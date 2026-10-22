@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/geota/revokt/security/advisories/new
+    about: Report a vulnerability privately (SECURITY.md); never in a public issue.

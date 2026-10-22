@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# detekt configuration (CONTRIBUTING §3). Builds upon the default config; formatting is ktlint's job, so the
+# formatting ruleset is not applied and style rules that overlap ktlint stay off. No baseline, ever.
+
+build:
+  maxIssues: 0
+
+config:
+  validation: true
+  warningsAsErrors: true
+
+revokt:
+  active: true
+  PublicConstructorOnFinalClass:
+    active: true
+    excludes: ['**/test/**', '**/jvmTest/**', '**/commonTest/**']
+    allowedClasses:
+      - 'dev.revokt.engine.KotlinRevocationEngine'
+      - 'dev.revokt.jsse.JvmPlatformTrust'
+      - 'dev.revokt.android.AndroidPlatformTrust'
+      - 'dev.revokt.verify.JcaSignatureVerifier'
+      - 'dev.revokt.PkixPathBuilderFallback'
+      - 'dev.revokt.jsse.JdkHttpFetcher.Factory'
+      - 'dev.revokt.android.AndroidHttpFetcher.Factory'
+      - 'dev.revokt.okhttp.OkHttpFetcher.Factory'
+      - 'dev.revokt.ktor.KtorHttpFetcher.Factory'
+      - 'dev.revokt.android.work.RevoktSyncWorker'
+      - 'dev.revokt.testing.SymVerifier'
+  NoDataOrValueClassOnPublicSurface:
+    active: true
+    excludes: ['**/test/**', '**/jvmTest/**', '**/commonTest/**']
+  ClubcardPortRules:
+    active: true
+  NoHttpClientInTests:
+    active: true
+    includes: ['**/test/**', '**/jvmTest/**', '**/commonTest/**', '**/*Test.kt']
+    excludes: ['**/fetch/**', '**/live/**']
+
+complexity:
+  LongParameterList:
+    functionThreshold: 8
+    constructorThreshold: 10
+  TooManyFunctions:
+    thresholdInClasses: 20
+    thresholdInObjects: 20
+    thresholdInFiles: 20
+  LongMethod:
+    threshold: 80
+
+style:
+  MaxLineLength:
+    active: false   # ktlint's job
+  MayBeConst:
+    active: false   # spec §4: limits are `@JvmField val`, never `const val`, so values are read at runtime, not inlined into consumers
+  MagicNumber:
+    active: false   # byte-level parsers are nothing but numbers; named constants where they help, not by rule
+  ReturnCount:
+    active: false
+  ForbiddenComment:
+    active: true
+    comments:
+      - reason: 'Track work in an issue, not a TODO; a TODO never ships (CONTRIBUTING §2).'
+        value: 'TODO'
+      - reason: 'Track work in an issue, not a FIXME.'
+        value: 'FIXME'
+  ForbiddenImport:
+    active: true
+    imports:
+      - reason: 'kotlinx-serialization is not a dependency (spec §3); the engine owns its JSON tree.'
+        value: 'kotlinx.serialization.*'
+  WildcardImport:
+    active: true

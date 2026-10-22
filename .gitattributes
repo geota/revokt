@@ -1,0 +1,10 @@
+# Fixture data must hash identically on every OS (CONTRIBUTING §3 "Toolchain").
+corpus/** -text
+**/src/test/resources/** -text
+*.bin binary
+*.zip binary
+*.filter binary
+*.delta binary
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf

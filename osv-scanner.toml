@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# OSV-Scanner allow-list (CONTRIBUTING §7). Every entry carries an `ignoreUntil` date and a reason; an entry past
+# its date fails the scan again. Empty on purpose.
+
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = 2026-12-31
+# reason = "No fixed version; not reachable from revokt (link to the issue)."

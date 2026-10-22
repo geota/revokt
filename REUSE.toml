@@ -1,0 +1,25 @@
+version = 1
+SPDX-PackageName = "revokt"
+SPDX-PackageSupplier = "revokt contributors"
+SPDX-PackageDownloadLocation = "https://github.com/geota/revokt"
+
+# Files that cannot carry a header (lockfiles, dumps, wrappers, data) get their licence here (CONTRIBUTING §3).
+[[annotations]]
+path = ["**/*.lockfile", "**/*.api", "gradle/wrapper/**", "gradlew", "gradlew.bat", "gradle/verification-metadata.xml", "gradle/verification-keyring.keys", "corpus/manifest.sha256", "docs/dev/status.md", "docs/dev/rulesets/**", ".github/protected-paths.txt", ".gitignore", ".gitattributes", "CODEOWNERS", "**/META-INF/services/**", "perf/baseline.json", "renovate.json", "osv-scanner.toml", "package.json", "package-lock.json"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 revokt contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# The spec, ADRs and docs are documentation of the project, Apache-2.0 like the code.
+[[annotations]]
+path = ["**/*.md", "corpus/**", "**/NOTICE", "native/rust-toolchain.toml", "native/Cargo.lock"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 revokt contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# The MPL port: 1:1 translation files only, under the port package (spec §3.1 item 2); verifyHeaderLocations enforces the location.
+[[annotations]]
+path = ["revokt-clubcard/src/*/kotlin/**/port/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "Mozilla Foundation and clubcard contributors; translation 2026 revokt contributors"
+SPDX-License-Identifier = "MPL-2.0"

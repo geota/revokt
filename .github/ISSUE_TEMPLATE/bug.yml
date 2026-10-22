@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+name: Bug
+description: Something behaves differently from the spec. A failing test is the best report (CONTRIBUTING §6).
+labels: ["kind/fix"]
+body:
+  - type: textarea
+    id: expected
+    attributes:
+      label: What the spec says should happen (section)
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens
+    validations:
+      required: true
+  - type: textarea
+    id: test
+    attributes:
+      label: Failing test or steps
+      description: A test in the repository's style (`<area> <behaviour>`), or exact steps and the inputs.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit

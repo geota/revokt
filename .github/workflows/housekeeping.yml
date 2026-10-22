@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# stale drafts (exempt: blocked), /claim on issues, the weekly owner-power audit trail (rulesets and settings
+# exported to docs/dev/rulesets/, PR on diff). CONTRIBUTING §2, §5, §7.
+name: housekeeping
+
+on:
+  schedule:
+    - cron: "7 4 * * *"
+    - cron: "11 5 * * 1"
+  issue_comment:
+    types: [created]
+
+permissions: read-all
+
+jobs:
+  stale:
+    name: stale
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          days-before-pr-stale: 30
+          days-before-pr-close: 7
+          days-before-issue-stale: -1
+          only-pr-labels: ""
+          exempt-pr-labels: "blocked"
+          exempt-draft-pr: false
+          stale-pr-label: "stale"
+          stale-pr-message: "This draft has been idle for 30 days (CONTRIBUTING §5). It closes in 7 days unless labelled `blocked` or updated; the branch stays."
+
+  claim:
+    name: claim
+    if: github.event_name == 'issue_comment' && !github.event.issue.pull_request && startsWith(github.event.comment.body, '/claim')
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            if (issue.assignees && issue.assignees.length > 0) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Already claimed by @${issue.assignees[0].login} (one assignee per issue, CONTRIBUTING §2).` });
+              return;
+            }
+            await github.rest.issues.addAssignees({ owner, repo, issue_number: issue.number, assignees: [context.payload.comment.user.login] });
+
+  rulesets-audit:
+    name: rulesets-audit
+    if: github.event_name == 'schedule' && github.event.schedule == '11 5 * * 1'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: export rulesets, environments and merge settings
+        env:
+          GH_TOKEN: ${{ secrets.RULESETS_AUDIT_TOKEN || github.token }}
+        run: |
+          mkdir -p docs/dev/rulesets
+          gh api "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false" --jq 'sort_by(.id)' > docs/dev/rulesets/rulesets.json || echo '[]' > docs/dev/rulesets/rulesets.json
+          for id in $(jq -r '.[].id' docs/dev/rulesets/rulesets.json); do gh api "repos/${GITHUB_REPOSITORY}/rulesets/$id" --jq 'del(.updated_at, ._links, .node_id)' > "docs/dev/rulesets/ruleset-$id.json"; done
+          gh api "repos/${GITHUB_REPOSITORY}" --jq '{allow_squash_merge, allow_merge_commit, allow_rebase_merge, allow_auto_merge, delete_branch_on_merge, squash_merge_commit_title, squash_merge_commit_message, has_issues, web_commit_signoff_required}' > docs/dev/rulesets/repository.json
+          gh api "repos/${GITHUB_REPOSITORY}/environments" --jq '[.environments[] | {name, protection_rules: [.protection_rules[] | {type, reviewers: [.reviewers[]? | {type, login: .reviewer.login}], prevent_self_review}], deployment_branch_policy}]' > docs/dev/rulesets/environments.json || echo '[]' > docs/dev/rulesets/environments.json
+      # RULESETS_AUDIT_TOKEN is a fine-grained PAT (contents + pull-requests write) so the audit PR's checks run; a PR
+      # created with github.token triggers no workflows. Without the secret the PR is still opened, checks must be re-run by hand.
+      - name: open a PR on any diff
+        env:
+          GH_TOKEN: ${{ secrets.RULESETS_AUDIT_TOKEN || github.token }}
+        run: |
+          if git diff --quiet -- docs/dev/rulesets; then echo "no change"; exit 0; fi
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          b="chore/rulesets-audit-$(date -u +%Y%m%d)"
+          git switch -c "$b"; git add docs/dev/rulesets; git commit -m "chore(repo): rulesets audit $(date -u +%Y-%m-%d)" -m "Spec: none (audit)"
+          git push -u origin "$b"
+          gh pr create --title "chore(repo): rulesets audit $(date -u +%Y-%m-%d)" --body "$(printf '## What\nWeekly export of rulesets, environments and merge settings changed (CONTRIBUTING §7 owner-power audit trail).\n\n## Why\nRefs: #1\n\n## Spec\nnone (audit)\n\n## Tests\nnone, no behaviour change\n\n## API\nno public API change\n\n## Risk and rollout\nnone\n\n## AI assistance\nnone\n\n## Checklist\n- [x] n/a\n\n## Trailers\nSpec: none (audit)\n')"

@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# protected-paths (CONTRIBUTING §5): counts maintainer approvals on protected paths, reading MAINTAINERS.md and
+# .github/protected-paths.txt from the BASE branch. Passes at once when no protected path changed. Honest note: with
+# two maintainers it adds nothing beyond code-owner review; it becomes a boundary at three.
+name: protected-paths
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  protected-paths:
+    name: protected-paths
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            MAINTAINERS.md
+            .github/protected-paths.txt
+            .github/scripts/protected_paths.js
+          sparse-checkout-cone-mode: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const script = fs.readFileSync('.github/scripts/protected_paths.js', 'utf8');
+            await eval(`(async () => { ${script} })()`);

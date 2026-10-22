@@ -1,0 +1,30 @@
+# ADR-0005: Solo-maintainer phase
+
+- Status: accepted, 2026-10-22
+- Deciders: maintainer
+
+## Context
+
+Until `MAINTAINERS.md` lists a second maintainer, no human can approve the maintainer's own PRs: GitHub forbids
+self-approval and the two-person rule of CONTRIBUTING §5 cannot be satisfied. The project is built with one local
+agent operated by the maintainer, one task at a time.
+
+## Decision
+
+Compensating controls, all enforced:
+
+- rulesets require every status check but 0 approvals;
+- every PR carries an **independent review**: a fresh-context agent pass over the diff that did not write it, posted as
+  a PR comment under the heading `Independent review`; `pr-lint` requires it before the PR can leave draft;
+- the maintainer reads the full diff before enabling auto-merge;
+- the `cooling` check applies to every protected path (24 h between the last push and merge), not only the three
+  release-critical ones;
+- no release is cut and no 1.0 promise is made in this phase (spec §14 requires two release-capable maintainers and
+  external review before 1.0); no release key is created.
+
+The phase ends, and the two-person rule activates, in the PR that adds the second maintainer.
+
+## Consequences
+
+Throughput is bounded by one human's reading. Agent output is never merged on the agent's word: the independent
+review and the human read are both required, and the Handoff comment states exactly what ran.

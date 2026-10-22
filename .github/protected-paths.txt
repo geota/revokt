@@ -1,0 +1,23 @@
+# One glob per line; read from the base branch by the protected-paths workflow (CONTRIBUTING §5). Keep in step with CODEOWNERS.
+revokt-clubcard/**
+**/verify/**
+**/walker/**
+**/RevoktTrustManager*
+**/parser/**
+**/fetch/**
+**/signature/**
+data/seed/**
+.github/**
+build-logic/**
+docs/spec/**
+gradle/libs.versions.toml
+gradle/verification-metadata.xml
+gradle/verification-keyring.keys
+**/*.lockfile
+renovate.json
+.commitlintrc.cjs
+REUSE.toml
+detekt.yml
+detekt-common.yml
+CODEOWNERS
+MAINTAINERS.md

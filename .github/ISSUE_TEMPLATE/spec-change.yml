@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+name: Spec change
+description: Two readings of the spec differ in observable behaviour, or the spec is wrong (CONTRIBUTING §1, §12).
+labels: ["kind/spec"]
+body:
+  - type: input
+    id: section
+    attributes:
+      label: Spec section
+    validations:
+      required: true
+  - type: textarea
+    id: readings
+    attributes:
+      label: The readings (or the defect)
+      description: Each reading and the observable behaviour it produces (public API, preset row, fixture outcome, data format, wire interaction).
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+    validations:
+      required: true
+  - type: textarea
+    id: growability
+    attributes:
+      label: Growability contracts touched
+      description: §4 Rule model, §3.2 engine seam, §11 milestones, or none.

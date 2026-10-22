@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# pr-lint (CONTRIBUTING §5): template sections, trailers survive the squash, the Spec: rule by type, issue link,
+# the Independent review comment in the solo-maintainer phase, the trademark rule. commitlint on the title.
+name: pr-lint
+
+# The Independent review comment (ADR-0005) is picked up on the next `ready_for_review`, `edited` or `synchronize`
+# event; a comment alone cannot re-run a check on the PR head.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  commitlint:
+    name: commitlint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}   # the commitlint config comes from the base branch
+          persist-credentials: false
+          sparse-checkout: |
+            .commitlintrc.cjs
+          sparse-checkout-cone-mode: false
+      - name: lint the PR title (the squash subject)
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          npm install --no-save --no-audit --no-fund @commitlint/cli@21.2.4 @commitlint/config-conventional@21.2.4
+          printf '%s\n' "$TITLE" | npx --no commitlint --config .commitlintrc.cjs
+
+  pr-lint:
+    name: pr-lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write   # applies the ai-assisted and size/XL labels (CONTRIBUTING §2, §12)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}   # the policy (scripts, MAINTAINERS.md) comes from the base branch
+          persist-credentials: false
+          sparse-checkout: |
+            MAINTAINERS.md
+            .github/scripts/pr_lint.js
+          sparse-checkout-cone-mode: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const script = fs.readFileSync('.github/scripts/pr_lint.js', 'utf8');
+            await eval(`(async () => { ${script} })()`);

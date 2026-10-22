@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The only place a version is written (CONTRIBUTING §3 "Dependencies"). Resolved from repo1 / plugins.gradle.org /
+# dl.google.com metadata on 2026-10-22; Renovate keeps it current.
+
+[versions]
+kotlin = "2.4.21"
+agp = "8.13.2"
+detekt = "1.23.8"
+ktlint-gradle = "14.2.0"
+ktlint = "1.8.0"
+bcv = "0.18.2"
+kover = "0.9.11"
+animalsniffer = "2.0.1"
+gummy-bears = "0.16.0"
+cyclonedx = "3.5.1"
+okio = "3.18.2"
+coroutines = "1.11.0"
+junit = "5.14.4"
+jazzer = "0.30.0"
+okhttp = "5.5.1"
+ktor = "3.6.0"
+robolectric = "4.17"
+
+[libraries]
+okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+jazzer-junit = { module = "com.code-intelligence:jazzer-junit", version.ref = "jazzer" }
+gummy-bears-api26 = { module = "com.toasttab.android:gummy-bears-api-26", version.ref = "gummy-bears" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+
+# Plugin artifacts consumed by build-logic (convention plugins) and the detekt rule set.
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+detekt-gradle-plugin = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plugin", version.ref = "detekt" }
+detekt-api = { module = "io.gitlab.arturbosch.detekt:detekt-api", version.ref = "detekt" }
+detekt-test = { module = "io.gitlab.arturbosch.detekt:detekt-test", version.ref = "detekt" }
+ktlint-gradle-plugin = { module = "org.jlleitschuh.gradle:ktlint-gradle", version.ref = "ktlint-gradle" }
+bcv-gradle-plugin = { module = "org.jetbrains.kotlinx:binary-compatibility-validator", version.ref = "bcv" }
+kover-gradle-plugin = { module = "org.jetbrains.kotlinx:kover-gradle-plugin", version.ref = "kover" }
+animalsniffer-gradle-plugin = { module = "ru.vyarus:gradle-animalsniffer-plugin", version.ref = "animalsniffer" }
+
+[plugins]
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
+ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint-gradle" }
+bcv = { id = "org.jetbrains.kotlinx.binary-compatibility-validator", version.ref = "bcv" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
+animalsniffer = { id = "ru.vyarus.animalsniffer", version.ref = "animalsniffer" }
+cyclonedx = { id = "org.cyclonedx.bom", version.ref = "cyclonedx" }

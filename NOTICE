@@ -1,0 +1,11 @@
+revokt
+Copyright 2026 revokt contributors
+
+revokt, a Kotlin TLS revocation library, is not affiliated with Revokt (revokt.com).
+
+Licensed under the Apache License, Version 2.0 (see LICENSE), except:
+
+  revokt-clubcard (the `dev.revokt.clubcard.port` package): a translation of Mozilla's `clubcard` and
+  `clubcard-crlite` crates, Mozilla Public License 2.0 (see LICENSES/MPL-2.0.txt and revokt-clubcard/UPSTREAM.md).
+
+Data artifacts (revokt-seed-*) carry no copyright claim and contain Mozilla Remote Settings data.
