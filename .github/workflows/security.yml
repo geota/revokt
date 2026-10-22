@@ -54,9 +54,10 @@ jobs:
           persist-credentials: false
       - uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
-          scan-args: |
-            --config=osv-scanner.toml
-            --recursive
+          scan-args: |-
+            --config
+            osv-scanner.toml
+            -r
             --skip-git
             ./
 
