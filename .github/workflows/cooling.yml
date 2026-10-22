@@ -31,6 +31,17 @@ jobs:
             .github/protected-paths.txt
             .github/scripts/cooling.js
           sparse-checkout-cone-mode: false
+      - name: policy files from the base branch (fallback to the PR head only when the base has none, i.e. the bootstrap)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for f in MAINTAINERS.md .github/protected-paths.txt .github/scripts/cooling.js; do [ -f "$f" ] || missing=1; done
+          if [ "$missing" = 1 ]; then
+            echo "::warning::base branch carries no policy files (bootstrap PR); taking them from the PR head $HEAD_SHA"
+            git fetch --depth 1 origin "$HEAD_SHA"
+            git checkout FETCH_HEAD -- MAINTAINERS.md .github/protected-paths.txt .github/scripts/cooling.js
+          fi
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
