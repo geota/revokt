@@ -54,8 +54,8 @@ jobs:
           persist-credentials: false
       - uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
-          # one line: the action hands the whole value to the scanner as a single argument otherwise
-          scan-args: --config osv-scanner.toml -r --skip-git ./
+          # osv-scanner 2.x honours .gitignore by default (there is no --skip-git any more)
+          scan-args: --config osv-scanner.toml -r ./
 
   dependency-review:
     name: dependency-review
