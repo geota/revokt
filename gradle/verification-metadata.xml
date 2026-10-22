@@ -16,7 +16,10 @@
          <trusted-key id="09939C73246B4BA7444CAA453D002DBC5EA9615F" group="dev.drewhamilton.poko"/>
          <trusted-key id="10F3C7A02ECA55E502BADCF3991EFB94DB91127D" group="org.ow2" name="ow2" version="1.5.1"/>
          <trusted-key id="120D6F34E627ED3A772EBBFE55C7E5E701832382" group="org.snakeyaml" name="snakeyaml-engine" version="2.7"/>
-         <trusted-key id="13AC2213964ABE1D1C147C0E1939A2520BAB1D90" group="org.freemarker" name="freemarker" version="2.3.32"/>
+         <trusted-key id="13AC2213964ABE1D1C147C0E1939A2520BAB1D90">
+            <trusting group="org.freemarker" name="freemarker" version="2.3.32"/>
+            <trusting group="org.freemarker" name="freemarker" version="2.3.35"/>
+         </trusted-key>
          <trusted-key id="1BD97A6A154E7810EE0BC832E2F38302C8075E3D" group="org.gradle.kotlin" name="gradle-kotlin-dsl-plugins" version="6.7.3"/>
          <trusted-key id="1D85469D8559C2E1DF5F925131D2D79DF7E85DD3" group="org.jcommander" name="jcommander" version="1.85"/>
          <trusted-key id="2DB4F1EF0FA761ECC4EA935C86FDC7E2A11262CB" group="commons-io"/>

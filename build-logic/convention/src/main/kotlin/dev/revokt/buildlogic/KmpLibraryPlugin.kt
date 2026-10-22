@@ -74,6 +74,11 @@ class KmpLibraryPlugin : Plugin<Project> {
         }
         dependencies {
             "detektPlugins"(Conventions.DETEKT_RULES)
+            // ktlint's tool classpath declares logback-core 1.3.x (three low OSV entries); only logging, so the fix is safe.
+            constraints {
+                add("ktlint", "ch.qos.logback:logback-core:1.5.34") { because("GHSA-jhq6-gfmj-v8fx, GHSA-p47f-322f-whfh, GHSA-qqpg-mvqg-649v") }
+                add("ktlint", "ch.qos.logback:logback-classic:1.5.34") { because("keeps logback-classic aligned with logback-core") }
+            }
         }
 
         // detekt's KMP per-source-set tasks are unreliable for commonMain; register an explicit one (CONTRIBUTING §3).

@@ -54,6 +54,10 @@ class JvmLibraryPlugin : Plugin<Project> {
         dependencies {
             "detektPlugins"(Conventions.DETEKT_RULES)
             "signature"(VersionCatalog.gummyBears(project))
+            constraints {
+                add("ktlint", "ch.qos.logback:logback-core:1.5.34") { because("GHSA-jhq6-gfmj-v8fx, GHSA-p47f-322f-whfh, GHSA-qqpg-mvqg-649v") }
+                add("ktlint", "ch.qos.logback:logback-classic:1.5.34") { because("keeps logback-classic aligned with logback-core") }
+            }
         }
 
         val verifyPomLicenses = tasks.register<VerifyPomLicensesTask>("verifyPomLicenses") {

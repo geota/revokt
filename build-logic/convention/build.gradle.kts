@@ -16,6 +16,10 @@ kotlin {
 }
 
 dependencies {
+    constraints {
+        // detekt's HTML reporter pulls freemarker 2.3.32 (GHSA-27j2-h3m2-8237); every build-classpath consumer takes the fix.
+        implementation("org.freemarker:freemarker:2.3.35") { because("GHSA-27j2-h3m2-8237; detekt 1.23.8 declares 2.3.32") }
+    }
     implementation(libs.kotlin.gradle.plugin)
     implementation(libs.detekt.gradle.plugin)
     implementation(libs.ktlint.gradle.plugin)
