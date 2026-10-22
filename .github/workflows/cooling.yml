@@ -31,17 +31,24 @@ jobs:
             .github/protected-paths.txt
             .github/scripts/cooling.js
           sparse-checkout-cone-mode: false
-      - name: policy files from the base branch (fallback to the PR head only when the base has none, i.e. the bootstrap)
+      - name: policy files come from the base branch (fail closed; the bootstrap is the one exception)
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           missing=0
           for f in MAINTAINERS.md .github/protected-paths.txt .github/scripts/cooling.js; do [ -f "$f" ] || missing=1; done
-          if [ "$missing" = 1 ]; then
-            echo "::warning::base branch carries no policy files (bootstrap PR); taking them from the PR head $HEAD_SHA"
-            git fetch --depth 1 origin "$HEAD_SHA"
-            git checkout FETCH_HEAD -- MAINTAINERS.md .github/protected-paths.txt .github/scripts/cooling.js
+          if [ "$missing" = 0 ]; then exit 0; fi
+          # Fail closed unless this is the bootstrap: the base is the EMPTY root tree and the head lives in this
+          # repository (its author already has write access, so running its scripts grants nothing new).
+          empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          if [ "$(git rev-parse 'HEAD^{tree}')" != "$empty_tree" ] || [ "$SAME_REPO" != "true" ]; then
+            echo "::error::policy files are missing on the base branch and this is not the bootstrap; refusing to read policy from the PR head (CONTRIBUTING §5)"
+            exit 1
           fi
+          echo "::warning::bootstrap PR: base is the empty root commit; taking the policy files from the same-repository head $HEAD_SHA"
+          git fetch --depth 1 origin "$HEAD_SHA"
+          git checkout FETCH_HEAD -- MAINTAINERS.md .github/protected-paths.txt .github/scripts/cooling.js
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
