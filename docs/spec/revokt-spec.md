@@ -2705,7 +2705,7 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   the trailing-element cases of the §9.2 rule (bytes after `[3]`; an element between `subjectPublicKeyInfo` and `[3]`,
   dropping the extensions; `[2]` before `[1]` and `[1]` twice, dropping them; constructed `[1]`/`[2]`; a primitive
   `[3]`, ignored; two `[3]`, the second ignored; bytes after the Extensions SEQUENCE inside `[3]` and after `extnValue`,
-  ignored; anything after the INTEGER inside `[0]`, `STRUCTURE`, with the flattening case whose producer serial
+  ignored; anything after the INTEGER inside `[0]`, `STRUCTURE`, with the flattening case whose producer SPKI
   differs; a zero-length primitive `[3]` (`83 00`), `Parsed` and producer-unkeyable; a constructed `[1]` then `[3]`
   carrying a non-minimal length, keyable because ct-go never visits `[3]` there), the more-lenient-than-JDK cases (a v1 or v2 certificate carrying
   elements its version does not allow; unique-id content that is not BIT STRING content), times with an offset, without
