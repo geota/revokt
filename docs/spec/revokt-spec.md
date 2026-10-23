@@ -1,10 +1,68 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 32** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-22
+Status: **draft spec / project proposal, revision 33** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-22
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 33 (SCT list rule restated against `x509-parser` 0.18.1, with one mini consistency round, 2026-10-22)
+- §9.2 "Parser contract": the SCT-list parenthetical described a stricter parser than the one D2 compares
+  against (oracle 3a). A probe of `x509-parser` 0.18.1 (asn1-rs 0.7.2, nom 7.1.3) showed:
+  - bytes after the inner `OCTET STRING`, after the declared list region and inside an item after its
+    signature are ignored;
+  - the list keeps the items before the first one that fails, and fails only when its first item fails;
+  - an empty list, or a first item of length 0, is an error (a later item of length 0 ends the list);
+  - any long-form inner length is accepted, and a zero-length signature is accepted.
+
+  §9.2 now states a self-standing rule. It follows 3a for list framing and length forms. It differs at the
+  inner identifier: revokt requires `0x04`, whereas 3a accepts tag number 4 in any class and in multi-octet
+  form, with a u32 wrap. That wider acceptance is the recorded D3 divergence class `3A_HEADER_LAX`, excluded
+  from D2's SCT comparison. It is equivalent to issuing without SCTs.
+- §9.2 `producerKeyable` paragraph and D7: a non-minimal inner `OCTET STRING` length extracts the SCTs, not
+  `NO_SCTS` (`producerKeyable = true` is unchanged, since ct-go's SCT sub-parse is non-fatal). D7 now states
+  normative outcomes for its SCT-list entries and splits them: both directions of a wrong declared length, a
+  bad first item, the three ignore levels, an SCT hidden in ignored bytes, a zero-length signature, a
+  non-`0x04` inner identifier, and a constructed inner `OCTET STRING`.
+- D2 states a per-extension expected SCT pair set, with ∅ for an inner identifier other than `0x04`. That octet
+  is read by 3b, so the comparison substitutes ∅ rather than skipping. The record schema gains `divergence`, and the
+  end-to-end oracle takes the same expectation.
+- D3: `Ok([])` does not occur; an empty list is `ParseError` → `NO_SCTS`. Firefox's decoder is not an oracle; its
+  divergences are hand-recorded `D3_DIVERGENCE` entries in the D7 corpus. A 3c pair revokt does not yield blocks the release until a spec
+  revision resolves it. `3A_HEADER_LAX` is a class against 3a only. The direction note names the M1
+  unverified-SCT residual.
+- §9.2 "Structurally strict" notes that the SCT list's inner length follows the SCT-list rule.
+- The `NO_SCTS` failure lists in §3.2, §4 and §10 item 7 are examples; §9.2 is the complete statement.
+- Oracle 3b's SCT walk applies the §9.2 rule, so D2 against 3b does not raise false P0s.
+- "Malformed list → `NO_SCTS`" in §3.2 (twice), §4 (`CrliteQuery.scts`), §6.1, §6.2 and §10 item 7 now reads
+  "no list that parses under §9.2". §10 item 7 says the Firefox match is narrowed: a list §9.2 accepts in
+  part is queried, and `STRICT` then sees the CRLite answer.
+- §9.2 "Parser contract" (Independent review of the parser, PR #16): the TBS read now tolerates trailing elements wherever the JDK's
+  `X509CertInfo` does, closing a D1 violation that made such leaves `PARSE_FAILED` and dropped such intermediates
+  (`NO_ISSUER`), which fails open in `DEFAULT`. The tolerated places are:
+  - after `subjectPublicKeyInfo`, read sequentially as optional `[1]`, `[2]` (either form) and constructed `[3]`;
+  - inside `[3]`, the bytes after the `Extensions` SEQUENCE, unparsed;
+  - inside an `Extension`, the bytes after `extnValue`, unparsed.
+
+  Ignored bytes are recorded for `producerKeyable`. The D8 note on trailing SEQUENCE elements follows. revokt is
+  stated as more lenient than the JDK in three places: no version gating, unique-id content not inspected, and the
+  time forms, now stated in §9.2 (the JDK's day rollover included) with a fail-closed rule for a null time; D2's
+  Java fields gain `notBefore`/`notAfter`. §5.5's "structurally strict" is qualified.
+  Oracle 3b walks the TBS tail by the same rule, and D7 gains the cases. `[0]` stays strict: ct-go does not
+  bound explicit `[0]`, so a trailing element there changes what ct-go accepts and which SPKI it records. The keyed
+  serial is bounded (the stdlib `RawValue` re-parse) and is the JDK's. Both are confirmed by running the producer
+  (Appendix A). No input is known on which the filter key
+  differs, so the case is excluded conservatively, D1-dom by rule. The cost is `PARSE_FAILED` for such a leaf and a
+  dropped candidate for such an intermediate, both allowing in `DEFAULT`. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
+  `producerKeyable`. The table models ct-go's struct walk. 3a's primitive-`[3]` reading is the declared class
+  `3A_TBS_LAX`, stated in D2, D3 and the record schema. The end-to-end oracle excludes chains `x509-parser`
+  rejects. D1's domain is defined against the reference view, with `[0]`-trailing input D1-dom outright. D2's
+  oracle-4 clause applies where `producerKeyable`.
+- §5.1 `Cert.notBefore`/`notAfter` are `Long?`: the parse yields null for a time that does not decode, which only
+  platform-rejected input reaches.
+- Appendix A records `x509-parser` 0.18.1, asn1-rs 0.7.2 and nom 7.1.3 by sha256. They are pinned exactly in
+  `revokt-oracle` when oracle 3a lands with the 0.1 oracle issue. The probed behaviour becomes a committed `revokt-oracle` test, and bumping any of the three
+  crates is a spec revision that re-runs it. 3b's SCT walk runs the same cases.
 
 ### Changes in revision 32 (two factual corrections from the development-expectations review, 2026-10-22)
 - Maven Central's Portal has no OIDC "trusted publishing": publishing is a user token plus PGP signatures.
@@ -879,7 +937,7 @@ class GenerationFiles internal constructor(…) {                      // always
     val names: Set<String>; fun bytes(name: String): ByteArray /* fresh copy; a disk-backed implementation later is not a break */; fun sha256(name: String): ByteArray /* content hash, computed once by the loader */; val sourceTimestampMillis: Long }
 class CrliteSct private constructor(…) { val logId: ByteArray /* 32 bytes */; val timestampMillis: Long /* RFC 6962 u64 carried in Long; compared with java.lang.Long.compareUnsigned */ }   // @RevoktTestingApi Builder
 class CrliteQuery private constructor(…) {                           // growable value-semantics class (builder, @RevoktTestingApi); a field added in a minor does not break engines
-    val issuerSpkiHash: ByteArray /* SHA-256 of the issuer's SPKI TLV */; val serial: ByteArray /* rawSerial: DER INTEGER content bytes as encoded (the producer's RawValue.Bytes, §9.2) */; val scts: List<CrliteSct> /* order not significant; empty when the extension is absent, empty or malformed */ }
+    val issuerSpkiHash: ByteArray /* SHA-256 of the issuer's SPKI TLV */; val serial: ByteArray /* rawSerial: DER INTEGER content bytes as encoded (the producer's RawValue.Bytes, §9.2) */; val scts: List<CrliteSct> /* order not significant; empty when no SCT extension has a list that parses under §9.2 (absent, or for example empty, a first item that fails, an inner identifier other than 0x04; §9.2 states every case); a list that fails later keeps the items before the failure */ }
 ```
 
 **Seam.** `Revokt.Builder.revocationEngine(engine: RevocationEngine)` is public from 0.2 (the first `Revokt`; the engine-side types are public from 0.1) and
@@ -911,8 +969,8 @@ another layer is a separate interface with its own builder method, never a widen
 from connection threads and must observe either the previous or the new generation, never a mix;
 `close()` waits for in-flight `query` calls at most `ENGINE_CLOSE_DRAIN` (5 s), then proceeds; a query that returns later sees `ENGINE_ERROR`. **Ownership**:
 `Revokt` owns the engine whether defaulted or injected and closes it last (§5.1 lifecycle). `NO_SCTS` means
-no SCT extension or an empty or structurally malformed list (decision, §10 item 7); revokt's parser
-collapses all three to an empty `scts` list before the engine is called; the Kotlin engine answers
+no SCT extension, or none whose list parses under §9.2 (for example an empty list, a first item that fails, an inner identifier other than `0x04`; §9.2 states every case; decision,
+§10 item 7); revokt's parser passes an empty `scts` list in each case before the engine is called; the Kotlin engine answers
 `NO_SCTS` on it, the upki engine `NOT_COVERED` (one equivalence class, below).
 
 **upki adapter (`revokt-engine-upki`, Panama, JDK 22+; CI-only until the §12 trigger).**
@@ -958,8 +1016,9 @@ between the two engines is a release blocker (no input is abstained). The finer 
 class is compared against `revokt-oracle`'s `clubcard-crlite` binding instead. What an engine swap
 can still change is therefore only the lookup itself and the data decoding, both pinned by this
 suite. Documented, out of scope: the `rustls-upki` verifier, a different product, fails the
-handshake on a malformed SCT list and on a leaf webpki cannot parse; revokt yields `NO_SCTS` and
-`PARSE_FAILED`, both allowing in `DEFAULT` by decision. Generations: (i) Mozilla `SIGNED` v3 generations as served, both engines directly (no transcoder
+handshake on a malformed SCT list and on a leaf webpki cannot parse; revokt yields `NO_SCTS` when no
+list parses under §9.2 (otherwise it queries the items §9.2 keeps) and `PARSE_FAILED`, both allowing in
+`DEFAULT` by decision. Generations: (i) Mozilla `SIGNED` v3 generations as served, both engines directly (no transcoder
 in the oracle path); (ii) `MIRROR` v4 generations as fetched from `upki.rustls.dev`; (iii) the v3
 generations transcoded to v4 by `revokt-oracle` (`upki-mirror`'s transcoder), a third leg that pins the
 transcoder; every generation passes the `index.bin` consistency check above before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
@@ -1588,7 +1647,7 @@ the fallback is `PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback wh
 // Declarations the walker and the §9.1 harness compile against. Walk, WalkPath, Cert, CandidateIndex and reconstruct are `internal`
 // to revokt-engine; the walker-only harness and the Jazzer walker fuzzer live in revokt-engine's own test source set; revokt-testing's
 // reference walker takes List<ByteArray> and returns the Set<String> of lowercase-hex leaf-issuer SPKI hashes (value equality), so it needs no internal type.
-internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray, val sig: ByteArray, val tbsSigAlg: ByteArray, val tbsSigOid: String, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long, val notAfter: Long, val producerKeyable: Boolean, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
+internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray, val sig: ByteArray, val tbsSigAlg: ByteArray, val tbsSigOid: String, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long? /* null when the time does not decode (§9.2; every JDK-accepted form decodes) */, val notAfter: Long?, val producerKeyable: Boolean, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
 internal class WalkPath(val certs: List<Cert>, val terminal: TerminalKind)   // leaf → … → terminal; distinct from Finding.Path
 internal sealed interface Walk {                          // every variant carries unsupportedOids (related candidates only), findings and stats: WalkStats (verifications, candidatesExplored, relatedExploredAtLeaf, unrelatedExploredAtLeaf), built at the three return sites
     class Found(val paths: List<WalkPath>, val leafKeys: Set<ByteString>, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
@@ -1884,8 +1943,8 @@ sequence jump.
 ### 5.5 Engine evaluation (shared)
 All byte inputs come from one minimal DER parse of each certificate's `tbsCertificate`:
 `rawSerial`, `rawSpki` (complete TLV), `rawSubject`, `rawIssuer`, AKI/SKI, TBS `signature` and
-outer `signatureAlgorithm`, `notBefore`/`notAfter` (M4's distrust-after needs them; parsed from 0.1 so the corpus covers them), the SCT list, extension byte offsets, and `producerKeyable` (§9.2 D8). Structurally strict,
-semantically lenient, at least as lenient as the platforms (§9.2 differential parser oracle). The
+outer `signatureAlgorithm`, `notBefore`/`notAfter` (M4's distrust-after needs them; parsed from 0.1 so the corpus covers them), the SCT list, extension byte offsets, and `producerKeyable` (§9.2 D8). Structurally strict except where §9.2
+follows the JDK's TBS read, semantically lenient, at least as lenient as the platforms (§9.2 differential parser oracle). The
 leaf is parsed once at decision step 3; `PARSE_FAILED` applies to the leaf only; unparseable
 candidates are dropped. SCTs: only `(log_id, timestamp)` is used. **One catch boundary**: steps 2–3
 and `Evaluator.evaluate` (which throws `IllegalStateException` outside `STARTED`, §4, before any boundary) catch `Throwable` (every `VirtualMachineError` except `StackOverflowError` is rethrown; a `LinkageError` from a bad R8 config or a `StackOverflowError` is not a policy reject) into `ENGINE_ERROR`; the boundary closes at flow step 3, before event emission; **fired rules accumulate**: a throw after step 7 answered adds `ENGINE_ERROR` to the rules fired so far (`REVOKED` included) rather than replacing them, so a late failure is allow-safe by construction; `Verdict.path.status = NOT_WALKED` when
@@ -1903,9 +1962,8 @@ Layers by milestone: **[M2] L1/L2** over every path the walker (or an exhaustive
 ### 6.1 Inputs
 `issuerSpkiHash` = SHA-256 of a path-verified issuer's `rawSpki` (the complete SPKI TLV, as Mozilla's
 producer takes `RawSubjectPublicKeyInfo`); `serial` = `rawSerial` (INTEGER content bytes as encoded,
-as the producer takes `asn1.RawValue.Bytes` from the TBS, Appendix A); SCTs = the union over every
-extension with the SCT OID whose list parses, from
-extension `1.3.6.1.4.1.11129.2.4.2`; `key` = `SHA-256(issuerSpkiHash ‖ serial)`; one covered SCT suffices.
+as the producer takes `asn1.RawValue.Bytes` from the TBS, Appendix A); SCTs = the union, over every
+extension with OID `1.3.6.1.4.1.11129.2.4.2`, of the items its list keeps under §9.2; `key` = `SHA-256(issuerSpkiHash ‖ serial)`; one covered SCT suffices.
 
 ### 6.2 Query (exact port; W = 4)
 ```
@@ -1916,7 +1974,7 @@ eval(eq, z: LongArray): limb = s/64; sh = s%64; r = 0
      t = z[i] ushr sh; if (sh != 0) t = t or (z[i+1] shl (64 - sh))   // columns padded with one zero word
      r = r xor (t and a[i - limb])
   return r.countOneBits() and 1
-query(q): if q.scts.isEmpty(): return NO_SCTS   // revokt's parser passes an empty list for an absent, empty or malformed list (§3.2, §6.1; decision §10 item 7); never reaches a filter
+query(q): if q.scts.isEmpty(): return NO_SCTS   // revokt's parser passes an empty list when no SCT extension's list parses under §9.2 (§3.2, §6.1; decision §10 item 7); never reaches a filter
 perFilter(filter, key, scts):
   if no (log, ts) in scts is within filter.coverage: return NotCovering
   meta = filter.index[issuerSpkiHash] ?: return NotEnrolled
@@ -2245,7 +2303,10 @@ tests; **live checks** are informational.
 
 **M1**
 - **End-to-end oracle**: `rust-query-crlite` and `clubcard-crlite` driven with tens of thousands of
-  PEM chains from CT; the 10⁶-key comparison as a second tier; `index.bin` byte comparison;
+  PEM chains from CT (where `rust-query-crlite` takes SCTs from `x509-parser`, its pair set gets the same
+  per-extension ∅ expectation as D2 for an inner identifier other than `0x04`, and the §9.2 read for a primitive
+  `[3]`; a chain whose leaf `x509-parser` rejects is counted and excluded, not compared; the 0.1 oracle issue verifies its SCT
+  path); the 10⁶-key comparison as a second tier; `index.bin` byte comparison;
   canonical JSON against `canonical_json`.
 - **Cross-engine suite** (0.2): chain corpus × generations against both `RevocationEngine`s under
   the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
@@ -2482,16 +2543,59 @@ outside the filter's universe, return an arbitrary answer. The oracle bounds bot
 TLV), `rawSubject`, `rawIssuer` (complete Name TLVs), SKI/AKI, TBS `signature` and outer
 `signatureAlgorithm` TLVs, the extension table (OID, critical, value bytes, offsets), and the SCT
 pairs `(logId, timestamp)` as the **union** over every extension with OID `1.3.6.1.4.1.11129.2.4.2`
-whose list parses exactly as `x509-parser`'s `parse_ct_signed_certificate_timestamp_list` (any version byte, 32-byte log id, u64 timestamp, u16-prefixed extensions, hash and signature algorithm bytes, u16-prefixed signature, exact list and item lengths, no trailing bytes); a list that fails to parse
-contributes nothing; `NO_SCTS` iff the union is empty (the union is monotone under "one covered SCT
-suffices" and SCTs never enter the key). Structurally strict: definite lengths only, tags and
-lengths well-formed, no trailing bytes after `Certificate`; **non-minimal definite lengths are
-accepted for extraction but, at a header the producer's *fatal* walks visit, mark the certificate `producerKeyable = false`** (one inside an uninspected value does not, and neither does one reached only by a non-fatal sub-parse: ct-go reports every error of the SCT-list extension's inner `OCTET STRING` and TLS list through `NonFatalErrors`, Mozilla's `ParseCertificate` returns the certificate anyway and ct-fetch logs and continues, so a non-minimal length there is keyable, revokt's `x509-parser`-pinned SCT parse rejects the list and the certificate is `NO_SCTS`; the JDK preserves
+whose list parses under the SCT-list rule here. The rule follows `x509-parser` 0.18.1's `parse_ct_signed_certificate_timestamp_list` (oracle 3a; Appendix A pins it) except at the inner identifier.
+
+- **Inner header.** The extension value must begin with the identifier octet `0x04` (universal, primitive `OCTET STRING`) and a definite length. The length is either short form, or long form `0x81`–`0xFE` followed by that many length octets, with leading zero octets allowed and the value below 2^64 and not past the end of the extension value; `0x80` and `0xFF` fail the list.
+- **Divergence from 3a.** 3a also accepts tag number 4 in any class and in multi-octet form (asn1-rs checks the tag number only). That wider acceptance is the recorded D3 divergence class `3A_HEADER_LAX`. D2 expects no pairs from such an extension, so revokt yielding none is still asserted, never skipped. Firefox and webpki yield none either.
+- **Items.** The inner content begins with a `u16` list length that must fit the content. Items are read only within that declared region. Each is a `u16`-prefixed item, whose length must fit the region, of: any version byte, 32-byte log id, u64 timestamp, `u16`-prefixed extensions, hash and signature algorithm bytes, `u16`-prefixed signature (a zero-length signature is accepted).
+- **Ignored bytes.** Bytes after the inner `OCTET STRING`, after the declared region and inside an item after its signature are ignored and never parsed as items.
+- **Partial lists.** The list keeps every item before the first item that fails to parse; a later item of length 0 ends the list like any failing item. It fails when its first item fails, which includes an empty list and a first item of length 0. A list that fails contributes nothing.
+
+`NO_SCTS` iff the union is empty (the union is monotone under "one covered SCT
+suffices" and SCTs never enter the key).
+
+**Trailing elements are tolerated at least where the JDK's `X509CertInfo` tolerates them**; ct-go ignores extra elements at the end of a SEQUENCE, and the producer's outcome for each case is oracle 4's (D8). The JDK behaviour was probed on JDK 21 (Appendix A), and each case below is a D7 entry:
+- **After `subjectPublicKeyInfo` in `tbsCertificate`,** the remaining elements are read in turn:
+  - the next is `issuerUniqueID` if it is context tag 1 in either form (its content is not inspected);
+  - then `subjectUniqueID` if it is context tag 2 in either form (likewise);
+  - then `extensions` if it is a constructed context tag 3.
+
+  The first element that does not fit ends the read. It must be a well-formed TLV; it and everything after it are ignored, and the bytes after it are not parsed and need not be TLVs. After `extensions`, the remaining bytes are ignored unparsed.
+- **Inside `[3]`,** the bytes after the `Extensions` SEQUENCE are ignored unparsed.
+- **Inside an `Extension`,** the bytes after `extnValue` are ignored unparsed.
+
+- **Inside `[0]` the parse stays strict:** nothing may follow the version INTEGER, and anything there is `STRUCTURE`. The JDK accepts it, but ct-go's explicit-tag walk does not bound `[0]` by its length (`parseField` advances by the inner element only), so ct-go reads the elements after the INTEGER as the next TBS fields. It rejects most such inputs. One it accepts carries an SPKI and other fields the JDK does not read, which matter when the certificate is an issuer, while the keyed serial comes from the length-bounded stdlib re-parse of (ii) and is the JDK's. Whether the producer keys the same bytes therefore depends on crafted content, and the case is excluded by rule: such input is D1-dom (D1 below), never queried. Confirmed by running the producer (Appendix A).
+
+Ignored bytes contribute no field. Their offsets are recorded, and the `producerKeyable` table evaluates them as ct-go's struct walk sees them (below). For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, as the JDK reads it. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none (oracle 4 decides keyability, D8); revokt takes the JDK's view, which only adds extensions and SCTs.
+
+**Where revokt is more lenient than the JDK** (the platform rejects such input first, so D1 is unaffected):
+- revokt does not gate on the version. The JDK rejects a v1 certificate with anything after `subjectPublicKeyInfo`, and a v2 certificate with any element after the unique IDs (a NULL or `extensions`).
+- revokt does not inspect unique-id content. The JDK requires BIT STRING content.
+- revokt's time decoding is more lenient, as follows.
+
+**Times.** `notBefore` and `notAfter` decode at least as the JDK's `DerValue` does:
+- seconds optional;
+- `Z` or `±hhmm` in both `UTCTime` and `GeneralizedTime`;
+- `GeneralizedTime` fractions after `.` or `,` of any length, truncated to milliseconds;
+- a day of 1 to 31 in any month, a day past the month's end rolling into the next month as the JDK's lenient calendar does (2026-02-31 is 2026-03-03, 2026-04-31 is 2026-05-01).
+
+revokt also accepts optional minutes, second 60 (the first second of the next minute) and an absent zone, which it takes as UTC. A time outside these forms is null; only platform-rejected input reaches that. A rule that needs a null time fails closed: M4's distrust-after treats a null `notBefore` as after any distrust date.
+
+**Everywhere else the parse is structurally strict.** Lengths must be definite, and tags and lengths well-formed (the SCT list's inner length follows the rule above). `Certificate`, `[0]` (exactly its INTEGER), `Validity`, the `Extensions` SEQUENCE and each `Extension` before its `extnValue` hold exactly their elements, and no bytes may follow `Certificate`; **non-minimal definite lengths are
+accepted for extraction but, at a header the producer's *fatal* walks visit, mark the certificate `producerKeyable = false`** (one inside an uninspected value does not, and neither does one reached only by a non-fatal sub-parse: ct-go reports every error of the SCT-list extension's inner `OCTET STRING` and TLS list through `NonFatalErrors`, Mozilla's `ParseCertificate` returns the certificate anyway and ct-fetch logs and continues, so a non-minimal length there is keyable, and revokt's §9.2 SCT-list rule accepts it and extracts the SCTs; the JDK preserves
 them through `getEncoded()`; the producer rejects them; decision step 3 then yields
 `PARSE_FAILED(PRODUCER_UNKEYABLE)` and never queries, property D8). **`producerKeyable` is an exact
-predicate**, a committed table in the parser package pinned to the producer's toolchain
+predicate**: the producer accepts the certificate **and** keys the same bytes, its serial content equal to `rawSerial`
+and its SPKI equal to `rawSpki`; an input the producer accepts with other key bytes is producer-unkeyable. It is a committed table in the parser package pinned to the producer's toolchain
 (`mozilla/crlite` commit, certificate-transparency-go and zcrypto versions, Go release; Appendix A),
 derived from the producer's code path `types.ParseCertificate` → `NewSerialFromCertificate` → `asn1.Unmarshal(RawTBSCertificate, tbsCertWithRawSerial)`:
+The table models ct-go's struct walk, not revokt's ignored set:
+- explicit `[0]` and `[3]` are prefixes, not length-bounded containers;
+- `[1]`/`[2]` match only primitive encodings;
+- `[3]` matches if constructed or of zero length, and a zero-length `[3]` is fatal;
+- the walk peeks at the first element no optional field matches, whose header is on the fatal path, and visits nothing after it.
+
+The conditions are:
 (i) ct-go `x509.ParseCertificate` returns a certificate (fatal errors only; `NonFatalErrors` are
 accepted), or, failing that, zcrypto `x509.ParseCertificate` does; both struct walks require a
 DER-minimal tag and a minimal definite length at **every TLV header they visit on a fatal path** (the SCT extension's sub-parse is non-fatal, above; the other non-fatal paths are content-level: SAN IP length, EKU, name constraints, subject/issuer strictness, empty AIA; ct-go and stdlib
@@ -2520,7 +2624,7 @@ reported, never rejected. Result: `Parsed | ParseFailed(reason)`; no other excep
 | 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()` | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
 | 2 | Conscrypt `CertificateFactory` (BoringSSL): `conscrypt-openjdk-uber` versions in the matrix; the **platform** Conscrypt on the instrumented tier | platform acceptance on Android; `encoded = getEncoded()` (`i2d_X509`) | as above | as above | as above |
 | 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error | `Ok` | `Err` | caught panic |
-| 3b | `revokt-oracle`: a minimal independent TLV locator (walk `Certificate → tbs`, slice serial content, SPKI TLV, subject, issuer, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT; no semantics) | raw bytes where 3a rejects | located | not located | caught panic |
+| 3b | `revokt-oracle`: a minimal independent TLV locator (walk `Certificate → tbs` with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located, slice serial content, SPKI TLV, subject, issuer, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; no other semantics) | raw bytes where 3a rejects | located | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
 | 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key this certificate and with which bytes | both calls return | `ParseCertificate` error or `NewSerialFromCertificate` panic (recovered in the shim) | unrecovered |
 
@@ -2533,36 +2637,58 @@ Java field normalisation: `getSerialNumber()` by value (`BigInteger` drops paddi
 `getPublicKey().getEncoded()` by SHA-256 against `rawSpki` with a recorded allow-list of
 re-encoding cases (Java re-encodes RSA parameters); `getIssuerX500Principal()` and
 `getSubjectX500Principal()` as `X500Principal(raw).getName(CANONICAL)`; `getExtensionValue(oid)`
-unwrapped; `getCriticalExtensionOIDs()`. Raw-byte equality is asserted against 3a, else 3b.
+unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epoch milliseconds against
+`notBefore`/`notAfter`. Raw-byte equality is asserted against 3a, else 3b.
 
 **Properties.** For each platform oracle *i* ∈ {1, 2} and each version *v* in the matrix:
 - **D1 leniency (security)**: `Accept_i,v(b)` ⇒ `parse(encoded_i,v)` is `Parsed`, for every input in
-  the D1 domain: platform-accepted and producer-keyable (oracle 4 `Accept`). A violation is a P0 and
+  the D1 domain: platform-accepted and producer-keyable (oracle 4 `Accept` with serial and SPKI equal to the
+  reference view's, 3a else 3b). An input with any bytes after the version INTEGER inside `[0]` is D1-dom whatever
+  oracle 4 keys. A violation is a P0 and
   a security advisory class once the input is CA/B-lint clean.
-- **D1-dom (recorded)**: platform-accepted inputs oracle 4 rejects. No filter can contain such a
+- **D1-dom (recorded)**: platform-accepted inputs oracle 4 rejects, or accepts with key bytes other than the
+  reference view's, and any input with content after the INTEGER inside `[0]`, excluded by rule (the `[0]`
+  flattening above). That case is excluded conservatively, not because its key is outside the universe. It costs
+  `PARSE_FAILED` for such a leaf and a dropped candidate for such an intermediate, both allowing in `DEFAULT`; such
+  certificates are not CA/B-conformant. For the other D1-dom inputs, no filter can contain such a
   certificate and its key is outside the filter's universe, so it must never be queried (a query
   would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and with high probability under
   an inverted issuer block); D8 enforces that; each entry is kept with the producer's error so a
   producer change can be re-evaluated.
 - **D8 producer-keyability (0.1 gate, zero tolerance)**: `producerKeyable(encoded) == (oracle 4
-  accepts)` for every input where `parse(encoded)` is `Parsed`, on every corpus, committed and secondary, and on the fuzz corpus (the predicate has no value on `ParseFailed`: Go ignores trailing `SEQUENCE` elements revokt's structurally strict parse rejects as `STRUCTURE`, and over-cap inputs never reach the parser; oracle-4 outcomes on `ParseFailed(STRUCTURE)` inputs are recorded as a D4-class metric); a zcrypto-only
+  accepts with serial and SPKI equal to revokt's)` for every input where `parse(encoded)` is `Parsed`, on every corpus, committed and secondary, and on the fuzz corpus (the predicate has no value on `ParseFailed`: Go ignores trailing `SEQUENCE` elements, and revokt ignores them only where the rule above does, elsewhere rejecting them as `STRUCTURE`, and over-cap inputs never reach the parser; oracle-4 outcomes on `ParseFailed(STRUCTURE)` inputs are recorded as a D4-class metric); a zcrypto-only
   acceptance is producer-keyable (in the D1 domain) and is recorded in a separate zcrypto-only list
   with the ct-go error, so a producer change that drops the zcrypto fallback can be re-evaluated.
 - **D1-raw (informational)**: inputs where `encoded ≠ b`, or `parse(b)` fails while
   `parse(encoded)` succeeds. This is the `EvaluationRequest.presented` raw-DER surface (§4), documented,
   not gated.
 - **D2 extraction agreement (security)**: on `parse(encoded_i,v)`: `rawSerial` equals oracle 4's
-  serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where oracle 4 accepts;
+  serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where `producerKeyable`;
   `rawSerial`, `rawSpki`, `rawSubject`, `rawIssuer`, extension values and the SCT pair set equal 3a's
-  where 3a accepts, else 3b's; the normalised Java fields equal oracle *i,v*'s. A violation is a P0.
+  where 3a accepts, else 3b's. The expected SCT pair set is the union over SCT extensions of a per-extension
+  expectation: the reference's pairs for that extension, or ∅ when the extension value's first octet is not `0x04`.
+  That octet is read by 3b's locator, never by revokt. An extension whose expectation is ∅ while 3a yields pairs is
+  recorded as `3A_HEADER_LAX`, so the comparison substitutes ∅ rather than skipping. Where 3a takes a primitive `[3]`
+  as extensions (decided by 3b's TBS walk), the reference extension table and SCT pairs are the §9.2 read (∅),
+  recorded as `3A_TBS_LAX`; the normalised Java fields equal oracle *i,v*'s. A violation is a P0.
   The count of platform-accepted inputs with no raw-byte reference (3a and 3b both fail) is a gate
   metric and must be zero on the committed corpora.
-- **D3 SCT classification**: mapping from 3a: no extension → `NO_SCTS`; `Ok([])` → `NO_SCTS`;
-  `ParseError` → `NO_SCTS`; `Ok(list)` → pair-set equality (D2); 3a's duplicate-extension error →
+- **D3 SCT classification**: mapping from 3a: no extension → `NO_SCTS`; `ParseError` → `NO_SCTS`
+  (an empty list is a `ParseError`; `x509-parser` 0.18.1 never returns `Ok([])`); `Ok(list)` → pair-set equality (D2), with the per-extension ∅ expectation for an inner identifier other than `0x04` (`3A_HEADER_LAX`); 3a's duplicate-extension error →
   the union rule, recorded as a divergence class. Firefox's decoder (fails the whole list on
   version ≠ 0, trailing bytes in the OCTET STRING, per-item length errors) and 3c's errors are
   recorded as divergence entries, never gate failures: every such divergence is in the
-  more-checking direction (revokt queries where Firefox or the `rustls-upki` verifier would not).
+  more-checking direction (revokt queries where Firefox or the `rustls-upki` verifier would not). Firefox's
+  decoder is not an oracle and is not run in CI; its stricter behaviour is argued here, and its divergences are hand-recorded
+  `D3_DIVERGENCE` entries (record schema) in the D7 corpus. A 3c error where revokt yields pairs is recorded, never a gate failure. A 3c pair that
+  revokt does not yield blocks the release until a spec revision resolves it; revokt follows §9.2, never 3c. A
+  further class, also against 3a only, is `3A_TBS_LAX`: 3a takes a primitive `[3]` as extensions, which the JDK and
+  revokt do not, so D2's reference for that certificate's extension table and SCT pairs is the §9.2 read (∅),
+  asserted, not skipped. A
+  separate class, against 3a only, is `3A_HEADER_LAX`: 3a yields pairs under an inner identifier other than
+  `0x04`; Firefox, webpki and revokt do not; that is equivalent to issuing without SCTs. For a key outside the filter's universe
+  a query answers arbitrarily. That is the M1 unverified-SCT residual (§10 item 7), unchanged by revision 33,
+  because every pair set revision 33 newly accepts is also produced by some well-formed list.
 - **D4 strictness bound (informational)**: revokt `Parsed` while every oracle rejects; the platform
   rejects such input first.
 - **D5 crash-freedom and budgets**: no exception other than `ParseFailed`; allocation ≤ budget;
@@ -2572,14 +2698,22 @@ unwrapped; `getCriticalExtensionOIDs()`. Raw-byte equality is asserted against 3
   reported values; `parse(encoded_i,v)` has the same status and fields as `parse(b)` whenever both
   are `Parsed`, for oracle 1 and for oracle 2 on the uber artifact and on the platform tier.
 - **D7 leniency corpus**: a committed corpus of real-world oddities, each entry carrying the
-  recorded outcome of every oracle version and revokt's required outcome (no outcome is asserted in
-  this text; the corpus is the record): negative serial, serial over 20 bytes, serial with leading
+  recorded outcome of every oracle version and revokt's required outcome (the SCT-list outcomes named below follow from the rule above and are
+  normative; for every other entry no outcome is asserted in this text and the corpus is the record): negative serial, serial over 20 bytes, serial with leading
   zeros, TBS/outer algorithm mismatch (NULL vs absent), `GeneralizedTime` with fractional seconds,
   `UTCTime` used for a date in 2050 or later, PrintableString/UTF8String/TeletexString/BMPString
   names, an empty subject, duplicate extension OIDs, **two SCT extensions** (empty list first,
-  covered SCT second → union queries), an unknown critical extension, an SCT list with a wrong
-  length prefix, a non-minimal length on the SCT extension's inner OCTET STRING (required outcome: `Parsed`, `producerKeyable = true`, `scts = ∅` → `NO_SCTS`), a non-zero SCT version, a truncated SCT, trailing bytes inside the OCTET STRING,
-  an extension value that is not an OCTET STRING, a 64 KB extension, BER indefinite lengths,
+  covered SCT second → union queries), an unknown critical extension, an SCT list whose declared
+  length is longer than its content (the list fails) or shorter (the items that fit extracted), a malformed first SCT followed by valid ones (the list fails), a non-minimal length on the SCT extension's inner OCTET STRING, `81 nn` with nn < 0x80 and `84 00 00 00 nn` (required outcome: `Parsed`, `producerKeyable = true`, the list's SCTs extracted), an inner length `0x80` or `0xFF` (the list fails), an inner identifier other than `0x04` that is tag number 4 (for example `0x44`, `1F 04`; `3A_HEADER_LAX`: no pairs), a constructed inner OCTET STRING (the list fails), a non-zero SCT version (extracted), a truncated last SCT (the items before it extracted), trailing bytes after the inner OCTET STRING, after the declared list region and inside an SCT after its signature (ignored), an SCT hidden in ignored bytes (never extracted), a zero-length signature (extracted),
+  an inner identifier that is not tag number 4, such as `0x30` (the list fails in revokt and 3a alike, not `3A_HEADER_LAX`),
+  the trailing-element cases of the §9.2 rule (bytes after `[3]`; an element between `subjectPublicKeyInfo` and `[3]`,
+  dropping the extensions; `[2]` before `[1]` and `[1]` twice, dropping them; constructed `[1]`/`[2]`; a primitive
+  `[3]`, ignored; two `[3]`, the second ignored; bytes after the Extensions SEQUENCE inside `[3]` and after `extnValue`,
+  ignored; anything after the INTEGER inside `[0]`, `STRUCTURE`, with the flattening case whose producer SPKI
+  differs; a zero-length primitive `[3]` (`83 00`), `Parsed` and producer-unkeyable; a constructed `[1]` then `[3]`
+  carrying a non-minimal length, keyable because ct-go never visits `[3]` there), the more-lenient-than-JDK cases (a v1 or v2 certificate carrying
+  elements its version does not allow; unique-id content that is not BIT STRING content), times with an offset, without
+  seconds and with a day past the month's end (2026-02-31, rolling over to 2026-03-03), a 64 KB extension, BER indefinite lengths,
   non-minimal definite lengths, and a `Certificate` with trailing bytes.
 
 **Issuer corpus (zero tolerance).** Every certificate in Mozilla's `intermediates` Remote Settings
@@ -2592,7 +2726,8 @@ collection marks CRLite-enrolled, `SHA-256(rawSpki)` must be a key of the live f
 **Corpus record schema (one for all four kinds; committed).**
 `{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome,
 fields | unavailable}], class ∈ {D7_LENIENCY, D2_REENCODE_ALLOW, D3_DIVERGENCE, D1_DOM,
-FUZZ_FINDING, ISSUER_CORPUS}, justification, added}`. Goldens for 3a/3b/4 are computed at admission
+FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, the
+duplicate-extension class, or a named 3c/Firefox class), justification, added}`. Goldens for 3a/3b/4 are computed at admission
 so the PR replay evaluates D1–D3 offline, JDK-only. The release review mechanically lists entries
 whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves across all enrolled
 CAs, the `x509-limbo` vectors, the D7 corpus, the issuer corpus) is pinned by a committed SHA-256
@@ -2673,11 +2808,13 @@ divergence and D1-dom records reviewed at each release with every entry justifie
      under a cross-issuing key with a different serial is a data-model limit, not a walker defect.
   6. The named M1 Android residual (§5.2), including any app whose NSC carries a `<domain-config>`, where `RootTrustManager` rejects a null host: the plain-delegate binding and any path where the
      null-host extension call is unavailable.
-  7. **Decided (revision 11): kept, matching Firefox.** A certificate issued without embedded SCTs,
-     with an empty list or with a malformed list yields `NO_SCTS`, which allows in `DEFAULT`: an
-     issuance-time opt-out from checking. Firefox skips CRLite without usable SCT timestamps and
-     falls to OCSP, which revokt does not do; `STRICT` rejects; the `rustls-upki` verifier rejects a
-     malformed list (§3.2 divergence).
+  7. **Decided (revision 11): kept; revision 33 narrows the Firefox match.** A certificate issued without
+     embedded SCTs, or whose every SCT list fails under §9.2 (for example an empty list, a first item that fails, an inner identifier other than `0x04`; §9.2 states every case), yields `NO_SCTS`, which allows in `DEFAULT`: an issuance-time
+     opt-out from checking. Firefox skips CRLite without usable SCT timestamps and falls to OCSP, which
+     revokt does not do; `STRICT` rejects; the `rustls-upki` verifier rejects a malformed list (§3.2
+     divergence). A list §9.2 accepts in part, which Firefox and webpki fail whole, is queried, so `STRICT`
+     then sees the CRLite answer, not `NO_SCTS`. SCTs are not verified in M1: a forged covered SCT on a key
+     outside a filter's universe gets an arbitrary answer, a residual that predates revision 33.
   8. **Decided (revision 11): kept, matching Firefox.** `PARSE_FAILED` on the leaf allows in
      `DEFAULT`, so a leaf encoding the platform accepts and the Kotlin parser rejects is unchecked;
      the subscriber controls leaf content only at issuance under CA linting, and the §9.2
@@ -2831,7 +2968,68 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   `RevocationCheckInput::new(CertSerial, IssuerSpkiHash, Vec<CtTimestamp>)` and `Store::check` are
   public, which is what `revokt-upki-shim` calls.
 - Crates: `clubcard` 0.3.4, `clubcard-crlite` 0.6.2 (MPL-2.0, Exhibit A only); `upki`/`rustls-upki`
-  1.0.x; `canonical_json` 0.7.0.
+  1.0.x; `canonical_json` 0.7.0; the oracle-3a reference crates are pinned exactly when oracle 3a lands with the 0.1
+  oracle issue, by `=` requirements in `revokt-oracle/Cargo.toml` and the workspace `native/Cargo.lock`:
+
+  | Crate | Version | sha256 |
+  |---|---|---|
+  | `x509-parser` | 0.18.1 | `d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202` |
+  | asn1-rs | 0.7.2 | `b7f43a50ac4fdca5df8e885c21b835997f0a1cdee65494a6847694a98652d9d8` |
+  | nom | 7.1.3 | `d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a` |
+
+  The SCT-list behaviour §9.2 states was probed on 2026-10-22, and each part comes from one place in the code:
+  - `parse_extension0` discards each extension parser's rest;
+  - `map_parser(take(len), …)` discards the rest of the declared region, and `map_parser(length_data(be_u16), …)` the rest of each item;
+  - `many1(complete(item))` keeps the items before the first failure;
+  - asn1-rs `Header::from_der` takes any long-form length;
+  - asn1-rs `TryFrom<Any> for &[u8]` checks the tag number only.
+
+  That behaviour becomes a committed `revokt-oracle` test with one case per §9.2 sentence and per D7 SCT entry, landing
+  with oracle 3a. The same cases, with §9.2's expected outcomes (∅ on the `3A_HEADER_LAX` and `3A_TBS_LAX` rows), run against
+  3b's SCT and TBS walks, so a misreading of §9.2 in either walk fails a case rather than passing as agreement. A bump of any of the three crates is a spec revision. It re-runs that test. If a case changes,
+  §9.2 is re-derived, every 3a golden is recomputed, and the diff is reviewed as D2/D3 entries. revokt's rule
+  changes only through §9.2, never by following the crate.
+- JDK `X509CertInfo` trailing-element behaviour, probed 2026-10-22 on JDK 21 (SUN `CertificateFactory`, each input
+  `getEncoded()`-identical).
+  - **Accepted:**
+    - a trailing NULL or non-TLV bytes after `[3]`;
+    - a NULL between `subjectPublicKeyInfo` and `[3]`, which drops the extensions;
+    - a NULL, or non-TLV bytes, after the `Extensions` SEQUENCE inside `[3]` and after `extnValue`;
+    - a trailing element, or non-TLV bytes, inside `[0]` (revokt keeps `[0]` strict: ct-go flattens `[0]`, reading
+      the elements after the INTEGER as TBS fields, while the stdlib serial re-parse is bounded; confirmed below);
+    - a stopping element with a non-minimal header (`05 81 00`);
+    - a v2 certificate with only `[1]`;
+    - constructed `[1]`/`[2]`;
+    - `[2]` before `[1]`, or `[1]` twice, either of which drops the extensions;
+    - a primitive `[3]`, ignored;
+    - two `[3]` elements, the second ignored.
+  - **Rejected:**
+    - an element after `signatureValue` ("signed overrun");
+    - a trailing element in `Validity`;
+    - a non-`Extension` element in the `Extensions` SEQUENCE;
+    - an element between an extension's OID and its value;
+    - a malformed element where the read stops;
+    - a v1 certificate with anything after `subjectPublicKeyInfo` ("no more data allowed for version 1 certificate");
+    - a v2 certificate with any element after the unique IDs, a NULL or `extensions` ("Extensions not allowed in v2
+      certificate");
+    - day 00, month 13, hour 24 and second 60 in a time (the day past a month's end is accepted and rolls over);
+    - unique-id content `00`, `08 00` or `09 00` (an empty BIT STRING, or padding bits outside 0 to 7).
+
+- Producer `[0]` behaviour, run 2026-10-23 with `mozilla/crlite` `go/types` at `008299826177078097b2539a57564b7926916a2c`
+  (Go 1.27.3, certificate-transparency-go v1.3.2, zcrypto `v0.0.0-20260109180747-df961ee46a6c`):
+  - a NULL after the version INTEGER inside `[0]` is rejected ("SerialNumber: tags don't match"), so ct-go read the
+    NULL as the serial, which shows that the explicit `[0]` is not bounded;
+  - a `[0]` holding a fake serial `0f ac` and a complete fake TBS prefix, followed by the real serial `0e a1`, is
+    accepted and keyed `0ea1`, the outer serial and the JDK's (`getSerialNumber()` = `0xea1`);
+  - a `[0]` holding a complete fake TBS prefix with a different SPKI is accepted. The producer keys the outer serial, the JDK's (the
+    `RawValue` re-parse is bounded), but records the inner SPKI as `RawSubjectPublicKeyInfo`, which the JDK does not
+    read. As an issuer, such a certificate's children would be keyed under an SPKI the platform never sees.
+  - The producer rejects a zero-length explicit `[3]` (`83 00`, `a3 00`): "explicit tag has no child".
+
+  These are the first oracle-4 records; the part-3 issue (#11) commits the CLI and its goldens.
+
+  The probe is committed as the parser's JDK cross-check (`CertificateParserJdkTest` and its `certs/variants/`, on
+  `feat/9-der-tbs-parser`, PR #16). `DerValue`'s time forms are stated in §9.2.
 - Ktor 3.6.0; CIO 2-arg, TLS 1.2 only. OkHttp 5.5.0 at `lysine-dev/okhttp`; the Android cleaner
   calls the 3-arg method with `"RSA"`; builder TLS fields are `internal`.
 - Conscrypt: hostname-only path passes null OCSP/SCT data; `checkCT` only when `host != null &&
