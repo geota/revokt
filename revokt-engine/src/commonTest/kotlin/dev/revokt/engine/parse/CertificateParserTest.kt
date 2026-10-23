@@ -255,15 +255,8 @@ class CertificateParserTest {
     }
 
     @Test
-    fun `parser ignores trailing elements inside the version wrapper and after extnValue`() {
-        val p =
-            parsed(
-                TestCert(
-                    version = tlv(0xa0, tlv(0x02, bytes(2)), tlv(0x05)),
-                    extensions = listOf(seq(TestDer.oid("1.2.3"), tlv(0x04, bytes(7)), tlv(0x05))),
-                ),
-            )
-        assertContentEquals(bytes(2), p.tbs.version!!.bytes(p.der))
+    fun `parser ignores trailing elements after extnValue and keeps the version wrapper strict`() {
+        val p = parsed(TestCert(extensions = listOf(seq(TestDer.oid("1.2.3"), tlv(0x04, bytes(7)), tlv(0x05)))))
         assertContentEquals(
             bytes(7),
             p.tbs.extensions
@@ -271,34 +264,35 @@ class CertificateParserTest {
                 .value
                 .bytes(p.der),
         )
-        assertEquals(
-            listOf(IgnoredSite.VERSION_TRAILING, IgnoredSite.EXTENSION_TRAILING),
-            p.ignoredElements.map { it.site },
-        )
+        assertEquals(listOf(IgnoredSite.EXTENSION_TRAILING), p.ignoredElements.map { it.site })
+        // ct-go flattens [0], so a trailing element there would make the producer key a different serial.
+        val trailing = failed(TestCert(version = tlv(0xa0, tlv(0x02, bytes(2)), tlv(0x05))).der)
+        assertContains(trailing.detail, "after version")
     }
 
     @Test
     fun `parser ignores non-TLV bytes where the JDK never reads them`() {
-        // Spec §9.2 revision 33: the JDK accepts junk that is not a TLV after the INTEGER in [0], after the
-        // Extensions SEQUENCE in [3] and after extnValue, so revokt skips those bytes unparsed.
+        // Spec §9.2 revision 33: the JDK accepts junk that is not a TLV after the Extensions SEQUENCE in [3] and
+        // after extnValue, so revokt skips those bytes unparsed.
         val junk = bytes(0xff, 0xff)
         val ext = seq(TestDer.oid("1.2.3"), tlv(0x04, bytes(7)))
         val p =
             parsed(
                 TestCert(
-                    version = tlv(0xa0, tlv(0x02, bytes(2)), junk),
                     extensions = listOf(seq(TestDer.oid("1.2.4"), tlv(0x04, bytes(8)), junk), ext),
                     extensionsWrapper = { exts -> tlv(0xa3, seq(*exts.toTypedArray()), junk) },
                 ),
             )
         assertEquals(listOf("1.2.4", "1.2.3"), p.tbs.extensions.map { it.oidDotted })
+        // The wrapper's trailing bytes are recorded before the list inside it is walked.
         assertEquals(
             listOf(
-                IgnoredSite.VERSION_TRAILING,
-                IgnoredSite.EXTENSIONS_WRAPPER_TRAILING, // recorded before the list inside it is walked
+                IgnoredSite.EXTENSIONS_WRAPPER_TRAILING,
                 IgnoredSite.EXTENSION_TRAILING,
             ),
-            p.ignoredElements.map { it.site },
+            p.ignoredElements.map {
+                it.site
+            },
         )
         assertTrue(p.ignoredElements.all { it.span.length == 2 })
     }

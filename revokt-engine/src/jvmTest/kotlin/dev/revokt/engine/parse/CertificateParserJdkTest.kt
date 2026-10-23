@@ -113,45 +113,50 @@ class CertificateParserJdkTest {
         }
     }
 
+    private enum class Expected {
+        /** The JDK accepts it; revokt parses it with the JDK's extension set and records what it ignored. */
+        TOLERATED,
+
+        /** As [TOLERATED], with nothing ignored (a constructed unique id is read, not skipped). */
+        TOLERATED_NOTHING_IGNORED,
+
+        /** The JDK accepts it, but §9.2 keeps it `STRUCTURE`: the producer flattens `[0]` and keys other bytes. */
+        JDK_ACCEPTS_KEPT_STRICT,
+
+        /** The JDK rejects it, and §9.2 keeps it `STRUCTURE`. */
+        STRICT,
+    }
+
+    private val variants: Map<String, Expected> =
+        mapOf(
+            "cert-null-after-signature" to Expected.STRICT,
+            "ext3-null-after-sequence" to Expected.TOLERATED,
+            "ext3-primitive-83" to Expected.TOLERATED,
+            "extension-null-after-extnvalue" to Expected.TOLERATED,
+            "extension-null-between-oid-and-value" to Expected.STRICT,
+            "extensions-seq-with-null-element" to Expected.STRICT,
+            "spki-then-null-then-uid" to Expected.TOLERATED,
+            "tbs-junk-after-extensions" to Expected.TOLERATED,
+            "tbs-junk-before-extensions" to Expected.STRICT,
+            "tbs-null-after-extensions" to Expected.TOLERATED,
+            "tbs-null-before-extensions" to Expected.TOLERATED,
+            "tbs-two-ext3" to Expected.TOLERATED,
+            "uid-81-twice" to Expected.TOLERATED,
+            "uid-82-then-81" to Expected.TOLERATED,
+            "uid-a2-constructed" to Expected.TOLERATED_NOTHING_IGNORED,
+            "uid-constructed-a1" to Expected.TOLERATED_NOTHING_IGNORED,
+            "validity-null-after-times" to Expected.STRICT,
+            "version-wrapper-trailing" to Expected.JDK_ACCEPTS_KEPT_STRICT,
+        )
+
     /**
-     * Spec §9.2 revision 33: the parse tolerates trailing elements exactly where the JDK does. Every structural variant
-     * of `letsencrypt.org-2` the JDK accepts must parse with the JDK's extension set; the ones it rejects at a place
-     * §9.2 keeps strict must be `STRUCTURE`. Regenerate the variants with `certs/variants/generate.py`.
+     * Spec §9.2 revision 33: the parse tolerates trailing elements at least where the JDK does, except inside `[0]`.
+     * Regenerate the variants with `certs/variants/generate.py`.
      */
     @Test
-    fun `parser accepts every structural variant the JDK accepts and rejects the strict ones`() {
+    fun `parser reads every structural variant as the spec assigns it against the JDK`() {
         val factory = CertificateFactory.getInstance("X.509")
-        val strict =
-            setOf(
-                "cert-null-after-signature",
-                "validity-null-after-times",
-                "extensions-seq-with-null-element",
-                "extension-null-between-oid-and-value",
-                "tbs-junk-before-extensions",
-            )
-        val names =
-            listOf(
-                "cert-null-after-signature",
-                "ext3-null-after-sequence",
-                "ext3-primitive-83",
-                "extension-null-after-extnvalue",
-                "extension-null-between-oid-and-value",
-                "extensions-seq-with-null-element",
-                "spki-then-null-then-uid",
-                "tbs-junk-after-extensions",
-                "tbs-junk-before-extensions",
-                "tbs-null-after-extensions",
-                "tbs-null-before-extensions",
-                "tbs-two-ext3",
-                "uid-81-twice",
-                "uid-82-then-81",
-                "uid-a2-constructed",
-                "uid-constructed-a1",
-                "validity-null-after-times",
-                "version-wrapper-trailing",
-            )
-        val tolerantWithoutIgnored = setOf("uid-a2-constructed", "uid-constructed-a1")
-        for (name in names) {
+        for ((name, expected) in variants) {
             val stream =
                 checkNotNull(javaClass.getResourceAsStream("certs/variants/$name.der")) { "missing variant $name" }
             val der = stream.use { it.readBytes() }
@@ -161,33 +166,40 @@ class CertificateParserJdkTest {
                         ByteArrayInputStream(der),
                     ) as X509Certificate
                 }.getOrNull()
-            val parse = CertificateParser.parse(der)
-            if (name in strict) {
-                assertNull(jdk, "$name: the JDK rejects it")
-                assertEquals(
-                    ParseReason.STRUCTURE,
-                    (parse as? CertificateParse.Failed)?.reason,
-                    "$name: §9.2 keeps it strict",
-                )
-                continue
+            checkVariant(name, expected, jdk, CertificateParser.parse(der))
+        }
+    }
+
+    private fun checkVariant(
+        name: String,
+        expected: Expected,
+        jdk: X509Certificate?,
+        parse: CertificateParse,
+    ) {
+        assertEquals(expected == Expected.STRICT, jdk == null, "$name: JDK acceptance")
+        when (expected) {
+            Expected.STRICT, Expected.JDK_ACCEPTS_KEPT_STRICT -> {
+                assertEquals(ParseReason.STRUCTURE, (parse as? CertificateParse.Failed)?.reason, "$name: kept strict")
             }
-            checkNotNull(jdk) { "$name: the JDK accepts it" }
-            val p =
-                (parse as? CertificateParse.Parsed)?.certificate
-                    ?: fail("$name: ${(parse as CertificateParse.Failed).detail}")
-            val oids = jdk.criticalExtensionOIDs.orEmpty() + jdk.nonCriticalExtensionOIDs.orEmpty()
-            assertEquals(
-                oids,
-                p.tbs.extensions
-                    .mapNotNull { it.oidDotted }
-                    .toSet(),
-                "$name extensions",
-            )
-            assertEquals(
-                name !in tolerantWithoutIgnored,
-                p.ignoredElements.isNotEmpty(),
-                "$name records what it ignored",
-            )
+
+            Expected.TOLERATED, Expected.TOLERATED_NOTHING_IGNORED -> {
+                val p =
+                    (parse as? CertificateParse.Parsed)?.certificate
+                        ?: fail("$name: ${(parse as CertificateParse.Failed).detail}")
+                val oids = jdk!!.criticalExtensionOIDs.orEmpty() + jdk.nonCriticalExtensionOIDs.orEmpty()
+                assertEquals(
+                    oids,
+                    p.tbs.extensions
+                        .mapNotNull { it.oidDotted }
+                        .toSet(),
+                    "$name extensions",
+                )
+                assertEquals(
+                    expected == Expected.TOLERATED,
+                    p.ignoredElements.isNotEmpty(),
+                    "$name records what it ignored",
+                )
+            }
         }
     }
 }

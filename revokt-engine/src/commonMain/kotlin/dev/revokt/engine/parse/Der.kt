@@ -50,9 +50,6 @@ internal enum class IgnoredSite {
     /** Bytes after the `[3]` extensions element, unparsed. */
     TBS_AFTER_EXTENSIONS,
 
-    /** Elements after the INTEGER inside `[0]`. */
-    VERSION_TRAILING,
-
     /** Elements after the `Extensions` SEQUENCE inside `[3]`. */
     EXTENSIONS_WRAPPER_TRAILING,
 

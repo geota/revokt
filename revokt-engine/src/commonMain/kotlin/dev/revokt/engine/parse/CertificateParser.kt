@@ -84,8 +84,8 @@ internal sealed class CertificateParse {
 
 /**
  * The one minimal parse of `Certificate` → `tbsCertificate` (spec §5.5, §9.2). Structurally strict except where the
- * JDK's `X509CertInfo` tolerates trailing elements (after `subjectPublicKeyInfo`, inside `[0]` and `[3]`, after
- * `extnValue`; each recorded as an [IgnoredElement]): definite lengths, single-byte tags in their places, the RFC 5280
+ * JDK's `X509CertInfo` tolerates trailing elements (after `subjectPublicKeyInfo`, inside `[3]`, after `extnValue`;
+ * each recorded as an [IgnoredElement]; `[0]` stays strict because the producer flattens it): definite lengths, single-byte tags in their places, the RFC 5280
  * elements in order, nothing after `Certificate`. Semantically lenient: names, keys, algorithm parameters and extension values are not
  * descended into; unknown or critical extensions, duplicate OIDs, any INTEGER serial (negative, empty, over 20 bytes)
  * and non-DER times are accepted. Returns [CertificateParse.Failed] for every rejection; no other exception escapes.
@@ -151,12 +151,9 @@ internal object CertificateParser {
         val version =
             r.readOptional(VERSION, HeaderSite.VERSION)?.let { wrapper ->
                 val inner = r.child(wrapper)
-                inner
-                    .read(
-                        INTEGER,
-                        HeaderSite.VERSION_INTEGER,
-                    ).also { inner.ignoreRest(IgnoredSite.VERSION_TRAILING) }
-                    .content
+                // Strict, unlike the rest of the tail (spec §9.2): ct-go does not bound explicit [0], so anything after
+                // the INTEGER becomes the producer's next TBS fields and it would key a different serial.
+                inner.read(INTEGER, HeaderSite.VERSION_INTEGER).also { inner.requireEnd("version") }.content
             }
         val serial = r.read(INTEGER, HeaderSite.SERIAL)
         val signature = r.read(SEQUENCE, HeaderSite.TBS_SIGNATURE)
