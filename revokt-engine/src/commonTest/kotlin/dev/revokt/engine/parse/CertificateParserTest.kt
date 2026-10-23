@@ -12,6 +12,7 @@ import dev.revokt.engine.parse.TestDer.tlv
 import dev.revokt.engine.parse.TestDer.tlvWithLength
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -170,14 +171,10 @@ class CertificateParserTest {
         val base = TestCert()
         val cases =
             mapOf(
-                "indefinite length" to
-                    tlvWithLength(0x30, bytes(0x80), base.tbs + base.outerAlgorithm + base.signature + bytes(0, 0)),
                 "length past the end" to tlvWithLength(0x30, bytes(0x82, 0x7f, 0xff), base.tbs),
-                "five-byte length" to tlvWithLength(0x30, bytes(0x85, 0, 0, 0, 0, 1), bytes(0)),
                 "reserved length byte" to tlvWithLength(0x30, bytes(0xff), ByteArray(0)),
                 "bytes after Certificate" to TestCert(outerTrailing = bytes(0)).der,
                 "element after signatureValue" to TestCert(certificateTrailing = tlv(0x05)).der,
-                "element after extensions" to TestCert(tbsTrailing = tlv(0x05)).der,
                 "serial that is not an INTEGER" to TestCert(serial = tlv(0x04, bytes(1))).der,
                 "validity with one time" to TestCert(validity = seq(tlv(0x17, ascii("261022134530Z")))).der,
                 "validity time of the wrong type" to
@@ -188,16 +185,132 @@ class CertificateParserTest {
                     TestCert(
                         extensions = listOf(seq(TestDer.oid("1.2.3"), tlv(0x01, bytes(0xff, 0xff)), tlv(0x04))),
                     ).der,
-                "version wrapper with two elements" to
-                    TestCert(version = tlv(0xa0, tlv(0x02, bytes(2)), tlv(0x02, bytes(2)))).der,
-                "multi-byte tag" to TestCert(spki = tlv(0x1f, bytes(0x81, 0x01))).der,
-                "unique ids out of order" to TestCert(uniqueIds = tlv(0x82, bytes(0)) + tlv(0x81, bytes(0))).der,
                 "empty input" to ByteArray(0),
                 "truncated header" to bytes(0x30),
             )
         for ((name, der) in cases) {
             assertEquals(ParseReason.STRUCTURE, failed(der).reason, name)
         }
+    }
+
+    @Test
+    fun `parser rejects indefinite, five-byte and multi-byte headers at the element that carries them`() {
+        val indefinite = failed(TestCert(serial = tlvWithLength(0x02, bytes(0x80), bytes(1, 0, 0))).der)
+        assertContains(indefinite.detail, "indefinite length for SERIAL")
+        val fiveByte = failed(TestCert(serial = tlvWithLength(0x02, bytes(0x85, 0, 0, 0, 0, 3), bytes(1, 2, 3))).der)
+        assertContains(fiveByte.detail, "length of 5 bytes for SERIAL")
+        val multiByte = failed(TestCert(uniqueIds = bytes(0x1f, 0x81, 0x01, 0x00)).der)
+        assertContains(multiByte.detail, "multi-byte tag for TBS_STOP")
+    }
+
+    @Test
+    fun `parser reads the TBS tail sequentially as the JDK does`() {
+        val ext = TestCert().extensions
+        val wrapper = tlv(0xa3, seq(*ext.toTypedArray()))
+        val nul = tlv(0x05)
+
+        fun tail(bytes: ByteArray) = parsed(TestCert(uniqueIds = bytes, extensions = emptyList()))
+        // Each case: the TBS tail after the SPKI, the extensions the JDK reads, the ignored sites.
+        val cases =
+            listOf(
+                Triple("trailing NULL after [3]", wrapper + nul, 2 to listOf(IgnoredSite.TBS_AFTER_EXTENSIONS)),
+                Triple(
+                    "non-TLV bytes after [3]",
+                    wrapper + bytes(0xff, 0xff, 0xff),
+                    2 to listOf(IgnoredSite.TBS_AFTER_EXTENSIONS),
+                ),
+                Triple(
+                    "NULL before [3]",
+                    nul + wrapper,
+                    0 to listOf(IgnoredSite.TBS_AFTER_STOP, IgnoredSite.TBS_AFTER_STOP),
+                ),
+                Triple("constructed [1] then [3]", bytes(0xa1, 2, 0, 1) + wrapper, 2 to emptyList()),
+                Triple("constructed [2] then [3]", bytes(0xa2, 2, 0, 1) + wrapper, 2 to emptyList()),
+                Triple(
+                    "[2] before [1]",
+                    tlv(0x82, bytes(0)) + tlv(0x81, bytes(0)) + wrapper,
+                    0 to listOf(IgnoredSite.TBS_AFTER_STOP, IgnoredSite.TBS_AFTER_STOP),
+                ),
+                Triple(
+                    "[1] twice",
+                    tlv(0x81, bytes(0)) + tlv(0x81, bytes(0)) + wrapper,
+                    0 to listOf(IgnoredSite.TBS_AFTER_STOP, IgnoredSite.TBS_AFTER_STOP),
+                ),
+                Triple("primitive [3]", bytes(0x83, 0), 0 to listOf(IgnoredSite.TBS_AFTER_STOP)),
+                Triple("two [3]", wrapper + wrapper, 2 to listOf(IgnoredSite.TBS_AFTER_EXTENSIONS)),
+                Triple(
+                    "NULL after the Extensions SEQUENCE",
+                    tlv(0xa3, seq(*ext.toTypedArray()), nul),
+                    2 to listOf(IgnoredSite.EXTENSIONS_WRAPPER_TRAILING),
+                ),
+            )
+        for ((name, bytes, expected) in cases) {
+            val p = tail(bytes)
+            assertEquals(expected.first, p.tbs.extensions.size, name)
+            assertEquals(expected.second, p.ignoredElements.map { it.site }, name)
+            for (ignored in p.ignoredElements) {
+                assertTrue(ignored.span.start < ignored.span.end && ignored.span.end <= p.tbs.tlv.end, name)
+            }
+        }
+    }
+
+    @Test
+    fun `parser ignores trailing elements inside the version wrapper and after extnValue`() {
+        val p =
+            parsed(
+                TestCert(
+                    version = tlv(0xa0, tlv(0x02, bytes(2)), tlv(0x05)),
+                    extensions = listOf(seq(TestDer.oid("1.2.3"), tlv(0x04, bytes(7)), tlv(0x05))),
+                ),
+            )
+        assertContentEquals(bytes(2), p.tbs.version!!.bytes(p.der))
+        assertContentEquals(
+            bytes(7),
+            p.tbs.extensions
+                .single()
+                .value
+                .bytes(p.der),
+        )
+        assertEquals(
+            listOf(IgnoredSite.VERSION_TRAILING, IgnoredSite.EXTENSION_TRAILING),
+            p.ignoredElements.map { it.site },
+        )
+    }
+
+    @Test
+    fun `parser records a long-form length with a leading zero and not a minimal long form`() {
+        val body = ByteArray(128) { 0x41 }
+        val nonMinimal = parsed(TestCert(subject = tlvWithLength(0x30, bytes(0x82, 0x00, 0x80), body)))
+        assertEquals(listOf(HeaderSite.SUBJECT), nonMinimal.nonMinimalHeaders.map { it.site })
+        val minimal = parsed(TestCert(subject = tlvWithLength(0x30, bytes(0x81, 0x80), body)))
+        assertEquals(emptyList(), minimal.nonMinimalHeaders.map { it.site })
+        val shortInLong = parsed(TestCert(subject = tlvWithLength(0x30, bytes(0x81, 0x05), ByteArray(5))))
+        assertEquals(listOf(HeaderSite.SUBJECT), shortInLong.nonMinimalHeaders.map { it.site })
+    }
+
+    @Test
+    fun `parser step count is pinned for the reference certificate`() {
+        // Headers, one per element, OID and time content: a change here is a change to what D5 measures.
+        val p = parsed(TestCert())
+        assertEquals(105, p.steps)
+        assertTrue(p.steps <= 8L * p.der.size + 1024)
+    }
+
+    @Test
+    fun `parser treats any non-zero critical byte as true and decodes year zero`() {
+        val critical =
+            parsed(TestCert(extensions = listOf(seq(TestDer.oid("1.2.3"), tlv(0x01, bytes(0x01)), tlv(0x04)))))
+        assertTrue(
+            critical.tbs.extensions
+                .single()
+                .critical,
+        )
+        val year0 =
+            parsed(
+                TestCert(validity = seq(tlv(0x18, ascii("00000101000000Z")), tlv(0x18, ascii("99991231235959.999Z")))),
+            ).tbs.validity
+        assertEquals(-62_167_219_200_000, year0.notBeforeMillis)
+        assertEquals(253_402_300_799_999, year0.notAfterMillis)
     }
 
     @Test

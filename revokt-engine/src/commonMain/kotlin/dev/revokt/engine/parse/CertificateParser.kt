@@ -47,6 +47,7 @@ internal class ParsedCertificate(
     val signatureAlgorithm: Span,
     val signatureValue: Span,
     val nonMinimalHeaders: List<NonMinimalHeader>,
+    val ignoredElements: List<IgnoredElement>,
     val steps: Long,
 ) {
     fun rawSerial(): ByteArray = tbs.serial.bytes(der)
@@ -82,9 +83,10 @@ internal sealed class CertificateParse {
 }
 
 /**
- * The one minimal parse of `Certificate` → `tbsCertificate` (spec §5.5, §9.2). Structurally strict: definite lengths,
- * single-byte tags in their places, exactly the RFC 5280 elements in order, nothing after `Certificate`, nothing after
- * the last TBS element. Semantically lenient: names, keys, algorithm parameters and extension values are not
+ * The one minimal parse of `Certificate` → `tbsCertificate` (spec §5.5, §9.2). Structurally strict except where the
+ * JDK's `X509CertInfo` tolerates trailing elements (after `subjectPublicKeyInfo`, inside `[0]` and `[3]`, after
+ * `extnValue`; each recorded as an [IgnoredElement]): definite lengths, single-byte tags in their places, the RFC 5280
+ * elements in order, nothing after `Certificate`. Semantically lenient: names, keys, algorithm parameters and extension values are not
  * descended into; unknown or critical extensions, duplicate OIDs, any INTEGER serial (negative, empty, over 20 bytes)
  * and non-DER times are accepted. Returns [CertificateParse.Failed] for every rejection; no other exception escapes.
  */
@@ -99,6 +101,7 @@ internal object CertificateParser {
     private const val ISSUER_UID = 0x81
     private const val SUBJECT_UID = 0x82
     private const val EXTENSIONS = 0xa3
+    private const val CONSTRUCTED = 0x20
 
     fun parse(der: ByteArray): CertificateParse {
         if (der.size > RevoktLimits.MAX_CERT_BYTES) {
@@ -128,7 +131,15 @@ internal object CertificateParser {
         val signature = fields.read(BIT_STRING, HeaderSite.SIGNATURE_VALUE)
         fields.requireEnd("signatureValue")
         val tbs = parseTbs(der, fields.child(tbsTlv), tbsTlv, ctx)
-        return ParsedCertificate(der, tbs, algorithm.tlv, signature.content, ctx.nonMinimal.toList(), ctx.steps)
+        return ParsedCertificate(
+            der,
+            tbs,
+            algorithm.tlv,
+            signature.content,
+            ctx.nonMinimal.toList(),
+            ctx.ignored.toList(),
+            ctx.steps,
+        )
     }
 
     private fun parseTbs(
@@ -140,7 +151,12 @@ internal object CertificateParser {
         val version =
             r.readOptional(VERSION, HeaderSite.VERSION)?.let { wrapper ->
                 val inner = r.child(wrapper)
-                inner.read(INTEGER, HeaderSite.VERSION_INTEGER).also { inner.requireEnd("version") }.content
+                inner
+                    .read(
+                        INTEGER,
+                        HeaderSite.VERSION_INTEGER,
+                    ).also { inner.ignoreRest(IgnoredSite.VERSION_TRAILING) }
+                    .content
             }
         val serial = r.read(INTEGER, HeaderSite.SERIAL)
         val signature = r.read(SEQUENCE, HeaderSite.TBS_SIGNATURE)
@@ -148,13 +164,7 @@ internal object CertificateParser {
         val validity = parseValidity(der, r.child(r.read(SEQUENCE, HeaderSite.VALIDITY)), ctx)
         val subject = r.read(SEQUENCE, HeaderSite.SUBJECT)
         val spki = r.read(SEQUENCE, HeaderSite.SPKI)
-        r.readOptional(ISSUER_UID, HeaderSite.ISSUER_UID)
-        r.readOptional(SUBJECT_UID, HeaderSite.SUBJECT_UID)
-        val extensions =
-            r.readOptional(EXTENSIONS, HeaderSite.EXTENSIONS_WRAPPER)?.let {
-                parseExtensions(der, r.child(it), ctx)
-            }
-        r.requireEnd("tbsCertificate")
+        val extensions = parseTail(der, r, ctx)
         return Tbs(
             tlv.tlv,
             version,
@@ -193,13 +203,45 @@ internal object CertificateParser {
         return r.readAny(site)
     }
 
+    /**
+     * The elements after `subjectPublicKeyInfo`, read in turn as the JDK's `X509CertInfo` reads them (spec §9.2):
+     * `[1]` then `[2]`, each in either form, then a constructed `[3]`. The first element that does not fit ends the read;
+     * it must be a well-formed TLV and is ignored with everything after it. After `[3]` the rest is ignored unparsed.
+     */
+    private fun parseTail(
+        der: ByteArray,
+        r: DerReader,
+        ctx: ParseContext,
+    ): List<Extension> {
+        var tag = r.peekTag()
+        if (tag and CONSTRUCTED.inv() == ISSUER_UID) {
+            r.readAny(HeaderSite.ISSUER_UID)
+            tag = r.peekTag()
+        }
+        if (tag and CONSTRUCTED.inv() == SUBJECT_UID) {
+            r.readAny(HeaderSite.SUBJECT_UID)
+            tag = r.peekTag()
+        }
+        if (tag == EXTENSIONS) {
+            val extensions = parseExtensions(der, r.child(r.readAny(HeaderSite.EXTENSIONS_WRAPPER)), ctx)
+            r.ignoreRest(IgnoredSite.TBS_AFTER_EXTENSIONS)
+            return extensions
+        }
+        if (r.hasMore()) {
+            val stop = r.readAny(HeaderSite.TBS_STOP)
+            ctx.ignored.add(IgnoredElement(stop.tlv, IgnoredSite.TBS_AFTER_STOP))
+            r.ignoreRest(IgnoredSite.TBS_AFTER_STOP)
+        }
+        return emptyList()
+    }
+
     private fun parseExtensions(
         der: ByteArray,
         wrapper: DerReader,
         ctx: ParseContext,
     ): List<Extension> {
         val list = wrapper.read(SEQUENCE, HeaderSite.EXTENSIONS)
-        wrapper.requireEnd("extensions")
+        wrapper.ignoreRest(IgnoredSite.EXTENSIONS_WRAPPER_TRAILING)
         val r = wrapper.child(list)
         val out = ArrayList<Extension>()
         while (r.hasMore()) {
@@ -213,7 +255,7 @@ internal object CertificateParser {
                 fail("critical BOOLEAN of ${critical.content.length} bytes")
             }
             val value = e.read(OCTET_STRING, HeaderSite.EXTENSION_VALUE)
-            e.requireEnd("extension")
+            e.ignoreRest(IgnoredSite.EXTENSION_TRAILING)
             ctx.steps += oid.content.length
             val isCritical = critical != null && der[critical.content.start].toInt() != 0
             out.add(Extension(oid.content, Oid.dotted(der, oid.content), isCritical, value.content, ext.tlv))

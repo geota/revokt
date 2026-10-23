@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.parse
 
+import dev.revokt.ParseReason
 import java.io.ByteArrayInputStream
 import java.math.BigInteger
 import java.security.cert.CertificateFactory
@@ -10,6 +11,7 @@ import java.security.cert.X509Certificate
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -107,6 +109,84 @@ class CertificateParserJdkTest {
                     .single()
                     .value.length > 100,
                 "$name SCT list is present and non-trivial",
+            )
+        }
+    }
+
+    /**
+     * Spec §9.2 revision 33: the parse tolerates trailing elements exactly where the JDK does. Every structural variant
+     * of `letsencrypt.org-2` the JDK accepts must parse with the JDK's extension set; the ones it rejects at a place
+     * §9.2 keeps strict must be `STRUCTURE`. Regenerate the variants with `certs/variants/generate.py`.
+     */
+    @Test
+    fun `parser accepts every structural variant the JDK accepts and rejects the strict ones`() {
+        val factory = CertificateFactory.getInstance("X.509")
+        val strict =
+            setOf(
+                "cert-null-after-signature",
+                "validity-null-after-times",
+                "extensions-seq-with-null-element",
+                "extension-null-between-oid-and-value",
+                "tbs-junk-before-extensions",
+            )
+        val names =
+            listOf(
+                "cert-null-after-signature",
+                "ext3-null-after-sequence",
+                "ext3-primitive-83",
+                "extension-null-after-extnvalue",
+                "extension-null-between-oid-and-value",
+                "extensions-seq-with-null-element",
+                "spki-then-null-then-uid",
+                "tbs-junk-after-extensions",
+                "tbs-junk-before-extensions",
+                "tbs-null-after-extensions",
+                "tbs-null-before-extensions",
+                "tbs-two-ext3",
+                "uid-81-twice",
+                "uid-82-then-81",
+                "uid-a2-constructed",
+                "uid-constructed-a1",
+                "validity-null-after-times",
+                "version-wrapper-trailing",
+            )
+        val tolerantWithoutIgnored = setOf("uid-a2-constructed", "uid-constructed-a1")
+        for (name in names) {
+            val stream =
+                checkNotNull(javaClass.getResourceAsStream("certs/variants/$name.der")) { "missing variant $name" }
+            val der = stream.use { it.readBytes() }
+            val jdk =
+                runCatching {
+                    factory.generateCertificate(
+                        ByteArrayInputStream(der),
+                    ) as X509Certificate
+                }.getOrNull()
+            val parse = CertificateParser.parse(der)
+            if (name in strict) {
+                assertNull(jdk, "$name: the JDK rejects it")
+                assertEquals(
+                    ParseReason.STRUCTURE,
+                    (parse as? CertificateParse.Failed)?.reason,
+                    "$name: §9.2 keeps it strict",
+                )
+                continue
+            }
+            checkNotNull(jdk) { "$name: the JDK accepts it" }
+            val p =
+                (parse as? CertificateParse.Parsed)?.certificate
+                    ?: fail("$name: ${(parse as CertificateParse.Failed).detail}")
+            val oids = jdk.criticalExtensionOIDs.orEmpty() + jdk.nonCriticalExtensionOIDs.orEmpty()
+            assertEquals(
+                oids,
+                p.tbs.extensions
+                    .mapNotNull { it.oidDotted }
+                    .toSet(),
+                "$name extensions",
+            )
+            assertEquals(
+                name !in tolerantWithoutIgnored,
+                p.ignoredElements.isNotEmpty(),
+                "$name records what it ignored",
             )
         }
     }

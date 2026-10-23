@@ -37,6 +37,29 @@ internal class NonMinimalHeader(
     val site: HeaderSite,
 )
 
+/** Bytes the parse skipped where the JDK's `X509CertInfo` tolerates them (spec §9.2), for the producer-keyability table. */
+internal class IgnoredElement(
+    val span: Span,
+    val site: IgnoredSite,
+)
+
+internal enum class IgnoredSite {
+    /** The first element after `subjectPublicKeyInfo` and the unique ids that is not `[3]`, and everything after it. */
+    TBS_AFTER_STOP,
+
+    /** Bytes after the `[3]` extensions element, unparsed. */
+    TBS_AFTER_EXTENSIONS,
+
+    /** Elements after the INTEGER inside `[0]`. */
+    VERSION_TRAILING,
+
+    /** Elements after the `Extensions` SEQUENCE inside `[3]`. */
+    EXTENSIONS_WRAPPER_TRAILING,
+
+    /** Elements after `extnValue` inside one `Extension`. */
+    EXTENSION_TRAILING,
+}
+
 /** Which element of `Certificate` a recorded header belongs to. */
 internal enum class HeaderSite {
     CERTIFICATE,
@@ -47,6 +70,7 @@ internal enum class HeaderSite {
     TBS_SIGNATURE,
     ISSUER,
     VALIDITY,
+    TBS_STOP,
     NOT_BEFORE,
     NOT_AFTER,
     SUBJECT,
@@ -67,6 +91,7 @@ internal enum class HeaderSite {
 internal class ParseContext {
     var steps: Long = 0
     val nonMinimal: MutableList<NonMinimalHeader> = ArrayList()
+    val ignored: MutableList<IgnoredElement> = ArrayList()
 }
 
 internal fun fail(message: String): Nothing = throw DerException(message)
@@ -109,11 +134,12 @@ internal class DerReader(
         val headerStart = position
         if (position >= limit) fail("missing $site at $position")
         val tag = der[position].toInt() and 0xff
+        // Reachable where the parse reads whatever comes next (the TBS stop element); the JDK rejects these too.
         if (tag and 0x1f == 0x1f) fail("multi-byte tag for $site at $position")
         position++
         val length = readLength(headerStart, site)
         if (length > limit - position) fail("$site at $headerStart declares $length bytes, ${limit - position} remain")
-        ctx.steps += position - headerStart
+        ctx.steps += position - headerStart + 1
         val content = Span(position, position + length)
         position += length
         return Tlv(tag, Span(headerStart, position), content)
@@ -124,6 +150,12 @@ internal class DerReader(
         tag: Int,
         site: HeaderSite,
     ): Tlv? = if (peekTag() == tag) readAny(site) else null
+
+    /** Skips the rest of this reader's range, recording it as ignored when non-empty. */
+    fun ignoreRest(site: IgnoredSite) {
+        if (position < limit) ctx.ignored.add(IgnoredElement(Span(position, limit), site))
+        position = limit
+    }
 
     fun requireEnd(what: String) {
         if (position != limit) fail("${limit - position} trailing bytes after $what")

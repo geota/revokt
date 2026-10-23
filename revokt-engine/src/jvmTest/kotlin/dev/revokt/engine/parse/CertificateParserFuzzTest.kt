@@ -27,7 +27,7 @@ class CertificateParserFuzzTest {
                 val c = first.certificate
                 check(c.steps <= 8L * data.size + 1024) { "D5: ${c.steps} steps for ${data.size} bytes" }
                 check(
-                    second is CertificateParse.Parsed && second.certificate.tbs.serial == c.tbs.serial,
+                    second is CertificateParse.Parsed && sameFields(c, second.certificate),
                 ) { "D6: second parse differs" }
                 val spans =
                     listOf(c.tbs.tlv, c.tbs.signature, c.tbs.issuer, c.tbs.subject, c.tbs.spki, c.signatureAlgorithm) +
@@ -38,8 +38,25 @@ class CertificateParserFuzzTest {
                     check(again.tlv == span) { "D6: TLV at $span re-reads to ${again.tlv}" }
                 }
             } else {
-                check(second is CertificateParse.Failed) { "D6: second parse differs" }
+                first as CertificateParse.Failed
+                check(
+                    second is CertificateParse.Failed && second.reason == first.reason && second.detail == first.detail,
+                ) {
+                    "D6: second parse differs"
+                }
             }
         }
+
+        private fun sameFields(
+            a: ParsedCertificate,
+            b: ParsedCertificate,
+        ): Boolean =
+            a.tbs.tlv == b.tbs.tlv && a.tbs.serial == b.tbs.serial && a.tbs.spki == b.tbs.spki &&
+                a.tbs.subject == b.tbs.subject &&
+                a.tbs.issuer == b.tbs.issuer && a.tbs.extensions.map { it.tlv } == b.tbs.extensions.map { it.tlv } &&
+                a.tbs.validity.notBeforeMillis == b.tbs.validity.notBeforeMillis &&
+                a.tbs.validity.notAfterMillis == b.tbs.validity.notAfterMillis &&
+                a.nonMinimalHeaders.map { it.offset } == b.nonMinimalHeaders.map { it.offset } &&
+                a.ignoredElements.map { it.span } == b.ignoredElements.map { it.span }
     }
 }

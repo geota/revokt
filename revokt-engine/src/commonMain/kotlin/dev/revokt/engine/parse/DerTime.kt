@@ -5,8 +5,9 @@ package dev.revokt.engine.parse
 
 /**
  * Lenient `UTCTime` (`0x17`) and `GeneralizedTime` (`0x18`) decoding to epoch milliseconds (spec §9.2: non-DER times are
- * accepted). Seconds are optional, fractional seconds are truncated to milliseconds, the zone may be `Z`, `±hhmm` or
- * absent (taken as UTC). `UTCTime` years below 50 are 20YY, otherwise 19YY (RFC 5280 §4.1.2.5.1). Anything else
+ * accepted). Minutes and seconds are optional and second 60 is accepted (both beyond the JDK, which only makes revokt
+ * the more lenient); fractional seconds are truncated to milliseconds; the zone may be `Z`, `±hhmm` or absent (taken
+ * as UTC). `UTCTime` years below 50 are 20YY, otherwise 19YY (RFC 5280 §4.1.2.5.1). Anything else
  * decodes to null; the certificate still parses.
  */
 internal object DerTime {
