@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":disableDependencyDashboard", "helpers:pinGitHubActionDigests"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "UTC",
+  "automerge": false,
+  "labels": ["kind/chore", "area/deps"],
+  "commitMessagePrefix": "chore(deps): ",
+  "commitMessageAction": "update",
+  "prBodyNotes": [
+    "A maintainer completes this PR: `./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256,pgp --export-keys -Prevokt.purityGate -Prevokt.ci --no-configuration-cache`, then pushes to this branch and adds the Trailers block (CONTRIBUTING §3)."
+  ],
+  "packageRules": [
+    { "matchManagers": ["gradle"], "groupName": "gradle dependencies", "groupSlug": "gradle" },
+    { "matchManagers": ["github-actions"], "groupName": "github actions", "groupSlug": "actions", "pinDigests": true },
+    { "matchManagers": ["npm"], "groupName": "commitlint", "groupSlug": "npm" },
+    { "matchPackageNames": ["org.jetbrains.kotlin:kotlin-gradle-plugin", "org.jetbrains.kotlin.multiplatform", "org.jetbrains.kotlin.jvm"], "groupName": "kotlin", "groupSlug": "kotlin", "prBodyNotes": ["A Kotlin bump may leave CodeQL's supported window; see CONTRIBUTING §6."] },
+    { "matchUpdateTypes": ["major"], "dependencyDashboardApproval": false, "labels": ["kind/chore", "area/deps", "size/XL"] }
+  ],
+  "gradle": { "enabled": true },
+  "lockFileMaintenance": { "enabled": false }
+}

@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+name: Task
+description: One unit of work (CONTRIBUTING §2). A task without a spec reference is labelled needs-spec.
+labels: ["kind/feat"]
+body:
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone
+      placeholder: "0.1"
+    validations:
+      required: true
+  - type: input
+    id: spec
+    attributes:
+      label: Spec sections implemented
+      placeholder: "§5.1 decision steps 2–3; §9 (k), (k2)"
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance test
+      description: Which §9 fixture ids, or which new fixture, prove this is done.
+    validations:
+      required: true
+  - type: textarea
+    id: depends
+    attributes:
+      label: Depends on
+      placeholder: "#12, #15"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes

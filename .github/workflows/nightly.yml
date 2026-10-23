@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Nightly (CONTRIBUTING §6): the native oracle job, fuzzing, the Android matrix and the minified-build tests. Each job
+# is added with its milestone; today only the native build skeleton and the purity compile run. Never a PR gate.
+name: nightly
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions: read-all
+
+jobs:
+  native:
+    name: native (oracles, upki shim)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: rust toolchain (pinned in native/rust-toolchain.toml)
+        run: rustup show
+      - name: build the native workspace
+        run: cargo build --locked --manifest-path native/Cargo.toml
+      - name: test the native workspace
+        run: cargo test --locked --manifest-path native/Cargo.toml
+
+  purity:
+    name: purity (linuxX64 compile)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      - name: konan cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+      - run: ./gradlew :revokt-engine:compileKotlinLinuxX64 :revokt-clubcard:compileKotlinLinuxX64 -Prevokt.purityGate --no-daemon
+
+  android:
+    name: android (emulator matrix; from 0.3)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'run/android')
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "The emulator matrix (API 26, 31, 34, 36) lands with milestone 0.3 (CONTRIBUTING §6)."

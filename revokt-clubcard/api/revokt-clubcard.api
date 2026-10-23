@@ -1,0 +1,3 @@
+public abstract interface annotation class dev/revokt/clubcard/RevoktInternalApi : java/lang/annotation/Annotation {
+}
+

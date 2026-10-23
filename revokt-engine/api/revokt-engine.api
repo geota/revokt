@@ -1,0 +1,50 @@
+public abstract interface annotation class dev/revokt/RevoktInternalApi : java/lang/annotation/Annotation {
+}
+
+public final class dev/revokt/RevoktLifecycle : java/lang/Enum {
+	public static final field CLOSED Ldev/revokt/RevoktLifecycle;
+	public static final field CREATED Ldev/revokt/RevoktLifecycle;
+	public static final field STARTED Ldev/revokt/RevoktLifecycle;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/RevoktLifecycle;
+	public static fun values ()[Ldev/revokt/RevoktLifecycle;
+}
+
+public final class dev/revokt/RevoktLimits {
+	public static final field ACCEPTANCE_MEMO_ENTRIES I
+	public static final field ACCEPTANCE_MEMO_TTL J
+	public static final field ANCHOR_REFRESH_MIN_INTERVAL J
+	public static final field CROSS_CALL_MEMO_ENTRIES I
+	public static final field ENGINE_CLOSE_DRAIN J
+	public static final field EVENT_RING_CAPACITY I
+	public static final field FALLBACK_MAX_PRESENTED I
+	public static final field FEED_HOST_HOLD J
+	public static final field FETCH_TIMEOUT J
+	public static final field INSTANCE Ldev/revokt/RevoktLimits;
+	public static final field MAX_BACKOFF J
+	public static final field MAX_CERT_BYTES I
+	public static final field MAX_CHANGESET_RECORDS I
+	public static final field MAX_DEPTH I
+	public static final field MAX_EXPLORED I
+	public static final field MAX_FILTER_BYTES J
+	public static final field MAX_JSON_BYTES J
+	public static final field MAX_MANIFEST_ENTRIES I
+	public static final field MAX_PRESENTED I
+	public static final field MAX_PRESENTED_BYTES J
+	public static final field MAX_RELATED_PER_LEVEL I
+	public static final field MAX_SYNC_BYTES J
+	public static final field MAX_TRUST_MANAGERS I
+	public static final field MAX_VERIFICATIONS I
+	public static final field MAX_X5U_BYTES J
+	public static final field MiB J
+	public static final field PATH_CACHE_ENTRIES I
+	public static final field PATH_CACHE_TTL J
+	public static final field READONLY_POLL_INTERVAL J
+	public static final field REJECTED_QUEUE_CAPACITY I
+	public static final field VERDICT_CACHE_ENTRIES I
+	public static final field VERDICT_CACHE_TTL J
+}
+
+public abstract interface annotation class dev/revokt/RevoktTestingApi : java/lang/annotation/Annotation {
+}
+

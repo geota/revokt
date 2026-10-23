@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+# actions/labeler v7 config: path-based area labels and the security label (CONTRIBUTING §2).
+"area/clubcard":
+  - changed-files:
+      - any-glob-to-any-file: ["revokt-clubcard/**"]
+"area/engine":
+  - changed-files:
+      - any-glob-to-any-file: ["revokt-engine/**"]
+"area/bom":
+  - changed-files:
+      - any-glob-to-any-file: ["revokt-bom/**"]
+"area/deps":
+  - changed-files:
+      - any-glob-to-any-file: ["gradle/libs.versions.toml", "gradle/verification-metadata.xml", "gradle/verification-keyring.keys", "**/*.lockfile", "renovate.json"]
+"area/repo":
+  - changed-files:
+      - any-glob-to-any-file: ["build-logic/**", ".github/**", "*.md", "docs/dev/**", "detekt*.yml", "REUSE.toml", ".commitlintrc.cjs"]
+"kind/spec":
+  - changed-files:
+      - any-glob-to-any-file: ["docs/spec/**", "docs/adr/**"]
+"security":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "revokt-clubcard/**"
+          - "**/verify/**"
+          - "**/walker/**"
+          - "**/RevoktTrustManager*"
+          - "**/parser/**"
+          - "**/fetch/**"
+          - "**/signature/**"
+          - "data/seed/**"
+          - ".github/**"
+          - "build-logic/**"
+          - "docs/spec/**"
+          - "gradle/libs.versions.toml"
+          - "gradle/verification-metadata.xml"
+          - "gradle/verification-keyring.keys"
+          - "**/*.lockfile"
+          - "renovate.json"
+          - ".commitlintrc.cjs"
+          - "REUSE.toml"
+          - "detekt.yml"
+          - "detekt-common.yml"
+          - "CODEOWNERS"
+          - "MAINTAINERS.md"

@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The fast commonMain purity check (CONTRIBUTING §3): no JVM types in revokt-engine/commonMain. The authoritative
+# gate is the linuxX64 compile under -Prevokt.purityGate; this catches the common case in milliseconds.
+
+build:
+  maxIssues: 0
+
+style:
+  active: true
+  ForbiddenImport:
+    active: true
+    imports:
+      - reason: 'commonMain is platform-neutral (spec §3 purity gate); JVM types belong in jvmMain.'
+        value: 'java.*'
+      - reason: 'commonMain is platform-neutral (spec §3 purity gate); JVM types belong in jvmMain.'
+        value: 'javax.*'
+      - reason: 'Use kotlin.concurrent.Volatile, not the JVM-only annotation.'
+        value: 'kotlin.jvm.Volatile'
+
+# Everything else off: this task is the purity check only.
+comments:
+  active: false
+complexity:
+  active: false
+coroutines:
+  active: false
+empty-blocks:
+  active: false
+exceptions:
+  active: false
+naming:
+  active: false
+performance:
+  active: false
+potential-bugs:
+  active: false

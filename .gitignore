@@ -1,0 +1,17 @@
+.gradle/
+build/
+**/build/
+
+.kotlin/
+.idea/
+*.iml
+.DS_Store
+local.properties
+/consumers/maven-consumer/target/
+/native/target/
+node_modules/
+*.hprof
+*.log
+
+# Gradle writes a binary keyring beside the ASCII one; only the .keys file is tracked (CONTRIBUTING §3)
+gradle/verification-keyring.gpg

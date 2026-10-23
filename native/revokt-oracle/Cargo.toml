@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "revokt-oracle"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# clubcard-crlite, upki, x509-parser, canonical_json: added by the 0.1 oracle issue, pinned in Cargo.lock.

@@ -1,0 +1,187 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The PR tier (CONTRIBUTING §6): `check` on the JDK matrix, `ci-extras`, `static`, `coverage`. Every job is a required
+# status check (Appendix B). Nightly and release live in their own workflows.
+name: ci
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main, "release/*"]
+
+permissions: read-all
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  # Gradle always runs on 21; the matrix JDK is the test launcher (`-Prevokt.testJdk`).
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+jobs:
+  check:
+    name: check (${{ matrix.label }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { jdk: "17", label: "17" }
+          - { jdk: "21", label: "21" }
+          - { jdk: "25", label: "lts" }
+          - { jdk: "27", label: "feature" }
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit   # switched to `block` once the warm-up job and cache restore exist (CONTRIBUTING §6)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: |
+            ${{ matrix.jdk }}
+            21
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          validate-wrappers: true
+      - name: check
+        run: >
+          ./gradlew check
+          -Prevokt.testJdk=${{ matrix.jdk }}
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_25_X64,JAVA_HOME_27_X64
+          --no-daemon
+      - name: coverage artifact (JDK 21 only)
+        if: matrix.jdk == '21'
+        run: ./gradlew koverXmlReport --no-daemon
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.jdk == '21'
+        with:
+          name: coverage-${{ github.sha }}
+          path: build/reports/kover/report.xml
+          if-no-files-found: error
+          retention-days: 14
+      - name: baseline for the coverage gate (main only)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.jdk == '21' && github.ref == 'refs/heads/main'
+        with:
+          name: coverage-main
+          path: build/reports/kover/report.xml
+          overwrite: true
+          retention-days: 90
+
+  check-os:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: macos-15
+          - os: windows
+            runner: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      - name: check (engine and clubcard only; file locking and ATOMIC_MOVE paths)
+        run: ./gradlew :revokt-engine:check :revokt-clubcard:check --no-daemon
+
+  ci-extras:
+    name: ci-extras
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: purity compile, consumers (Android modules from 0.3)
+        run: ./gradlew check -Prevokt.ci --no-daemon
+
+  static:
+    name: static
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - name: reuse lint
+        run: pipx run reuse==6.2.0 lint
+      - name: actionlint (download script pinned by commit)
+        run: |
+          curl -sSfL -o download-actionlint.bash https://raw.githubusercontent.com/rhysd/actionlint/03d0035246f3e81f36aed592ffb4bebf33a03106/scripts/download-actionlint.bash
+          bash download-actionlint.bash 1.7.7
+          ./actionlint -color
+
+  labeler:
+    name: labeler
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          sync-labels: true
+
+  dependency-submission:
+    name: dependency-submission (main; feeds dependency review and the graph)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/dependency-submission@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+
+  coverage:
+    name: coverage
+    needs: check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-${{ github.sha }}
+          path: pr-coverage
+      - name: compare with main (not below; 90 % target by 0.2)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/coverage_compare.py pr-coverage/report.xml

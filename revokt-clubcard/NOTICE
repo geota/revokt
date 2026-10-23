@@ -1,0 +1,4 @@
+revokt-clubcard
+A translation of Mozilla's `clubcard` and `clubcard-crlite` crates (query and decoding only), MPL-2.0.
+Upstream: https://github.com/mozilla/clubcard and https://github.com/mozilla/clubcard-crlite (see UPSTREAM.md).
+Apache-2.0 glue under dev.revokt.clubcard.api; MPL-2.0 translations under dev.revokt.clubcard.port (spec §3.1).

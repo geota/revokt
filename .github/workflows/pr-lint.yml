@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# pr-lint (CONTRIBUTING §5): template sections, trailers survive the squash, the Spec: rule by type, issue link,
+# the Independent review comment in the solo-maintainer phase, the trademark rule. commitlint on the title.
+name: pr-lint
+
+# The Independent review comment (ADR-0005) is picked up on the next `ready_for_review`, `edited` or `synchronize`
+# event; a comment alone cannot re-run a check on the PR head.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  commitlint:
+    name: commitlint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}   # the commitlint config comes from the base branch
+          persist-credentials: false
+          sparse-checkout: |
+            .commitlintrc.cjs
+          sparse-checkout-cone-mode: false
+      - name: policy files come from the base branch (fail closed; the bootstrap is the one exception)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          missing=0
+          for f in .commitlintrc.cjs; do [ -f "$f" ] || missing=1; done
+          if [ "$missing" = 0 ]; then exit 0; fi
+          # Fail closed unless this is the bootstrap: the base is the EMPTY root tree and the head lives in this
+          # repository (its author already has write access, so running its scripts grants nothing new).
+          empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          if [ "$(git rev-parse 'HEAD^{tree}')" != "$empty_tree" ] || [ "$SAME_REPO" != "true" ]; then
+            echo "::error::policy files are missing on the base branch and this is not the bootstrap; refusing to read policy from the PR head (CONTRIBUTING §5)"
+            exit 1
+          fi
+          echo "::warning::bootstrap PR: base is the empty root commit; taking the policy files from the same-repository head $HEAD_SHA"
+          git fetch --depth 1 origin "$HEAD_SHA"
+          git checkout FETCH_HEAD -- .commitlintrc.cjs
+      - name: lint the PR title (the squash subject)
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          npm install --no-save --no-audit --no-fund @commitlint/cli@21.2.4 @commitlint/config-conventional@21.2.4
+          printf '%s\n' "$TITLE" | ./node_modules/.bin/commitlint --config .commitlintrc.cjs
+
+  pr-lint:
+    name: pr-lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write   # applies the ai-assisted and size/XL labels (CONTRIBUTING §2, §12)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}   # the policy (scripts, MAINTAINERS.md) comes from the base branch
+          persist-credentials: false
+          sparse-checkout: |
+            MAINTAINERS.md
+            .github/scripts/pr_lint.js
+          sparse-checkout-cone-mode: false
+      - name: policy files come from the base branch (fail closed; the bootstrap is the one exception)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          missing=0
+          for f in MAINTAINERS.md .github/scripts/pr_lint.js; do [ -f "$f" ] || missing=1; done
+          if [ "$missing" = 0 ]; then exit 0; fi
+          # Fail closed unless this is the bootstrap: the base is the EMPTY root tree and the head lives in this
+          # repository (its author already has write access, so running its scripts grants nothing new).
+          empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          if [ "$(git rev-parse 'HEAD^{tree}')" != "$empty_tree" ] || [ "$SAME_REPO" != "true" ]; then
+            echo "::error::policy files are missing on the base branch and this is not the bootstrap; refusing to read policy from the PR head (CONTRIBUTING §5)"
+            exit 1
+          fi
+          echo "::warning::bootstrap PR: base is the empty root commit; taking the policy files from the same-repository head $HEAD_SHA"
+          git fetch --depth 1 origin "$HEAD_SHA"
+          git checkout FETCH_HEAD -- MAINTAINERS.md .github/scripts/pr_lint.js
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const script = fs.readFileSync('.github/scripts/pr_lint.js', 'utf8');
+            await eval(`(async () => { ${script} })()`);

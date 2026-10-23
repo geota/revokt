@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# cooling (CONTRIBUTING §8): 24 h between the last push and merge on data/seed/**, the release workflows and
+# **/verify/**. Paused (reports success) while MAINTAINERS.md lists one maintainer (ADR-0005). Reports success at once
+# for other PRs, and a schedule re-runs it so a pending PR turns green without a push. Advisory fixes and reverts are exempt.
+name: cooling
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: write
+
+jobs:
+  cooling:
+    name: cooling
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}   # the policy comes from the base branch
+          persist-credentials: false
+          sparse-checkout: |
+            MAINTAINERS.md
+            .github/scripts/cooling.js
+          sparse-checkout-cone-mode: false
+      - name: policy files come from the base branch (fail closed; the bootstrap is the one exception)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          missing=0
+          for f in MAINTAINERS.md .github/scripts/cooling.js; do [ -f "$f" ] || missing=1; done
+          if [ "$missing" = 0 ]; then exit 0; fi
+          # Fail closed unless this is the bootstrap: the base is the EMPTY root tree and the head lives in this
+          # repository (its author already has write access, so running its scripts grants nothing new).
+          empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          if [ "$(git rev-parse 'HEAD^{tree}')" != "$empty_tree" ] || [ "$SAME_REPO" != "true" ]; then
+            echo "::error::policy files are missing on the base branch and this is not the bootstrap; refusing to read policy from the PR head (CONTRIBUTING §5)"
+            exit 1
+          fi
+          echo "::warning::bootstrap PR: base is the empty root commit; taking the policy files from the same-repository head $HEAD_SHA"
+          git fetch --depth 1 origin "$HEAD_SHA"
+          git checkout FETCH_HEAD -- MAINTAINERS.md .github/scripts/cooling.js
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const script = fs.readFileSync('.github/scripts/cooling.js', 'utf8');
+            await eval(`(async () => { ${script} })()`);

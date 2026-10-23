@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: 2026 revokt contributors -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>dev.revokt.consumer</groupId>
+  <artifactId>maven-consumer</artifactId>
+  <version>0.0.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <revokt.version>0.1.0-SNAPSHOT</revokt.version>
+    <maven.compiler.release>11</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <!-- The Maven consumer references both the KMP root POM and the -jvm artifact (spec §3, BOM row). -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>dev.revokt</groupId>
+        <artifactId>revokt-bom</artifactId>
+        <version>${revokt.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>dev.revokt</groupId>
+      <artifactId>revokt-engine-jvm</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>dev.revokt</groupId>
+      <artifactId>revokt-engine</artifactId>
+      <version>${revokt.version}</version>
+      <type>pom</type>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.14.0</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>

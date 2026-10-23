@@ -1,0 +1,26 @@
+# Protected paths (CONTRIBUTING §5): one approving maintainer who is a code owner, plus the author, neither an agent.
+# Every maintainer in MAINTAINERS.md is listed on every protected path (a personal account has no teams).
+# The same list lives in .github/protected-paths.txt for the protected-paths Action; keep them identical.
+
+/revokt-clubcard/                  @geota
+/**/verify/                        @geota
+/**/walker/                        @geota
+/**/RevoktTrustManager*            @geota
+/**/parser/                        @geota
+/**/fetch/                         @geota
+/**/signature/                     @geota
+/data/seed/                        @geota
+/.github/                          @geota
+/build-logic/                      @geota
+/docs/spec/                        @geota
+/gradle/libs.versions.toml         @geota
+/gradle/verification-metadata.xml  @geota
+/gradle/verification-keyring.keys  @geota
+/**/*.lockfile                     @geota
+/renovate.json                     @geota
+/.commitlintrc.cjs                 @geota
+/REUSE.toml                        @geota
+/detekt.yml                        @geota
+/detekt-common.yml                 @geota
+/CODEOWNERS                        @geota
+/MAINTAINERS.md                    @geota

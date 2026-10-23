@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release (CONTRIBUTING §9). Disabled during the solo-maintainer phase (ADR-0005): the `release` environment does not
+# exist yet, so the deploy job cannot run. The build and verification steps run on dispatch so the pipeline is exercised.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer to release (vX.Y.Z); the tag is created by the workflow, never by hand"
+        required: true
+
+permissions: read-all
+
+jobs:
+  build:
+    name: build and verify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-disabled: true   # never a cache in release or reproducibility jobs (CONTRIBUTING §3)
+      - name: version is SemVer
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
+      - name: check, api, golden fixture
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: ./gradlew check apiCheck -Prevokt.version="${VERSION#v}" --no-daemon
+      - name: reproducible build (second clean build must match)
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          ./gradlew clean assemble -Prevokt.version="${VERSION#v}" --no-daemon --no-build-cache
+          find . -path '*/build/libs/*.jar' -not -path './build-logic/*' -exec sha256sum {} \; | sort > first.sha256
+          ./gradlew clean assemble -Prevokt.version="${VERSION#v}" --no-daemon --no-build-cache
+          find . -path '*/build/libs/*.jar' -not -path './build-logic/*' -exec sha256sum {} \; | sort > second.sha256
+          diff first.sha256 second.sha256
+
+  publish:
+    name: publish (needs the release environment; after the solo phase)
+    needs: build
+    if: vars.RELEASE_ENABLED == 'true'   # the repository variable is set in the PR that adds the second maintainer and creates the release environment (ADR-0005)
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - run: echo "tag via revokt-release[bot], PGP sign, attest, Central Portal USER_MANAGED upload, GitHub release with jars, .asc, .sigstore.json and provenance (CONTRIBUTING §9)"
