@@ -30,6 +30,16 @@ Status: **draft spec / project proposal, revision 33** · Target: JVM 11+ and An
 - "Malformed list → `NO_SCTS`" in §3.2 (twice), §4 (`CrliteQuery.scts`), §6.1, §6.2 and §10 item 7 now reads
   "no list that parses under §9.2". §10 item 7 says the Firefox match is narrowed: a list §9.2 accepts in
   part is queried, and `STRICT` then sees the CRLite answer.
+- §9.2 "Parser contract" (Independent review of the parser, PR #16): the TBS read now tolerates trailing elements wherever the JDK's
+  `X509CertInfo` does, closing a D1 violation that made such leaves `PARSE_FAILED` and dropped such intermediates
+  (`NO_ISSUER`), which fails open in `DEFAULT`. The tolerated places are:
+  - after `subjectPublicKeyInfo`, read sequentially as optional `[1]`, `[2]` (either form) and constructed `[3]`;
+  - inside `[0]` and `[3]` after the first element;
+  - inside an `Extension` after `extnValue`.
+
+  Ignored elements are recorded for `producerKeyable`. The D8 note on trailing SEQUENCE elements follows.
+- §5.1 `Cert.notBefore`/`notAfter` are `Long?`: the parse yields null for a time that does not decode, which only
+  platform-rejected input reaches.
 - Appendix A pins `x509-parser` 0.18.1, asn1-rs 0.7.2 and nom 7.1.3 by sha256 through `revokt-oracle`'s
   `Cargo.lock`. The probed behaviour becomes a committed `revokt-oracle` test, and bumping any of the three
   crates is a spec revision that re-runs it.
@@ -1617,7 +1627,7 @@ the fallback is `PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback wh
 // Declarations the walker and the §9.1 harness compile against. Walk, WalkPath, Cert, CandidateIndex and reconstruct are `internal`
 // to revokt-engine; the walker-only harness and the Jazzer walker fuzzer live in revokt-engine's own test source set; revokt-testing's
 // reference walker takes List<ByteArray> and returns the Set<String> of lowercase-hex leaf-issuer SPKI hashes (value equality), so it needs no internal type.
-internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray, val sig: ByteArray, val tbsSigAlg: ByteArray, val tbsSigOid: String, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long, val notAfter: Long, val producerKeyable: Boolean, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
+internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray, val sig: ByteArray, val tbsSigAlg: ByteArray, val tbsSigOid: String, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long? /* null when the time does not decode (§9.2; every JDK-accepted form decodes) */, val notAfter: Long?, val producerKeyable: Boolean, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
 internal class WalkPath(val certs: List<Cert>, val terminal: TerminalKind)   // leaf → … → terminal; distinct from Finding.Path
 internal sealed interface Walk {                          // every variant carries unsupportedOids (related candidates only), findings and stats: WalkStats (verifications, candidatesExplored, relatedExploredAtLeaf, unrelatedExploredAtLeaf), built at the three return sites
     class Found(val paths: List<WalkPath>, val leafKeys: Set<ByteString>, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
@@ -2518,8 +2528,19 @@ whose list parses under the SCT-list rule here. The rule follows `x509-parser` 0
 - **Ignored bytes.** Bytes after the inner `OCTET STRING`, after the declared region and inside an item after its signature are ignored and never parsed as items.
 - **Partial lists.** The list keeps every item before the first item that fails to parse. It fails when its first item fails, which includes an empty list and an item of length 0. A list that fails
 contributes nothing; `NO_SCTS` iff the union is empty (the union is monotone under "one covered SCT
-suffices" and SCTs never enter the key). Structurally strict: definite lengths only, tags and
-lengths well-formed (the SCT list's inner length follows the rule above), no trailing bytes after `Certificate`; **non-minimal definite lengths are
+suffices" and SCTs never enter the key). **Trailing elements are tolerated where the JDK's `X509CertInfo` tolerates them**; ct-go likewise ignores extra elements at the end of a SEQUENCE. The JDK behaviour was probed on JDK 21 (Appendix A), and each case below is a D7 entry:
+- **After `subjectPublicKeyInfo` in `tbsCertificate`,** the remaining elements are read in turn:
+  - the next is `issuerUniqueID` if it is context tag 1 in either form;
+  - then `subjectUniqueID` if it is context tag 2 in either form;
+  - then `extensions` if it is a constructed context tag 3.
+
+  The first element that does not fit ends the read. It must be a well-formed TLV, and it is ignored together with everything after it. After `extensions`, the remaining bytes are ignored unparsed.
+- **Inside `[0]` and inside `[3]`,** elements after the first are ignored.
+- **Inside an `Extension`,** elements after `extnValue` are ignored.
+
+Ignored elements contribute no field. Their offsets are recorded for the `producerKeyable` table. For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, exactly as the JDK reads it. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none; revokt takes the JDK's view, which only adds extensions and SCTs.
+
+**Everywhere else the parse is structurally strict.** Lengths must be definite, and tags and lengths well-formed (the SCT list's inner length follows the rule above). `Certificate`, `Validity`, the `Extensions` SEQUENCE and each `Extension` before its `extnValue` hold exactly their elements, and no bytes may follow `Certificate`; **non-minimal definite lengths are
 accepted for extraction but, at a header the producer's *fatal* walks visit, mark the certificate `producerKeyable = false`** (one inside an uninspected value does not, and neither does one reached only by a non-fatal sub-parse: ct-go reports every error of the SCT-list extension's inner `OCTET STRING` and TLS list through `NonFatalErrors`, Mozilla's `ParseCertificate` returns the certificate anyway and ct-fetch logs and continues, so a non-minimal length there is keyable, and revokt's `x509-parser`-pinned SCT parse accepts it and extracts the SCTs; the JDK preserves
 them through `getEncoded()`; the producer rejects them; decision step 3 then yields
 `PARSE_FAILED(PRODUCER_UNKEYABLE)` and never queries, property D8). **`producerKeyable` is an exact
@@ -2579,7 +2600,7 @@ unwrapped; `getCriticalExtensionOIDs()`. Raw-byte equality is asserted against 3
   an inverted issuer block); D8 enforces that; each entry is kept with the producer's error so a
   producer change can be re-evaluated.
 - **D8 producer-keyability (0.1 gate, zero tolerance)**: `producerKeyable(encoded) == (oracle 4
-  accepts)` for every input where `parse(encoded)` is `Parsed`, on every corpus, committed and secondary, and on the fuzz corpus (the predicate has no value on `ParseFailed`: Go ignores trailing `SEQUENCE` elements revokt's structurally strict parse rejects as `STRUCTURE`, and over-cap inputs never reach the parser; oracle-4 outcomes on `ParseFailed(STRUCTURE)` inputs are recorded as a D4-class metric); a zcrypto-only
+  accepts)` for every input where `parse(encoded)` is `Parsed`, on every corpus, committed and secondary, and on the fuzz corpus (the predicate has no value on `ParseFailed`: Go ignores trailing `SEQUENCE` elements, and revokt ignores them only where the rule above does, elsewhere rejecting them as `STRUCTURE`, and over-cap inputs never reach the parser; oracle-4 outcomes on `ParseFailed(STRUCTURE)` inputs are recorded as a D4-class metric); a zcrypto-only
   acceptance is producer-keyable (in the D1 domain) and is recorded in a separate zcrypto-only list
   with the ct-go error, so a producer change that drops the zcrypto fallback can be re-evaluated.
 - **D1-raw (informational)**: inputs where `encoded ≠ b`, or `parse(b)` fails while
@@ -2893,6 +2914,25 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   with oracle 3a. A bump of any of the three crates is a spec revision. It re-runs that test. If a case changes,
   §9.2 is re-derived, every 3a golden is recomputed, and the diff is reviewed as D2/D3 entries. revokt's rule
   changes only through §9.2, never by following the crate.
+- JDK `X509CertInfo` trailing-element behaviour, probed 2026-10-22 on JDK 21 (SUN `CertificateFactory`, each input
+  `getEncoded()`-identical).
+  - **Accepted:**
+    - a trailing NULL or non-TLV bytes after `[3]`;
+    - a NULL between `subjectPublicKeyInfo` and `[3]`, which drops the extensions;
+    - a NULL after the `Extensions` SEQUENCE inside `[3]`, and after `extnValue`;
+    - a trailing element inside `[0]`;
+    - constructed `[1]`/`[2]`;
+    - `[2]` before `[1]`, or `[1]` twice, either of which drops the extensions;
+    - a primitive `[3]`, ignored;
+    - two `[3]` elements, the second ignored.
+  - **Rejected:**
+    - an element after `signatureValue` ("signed overrun");
+    - a trailing element in `Validity`;
+    - a non-`Extension` element in the `Extensions` SEQUENCE;
+    - an element between an extension's OID and its value;
+    - a malformed element where the read stops.
+
+  The probe is the parser's committed JDK cross-check (`CertificateParserJdkTest`).
 - Ktor 3.6.0; CIO 2-arg, TLS 1.2 only. OkHttp 5.5.0 at `lysine-dev/okhttp`; the Android cleaner
   calls the 3-arg method with `"RSA"`; builder TLS fields are `internal`.
 - Conscrypt: hostname-only path passes null OCSP/SCT data; `checkCT` only when `host != null &&
