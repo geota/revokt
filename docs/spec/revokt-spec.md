@@ -49,8 +49,9 @@ Status: **draft spec / project proposal, revision 33** · Target: JVM 11+ and An
   time forms, now stated in §9.2 (the JDK's day rollover included) with a fail-closed rule for a null time; D2's
   Java fields gain `notBefore`/`notAfter`. §5.5's "structurally strict" is qualified.
   Oracle 3b walks the TBS tail by the same rule, and D7 gains the cases. `[0]` stays strict: ct-go does not
-  bound explicit `[0]`, so a trailing element there makes the producer key a different serial than revokt reads,
-  which would be a `STRICT` bypass. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
+  bound explicit `[0]`, so a trailing element there changes what ct-go accepts and which SPKI it records, the key's
+  SPKI when the certificate is an issuer. A crafted input could make the producer's key differ from revokt's, which
+  would be a `STRICT` bypass. The case is D1-dom by rule. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
   `producerKeyable`. The table models ct-go's struct walk. 3a's primitive-`[3]` reading is the declared class
   `3A_TBS_LAX`, stated in D2, D3 and the record schema. The end-to-end oracle excludes chains `x509-parser`
   rejects. D1's domain is defined against the reference view, with `[0]`-trailing input D1-dom outright. D2's
@@ -2561,7 +2562,7 @@ suffices" and SCTs never enter the key).
 - **Inside `[3]`,** the bytes after the `Extensions` SEQUENCE are ignored unparsed.
 - **Inside an `Extension`,** the bytes after `extnValue` are ignored unparsed.
 
-- **Inside `[0]` the parse stays strict:** nothing may follow the version INTEGER, and anything there is `STRUCTURE`. The JDK accepts it, but ct-go's explicit-tag walk does not bound `[0]` by its length (`parseField` advances by the inner element only), so the producer reads the elements after the INTEGER as the next TBS fields and keys a different serial and SPKI than the JDK. Such input is outside the D1 domain under the key-equality condition below, and must never be queried with revokt's bytes.
+- **Inside `[0]` the parse stays strict:** nothing may follow the version INTEGER, and anything there is `STRUCTURE`. The JDK accepts it, but ct-go's explicit-tag walk does not bound `[0]` by its length (`parseField` advances by the inner element only), so ct-go reads the elements after the INTEGER as the next TBS fields. It rejects most such inputs. One it accepts carries an SPKI and other fields the JDK does not read, which matter when the certificate is an issuer, while the keyed serial comes from the length-bounded stdlib re-parse of (ii) and is the JDK's. Whether the producer keys the same bytes therefore depends on crafted content, and the case is excluded by rule: such input is D1-dom (D1 below), never queried; oracle 4 confirms the walk when Go is available.
 
 Ignored bytes contribute no field. Their offsets are recorded, and the `producerKeyable` table evaluates them as ct-go's struct walk sees them (below). For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, as the JDK reads it. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none (oracle 4 decides keyability, D8); revokt takes the JDK's view, which only adds extensions and SCTs.
 
@@ -2578,7 +2579,7 @@ Ignored bytes contribute no field. Their offsets are recorded, and the `producer
 
 revokt also accepts optional minutes, second 60 (the first second of the next minute) and an absent zone, which it takes as UTC. A time outside these forms is null; only platform-rejected input reaches that. A rule that needs a null time fails closed: M4's distrust-after treats a null `notBefore` as after any distrust date.
 
-**Everywhere else the parse is structurally strict.** Lengths must be definite, and tags and lengths well-formed (the SCT list's inner length follows the rule above). `Certificate`, `Validity`, the `Extensions` SEQUENCE and each `Extension` before its `extnValue` hold exactly their elements, and no bytes may follow `Certificate`; **non-minimal definite lengths are
+**Everywhere else the parse is structurally strict.** Lengths must be definite, and tags and lengths well-formed (the SCT list's inner length follows the rule above). `Certificate`, `[0]` (exactly its INTEGER), `Validity`, the `Extensions` SEQUENCE and each `Extension` before its `extnValue` hold exactly their elements, and no bytes may follow `Certificate`; **non-minimal definite lengths are
 accepted for extraction but, at a header the producer's *fatal* walks visit, mark the certificate `producerKeyable = false`** (one inside an uninspected value does not, and neither does one reached only by a non-fatal sub-parse: ct-go reports every error of the SCT-list extension's inner `OCTET STRING` and TLS list through `NonFatalErrors`, Mozilla's `ParseCertificate` returns the certificate anyway and ct-fetch logs and continues, so a non-minimal length there is keyable, and revokt's §9.2 SCT-list rule accepts it and extracts the SCTs; the JDK preserves
 them through `getEncoded()`; the producer rejects them; decision step 3 then yields
 `PARSE_FAILED(PRODUCER_UNKEYABLE)` and never queries, property D8). **`producerKeyable` is an exact
@@ -2621,7 +2622,7 @@ reported, never rejected. Result: `Parsed | ParseFailed(reason)`; no other excep
 | 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()` | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
 | 2 | Conscrypt `CertificateFactory` (BoringSSL): `conscrypt-openjdk-uber` versions in the matrix; the **platform** Conscrypt on the instrumented tier | platform acceptance on Android; `encoded = getEncoded()` (`i2d_X509`) | as above | as above | as above |
 | 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error | `Ok` | `Err` | caught panic |
-| 3b | `revokt-oracle`: a minimal independent TLV locator (walk `Certificate → tbs`, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located, slice serial content, SPKI TLV, subject, issuer, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; no other semantics) | raw bytes where 3a rejects | located | not located | caught panic |
+| 3b | `revokt-oracle`: a minimal independent TLV locator (walk `Certificate → tbs` with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located, slice serial content, SPKI TLV, subject, issuer, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; no other semantics) | raw bytes where 3a rejects | located | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
 | 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key this certificate and with which bytes | both calls return | `ParseCertificate` error or `NewSerialFromCertificate` panic (recovered in the shim) | unrecovered |
 
@@ -2643,7 +2644,8 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   reference view's, 3a else 3b). An input with any bytes after the version INTEGER inside `[0]` is D1-dom whatever
   oracle 4 keys. A violation is a P0 and
   a security advisory class once the input is CA/B-lint clean.
-- **D1-dom (recorded)**: platform-accepted inputs oracle 4 rejects, or accepts with other key bytes (the `[0]`
+- **D1-dom (recorded)**: platform-accepted inputs oracle 4 rejects, or accepts with key bytes other than the
+  reference view's, and any input with content after the INTEGER inside `[0]`, excluded by rule (the `[0]`
   flattening above). No filter can contain such a
   certificate and its key is outside the filter's universe, so it must never be queried (a query
   would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and with high probability under
@@ -2989,8 +2991,9 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     - a trailing NULL or non-TLV bytes after `[3]`;
     - a NULL between `subjectPublicKeyInfo` and `[3]`, which drops the extensions;
     - a NULL, or non-TLV bytes, after the `Extensions` SEQUENCE inside `[3]` and after `extnValue`;
-    - a trailing element, or non-TLV bytes, inside `[0]` (revokt keeps `[0]` strict: ct-go flattens `[0]` and keys
-      the elements after the INTEGER, from source; oracle 4 confirms when Go is available);
+    - a trailing element, or non-TLV bytes, inside `[0]` (revokt keeps `[0]` strict: ct-go flattens `[0]`, reading
+      the elements after the INTEGER as TBS fields, while the stdlib serial re-parse is bounded; from source, oracle 4
+      confirms when Go is available);
     - a stopping element with a non-minimal header (`05 81 00`);
     - a v2 certificate with only `[1]`;
     - constructed `[1]`/`[2]`;
