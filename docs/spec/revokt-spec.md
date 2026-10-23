@@ -41,10 +41,13 @@ Status: **draft spec / project proposal, revision 33** · Target: JVM 11+ and An
   `X509CertInfo` does, closing a D1 violation that made such leaves `PARSE_FAILED` and dropped such intermediates
   (`NO_ISSUER`), which fails open in `DEFAULT`. The tolerated places are:
   - after `subjectPublicKeyInfo`, read sequentially as optional `[1]`, `[2]` (either form) and constructed `[3]`;
-  - inside `[0]` and `[3]` after the first element;
-  - inside an `Extension` after `extnValue`.
+  - inside `[0]` and `[3]`, the bytes after the first element, unparsed;
+  - inside an `Extension`, the bytes after `extnValue`, unparsed.
 
-  Ignored elements are recorded for `producerKeyable`. The D8 note on trailing SEQUENCE elements follows.
+  Ignored bytes are recorded for `producerKeyable`. The D8 note on trailing SEQUENCE elements follows. revokt is
+  stated as more lenient than the JDK in three places: no version gating, unique-id content not inspected, and the
+  time forms, now stated in §9.2 with a fail-closed rule for a null time. §5.5's "structurally strict" is qualified.
+  Oracle 3b walks the TBS tail by the same rule, and D7 gains the cases.
 - §5.1 `Cert.notBefore`/`notAfter` are `Long?`: the parse yields null for a time that does not decode, which only
   platform-rejected input reaches.
 - Appendix A records `x509-parser` 0.18.1, asn1-rs 0.7.2 and nom 7.1.3 by sha256. They are pinned exactly in
@@ -1930,8 +1933,8 @@ sequence jump.
 ### 5.5 Engine evaluation (shared)
 All byte inputs come from one minimal DER parse of each certificate's `tbsCertificate`:
 `rawSerial`, `rawSpki` (complete TLV), `rawSubject`, `rawIssuer`, AKI/SKI, TBS `signature` and
-outer `signatureAlgorithm`, `notBefore`/`notAfter` (M4's distrust-after needs them; parsed from 0.1 so the corpus covers them), the SCT list, extension byte offsets, and `producerKeyable` (§9.2 D8). Structurally strict,
-semantically lenient, at least as lenient as the platforms (§9.2 differential parser oracle). The
+outer `signatureAlgorithm`, `notBefore`/`notAfter` (M4's distrust-after needs them; parsed from 0.1 so the corpus covers them), the SCT list, extension byte offsets, and `producerKeyable` (§9.2 D8). Structurally strict except where §9.2
+follows the JDK's TBS read, semantically lenient, at least as lenient as the platforms (§9.2 differential parser oracle). The
 leaf is parsed once at decision step 3; `PARSE_FAILED` applies to the leaf only; unparseable
 candidates are dropped. SCTs: only `(log_id, timestamp)` is used. **One catch boundary**: steps 2–3
 and `Evaluator.evaluate` (which throws `IllegalStateException` outside `STARTED`, §4, before any boundary) catch `Throwable` (every `VirtualMachineError` except `StackOverflowError` is rethrown; a `LinkageError` from a bad R8 config or a `StackOverflowError` is not a policy reject) into `ENGINE_ERROR`; the boundary closes at flow step 3, before event emission; **fired rules accumulate**: a throw after step 7 answered adds `ENGINE_ERROR` to the rules fired so far (`REVOKED` included) rather than replacing them, so a late failure is allow-safe by construction; `Verdict.path.status = NOT_WALKED` when
@@ -2540,17 +2543,30 @@ whose list parses under the SCT-list rule here. The rule follows `x509-parser` 0
 `NO_SCTS` iff the union is empty (the union is monotone under "one covered SCT
 suffices" and SCTs never enter the key).
 
-**Trailing elements are tolerated where the JDK's `X509CertInfo` tolerates them**; ct-go likewise ignores extra elements at the end of a SEQUENCE. The JDK behaviour was probed on JDK 21 (Appendix A), and each case below is a D7 entry:
+**Trailing elements are tolerated at least where the JDK's `X509CertInfo` tolerates them**; ct-go ignores extra elements at the end of a SEQUENCE, and the producer's outcome for each case is oracle 4's (D8). The JDK behaviour was probed on JDK 21 (Appendix A), and each case below is a D7 entry:
 - **After `subjectPublicKeyInfo` in `tbsCertificate`,** the remaining elements are read in turn:
-  - the next is `issuerUniqueID` if it is context tag 1 in either form;
-  - then `subjectUniqueID` if it is context tag 2 in either form;
+  - the next is `issuerUniqueID` if it is context tag 1 in either form (its content is not inspected);
+  - then `subjectUniqueID` if it is context tag 2 in either form (likewise);
   - then `extensions` if it is a constructed context tag 3.
 
   The first element that does not fit ends the read. It must be a well-formed TLV, and it is ignored together with everything after it. After `extensions`, the remaining bytes are ignored unparsed.
-- **Inside `[0]` and inside `[3]`,** elements after the first are ignored.
-- **Inside an `Extension`,** elements after `extnValue` are ignored.
+- **Inside `[0]` and inside `[3]`,** the bytes after the first element are ignored unparsed.
+- **Inside an `Extension`,** the bytes after `extnValue` are ignored unparsed.
 
-Ignored elements contribute no field. Their offsets are recorded for the `producerKeyable` table. For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, exactly as the JDK reads it. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none; revokt takes the JDK's view, which only adds extensions and SCTs.
+Ignored bytes contribute no field. Their offsets are recorded for the `producerKeyable` table. For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, as the JDK reads it.
+
+**Where revokt is more lenient than the JDK** (D4: the platform rejects such input first, so D1 is unaffected):
+- revokt does not gate on the version. The JDK rejects a v1 certificate with anything after `subjectPublicKeyInfo`, and a v2 certificate with `extensions`.
+- revokt does not inspect unique-id content. The JDK requires BIT STRING content.
+- revokt's time decoding is more lenient, as follows.
+
+**Times.** `notBefore` and `notAfter` decode at least as the JDK's `DerValue` does:
+- seconds optional;
+- `Z` or `±hhmm` in both `UTCTime` and `GeneralizedTime`;
+- `GeneralizedTime` fractions after `.` or `,` of any length, truncated to milliseconds;
+- a day of 1 to 31 in any month.
+
+revokt also accepts optional minutes, second 60 and an absent zone, which it takes as UTC. A time outside these forms is null; only platform-rejected input reaches that. A rule that needs a null time fails closed: M4's distrust-after treats a null `notBefore` as after any distrust date. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none; revokt takes the JDK's view, which only adds extensions and SCTs.
 
 **Everywhere else the parse is structurally strict.** Lengths must be definite, and tags and lengths well-formed (the SCT list's inner length follows the rule above). `Certificate`, `Validity`, the `Extensions` SEQUENCE and each `Extension` before its `extnValue` hold exactly their elements, and no bytes may follow `Certificate`; **non-minimal definite lengths are
 accepted for extraction but, at a header the producer's *fatal* walks visit, mark the certificate `producerKeyable = false`** (one inside an uninspected value does not, and neither does one reached only by a non-fatal sub-parse: ct-go reports every error of the SCT-list extension's inner `OCTET STRING` and TLS list through `NonFatalErrors`, Mozilla's `ParseCertificate` returns the certificate anyway and ct-fetch logs and continues, so a non-minimal length there is keyable, and revokt's §9.2 SCT-list rule accepts it and extracts the SCTs; the JDK preserves
@@ -2587,7 +2603,7 @@ reported, never rejected. Result: `Parsed | ParseFailed(reason)`; no other excep
 | 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()` | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
 | 2 | Conscrypt `CertificateFactory` (BoringSSL): `conscrypt-openjdk-uber` versions in the matrix; the **platform** Conscrypt on the instrumented tier | platform acceptance on Android; `encoded = getEncoded()` (`i2d_X509`) | as above | as above | as above |
 | 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error | `Ok` | `Err` | caught panic |
-| 3b | `revokt-oracle`: a minimal independent TLV locator (walk `Certificate → tbs`, slice serial content, SPKI TLV, subject, issuer, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; no other semantics) | raw bytes where 3a rejects | located | not located | caught panic |
+| 3b | `revokt-oracle`: a minimal independent TLV locator (walk `Certificate → tbs`, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located, slice serial content, SPKI TLV, subject, issuer, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; no other semantics) | raw bytes where 3a rejects | located | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
 | 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key this certificate and with which bytes | both calls return | `ParseCertificate` error or `NewSerialFromCertificate` panic (recovered in the shim) | unrecovered |
 
@@ -2656,7 +2672,13 @@ unwrapped; `getCriticalExtensionOIDs()`. Raw-byte equality is asserted against 3
   names, an empty subject, duplicate extension OIDs, **two SCT extensions** (empty list first,
   covered SCT second → union queries), an unknown critical extension, an SCT list whose declared
   length is longer than its content (the list fails) or shorter (the items that fit extracted), a malformed first SCT followed by valid ones (the list fails), a non-minimal length on the SCT extension's inner OCTET STRING, `81 nn` with nn < 0x80 and `84 00 00 00 nn` (required outcome: `Parsed`, `producerKeyable = true`, the list's SCTs extracted), an inner length `0x80` or `0xFF` (the list fails), an inner identifier other than `0x04` that is tag number 4 (for example `0x44`, `1F 04`; `3A_HEADER_LAX`: no pairs), a constructed inner OCTET STRING (the list fails), a non-zero SCT version (extracted), a truncated last SCT (the items before it extracted), trailing bytes after the inner OCTET STRING, after the declared list region and inside an SCT after its signature (ignored), an SCT hidden in ignored bytes (never extracted), a zero-length signature (extracted),
-  an inner identifier that is not tag number 4, such as `0x30` (the list fails in revokt and 3a alike, not `3A_HEADER_LAX`), a 64 KB extension, BER indefinite lengths,
+  an inner identifier that is not tag number 4, such as `0x30` (the list fails in revokt and 3a alike, not `3A_HEADER_LAX`),
+  the trailing-element cases of the §9.2 rule (bytes after `[3]`; an element between `subjectPublicKeyInfo` and `[3]`,
+  dropping the extensions; `[2]` before `[1]` and `[1]` twice, dropping them; constructed `[1]`/`[2]`; a primitive
+  `[3]`, ignored; two `[3]`, the second ignored; bytes after the Extensions SEQUENCE inside `[3]`, after the INTEGER
+  inside `[0]` and after `extnValue`, ignored), the more-lenient-than-JDK cases (a v1 or v2 certificate carrying
+  elements its version does not allow; unique-id content that is not BIT STRING content), times with an offset and
+  without seconds, a 64 KB extension, BER indefinite lengths,
   non-minimal definite lengths, and a `Certificate` with trailing bytes.
 
 **Issuer corpus (zero tolerance).** Every certificate in Mozilla's `intermediates` Remote Settings
@@ -2937,8 +2959,10 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   - **Accepted:**
     - a trailing NULL or non-TLV bytes after `[3]`;
     - a NULL between `subjectPublicKeyInfo` and `[3]`, which drops the extensions;
-    - a NULL after the `Extensions` SEQUENCE inside `[3]`, and after `extnValue`;
-    - a trailing element inside `[0]`;
+    - a NULL, or non-TLV bytes, after the `Extensions` SEQUENCE inside `[3]` and after `extnValue`;
+    - a trailing element, or non-TLV bytes, inside `[0]`;
+    - a stopping element with a non-minimal header (`05 81 00`);
+    - a v2 certificate with only `[1]`;
     - constructed `[1]`/`[2]`;
     - `[2]` before `[1]`, or `[1]` twice, either of which drops the extensions;
     - a primitive `[3]`, ignored;
@@ -2948,9 +2972,13 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     - a trailing element in `Validity`;
     - a non-`Extension` element in the `Extensions` SEQUENCE;
     - an element between an extension's OID and its value;
-    - a malformed element where the read stops.
+    - a malformed element where the read stops;
+    - a v1 certificate with anything after `subjectPublicKeyInfo` ("no more data allowed for version 1 certificate");
+    - a v2 certificate with `extensions` ("Extensions not allowed in v2 certificate");
+    - unique-id content `00`, `08 00` or `09 00` (an empty BIT STRING, or padding bits outside 0 to 7).
 
-  The probe is the parser's committed JDK cross-check (`CertificateParserJdkTest`).
+  The probe is committed as the parser's JDK cross-check (`CertificateParserJdkTest` and its `certs/variants/`, on
+  `feat/9-der-tbs-parser`, PR #16). `DerValue`'s time forms are stated in §9.2.
 - Ktor 3.6.0; CIO 2-arg, TLS 1.2 only. OkHttp 5.5.0 at `lysine-dev/okhttp`; the Android cleaner
   calls the 3-arg method with `"RSA"`; builder TLS fields are `internal`.
 - Conscrypt: hostname-only path passes null OCSP/SCT data; `checkCT` only when `host != null &&
