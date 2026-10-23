@@ -278,6 +278,32 @@ class CertificateParserTest {
     }
 
     @Test
+    fun `parser ignores non-TLV bytes where the JDK never reads them`() {
+        // Spec §9.2 revision 33: the JDK accepts junk that is not a TLV after the INTEGER in [0], after the
+        // Extensions SEQUENCE in [3] and after extnValue, so revokt skips those bytes unparsed.
+        val junk = bytes(0xff, 0xff)
+        val ext = seq(TestDer.oid("1.2.3"), tlv(0x04, bytes(7)))
+        val p =
+            parsed(
+                TestCert(
+                    version = tlv(0xa0, tlv(0x02, bytes(2)), junk),
+                    extensions = listOf(seq(TestDer.oid("1.2.4"), tlv(0x04, bytes(8)), junk), ext),
+                    extensionsWrapper = { exts -> tlv(0xa3, seq(*exts.toTypedArray()), junk) },
+                ),
+            )
+        assertEquals(listOf("1.2.4", "1.2.3"), p.tbs.extensions.map { it.oidDotted })
+        assertEquals(
+            listOf(
+                IgnoredSite.VERSION_TRAILING,
+                IgnoredSite.EXTENSIONS_WRAPPER_TRAILING, // recorded before the list inside it is walked
+                IgnoredSite.EXTENSION_TRAILING,
+            ),
+            p.ignoredElements.map { it.site },
+        )
+        assertTrue(p.ignoredElements.all { it.span.length == 2 })
+    }
+
+    @Test
     fun `parser records a long-form length with a leading zero and not a minimal long form`() {
         val body = ByteArray(128) { 0x41 }
         val nonMinimal = parsed(TestCert(subject = tlvWithLength(0x30, bytes(0x82, 0x00, 0x80), body)))
