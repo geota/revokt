@@ -67,7 +67,7 @@ jobs:
         run: |
           mkdir -p docs/dev/rulesets
           gh api "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false" --jq 'sort_by(.id)' > docs/dev/rulesets/rulesets.json || echo '[]' > docs/dev/rulesets/rulesets.json
-          for id in $(jq -r '.[].id' docs/dev/rulesets/rulesets.json); do gh api "repos/${GITHUB_REPOSITORY}/rulesets/$id" --jq 'del(.updated_at, ._links, .node_id)' > "docs/dev/rulesets/ruleset-$id.json"; done
+          for id in $(jq -r '.[].id' docs/dev/rulesets/rulesets.json); do gh api "repos/${GITHUB_REPOSITORY}/rulesets/$id" --jq 'del(.updated_at, ._links, .node_id, .current_user_can_bypass)' > "docs/dev/rulesets/ruleset-$id.json"; done
           gh api "repos/${GITHUB_REPOSITORY}" --jq '{allow_squash_merge, allow_merge_commit, allow_rebase_merge, allow_auto_merge, delete_branch_on_merge, squash_merge_commit_title, squash_merge_commit_message, has_issues, web_commit_signoff_required}' > docs/dev/rulesets/repository.json
           gh api "repos/${GITHUB_REPOSITORY}/environments" --jq '[.environments[] | {name, protection_rules: [.protection_rules[] | {type, reviewers: [.reviewers[]? | {type, login: .reviewer.login}], prevent_self_review}], deployment_branch_policy}]' > docs/dev/rulesets/environments.json || echo '[]' > docs/dev/rulesets/environments.json
       # RULESETS_AUDIT_TOKEN is a fine-grained PAT (contents + pull-requests write) so the audit PR's checks run; a PR

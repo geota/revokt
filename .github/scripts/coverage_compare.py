@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
@@ -36,9 +37,21 @@ def baseline_rate(repo: str, token: str) -> float | None:
         arts = json.load(r).get("artifacts", [])
     if not arts:
         return None
+    # The archive endpoint answers 302 to blob storage, which rejects a forwarded Authorization header (401).
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+            return None
+
+    opener = urllib.request.build_opener(NoRedirect)
     req = urllib.request.Request(arts[0]["archive_download_url"], headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req) as r:
-        data = r.read()
+    try:
+        with opener.open(req) as r:
+            data = r.read()
+    except urllib.error.HTTPError as e:
+        if e.code not in (301, 302, 303, 307, 308):
+            raise
+        with urllib.request.urlopen(e.headers["Location"]) as r:
+            data = r.read()
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         name = next(n for n in z.namelist() if n.endswith(".xml"))
         with z.open(name) as f, open("baseline.xml", "wb") as out:

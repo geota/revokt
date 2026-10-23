@@ -444,8 +444,8 @@ approvals per section 5 · threads resolved · squash-merged by auto-merge. Done
 |---|---|---|---|
 | Title grammar, types, scopes | commitlint (`.commitlintrc.cjs`, Appendix A) on the PR title | PR (`opened`, `edited`, `synchronize`) | yes |
 | Trailers, `Spec:` rule, template sections, issue link, AI-assistance section | PR-lint workflow (ours) on the PR body, including the `trailers` check | PR (`opened`, `edited`, `synchronize`) | yes |
-| DCO sign-off on every commit (bots skipped) | DCO GitHub app (free) | PR | yes |
-| Required checks, linear history, no force-push, no deletion, 1 approval, last-push approval, conversation resolution, code-owner review, require up to date before merge | **rulesets** (free on public repositories, personal accounts included; JSON exported to `docs/dev/rulesets/`), on `main` and `release/*`; tag ruleset on `v*` | GitHub | yes |
+| DCO sign-off on every commit (bots skipped) | DCO GitHub app (free; installed by the owner, after which `DCO` joins the required checks) | PR | yes once installed |
+| Required checks, linear history, no force-push, no deletion, 1 approval, last-push approval, conversation resolution, code-owner review, require up to date before merge (in the solo phase, ADR-0005: 0 approvals and the three approver-dependent rules off) | **rulesets** (free on public repositories, personal accounts included; JSON exported to `docs/dev/rulesets/`), on `main` and `release/*`; tag ruleset on `v*` | GitHub | yes |
 | Two-person rule on protected paths | CODEOWNERS with every maintainer's handle (one owner approval is what GitHub enforces; the second person is the author) + the `protected-paths` Action counting maintainer approvals from `MAINTAINERS.md` | GitHub; PR | yes |
 | Formatting | ktlint | `check` | yes |
 | Complexity, forbidden APIs, custom rules | detekt + `revokt-detekt-rules` | `check` | yes |
@@ -585,11 +585,13 @@ over the PR body), not commitlint's, because they depend on the type and on the 
 
 ### Appendix B. Rulesets (exported to `docs/dev/rulesets/`; applied right after the bootstrap PR merges)
 
-`main` and `release/*`: require a PR; 1 approval (0 in the solo-maintainer phase, ADR-0005); dismiss stale
-approvals on push; require approval of the most recent reviewable push; require review from code owners;
+`main` and `release/*`: require a PR; 1 approval; dismiss stale approvals on push; require approval of the most
+recent reviewable push; require review from code owners (in the solo-maintainer phase, ADR-0005: 0 approvals, and the
+last-push-approval, code-owner-review and unattributed-changes rules off, since each needs an approver other than the
+single owner);
 required status checks `check (17)`, `check (21)`, `check (lts)`, `check (feature)`, `check (macos)`,
 `check (windows)`, `ci-extras`, `static`, `commitlint`, `pr-lint` (includes `trailers` and, in the solo
-phase, the `Independent review` comment), `protected-paths`, `DCO` (the app's exact check name), `codeql`, `osv`, `dependency-review`,
+phase, the `Independent review` comment), `protected-paths`, `DCO` (the app's exact check name; added once the app is installed), `codeql`, `osv`, `dependency-review`,
 `coverage`, `cooling` (reports success at once unless the PR touches `data/seed/**`, the release workflows or
 `**/verify/**`; paused throughout the solo phase, section 8); require branches to be up to date before merging; squash merge only (repository
 setting: allow squash merging only, default message "pull request title and description", auto-merge enabled);
