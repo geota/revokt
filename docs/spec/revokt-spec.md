@@ -2563,7 +2563,7 @@ suffices" and SCTs never enter the key).
 - **Inside `[3]`,** the bytes after the `Extensions` SEQUENCE are ignored unparsed.
 - **Inside an `Extension`,** the bytes after `extnValue` are ignored unparsed.
 
-- **Inside `[0]` the parse stays strict:** nothing may follow the version INTEGER, and anything there is `STRUCTURE`. The JDK accepts it, but ct-go's explicit-tag walk does not bound `[0]` by its length (`parseField` advances by the inner element only), so ct-go reads the elements after the INTEGER as the next TBS fields. It rejects most such inputs. One it accepts carries an SPKI and other fields the JDK does not read, which matter when the certificate is an issuer, while the keyed serial comes from the length-bounded stdlib re-parse of (ii) and is the JDK's. Whether the producer keys the same bytes therefore depends on crafted content, and the case is excluded by rule: such input is D1-dom (D1 below), never queried; oracle 4 confirms the walk when Go is available.
+- **Inside `[0]` the parse stays strict:** nothing may follow the version INTEGER, and anything there is `STRUCTURE`. The JDK accepts it, but ct-go's explicit-tag walk does not bound `[0]` by its length (`parseField` advances by the inner element only), so ct-go reads the elements after the INTEGER as the next TBS fields. It rejects most such inputs. One it accepts carries an SPKI and other fields the JDK does not read, which matter when the certificate is an issuer, while the keyed serial comes from the length-bounded stdlib re-parse of (ii) and is the JDK's. Whether the producer keys the same bytes therefore depends on crafted content, and the case is excluded by rule: such input is D1-dom (D1 below), never queried. Confirmed by running the producer (Appendix A).
 
 Ignored bytes contribute no field. Their offsets are recorded, and the `producerKeyable` table evaluates them as ct-go's struct walk sees them (below). For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, as the JDK reads it. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none (oracle 4 decides keyability, D8); revokt takes the JDK's view, which only adds extensions and SCTs.
 
@@ -2995,8 +2995,7 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     - a NULL between `subjectPublicKeyInfo` and `[3]`, which drops the extensions;
     - a NULL, or non-TLV bytes, after the `Extensions` SEQUENCE inside `[3]` and after `extnValue`;
     - a trailing element, or non-TLV bytes, inside `[0]` (revokt keeps `[0]` strict: ct-go flattens `[0]`, reading
-      the elements after the INTEGER as TBS fields, while the stdlib serial re-parse is bounded; from source, oracle 4
-      confirms when Go is available);
+      the elements after the INTEGER as TBS fields, while the stdlib serial re-parse is bounded; confirmed below);
     - a stopping element with a non-minimal header (`05 81 00`);
     - a v2 certificate with only `[1]`;
     - constructed `[1]`/`[2]`;
@@ -3014,6 +3013,17 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
       certificate");
     - day 00, month 13, hour 24 and second 60 in a time (the day past a month's end is accepted and rolls over);
     - unique-id content `00`, `08 00` or `09 00` (an empty BIT STRING, or padding bits outside 0 to 7).
+
+- Producer `[0]` behaviour, run 2026-10-23 with `mozilla/crlite` `go/types` at `008299826177078097b2539a57564b7926916a2c`
+  (Go 1.27.3, certificate-transparency-go v1.3.2, zcrypto `v0.0.0-20260109180747-df961ee46a6c`):
+  - a NULL after the version INTEGER inside `[0]` is rejected ("SerialNumber: tags don't match"), so ct-go read the
+    NULL as the serial, which shows that the explicit `[0]` is not bounded;
+  - a `[0]` holding a complete fake TBS prefix is accepted. The producer keys the outer serial, the JDK's (the
+    `RawValue` re-parse is bounded), but records the inner SPKI as `RawSubjectPublicKeyInfo`, which the JDK does not
+    read. As an issuer, such a certificate's children would be keyed under an SPKI the platform never sees.
+  - The producer rejects a zero-length explicit `[3]` (`83 00`, `a3 00`): "explicit tag has no child".
+
+  These are the first oracle-4 records; the part-3 issue (#11) commits the CLI and its goldens.
 
   The probe is committed as the parser's JDK cross-check (`CertificateParserJdkTest` and its `certs/variants/`, on
   `feat/9-der-tbs-parser`, PR #16). `DerValue`'s time forms are stated in §9.2.
