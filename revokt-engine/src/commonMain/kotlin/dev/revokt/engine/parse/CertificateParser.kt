@@ -40,6 +40,16 @@ internal class Tbs(
     val extensions: List<Extension>,
 )
 
+/**
+ * What the engine reads from the extensions (spec §5.5, §9.2): the SCT union over every SCT-list extension, and the
+ * SKI and AKI keyIdentifier of the first such extension (null when absent or malformed).
+ */
+internal class ExtensionFields(
+    val scts: Set<Sct>,
+    val ski: Span?,
+    val akiKeyId: Span?,
+)
+
 /** A parsed `Certificate`. [der] is the caller's array, not a copy; every span indexes it. */
 internal class ParsedCertificate(
     val der: ByteArray,
@@ -48,6 +58,7 @@ internal class ParsedCertificate(
     val signatureValue: Span,
     val nonMinimalHeaders: List<NonMinimalHeader>,
     val ignoredElements: List<IgnoredElement>,
+    val fields: ExtensionFields,
     val steps: Long,
 ) {
     fun rawSerial(): ByteArray = tbs.serial.bytes(der)
@@ -131,6 +142,7 @@ internal object CertificateParser {
         val signature = fields.read(BIT_STRING, HeaderSite.SIGNATURE_VALUE)
         fields.requireEnd("signatureValue")
         val tbs = parseTbs(der, fields.child(tbsTlv), tbsTlv, ctx)
+        val extensionFields = extensionFields(der, tbs.extensions, ctx)
         return ParsedCertificate(
             der,
             tbs,
@@ -138,6 +150,7 @@ internal object CertificateParser {
             signature.content,
             ctx.nonMinimal.toList(),
             ctx.ignored.toList(),
+            extensionFields,
             ctx.steps,
         )
     }
@@ -230,6 +243,29 @@ internal object CertificateParser {
             r.ignoreRest(IgnoredSite.TBS_AFTER_STOP)
         }
         return emptyList()
+    }
+
+    /** Spec §9.2: the SCT pairs are the union over every SCT-list extension of the items its list keeps. */
+    private fun extensionFields(
+        der: ByteArray,
+        extensions: List<Extension>,
+        ctx: ParseContext,
+    ): ExtensionFields {
+        val scts = LinkedHashSet<Sct>()
+        for (e in extensions) {
+            if (e.oidDotted == Oid.SCT_LIST) SctList.parse(der, e.value, ctx)?.let { scts.addAll(it) }
+        }
+        val ski =
+            extensions
+                .firstOrNull {
+                    it.oidDotted == Oid.SUBJECT_KEY_IDENTIFIER
+                }?.let { KeyIdentifiers.ski(der, it.value) }
+        val aki =
+            extensions
+                .firstOrNull {
+                    it.oidDotted == Oid.AUTHORITY_KEY_IDENTIFIER
+                }?.let { KeyIdentifiers.akiKeyId(der, it.value) }
+        return ExtensionFields(scts, ski, aki)
     }
 
     private fun parseExtensions(
