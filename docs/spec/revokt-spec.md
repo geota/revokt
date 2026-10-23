@@ -2650,15 +2650,16 @@ An indefinite element at the first two places is delimited and re-encoded as the
 - `00 00` at a tag position closes the innermost open indefinite element.
 - A TLV whose length octet is `80`, constructed or primitive, opens a nested indefinite element whose content is read
   the same way.
-- A definite TLV is skipped whole by its length, so `00 00` inside it is never end-of-contents. Its header must be
-  minimal, and any other form is `STRUCTURE`: under the TBS it makes the JDK's message differ from the signed bytes,
+- A definite TLV is skipped whole by its length, so `00 00` inside it is never end-of-contents. Its header must be a
+  single-octet tag and a minimal definite length, and any other form is `STRUCTURE` (the JDK's converter reads one tag
+  octet and at most four length octets): under the TBS it makes the JDK's message differ from the signed bytes,
   and under the outer `signatureAlgorithm` the JDK's converter fails to parse the certificate (Appendix A).
 - The re-encoding replaces each indefinite header and its end-of-contents octets with a minimal definite header, and
   copies every other octet unchanged.
 
 `Cert.tbs` is the TBS so re-encoded, under a minimal definite header; for a definite TBS that is its content byte for
 byte. It is the message the walker verifies, the input of every TBS field and of K1–K8, and the first element of
-`canon(encoded)`. D2 requires it to equal each accepting platform oracle's `getTBSCertificate()`. `Cert.sig` is the
+`canon(encoded)`. D2 requires it to equal oracle 1's `getTBSCertificate()`. `Cert.sig` is the
 `signatureValue` content after its unused-bits octet u, with the last octet's u low bits cleared, as
 `DerValue.getBitString` returns it. Forms the parser accepts and the JDK rejects are harmless for D1 and are not
 listed as accepted by the platform: a length of five or more octets on the TBS or `signatureValue` header; an empty
@@ -2677,11 +2678,11 @@ can re-encode the envelope and the platform still verifies the certificate (Appe
 itself, the outer `signatureAlgorithm` in any length form with its NULL parameters flipped, the `signatureValue`
 header, and the RSA signature's unused-bits octet. The producer keyed the bytes
 the CA logged, not the presented envelope. Oracle 4 therefore runs on `canon(encoded)`, which is
-`SEQUENCE { the TBS re-encoded by the unsigned-header rule above, the TBS signature AlgorithmIdentifier TLV, a BIT
-STRING with zero unused bits holding the presented signature octets }`, each located by the reference view (3a, else
+`SEQUENCE { the TBS re-encoded by the unsigned-header rule above, the signature AlgorithmIdentifier TLV taken from
+that re-encoded TBS, a BIT STRING with zero unused bits holding the presented signature octets }`, each located by the reference view (3a, else
 3b) and re-encoded by 3b's implementation of the rule, never by revokt's parser, so `canon` exists for inputs revokt
 fails to parse; for a parsed input its first element is `Cert.tbs` (D2). The new outer SEQUENCE and BIT STRING
-headers are minimal; the re-encoded TBS and the `AlgorithmIdentifier` TLV are copied byte for byte.
+headers are minimal; the re-encoded TBS, and the AlgorithmIdentifier TLV from it, are copied byte for byte.
 
 The producer path is `types.ParseCertificate` (certificate-transparency-go, a `lax` retry, then zcrypto) →
 `NewSerialFromCertificate` (a stdlib `encoding/asn1` re-parse of the raw TBS). It keys on the serial's INTEGER content
@@ -2773,7 +2774,7 @@ reported, never rejected as `ParseFailed`; whether such a leaf is queried is the
 | 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()` | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
 | 2 | Conscrypt `CertificateFactory` (BoringSSL): `conscrypt-openjdk-uber` versions in the matrix; the **platform** Conscrypt on the instrumented tier | platform acceptance on Android; `encoded = getEncoded()` (`i2d_X509`) | as above | as above | as above |
 | 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error | `Ok` | `Err` | caught panic |
-| 3b | `revokt-oracle`: a minimal independent TLV locator (walk `Certificate → tbs`, with the `tbsCertificate` and outer `signatureAlgorithm` headers under the §9.2 unsigned-header rule, and with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located, slice, from the TBS so re-encoded, serial content, SPKI TLV, subject, issuer, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; no other semantics) | raw bytes where 3a rejects | located | not located | caught panic |
+| 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate` and the outer `signatureAlgorithm` and re-encode the TBS under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the `signatureValue` octets for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
 | 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key `canon(encoded)` (above), with which bytes and through which path (`ct` for certificate-transparency-go's strict parse, `lax` for ct-go only through a `lax` retry, `zc` for the zcrypto fallback) | both calls return | a `ParseCertificate` error, or a panic anywhere in the producer (the shim recovers around the whole call) | unrecovered; counts as `Reject` under D8 |
 
@@ -2848,7 +2849,8 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   `parse(encoded)` succeeds. This is the `EvaluationRequest.presented` raw-DER surface (§4), documented,
   not gated.
 - **D2 extraction agreement (security)**: on `parse(encoded_i,v)`: `Cert.tbs` equals `canon(encoded)`'s first element
-  and oracle *i,v*'s `getTBSCertificate()`;
+  and oracle 1's `getTBSCertificate()`, while a difference from oracle 2's is recorded as a divergence, not a violation
+  (Conscrypt verifies over the presented TBS TLV, so a difference marks an input it cannot verify);
   `rawSerial` equals oracle 4's serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where `producerKeyable` (implied by D8's gated direction, restated so that a mismatch names the field);
   `rawSerial`, `rawSpki`, `rawSubject`, `rawIssuer`, extension values and the SCT pair set equal 3a's
   where 3a accepts, else 3b's. The expected SCT pair set is the union over SCT extensions of a per-extension
