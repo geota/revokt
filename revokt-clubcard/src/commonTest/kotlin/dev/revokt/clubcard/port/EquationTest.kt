@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Translation of the tests in clubcard 0.3.4 src/equation.rs (git ecca8d1a9e92f9f3b4b910c05fe11c190836501e).
 // Upstream's `test_equation_add` first case uses W = 1; with W fixed at 4 it is written over four limbs.
+// revokt additions (#7): the `owning`/`asQuery` equivalence tests and `upstreamInhomogeneous`, a transcription of
+// upstream `Equation::inhomogeneous` kept independent of the production code.
 //
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not
 // distributed with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -9,6 +11,7 @@
 package dev.revokt.clubcard.port
 
 import dev.revokt.clubcard.RevoktInternalApi
+import okio.ByteString.Companion.toByteString
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -88,6 +91,28 @@ class EquationTest {
                     assertEquals(expected, Equation.inhomogeneous(s, a, b), "inhomogeneous s=$s a=${a.toList()} b=$b")
                     assertEquals(expected, Equation.owning(s, a.copyOf(), b), "owning s=$s a=${a.toList()} b=$b")
                 }
+            }
+        }
+    }
+
+    @Test
+    fun `query asQuery equals upstream homogeneous over the key hash limbs`() {
+        val random = Random(7)
+        repeat(200) {
+            val issuer = IssuerSpkiHash(random.nextBytes(32).toByteString())
+            val key = CrliteKey(issuer, random.nextBytes(1 + random.nextInt(20)).toByteString())
+            val hash = key.issuerSerialHash.toByteArray()
+            val limbs =
+                LongArray(4) { i ->
+                    (7 downTo 0).fold(0L) { acc, j ->
+                        (acc shl 8) or
+                            (hash[8 * i + j].toLong() and 0xff)
+                    }
+                }
+            limbs[0] = limbs[0] or 1L
+            for (m in listOf(0L, 1L, 1000L, 0xFFFF_FFFFL, random.nextLong(1, 1L shl 32))) {
+                val s = (limbs[3].toULong() % maxOf(m.toULong(), 1uL)).toLong()
+                assertEquals(upstreamInhomogeneous(s, limbs, 0), CrliteQuery(key, null).asQuery(m), "m=$m")
             }
         }
     }

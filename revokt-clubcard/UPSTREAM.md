@@ -18,11 +18,11 @@ upstream path, crate version and commit.
 | `clubcard/src/clubcard.rs` | `port/Clubcard.kt` | `Display`, `ApproximateSizeOf`, `partition` |
 | `clubcard-crlite/src/codec.rs` | `port/Codec.kt` | every `encode`; `impl Codec for ClubcardIndex` moved here from query.rs |
 | `clubcard-crlite/src/query.rs` | `port/CrliteQuery.kt` | `to_bytes`, `Display`, `ApproximateSizeOf`, `ClubcardError::Serialize`, the bincode arm of `from_bytes` |
-| `clubcard/src/equation.rs` (tests) | `commonTest/…/port/EquationTest.kt` | nothing |
+| `clubcard/src/equation.rs` (tests) | `commonTest/…/port/EquationTest.kt` | nothing; the file also holds the #7 equivalence tests and their transcription of upstream `inhomogeneous` (revokt additions, MPL) |
 | `clubcard/src/lib.rs`, `clubcard-crlite/src/lib.rs` | none | re-exports only |
 | `clubcard/src/builder.rs`, `clubcard-crlite/src/builder.rs` | none | builder (used by `native/revokt-oracle`, never shipped) |
 
-## Deviations, each marked `revokt:` in the source (1–5 decode, 6–7 allocation)
+## Deviations, each marked `revokt:` in the source (1–5 decode, 6 allocation, 7 readability)
 
 Spec §6.3 decode strictness and §6.4 storage, applied inside the v4 reader because they cannot be checked after the
 fact (duplicates and the `inverted` byte are gone once decoded):
@@ -35,16 +35,24 @@ fact (duplicates and the `inverted` byte are gone once decoded):
 5. Every column gets one zero pad word (spec §6.4); `Equation.eval` is bounds-checked exactly as upstream, so the
    pad changes no result.
 
-Allocation deviations (#7), proposed separately from the port so the fidelity trade can be judged on its own:
+Deviations proposed in #7, separately from the port, so the fidelity trade can be judged on its own:
 
-6. `Equation.add`'s alignment half is the private `align()`, and `Equation.owning(s, a, b)` aligns a caller-owned
-   array without the defensive copy and without upstream's throwaway `add(&Equation::zero())`;
-   `CrliteQuery.asQuery`, whose array is fresh, uses it. The public `homogeneous`/`inhomogeneous` keep upstream's
-   copy semantics. `EquationTest` checks both against a literal transcription of upstream's path.
-7. `TimestampInterval.contains` holds upstream's inline `low <= ts && ts <= high` from `in_universe`, so the check
-   reads `timestamp in interval` (unsigned and inclusive, never a `Comparable` range).
+6. **Allocation.** `Equation.add`'s alignment half is the private `align()`, and `Equation.owning(s, a, b)` aligns a
+   caller-owned array without the defensive copy and without upstream's throwaway `add(&Equation::zero())`;
+   `Equation.inhomogeneous` delegates to it after copying, and `CrliteQuery.asQuery`, whose array is fresh, calls it
+   directly. The public `homogeneous`/`inhomogeneous` keep upstream's copy semantics. `EquationTest` checks
+   `inhomogeneous`, `owning` and `asQuery` against a literal transcription of upstream's path. Measured with
+   thread-allocated bytes over 200,000 `CrliteClubcard.contains` calls after warm-up on JDK 21, one covered SCT,
+   4,096 synthetic serials over the enrolled issuers: 357 → 169 B/query on `synthetic.v4.filter` and 250 → 110 B on
+   the real `20261017-1-compat.filter`; the PR's independent review measured 301 → 152 and 121 → 63 with corpus
+   goldens as keys. On `asQuery`'s path `a[0] |= 1` makes `align()` a no-op; the saving is the copy and `zero()`.
+7. **Readability, no allocation saving.** `TimestampInterval.contains` holds upstream's inline
+   `low <= ts && ts <= high` from `in_universe`, so the check reads `timestamp in interval` (unsigned and inclusive).
+   Upstream's inline form allocates nothing either; this is a Kotlin-idiom change with a fidelity cost, kept as a
+   separate item so it can be dropped on its own.
 
-A re-sync that touches `Equation::add`, `Equation::inhomogeneous` or `in_universe` re-applies these by hand.
+A re-sync that touches `Equation::add`, `Equation::inhomogeneous`, `as_query` (clubcard-crlite `query.rs`) or
+`in_universe` re-applies these by hand.
 
 Type mapping: `usize` → `Long` (`m`, offsets, `s`), `approx_filter_rank` → `Int`, `Vec<u8>`/`[u8; 32]` → `okio.ByteString`,
 `BTreeMap`/`HashMap` → `Map`, `(LogId, Timestamp)` → `LogTimestamp`, `Option<…>` → nullable, `Result<…, ClubcardError>` →

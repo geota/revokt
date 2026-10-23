@@ -31,7 +31,7 @@ public class Equation(
     public val a: LongArray,
     b: Int,
 ) {
-    /** The row number. Written only by [add] and the `AsQuery` offset shifts in this module. */
+    /** The row number. Written by [add] and `align`, by `owning`, and by the `AsQuery` offset shifts in this module. */
     public var s: Long = s
         internal set
 
@@ -123,7 +123,8 @@ public class Equation(
             s: Long,
             a: LongArray,
             b: Int,
-        ): Equation = owning(s, a.copyOf(), b)
+        ): Equation =
+            owning(s, a.copyOf(), b) // revokt: upstream builds the equation and calls `add(&zero())` here (#7)
 
         /**
          * revokt: `inhomogeneous` without the defensive copy, for callers that built [a] for this equation alone; the
