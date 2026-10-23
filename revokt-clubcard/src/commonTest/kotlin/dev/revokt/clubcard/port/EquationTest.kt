@@ -9,8 +9,11 @@
 package dev.revokt.clubcard.port
 
 import dev.revokt.clubcard.RevoktInternalApi
+import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 
 @OptIn(RevoktInternalApi::class)
 class EquationTest {
@@ -64,5 +67,72 @@ class EquationTest {
         assertEquals(0, eq.eval(longArrayOf(-1L, -1L, -1L)))
         val far = Equation(64L * 0xFFFF_FFFFL, longArrayOf(-1L, -1L, -1L, -1L), 0)
         assertEquals(0, far.eval(longArrayOf(-1L)))
+    }
+
+    @Test
+    fun `equation owning alignment equals upstream add of zero over random and edge-case limbs`() {
+        val random = Random(20261023)
+        val cases =
+            mutableListOf(
+                LongArray(4),
+                longArrayOf(0, 0, 0, 1),
+                longArrayOf(0, 0, 1L shl 63, 5),
+                longArrayOf(0, -1, 0, 0),
+            )
+        for (k in 0 until 64) cases += longArrayOf(1L shl k, random.nextLong(), random.nextLong(), random.nextLong())
+        repeat(2000) { cases += LongArray(4) { if (random.nextInt(4) == 0) 0 else random.nextLong() } }
+        for (a in cases) {
+            for (s in listOf(0L, 1L, 63L, 64L, 0xFFFF_FFFFL, random.nextLong(0, 1L shl 33))) {
+                for (b in 0..1) {
+                    val expected = upstreamInhomogeneous(s, a, b)
+                    assertEquals(expected, Equation.inhomogeneous(s, a, b), "inhomogeneous s=$s a=${a.toList()} b=$b")
+                    assertEquals(expected, Equation.owning(s, a.copyOf(), b), "owning s=$s a=${a.toList()} b=$b")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `equation homogeneous copies its argument and owning takes it`() {
+        val a = longArrayOf(0b1000, 3, 5, 7)
+        val copied = Equation.homogeneous(0, a)
+        assertContentEquals(longArrayOf(0b1000, 3, 5, 7), a)
+        a[1] = 99
+        assertEquals(Equation.homogeneous(0, longArrayOf(0b1000, 3, 5, 7)), copied)
+        val owned = longArrayOf(0b1000, 3, 5, 7)
+        assertSame(owned, Equation.owning(0, owned, 0).a)
+    }
+
+    /**
+     * A literal transcription of upstream `Equation::inhomogeneous` (`eq.add(&Equation::zero()); eq.s += s`), kept
+     * independent of the production code so the #7 deviation is checked against upstream, not against itself.
+     */
+    private fun upstreamInhomogeneous(
+        s: Long,
+        a0: LongArray,
+        b0: Int,
+    ): Equation {
+        val a = a0.copyOf()
+        var start = 0L
+        val zero = LongArray(4)
+        for (i in 0 until 4) a[i] = a[i] xor zero[i]
+        val b = b0 xor 0
+        if (a.any { it != 0L }) {
+            while (a[0] == 0L) {
+                val first = a[0]
+                for (i in 0 until 3) a[i] = a[i + 1]
+                a[3] = first
+            }
+            val k = a[0].countTrailingZeroBits()
+            if (k != 0) {
+                for (i in 0 until 3) {
+                    a[i] = a[i] ushr k
+                    a[i] = a[i] or (a[i + 1] shl (64 - k))
+                }
+                a[3] = a[3] ushr k
+                start += k
+            }
+        }
+        return Equation(start + s, a, b)
     }
 }

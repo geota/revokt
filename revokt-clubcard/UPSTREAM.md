@@ -22,7 +22,7 @@ upstream path, crate version and commit.
 | `clubcard/src/lib.rs`, `clubcard-crlite/src/lib.rs` | none | re-exports only |
 | `clubcard/src/builder.rs`, `clubcard-crlite/src/builder.rs` | none | builder (used by `native/revokt-oracle`, never shipped) |
 
-## Deviations, each marked `revokt:` in the source
+## Deviations, each marked `revokt:` in the source (1–5 decode, 6–7 allocation)
 
 Spec §6.3 decode strictness and §6.4 storage, applied inside the v4 reader because they cannot be checked after the
 fact (duplicates and the `inverted` byte are gone once decoded):
@@ -34,6 +34,17 @@ fact (duplicates and the `inverted` byte are gone once decoded):
 4. `approx_filter_rank ≤` column count, checked at decode (upstream indexes out of bounds at query time).
 5. Every column gets one zero pad word (spec §6.4); `Equation.eval` is bounds-checked exactly as upstream, so the
    pad changes no result.
+
+Allocation deviations (#7), proposed separately from the port so the fidelity trade can be judged on its own:
+
+6. `Equation.add`'s alignment half is the private `align()`, and `Equation.owning(s, a, b)` aligns a caller-owned
+   array without the defensive copy and without upstream's throwaway `add(&Equation::zero())`;
+   `CrliteQuery.asQuery`, whose array is fresh, uses it. The public `homogeneous`/`inhomogeneous` keep upstream's
+   copy semantics. `EquationTest` checks both against a literal transcription of upstream's path.
+7. `TimestampInterval.contains` holds upstream's inline `low <= ts && ts <= high` from `in_universe`, so the check
+   reads `timestamp in interval` (unsigned and inclusive, never a `Comparable` range).
+
+A re-sync that touches `Equation::add`, `Equation::inhomogeneous` or `in_universe` re-applies these by hand.
 
 Type mapping: `usize` → `Long` (`m`, offsets, `s`), `approx_filter_rank` → `Int`, `Vec<u8>`/`[u8; 32]` → `okio.ByteString`,
 `BTreeMap`/`HashMap` → `Map`, `(LogId, Timestamp)` → `LogTimestamp`, `Option<…>` → nullable, `Result<…, ClubcardError>` →
