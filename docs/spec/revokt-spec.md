@@ -52,7 +52,9 @@ Status: **draft spec / project proposal, revision 33** · Target: JVM 11+ and An
   bound explicit `[0]`, so a trailing element there makes the producer key a different serial than revokt reads,
   which would be a `STRICT` bypass. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
   `producerKeyable`. The table models ct-go's struct walk. 3a's primitive-`[3]` reading is the declared class
-  `3A_TBS_LAX`, and the end-to-end oracle excludes chains `x509-parser` rejects.
+  `3A_TBS_LAX`, stated in D2, D3 and the record schema. The end-to-end oracle excludes chains `x509-parser`
+  rejects. D1's domain is defined against the reference view, with `[0]`-trailing input D1-dom outright. D2's
+  oracle-4 clause applies where `producerKeyable`.
 - §5.1 `Cert.notBefore`/`notAfter` are `Long?`: the parse yields null for a time that does not decode, which only
   platform-rejected input reaches.
 - Appendix A records `x509-parser` 0.18.1, asn1-rs 0.7.2 and nom 7.1.3 by sha256. They are pinned exactly in
@@ -2637,8 +2639,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
 
 **Properties.** For each platform oracle *i* ∈ {1, 2} and each version *v* in the matrix:
 - **D1 leniency (security)**: `Accept_i,v(b)` ⇒ `parse(encoded_i,v)` is `Parsed`, for every input in
-  the D1 domain: platform-accepted and producer-keyable (oracle 4 `Accept` with serial and SPKI equal to revokt's
-  `rawSerial` and `rawSpki`). A violation is a P0 and
+  the D1 domain: platform-accepted and producer-keyable (oracle 4 `Accept` with serial and SPKI equal to the
+  reference view's, 3a else 3b). An input with any bytes after the version INTEGER inside `[0]` is D1-dom whatever
+  oracle 4 keys. A violation is a P0 and
   a security advisory class once the input is CA/B-lint clean.
 - **D1-dom (recorded)**: platform-accepted inputs oracle 4 rejects, or accepts with other key bytes (the `[0]`
   flattening above). No filter can contain such a
@@ -2654,12 +2657,14 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   `parse(encoded)` succeeds. This is the `EvaluationRequest.presented` raw-DER surface (§4), documented,
   not gated.
 - **D2 extraction agreement (security)**: on `parse(encoded_i,v)`: `rawSerial` equals oracle 4's
-  serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where oracle 4 accepts;
+  serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where `producerKeyable`;
   `rawSerial`, `rawSpki`, `rawSubject`, `rawIssuer`, extension values and the SCT pair set equal 3a's
   where 3a accepts, else 3b's. The expected SCT pair set is the union over SCT extensions of a per-extension
   expectation: the reference's pairs for that extension, or ∅ when the extension value's first octet is not `0x04`.
   That octet is read by 3b's locator, never by revokt. An extension whose expectation is ∅ while 3a yields pairs is
-  recorded as `3A_HEADER_LAX`, so the comparison substitutes ∅ rather than skipping; the normalised Java fields equal oracle *i,v*'s. A violation is a P0.
+  recorded as `3A_HEADER_LAX`, so the comparison substitutes ∅ rather than skipping. Where 3a takes a primitive `[3]`
+  as extensions (decided by 3b's TBS walk), the reference extension table and SCT pairs are the §9.2 read (∅),
+  recorded as `3A_TBS_LAX`; the normalised Java fields equal oracle *i,v*'s. A violation is a P0.
   The count of platform-accepted inputs with no raw-byte reference (3a and 3b both fail) is a gate
   metric and must be zero on the committed corpora.
 - **D3 SCT classification**: mapping from 3a: no extension → `NO_SCTS`; `ParseError` → `NO_SCTS`
@@ -2715,8 +2720,8 @@ collection marks CRLite-enrolled, `SHA-256(rawSpki)` must be a key of the live f
 **Corpus record schema (one for all four kinds; committed).**
 `{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome,
 fields | unavailable}], class ∈ {D7_LENIENCY, D2_REENCODE_ALLOW, D3_DIVERGENCE, D1_DOM,
-FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, the duplicate-extension
-class, or a named 3c/Firefox class), justification, added}`. Goldens for 3a/3b/4 are computed at admission
+FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, the
+duplicate-extension class, or a named 3c/Firefox class), justification, added}`. Goldens for 3a/3b/4 are computed at admission
 so the PR replay evaluates D1–D3 offline, JDK-only. The release review mechanically lists entries
 whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves across all enrolled
 CAs, the `x509-limbo` vectors, the D7 corpus, the issuer corpus) is pinned by a committed SHA-256
