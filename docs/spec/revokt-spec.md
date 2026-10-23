@@ -2650,10 +2650,12 @@ An indefinite element at the first two places is delimited and re-encoded as the
 - `00 00` at a tag position closes the innermost open indefinite element.
 - A TLV whose length octet is `80`, constructed or primitive, opens a nested indefinite element whose content is read
   the same way.
-- A definite TLV is skipped whole by its length, so `00 00` inside it is never end-of-contents. Its header must be a
-  single-octet tag and a minimal definite length, and any other form is `STRUCTURE` (the JDK's converter reads one tag
-  octet and at most four length octets): under the TBS it makes the JDK's message differ from the signed bytes,
-  and under the outer `signatureAlgorithm` the JDK's converter fails to parse the certificate (Appendix A).
+- A definite TLV is skipped whole by its length, so `00 00` inside it is never end-of-contents. Its header is read as
+  the JDK's converter reads it: one tag octet, whatever its low five bits, then a length octet that is short form or
+  `81` to `84` followed by that many octets. The length must be minimal, and any other length is `STRUCTURE`: under
+  the TBS it makes the JDK's message differ from the signed bytes, and under the outer `signatureAlgorithm` the JDK
+  fails to parse the certificate (Appendix A). `Cert.tbs` is then parsed under the rules below; a multi-octet tag
+  survives there only where those rules leave bytes unparsed.
 - The re-encoding replaces each indefinite header and its end-of-contents octets with a minimal definite header, and
   copies every other octet unchanged.
 
@@ -2913,7 +2915,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   and key bytes of the unmodified certificate and a `VERIFIED` link, since the profile reads `Cert.tbs`; and on the
   reject side an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI `30 82 00 …`), which the JDK
   accepts and fails to verify, and an indefinite outer AlgorithmIdentifier holding a non-minimal OID header
-  (`30 80 06 81 08 … 00 00`), which the JDK rejects; each `STRUCTURE`); and the D8-gap examples (a serial with non-minimal
+  (`30 80 06 81 08 … 00 00`), which the JDK rejects; each `STRUCTURE`); and a CA-signed TBS whose extensions are
+  followed by a trailing element with a multi-octet tag (`9f 01 02 05 00`), presented with a definite and with an
+  indefinite TBS header (`Parsed`, outside the profile under K2, the same outcome for both); and the D8-gap examples (a serial with non-minimal
   INTEGER content, a keyUsage or basicConstraints value only zcrypto accepts, a `UTCTime` without seconds; each
   `Parsed` and outside the profile).
 
