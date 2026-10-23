@@ -46,7 +46,8 @@ Status: **draft spec / project proposal, revision 33** · Target: JVM 11+ and An
 
   Ignored bytes are recorded for `producerKeyable`. The D8 note on trailing SEQUENCE elements follows. revokt is
   stated as more lenient than the JDK in three places: no version gating, unique-id content not inspected, and the
-  time forms, now stated in §9.2 with a fail-closed rule for a null time. §5.5's "structurally strict" is qualified.
+  time forms, now stated in §9.2 (the JDK's day rollover included) with a fail-closed rule for a null time; D2's
+  Java fields gain `notBefore`/`notAfter`. §5.5's "structurally strict" is qualified.
   Oracle 3b walks the TBS tail by the same rule, and D7 gains the cases. `[0]` stays strict: ct-go does not
   bound explicit `[0]`, so a trailing element there makes the producer key a different serial than revokt reads,
   which would be a `STRICT` bypass. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
@@ -2560,10 +2561,10 @@ suffices" and SCTs never enter the key).
 
 - **Inside `[0]` the parse stays strict:** nothing may follow the version INTEGER, and anything there is `STRUCTURE`. The JDK accepts it, but ct-go's explicit-tag walk does not bound `[0]` by its length (`parseField` advances by the inner element only), so the producer reads the elements after the INTEGER as the next TBS fields and keys a different serial and SPKI than the JDK. Such input is outside the D1 domain under the key-equality condition below, and must never be queried with revokt's bytes.
 
-Ignored bytes contribute no field. Their offsets are recorded, and the `producerKeyable` table evaluates them as ct-go's struct walk sees them (below). For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, as the JDK reads it.
+Ignored bytes contribute no field. Their offsets are recorded, and the `producerKeyable` table evaluates them as ct-go's struct walk sees them (below). For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, as the JDK reads it. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none (oracle 4 decides keyability, D8); revokt takes the JDK's view, which only adds extensions and SCTs.
 
-**Where revokt is more lenient than the JDK** (D4: the platform rejects such input first, so D1 is unaffected):
-- revokt does not gate on the version. The JDK rejects a v1 certificate with anything after `subjectPublicKeyInfo`, and a v2 certificate with `extensions`.
+**Where revokt is more lenient than the JDK** (the platform rejects such input first, so D1 is unaffected):
+- revokt does not gate on the version. The JDK rejects a v1 certificate with anything after `subjectPublicKeyInfo`, and a v2 certificate with any element after the unique IDs (a NULL or `extensions`).
 - revokt does not inspect unique-id content. The JDK requires BIT STRING content.
 - revokt's time decoding is more lenient, as follows.
 
@@ -2571,9 +2572,9 @@ Ignored bytes contribute no field. Their offsets are recorded, and the `producer
 - seconds optional;
 - `Z` or `±hhmm` in both `UTCTime` and `GeneralizedTime`;
 - `GeneralizedTime` fractions after `.` or `,` of any length, truncated to milliseconds;
-- a day of 1 to 31 in any month.
+- a day of 1 to 31 in any month, a day past the month's end rolling into the next month as the JDK's lenient calendar does (2026-02-31 is 2026-03-03, 2026-04-31 is 2026-05-01).
 
-revokt also accepts optional minutes, second 60 and an absent zone, which it takes as UTC. A time outside these forms is null; only platform-rejected input reaches that. A rule that needs a null time fails closed: M4's distrust-after treats a null `notBefore` as after any distrust date. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none; revokt takes the JDK's view, which only adds extensions and SCTs.
+revokt also accepts optional minutes, second 60 (the first second of the next minute) and an absent zone, which it takes as UTC. A time outside these forms is null; only platform-rejected input reaches that. A rule that needs a null time fails closed: M4's distrust-after treats a null `notBefore` as after any distrust date.
 
 **Everywhere else the parse is structurally strict.** Lengths must be definite, and tags and lengths well-formed (the SCT list's inner length follows the rule above). `Certificate`, `Validity`, the `Extensions` SEQUENCE and each `Extension` before its `extnValue` hold exactly their elements, and no bytes may follow `Certificate`; **non-minimal definite lengths are
 accepted for extraction but, at a header the producer's *fatal* walks visit, mark the certificate `producerKeyable = false`** (one inside an uninspected value does not, and neither does one reached only by a non-fatal sub-parse: ct-go reports every error of the SCT-list extension's inner `OCTET STRING` and TLS list through `NonFatalErrors`, Mozilla's `ParseCertificate` returns the certificate anyway and ct-fetch logs and continues, so a non-minimal length there is keyable, and revokt's §9.2 SCT-list rule accepts it and extracts the SCTs; the JDK preserves
@@ -2631,7 +2632,8 @@ Java field normalisation: `getSerialNumber()` by value (`BigInteger` drops paddi
 `getPublicKey().getEncoded()` by SHA-256 against `rawSpki` with a recorded allow-list of
 re-encoding cases (Java re-encodes RSA parameters); `getIssuerX500Principal()` and
 `getSubjectX500Principal()` as `X500Principal(raw).getName(CANONICAL)`; `getExtensionValue(oid)`
-unwrapped; `getCriticalExtensionOIDs()`. Raw-byte equality is asserted against 3a, else 3b.
+unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epoch milliseconds against
+`notBefore`/`notAfter`. Raw-byte equality is asserted against 3a, else 3b.
 
 **Properties.** For each platform oracle *i* ∈ {1, 2} and each version *v* in the matrix:
 - **D1 leniency (security)**: `Accept_i,v(b)` ⇒ `parse(encoded_i,v)` is `Parsed`, for every input in
@@ -2699,8 +2701,8 @@ unwrapped; `getCriticalExtensionOIDs()`. Raw-byte equality is asserted against 3
   ignored; anything after the INTEGER inside `[0]`, `STRUCTURE`, with the flattening case whose producer serial
   differs; a zero-length primitive `[3]` (`83 00`), `Parsed` and producer-unkeyable; a constructed `[1]` then `[3]`
   carrying a non-minimal length, keyable because ct-go never visits `[3]` there), the more-lenient-than-JDK cases (a v1 or v2 certificate carrying
-  elements its version does not allow; unique-id content that is not BIT STRING content), times with an offset and
-  without seconds, a 64 KB extension, BER indefinite lengths,
+  elements its version does not allow; unique-id content that is not BIT STRING content), times with an offset, without
+  seconds and with a day past the month's end (2026-02-31, rolling over to 2026-03-03), a 64 KB extension, BER indefinite lengths,
   non-minimal definite lengths, and a `Certificate` with trailing bytes.
 
 **Issuer corpus (zero tolerance).** Every certificate in Mozilla's `intermediates` Remote Settings
@@ -2997,7 +2999,9 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     - an element between an extension's OID and its value;
     - a malformed element where the read stops;
     - a v1 certificate with anything after `subjectPublicKeyInfo` ("no more data allowed for version 1 certificate");
-    - a v2 certificate with `extensions` ("Extensions not allowed in v2 certificate");
+    - a v2 certificate with any element after the unique IDs, a NULL or `extensions` ("Extensions not allowed in v2
+      certificate");
+    - day 00, month 13, hour 24 and second 60 in a time (the day past a month's end is accepted and rolls over);
     - unique-id content `00`, `08 00` or `09 00` (an empty BIT STRING, or padding bits outside 0 to 7).
 
   The probe is committed as the parser's JDK cross-check (`CertificateParserJdkTest` and its `certs/variants/`, on
