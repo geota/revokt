@@ -117,22 +117,29 @@ internal object SctList {
     ): Int = ((der[p].toInt() and 0xff) shl 8) or (der[p + 1].toInt() and 0xff)
 }
 
-/** SKI and AKI keyIdentifier, extracted leniently: a malformed value yields null, never a failed parse (spec §5.5). */
+/**
+ * SKI and AKI keyIdentifier, extracted leniently: a malformed value yields null, never a failed parse (spec §5.5). The
+ * headers are read with the parse's context, so a non-minimal one is recorded for the producer-keyability table.
+ * Where this differs from the JDK, which only affects candidate ordering in the walker: a constructed (BER) SKI is
+ * null here, and the elements after an AKI's `[0]` are not inspected (the JDK nulls an AKI with trailing bytes).
+ */
 internal object KeyIdentifiers {
-    /** `SubjectKeyIdentifier ::= KeyIdentifier` (an OCTET STRING) inside the extension value. */
+    /** `SubjectKeyIdentifier ::= KeyIdentifier` (a primitive OCTET STRING filling the extension value). */
     fun ski(
         der: ByteArray,
         value: Span,
-    ): Span? = single(der, value, 0x04)
+        ctx: ParseContext,
+    ): Span? = single(der, value, 0x04, HeaderSite.SKI, ctx)
 
-    /** `AuthorityKeyIdentifier ::= SEQUENCE { keyIdentifier [0] IMPLICIT … OPTIONAL, … }`: the `[0]` content. */
+    /** `AuthorityKeyIdentifier ::= SEQUENCE { keyIdentifier [0] IMPLICIT … OPTIONAL, … }`: the primitive `[0]` content. */
     fun akiKeyId(
         der: ByteArray,
         value: Span,
+        ctx: ParseContext,
     ): Span? {
-        val seq = single(der, value, 0x30) ?: return null
-        val r = DerReader(der, seq.start, seq.end, ParseContext())
-        return if (r.peekTag() == 0x80) runCatchingDer { r.readAny(HeaderSite.EXTENSION_VALUE).content } else null
+        val seq = single(der, value, 0x30, HeaderSite.AKI, ctx) ?: return null
+        val r = DerReader(der, seq.start, seq.end, ctx)
+        return if (r.peekTag() == 0x80) runCatchingDer { r.readAny(HeaderSite.AKI_KEY_ID).content } else null
     }
 
     /** The content of the one element of [value] if it carries [tag] and fills [value] exactly. */
@@ -140,10 +147,12 @@ internal object KeyIdentifiers {
         der: ByteArray,
         value: Span,
         tag: Int,
+        site: HeaderSite,
+        ctx: ParseContext,
     ): Span? =
         runCatchingDer {
-            val r = DerReader(der, value.start, value.end, ParseContext())
-            r.read(tag, HeaderSite.EXTENSION_VALUE).also { r.requireEnd("key identifier") }.content
+            val r = DerReader(der, value.start, value.end, ctx)
+            r.read(tag, site).also { r.requireEnd("key identifier") }.content
         }
 
     private inline fun runCatchingDer(block: () -> Span): Span? =

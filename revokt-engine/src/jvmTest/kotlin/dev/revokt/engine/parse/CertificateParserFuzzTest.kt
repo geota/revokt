@@ -32,6 +32,11 @@ class CertificateParserFuzzTest {
                 val spans =
                     listOf(c.tbs.tlv, c.tbs.signature, c.tbs.issuer, c.tbs.subject, c.tbs.spki, c.signatureAlgorithm) +
                         c.tbs.extensions.map { it.tlv }
+                for (span in listOfNotNull(c.fields.ski, c.fields.akiKeyId)) {
+                    check(span.start >= 0 && span.start <= span.end && span.end <= data.size) {
+                        "D6: key id span $span outside ${data.size} bytes"
+                    }
+                }
                 for (span in spans) {
                     check(span.start >= 0 && span.end <= data.size) { "D6: span $span outside ${data.size} bytes" }
                     val again = DerReader(data, span.start, span.end, ParseContext()).readAny(HeaderSite.CERTIFICATE)
@@ -57,6 +62,7 @@ class CertificateParserFuzzTest {
                 a.tbs.validity.notBeforeMillis == b.tbs.validity.notBeforeMillis &&
                 a.tbs.validity.notAfterMillis == b.tbs.validity.notAfterMillis &&
                 a.nonMinimalHeaders.map { it.offset } == b.nonMinimalHeaders.map { it.offset } &&
-                a.ignoredElements.map { it.span } == b.ignoredElements.map { it.span }
+                a.ignoredElements.map { it.span } == b.ignoredElements.map { it.span } &&
+                a.fields.scts == b.fields.scts && a.fields.ski == b.fields.ski && a.fields.akiKeyId == b.fields.akiKeyId
     }
 }

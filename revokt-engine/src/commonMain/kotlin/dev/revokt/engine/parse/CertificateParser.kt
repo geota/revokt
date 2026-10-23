@@ -42,7 +42,7 @@ internal class Tbs(
 
 /**
  * What the engine reads from the extensions (spec §5.5, §9.2): the SCT union over every SCT-list extension, and the
- * SKI and AKI keyIdentifier of the first such extension (null when absent or malformed).
+ * SKI and AKI keyIdentifier of the first such extension that parses (null when none does).
  */
 internal class ExtensionFields(
     val scts: Set<Sct>,
@@ -253,18 +253,35 @@ internal object CertificateParser {
     ): ExtensionFields {
         val scts = LinkedHashSet<Sct>()
         for (e in extensions) {
-            if (e.oidDotted == Oid.SCT_LIST) SctList.parse(der, e.value, ctx)?.let { scts.addAll(it) }
+            if (Oid.matches(der, e.oid, Oid.SCT_LIST_CONTENT)) SctList.parse(der, e.value, ctx)?.let { scts.addAll(it) }
         }
+        // The first copy that parses, not the first copy: the JDK reports a later well-formed SKI after a malformed one.
         val ski =
-            extensions
-                .firstOrNull {
-                    it.oidDotted == Oid.SUBJECT_KEY_IDENTIFIER
-                }?.let { KeyIdentifiers.ski(der, it.value) }
+            extensions.firstNotNullOfOrNull {
+                if (Oid.matches(
+                        der,
+                        it.oid,
+                        Oid.SUBJECT_KEY_IDENTIFIER_CONTENT,
+                    )
+                ) {
+                    KeyIdentifiers.ski(der, it.value, ctx)
+                } else {
+                    null
+                }
+            }
         val aki =
-            extensions
-                .firstOrNull {
-                    it.oidDotted == Oid.AUTHORITY_KEY_IDENTIFIER
-                }?.let { KeyIdentifiers.akiKeyId(der, it.value) }
+            extensions.firstNotNullOfOrNull {
+                if (Oid.matches(
+                        der,
+                        it.oid,
+                        Oid.AUTHORITY_KEY_IDENTIFIER_CONTENT,
+                    )
+                ) {
+                    KeyIdentifiers.akiKeyId(der, it.value, ctx)
+                } else {
+                    null
+                }
+            }
         return ExtensionFields(scts, ski, aki)
     }
 
