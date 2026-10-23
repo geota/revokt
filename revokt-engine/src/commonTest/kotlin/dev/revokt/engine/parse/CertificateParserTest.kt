@@ -317,6 +317,18 @@ class CertificateParserTest {
     }
 
     @Test
+    fun `parser rolls a day past the month's end into the next month as the JDK does`() {
+        fun nb(text: String) =
+            parsed(
+                TestCert(validity = seq(tlv(0x17, ascii(text)), tlv(0x17, ascii("491231235959Z")))),
+            ).tbs.validity.notBeforeMillis
+        assertEquals(1_772_496_000_000, nb("260231000000Z"), "2026-02-31 is 2026-03-03")
+        assertEquals(1_777_593_600_000, nb("260431000000Z"), "2026-04-31 is 2026-05-01")
+        assertEquals(1_772_323_200_000, nb("260229000000Z"), "2026-02-29 is 2026-03-01")
+        assertEquals(nb("261022134600Z"), nb("261022134560Z"), "second 60 is the first second of the next minute")
+    }
+
+    @Test
     fun `parser treats any non-zero critical byte as true and decodes year zero`() {
         val critical =
             parsed(TestCert(extensions = listOf(seq(TestDer.oid("1.2.3"), tlv(0x01, bytes(0x01)), tlv(0x04)))))
