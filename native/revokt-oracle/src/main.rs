@@ -226,11 +226,33 @@ fn gen_queries(path: &str, count: usize, seed: u64, out: &str) -> Result<(), Str
     let filter = read_filter(path)?;
     let mut rng = Rng(seed);
     let issuers: Vec<&Vec<u8>> = filter.index().keys().collect();
-    let coverage: Vec<(&LogId, &TimestampInterval)> = filter.universe().iter().collect();
+    // `CRLiteCoverage` is a HashMap with a per-process random order: sort so a seed reproduces its queries.
+    let mut coverage: Vec<(&LogId, &TimestampInterval)> = filter.universe().iter().collect();
+    coverage.sort_by_key(|(log, _)| log.0);
     if issuers.is_empty() || coverage.is_empty() {
         return Err("filter has an empty index or coverage".into());
     }
     let mut lines = vec![];
+    // Every exception serial first, each with a covered SCT and a one-bit sibling, so the exception branch of
+    // `unchecked_contains` is always exercised (independent review of PR #6).
+    for (block, entry) in filter.index() {
+        let (log, interval) = coverage[0];
+        for serial in &entry.exceptions {
+            let mut sibling = serial.clone();
+            if let Some(last) = sibling.last_mut() {
+                *last ^= 1;
+            }
+            for s in [serial, &sibling] {
+                lines.push(format!(
+                    "{}\t{}\t{}:{}",
+                    hex(block),
+                    hex(s),
+                    hex(&log.0),
+                    interval.low.0
+                ));
+            }
+        }
+    }
     for i in 0..count {
         let issuer: Vec<u8> = if i % 97 == 96 {
             rng.bytes(32)

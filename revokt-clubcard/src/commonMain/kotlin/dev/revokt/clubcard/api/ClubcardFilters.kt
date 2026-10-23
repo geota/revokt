@@ -21,17 +21,17 @@ public object ClubcardFilters {
     public val wordWidth: Int get() = WORD_WIDTH
 
     /** The encoding named by the 2-byte prefix, or a [ClubcardFormatException] for an unknown or malformed prefix. */
-    public fun encodingOf(bytes: ByteArray): Encoding = translating { Encoding.read(ByteReader(bytes, 0)) }
+    public fun encodingOf(bytes: ByteArray): Encoding = translating { Encoding.read(ByteReader(bytes)) }
 
     /**
      * Decodes a complete filter (a full filter or a delta: each is a clubcard with its own coverage and index).
      * Every rule of spec §6.3 applies: v4 trailing bytes are rejected and v3 trailing bytes accepted; `inverted` is
-     * 0 or 1; the index is sorted and log ids are distinct; a rank past the last column is rejected; every length
+     * 0 or 1 (a deviation from upstream on v4 only; bincode already enforces it on v3); the index is sorted and log ids are distinct; a rank past the last column is rejected; every length
      * is checked against the remaining input before anything is allocated.
      */
     public fun decode(bytes: ByteArray): CrliteClubcard =
         translating {
-            val buf = ByteReader(bytes, 0)
+            val buf = ByteReader(bytes)
             when (Encoding.read(buf)) {
                 Encoding.V3 -> CrliteClubcard(BincodeV3.readClubcard(buf))
                 Encoding.V4 -> CrliteClubcard.fromBytes(bytes)

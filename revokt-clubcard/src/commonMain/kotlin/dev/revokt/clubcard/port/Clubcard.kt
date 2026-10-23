@@ -32,7 +32,7 @@ public enum class Membership {
  * `u32`, so sums with a row number cannot overflow); the rank is an `Int` (a `u8` in v4).
  */
 @RevoktInternalApi
-public class ClubcardIndexEntry(
+public data class ClubcardIndexEntry(
     /** Description of the hash function h. */
     public val approxFilterM: Long,
     /** Description of the hash function g. */
@@ -101,17 +101,14 @@ public class Clubcard<U>(
         val exactQuery = item.asExactQuery(meta)
         if (exactQuery.eval(exactFilter) != 0) return false
 
-        val discriminant = item.discriminant()
-        for (exception in meta.exceptions) {
-            if (exception == discriminant) return false
-        }
-        return true
+        return item.discriminant() !in meta.exceptions
     }
 
     /** Check that the item is in the appropriate universe, and then perform a membership query. */
-    public fun contains(item: Queryable<U>): Membership {
-        if (!item.inUniverse(universe)) return Membership.NOT_IN_UNIVERSE
-        if (!index.containsKey(item.block())) return Membership.NO_DATA
-        return Membership.of(uncheckedContains(item))
-    }
+    public fun contains(item: Queryable<U>): Membership =
+        when {
+            !item.inUniverse(universe) -> Membership.NOT_IN_UNIVERSE
+            item.block() !in index -> Membership.NO_DATA
+            else -> Membership.of(uncheckedContains(item))
+        }
 }

@@ -52,7 +52,7 @@ class EquationTest {
 
     @Test
     fun `equation eval is the same with and without the pad word`() {
-        val eq = Equation(70, longArrayOf(0x5a5a5a5a5a5a5a5aL, -1L, 1L, 0x8000000000000000uL.toLong()), 0)
+        val eq = Equation(70, longArrayOf(0x5a5a5a5a5a5a5a5aL, -1L, 1L, Long.MIN_VALUE), 0)
         val column = longArrayOf(0x123456789abcdef0L, -0x7f3a2b1cL, 0x0f0f0f0f0f0f0f0fL, 0x10L, 0x7aL)
         assertEquals(eq.eval(column), eq.eval(column + 0L))
         assertEquals(eq.eval(column), eq.eval(column + longArrayOf(0L, 0L)))

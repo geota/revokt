@@ -25,13 +25,19 @@ public val WORD_WIDTH: Int = 4
  */
 @RevoktInternalApi
 public class Equation(
-    /** The row number. */
-    public var s: Long,
+    s: Long,
     /** The non-trivial columns; exactly [WORD_WIDTH] limbs. */
     public val a: LongArray,
-    /** The constant term, 0 or 1. */
-    public var b: Int,
+    b: Int,
 ) {
+    /** The row number. Written only by [add] and the `AsQuery` offset shifts in this module. */
+    public var s: Long = s
+        internal set
+
+    /** The constant term, 0 or 1. */
+    public var b: Int = b
+        private set
+
     init {
         require(a.size == WORD_WIDTH) { "an Equation carries exactly $WORD_WIDTH limbs, got ${a.size}" }
     }
@@ -43,7 +49,7 @@ public class Equation(
      * Adds [other] into this, i.e. sets `a ^= other.a` and `b ^= other.b`, and then aligns the result.
      */
     public fun add(other: Equation) {
-        check(s == other.s) { "equations must share a row to be added ($s != ${other.s})" }
+        require(s == other.s) { "equations must share a row to be added ($s != ${other.s})" }
         // Add the equations in GF(2).
         for (i in 0 until WORD_WIDTH) {
             a[i] = a[i] xor other.a[i]
@@ -53,7 +59,7 @@ public class Equation(
         if (isZero()) return
         // Shift until there is a non-zero bit in the lowest limb.
         while (a[0] == 0L) {
-            rotateLeftOnce(a)
+            a.rotateLeftOnce()
         }
         // Shift the first non-zero bit to position 0.
         val k = a[0].countTrailingZeroBits()
@@ -74,16 +80,17 @@ public class Equation(
      */
     public fun eval(z: LongArray): Int {
         val limb = s / 64
-        val shift = (s % 64).toInt()
-        var r = 0L
         if (limb >= z.size) return 0
-        val end = minOf(z.size.toLong(), limb + WORD_WIDTH).toInt()
-        for (i in limb.toInt() until end) {
+        val first = limb.toInt()
+        val shift = (s % 64).toInt()
+        val end = minOf(z.size, first + WORD_WIDTH)
+        var r = 0L
+        for (i in first until end) {
             var tmp = z[i] ushr shift
             if (i + 1 < z.size && shift != 0) {
                 tmp = tmp or (z[i + 1] shl (64 - shift))
             }
-            r = r xor (tmp and a[i - limb.toInt()])
+            r = r xor (tmp and a[i - first])
         }
         return r.countOneBits() and 1
     }
@@ -118,14 +125,12 @@ public class Equation(
 
         /** Construct the equation `a(x) = 0`. */
         public fun zero(): Equation = Equation(0, LongArray(WORD_WIDTH), 0)
-
-        /** `[u64; W]::rotate_left(1)`: the first limb moves to the end. */
-        private fun rotateLeftOnce(limbs: LongArray) {
-            val first = limbs[0]
-            for (i in 0 until limbs.size - 1) {
-                limbs[i] = limbs[i + 1]
-            }
-            limbs[limbs.size - 1] = first
-        }
     }
+}
+
+/** `[u64; W]::rotate_left(1)`: the first limb moves to the end (`copyInto` allows the overlap). */
+private fun LongArray.rotateLeftOnce() {
+    val first = this[0]
+    copyInto(this, destinationOffset = 0, startIndex = 1)
+    this[lastIndex] = first
 }

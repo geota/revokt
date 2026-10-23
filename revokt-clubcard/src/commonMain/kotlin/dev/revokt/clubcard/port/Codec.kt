@@ -20,8 +20,12 @@ import okio.ByteString.Companion.toByteString
 @RevoktInternalApi
 public class ByteReader(
     private val buf: ByteArray,
-    position: Int,
+    position: Int = 0,
 ) {
+    init {
+        require(position in 0..buf.size) { "position $position is outside 0..${buf.size}" }
+    }
+
     /** Index of the next unread byte. */
     public var position: Int = position
         private set
@@ -37,29 +41,28 @@ public class ByteReader(
         if (n < 0 || n > remaining) throw ClubcardError.Deserialize("not enough bytes for $what")
     }
 
-    /** `uint8`. */
-    public fun u8(): Int {
-        need(1, "u8")
-        return buf[position++].toInt() and 0xff
+    /** `n` bytes as an unsigned big-endian integer, `n` in 1..8. Every multi-byte read goes through here. */
+    private fun readBigEndian(
+        n: Int,
+        what: String,
+    ): Long {
+        need(n.toLong(), what)
+        var v = 0L
+        repeat(n) { v = (v shl 8) or (buf[position++].toLong() and 0xff) }
+        return v
     }
+
+    /** `uint8`. */
+    public fun readU8(): Int = readBigEndian(1, "u8").toInt()
 
     /** `uint32`, big-endian. */
-    public fun u32(): Long {
-        need(4, "u32")
-        var v = 0L
-        for (i in 0 until 4) v = (v shl 8) or (buf[position + i].toLong() and 0xff)
-        position += 4
-        return v
-    }
+    public fun readU32(): Long = readBigEndian(4, "u32")
 
     /** `uint64`, big-endian. */
-    public fun u64(): Long {
-        need(8, "u64")
-        var v = 0L
-        for (i in 0 until 8) v = (v shl 8) or (buf[position + i].toLong() and 0xff)
-        position += 8
-        return v
-    }
+    public fun readU64(): Long = readBigEndian(8, "u64")
+
+    /** `uint64`, little-endian (the v3 bincode body; not part of the upstream codec). */
+    public fun readU64Le(): Long = readU64().reverseBytes()
 
     /** `opaque x[n]`: `n` fixed-width bytes. */
     public fun bytes(
@@ -67,24 +70,19 @@ public class ByteReader(
         what: String,
     ): ByteString {
         need(n.toLong(), what)
-        val out = buf.toByteString(position, n)
+        // A zero-length read shares one instance: 65535 empty serials must not cost 65535 objects (spec §6.3 budget).
+        val out = if (n == 0) ByteString.EMPTY else buf.toByteString(position, n)
         position += n
         return out
     }
 
     /** Read an `n`-byte big-endian length (or item count) prefix, `n` in 1..4. */
-    public fun readLen(n: Int): Long {
-        need(n.toLong(), "length")
-        var v = 0L
-        for (i in 0 until n) v = (v shl 8) or (buf[position + i].toLong() and 0xff)
-        position += n
-        return v
-    }
+    public fun readLen(n: Int): Long = readBigEndian(n, "length")
 
     /** `opaque content<0..2^(8*n)-1>`: an `n`-byte byte-length prefix followed by the bytes. */
     public fun readVec(n: Int): ByteString {
         val len = readLen(n)
-        need(len, "vector content")
+        need(len, "vector content") // checked as a Long first, so the toInt() below cannot truncate
         return bytes(len.toInt(), "vector content")
     }
 
@@ -95,16 +93,20 @@ public class ByteReader(
      */
     public fun readU64Seq(): LongArray {
         val count = readLen(4)
-        val byteLen = count * 8
-        if (byteLen > remaining) throw ClubcardError.Deserialize("not enough bytes for u64 sequence data")
+        need(count * 8, "u64 sequence data") // a Long product: a count up to 2^32 - 1 cannot wrap
         // revokt: one zero pad word per column (spec §6.4); `Equation.eval` reads the same with or without it.
-        val items = LongArray(count.toInt() + 1)
-        for (i in 0 until count.toInt()) items[i] = u64()
+        val n = count.toInt()
+        val items = LongArray(n + 1)
+        for (i in 0 until n) items[i] = readU64()
         return items
     }
 }
 
-/** The v4 (C2SP) wire format readers, `impl Codec for …` upstream (decoding only). */
+/**
+ * The v4 (C2SP) wire format readers, `impl Codec for …` upstream (decoding only). They live in an object rather than
+ * in companions because upstream implements them in `clubcard-crlite` for types that belong to `clubcard`; the readers
+ * for `clubcard-crlite`'s own types (`LogId`, `Timestamp`, `CrliteCoverage`, …) are companions in CrliteQuery.kt.
+ */
 @RevoktInternalApi
 public object Codec {
     /**
@@ -124,7 +126,18 @@ public object Codec {
         val columnCount = buf.readLen(1).toInt()
         val approxFilter = Array(columnCount) { buf.readU64Seq() }
         val exactFilter = buf.readU64Seq()
-        // revokt: spec §6.3, a rank past the last column is rejected at decode (upstream indexes out of bounds at query).
+        checkRanks(index, columnCount)
+        return Clubcard(universe, index, approxFilter, exactFilter)
+    }
+
+    /**
+     * revokt: spec §6.3, a rank past the last column is rejected at decode (upstream indexes out of bounds at query
+     * time). Shared with the v3 reader.
+     */
+    public fun checkRanks(
+        index: ClubcardIndex,
+        columnCount: Int,
+    ) {
         for ((blockId, entry) in index) {
             if (entry.approxFilterRank > columnCount) {
                 throw ClubcardError.Deserialize(
@@ -132,7 +145,6 @@ public object Codec {
                 )
             }
         }
-        return Clubcard(universe, index, approxFilter, exactFilter)
     }
 
     /**
@@ -154,18 +166,17 @@ public object Codec {
      * ```
      */
     public fun readIndexEntry(buf: ByteReader): ClubcardIndexEntry {
-        val approxFilterM = buf.u32()
-        val approxFilterRank = buf.u8()
-        val approxFilterOffset = buf.u32()
-        val exactFilterM = buf.u32()
-        val exactFilterOffset = buf.u32()
-        val inverted = buf.u8()
-        // revokt: spec §6.3, `inverted` is 0 or 1 (a C2SP MUST; upstream reads `!= 0`).
+        val approxFilterM = buf.readU32()
+        val approxFilterRank = buf.readU8()
+        val approxFilterOffset = buf.readU32()
+        val exactFilterM = buf.readU32()
+        val exactFilterOffset = buf.readU32()
+        val inverted = buf.readU8()
+        // revokt: spec §6.3, `inverted` is 0 or 1 (a C2SP MUST; upstream's v4 reader takes `!= 0`; bincode rejects it on v3).
         if (inverted > 1) throw ClubcardError.Deserialize("inverted byte is $inverted, expected 0 or 1")
 
         val count = buf.readLen(2).toInt()
-        val exceptions = ArrayList<ByteString>(count)
-        for (i in 0 until count) exceptions.add(buf.readVec(1))
+        val exceptions = List(count) { buf.readVec(1) }
 
         return ClubcardIndexEntry(
             approxFilterM = approxFilterM,
@@ -191,6 +202,7 @@ public object Codec {
      */
     public fun readIndex(buf: ByteReader): ClubcardIndex {
         val count = buf.readLen(4)
+        // Insertion order is the verified sorted order, so iteration reproduces upstream's BTreeMap: keep it linked.
         val index = LinkedHashMap<ByteString, ClubcardIndexEntry>()
         var previous: ByteString? = null
         for (i in 0 until count) {
@@ -205,4 +217,15 @@ public object Codec {
         }
         return index
     }
+}
+
+/** Byte order reversal of a 64-bit word. */
+private fun Long.reverseBytes(): Long {
+    var v = 0L
+    var x = this
+    repeat(8) {
+        v = (v shl 8) or (x and 0xff)
+        x = x ushr 8
+    }
+    return v
 }

@@ -36,7 +36,7 @@ record.json   {entry, filters: [{path, sha256, source}], queries: {generator, se
 |---|---|---|---|
 | `synthetic` | `synthetic.v3.filter`, `synthetic.v4.filter` | 2171 | `revokt-oracle build-synthetic`: 5 issuers × 2^12 serials, one inverted block, one empty block, coverage edges |
 | `compat-delta` | `20261021-1-compat.filter.delta` (v3, as served), `.v4` (oracle transcode) | 1500 | Mozilla Remote Settings `cert-revocations`, attachment hash in the record |
-| `compat-full` | `20261017-1-compat.filter` (v3, as served) | 2000 | same collection; 1.5 MB, the one large committed fixture |
+| `compat-full` | `20261017-1-compat.filter` (v3, as served) | 2048 | same collection; 1.5 MB, the one large committed fixture; the first 48 queries are its 24 exception serials and a one-bit sibling of each |
 
 Regenerating (a maintainer, after an oracle or upstream change; the nightly native job will take this over):
 
@@ -47,6 +47,22 @@ native/target/release/revokt-oracle gen-queries <filter> <count> <seed> queries.
 native/target/release/revokt-oracle goldens <filter> queries.tsv corpus/clubcard/<entry>/goldens.tsv
 ./gradlew writeCorpusManifest
 ```
+
+Reproducibility. `gen-queries` is deterministic for a seed (coverage is sorted before sampling; it is a `HashMap`
+upstream), so `goldens` over a real filter and its recorded seed reproduces the committed file byte for byte.
+`build-synthetic` is not: `clubcard`'s builder draws from `thread_rng`, so a rebuild yields a different filter (its
+queries are the same). Check the committed synthetic pair by replaying it, never by rebuilding:
+
+```
+cut -f1-3 corpus/clubcard/synthetic/goldens.tsv > q.tsv
+native/target/release/revokt-oracle goldens corpus/clubcard/synthetic/synthetic.v3.filter q.tsv g.tsv
+cmp g.tsv corpus/clubcard/synthetic/goldens.tsv
+```
+
+Coverage gaps, stated so they are not mistaken for checks: `compat-delta`, the only real v4 data, has no `Revoked`
+golden and no inverted block (982 of its 1030 blocks have `approx_filter_m == 0`); the v4 membership and inverted
+paths are covered by `synthetic.v4.filter` and by the structural-equality test, which proves the v4 transcode decodes
+to the same filter as the v3 original. A real delta with inverted blocks is a later admission.
 
 The real filters are Mozilla's published data artifacts (not code; `.gitattributes` marks them binary). A new entry is
 admitted in its own PR with the record filled in; goldens are never edited by hand.

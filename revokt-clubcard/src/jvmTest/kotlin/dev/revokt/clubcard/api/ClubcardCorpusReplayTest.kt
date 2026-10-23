@@ -29,10 +29,17 @@ class ClubcardCorpusReplayTest {
     private val corpus =
         File(System.getProperty("revokt.clubcardCorpus") ?: error("revokt.clubcardCorpus is set by the build"))
 
-    private fun entries(): List<File> = corpus.listFiles { f -> f.isDirectory }!!.sortedBy { it.name }
+    private fun entries(): List<File> =
+        checkNotNull(corpus.listFiles { f -> f.isDirectory }) {
+            "$corpus is not a directory"
+        }.sortedBy { it.name }
 
     private fun filtersIn(entry: File): List<File> =
-        entry.listFiles { f -> f.isFile && f.name.contains(".filter") }!!.sortedBy {
+        checkNotNull(
+            entry.listFiles { f ->
+                f.isFile && f.name.contains(".filter")
+            },
+        ) { "$entry is not a directory" }.sortedBy {
             it.name
         }
 
@@ -49,18 +56,17 @@ class ClubcardCorpusReplayTest {
             filtersIn(entry).map { filterFile ->
                 DynamicTest.dynamicTest("${entry.name}/${filterFile.name}: ${goldens.size} goldens") {
                     val filter = ClubcardFilters.decode(filterFile.readBytes())
-                    var mismatches = 0
-                    val first = StringBuilder()
-                    for (line in goldens) {
-                        val fields = line.split('\t')
-                        val expected = fields[3]
-                        val actual = query(filter, issuer = fields[0], serial = fields[1], scts = fields[2])
-                        if (actual.goldenName != expected) {
-                            mismatches++
-                            if (first.isEmpty()) first.append("first mismatch: $line -> $actual")
+                    val mismatches =
+                        goldens.mapNotNull { line ->
+                            // Four columns; detekt caps destructuring at three, so index them.
+                            val fields = line.split('\t')
+                            val actual = query(filter, issuer = fields[0], serial = fields[1], scts = fields[2])
+                            if (actual.goldenName == fields[3]) null else "$line -> $actual"
                         }
-                    }
-                    assertEquals(0, mismatches, "$mismatches of ${goldens.size} goldens disagree; $first")
+                    assertTrue(
+                        mismatches.isEmpty(),
+                        "${mismatches.size} of ${goldens.size} goldens disagree; first: ${mismatches.firstOrNull()}",
+                    )
                 }
             }
         }
@@ -80,18 +86,8 @@ class ClubcardCorpusReplayTest {
         b: CrliteClubcard,
         name: String,
     ) {
-        assertEquals(a.universe.logs.keys, b.universe.logs.keys, name)
-        for ((log, interval) in a.universe.logs) {
-            val o = b.universe.logs.getValue(log)
-            assertEquals(interval.low, o.low, name)
-            assertEquals(interval.high, o.high, name)
-        }
-        assertEquals(a.index.keys, b.index.keys, name)
-        for ((block, e) in a.index) {
-            val o = b.index.getValue(block)
-            assertEquals(e.toString(), o.toString(), name)
-            assertEquals(e.exceptions, o.exceptions, name)
-        }
+        assertEquals(a.universe.logs, b.universe.logs, name)
+        assertEquals(a.index, b.index, name)
         assertEquals(a.inner.approxFilter.size, b.inner.approxFilter.size, name)
         for (i in a.inner.approxFilter.indices) {
             assertContentEquals(
@@ -109,7 +105,7 @@ class ClubcardCorpusReplayTest {
         serial: String,
         scts: String,
     ): CrliteStatus {
-        val key = CrliteKey.of(IssuerSpkiHash(issuer.decodeHex()), serial.decodeHex())
+        val key = CrliteKey(IssuerSpkiHash(issuer.decodeHex()), serial.decodeHex())
         val timestamps =
             if (scts.isEmpty()) {
                 emptyList()

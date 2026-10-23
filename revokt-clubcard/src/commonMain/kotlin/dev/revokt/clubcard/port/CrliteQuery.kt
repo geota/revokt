@@ -16,32 +16,24 @@ import okio.ByteString
 
 /** SHA-256 of the issuer's SubjectPublicKeyInfo (spec §6.1); exactly 32 bytes. */
 @RevoktInternalApi
-public class IssuerSpkiHash(
+public data class IssuerSpkiHash(
     public val bytes: ByteString,
 ) {
     init {
         require(bytes.size == 32) { "an issuer SPKI hash is 32 bytes, got ${bytes.size}" }
     }
 
-    override fun equals(other: Any?): Boolean = other is IssuerSpkiHash && bytes == other.bytes
-
-    override fun hashCode(): Int = bytes.hashCode()
-
     override fun toString(): String = "IssuerSpkiHash(${bytes.hex()})"
 }
 
 /** A CT log id (`opaque LogId[32]`, the SHA-256 of the log's public key); exactly 32 bytes. */
 @RevoktInternalApi
-public class LogId(
+public data class LogId(
     public val bytes: ByteString,
 ) {
     init {
         require(bytes.size == 32) { "a log id is 32 bytes, got ${bytes.size}" }
     }
-
-    override fun equals(other: Any?): Boolean = other is LogId && bytes == other.bytes
-
-    override fun hashCode(): Int = bytes.hashCode()
 
     override fun toString(): String = "LogId(${bytes.hex()})"
 
@@ -54,35 +46,29 @@ public class LogId(
 
 /** A CT timestamp in milliseconds, an unsigned `u64` upstream: comparisons are unsigned. */
 @RevoktInternalApi
-public class Timestamp(
+public data class Timestamp(
     public val value: Long,
 ) : Comparable<Timestamp> {
     override fun compareTo(other: Timestamp): Int = value.toULong().compareTo(other.value.toULong())
-
-    override fun equals(other: Any?): Boolean = other is Timestamp && value == other.value
-
-    override fun hashCode(): Int = value.hashCode()
 
     override fun toString(): String = "Timestamp(${value.toULong()})"
 
     @RevoktInternalApi
     public companion object {
         public val MIN: Timestamp = Timestamp(0)
-        public val MAX: Timestamp = Timestamp(-1)
+        public val MAX: Timestamp = Timestamp(ULong.MAX_VALUE.toLong())
 
         /** `uint64 Timestamp`, big-endian. */
-        public fun read(buf: ByteReader): Timestamp = Timestamp(buf.u64())
+        public fun read(buf: ByteReader): Timestamp = Timestamp(buf.readU64())
     }
 }
 
 /** `struct { Timestamp low; Timestamp high; } TimestampInterval;` */
 @RevoktInternalApi
-public class TimestampInterval(
+public data class TimestampInterval(
     public val low: Timestamp,
     public val high: Timestamp,
 ) {
-    override fun toString(): String = "TimestampInterval($low, $high)"
-
     @RevoktInternalApi
     public companion object {
         public fun read(buf: ByteReader): TimestampInterval {
@@ -112,8 +98,9 @@ public class CrliteCoverage(
          */
         public fun read(buf: ByteReader): CrliteCoverage {
             val count = buf.readLen(2).toInt()
+            // Linked so iteration follows the file, which keeps every consumer deterministic (upstream: HashMap).
             val map = LinkedHashMap<LogId, TimestampInterval>(count)
-            for (i in 0 until count) {
+            repeat(count) {
                 val logId = LogId.read(buf)
                 val interval = TimestampInterval.read(buf)
                 // revokt: spec §6.3, log ids distinct (a C2SP MUST; upstream overwrites the earlier interval).
@@ -134,31 +121,21 @@ public class CrliteKey(
     /** `SHA-256(issuer || serial)`; not verified by the constructor (upstream `with_hash`). */
     public val issuerSerialHash: ByteString,
 ) {
+    /** Computes the hash (upstream `new`). */
+    public constructor(issuer: IssuerSpkiHash, serial: ByteString) :
+        this(issuer, serial, Buffer().write(issuer.bytes).write(serial).sha256())
+
     init {
         require(issuerSerialHash.size == 32) { "an issuer-serial hash is 32 bytes, got ${issuerSerialHash.size}" }
-    }
-
-    @RevoktInternalApi
-    public companion object {
-        /** Computes the hash (upstream `new`). */
-        public fun of(
-            issuer: IssuerSpkiHash,
-            serial: ByteString,
-        ): CrliteKey {
-            val hash = Buffer().write(issuer.bytes).write(serial).sha256()
-            return CrliteKey(issuer, serial, hash)
-        }
     }
 }
 
 /** One SCT's `(LogId, Timestamp)` as a query sees it. */
 @RevoktInternalApi
-public class LogTimestamp(
+public data class LogTimestamp(
     public val logId: LogId,
     public val timestamp: Timestamp,
-) {
-    override fun toString(): String = "LogTimestamp($logId, $timestamp)"
-}
+)
 
 /** A key with the SCT it is being checked under (`None` upstream when there is no SCT: never in the universe). */
 @RevoktInternalApi
@@ -178,8 +155,7 @@ public class CrliteQuery(
             a[i] = limb
         }
         a[0] = a[0] or 1L
-        val modulus = if (m.toULong() < 1uL) 1uL else m.toULong()
-        val s = (a[3].toULong() % modulus).toLong()
+        val s = (a[3].toULong() % maxOf(m.toULong(), 1uL)).toLong()
         return Equation.homogeneous(s, a)
     }
 
@@ -190,10 +166,6 @@ public class CrliteQuery(
         val interval = meta.logs[logId] ?: return false
         return interval.low <= timestamp && timestamp <= interval.high
     }
-
-    private operator fun LogTimestamp.component1(): LogId = logId
-
-    private operator fun LogTimestamp.component2(): Timestamp = timestamp
 }
 
 /** `ClubcardError` upstream; `Serialize` has no decoding counterpart. */
@@ -273,8 +245,7 @@ public class CrliteClubcard(
     ): CrliteStatus {
         for (logTimestamp in timestamps) {
             val status = CrliteStatus.of(inner.contains(CrliteQuery(key, logTimestamp)))
-            if (status == CrliteStatus.NOT_COVERED) continue
-            return status
+            if (status != CrliteStatus.NOT_COVERED) return status
         }
         return CrliteStatus.NOT_COVERED
     }
@@ -286,7 +257,7 @@ public class CrliteClubcard(
          * the translation (see `dev.revokt.clubcard.api.ClubcardFilters`).
          */
         public fun fromBytes(bytes: ByteArray): CrliteClubcard {
-            val buf = ByteReader(bytes, 0)
+            val buf = ByteReader(bytes)
             return when (Encoding.read(buf)) {
                 Encoding.V3 -> {
                     throw ClubcardError.Deserialize(

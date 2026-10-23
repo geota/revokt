@@ -21,7 +21,7 @@ internal class TestCoverage(
 internal class TestIndexEntry(
     val blockId: ByteString,
     val approxM: Long = 0,
-    val rank: Int = 0,
+    val rank: Long = 0,
     val approxOffset: Long = 0,
     val exactM: Long = 0,
     val exactOffset: Long = 0,
@@ -53,7 +53,7 @@ internal object TestFilterWriter {
         b.writeInt(filter.index.size)
         for (e in filter.index) {
             b.write(e.blockId)
-            b.writeInt(e.approxM.toInt()).writeByte(e.rank).writeInt(e.approxOffset.toInt())
+            b.writeInt(e.approxM.toInt()).writeByte(e.rank.toInt()).writeInt(e.approxOffset.toInt())
             b.writeInt(e.exactM.toInt()).writeInt(e.exactOffset.toInt()).writeByte(e.inverted)
             b.writeShort(e.exceptions.size)
             for (x in e.exceptions) b.writeByte(x.size).write(x)
@@ -73,7 +73,6 @@ internal object TestFilterWriter {
     fun v3(
         filter: TestFilter,
         trailing: ByteArray = ByteArray(0),
-        rankOverride: Long? = null,
     ): ByteArray {
         val b = Buffer().writeByte(3).writeByte(0)
         b.writeLongLe(filter.coverage.size.toLong())
@@ -81,7 +80,7 @@ internal object TestFilterWriter {
         b.writeLongLe(filter.index.size.toLong())
         for (e in filter.index) {
             b.writeLongLe(e.blockId.size.toLong()).write(e.blockId)
-            b.writeLongLe(e.approxM).writeLongLe(e.exactM).writeLongLe(rankOverride ?: e.rank.toLong())
+            b.writeLongLe(e.approxM).writeLongLe(e.exactM).writeLongLe(e.rank)
             b.writeLongLe(e.approxOffset).writeLongLe(e.exactOffset).writeByte(e.inverted)
             b.writeLongLe(e.exceptions.size.toLong())
             for (x in e.exceptions) b.writeLongLe(x.size.toLong()).write(x)

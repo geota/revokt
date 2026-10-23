@@ -27,7 +27,8 @@ upstream path, crate version and commit.
 Spec §6.3 decode strictness and §6.4 storage, applied inside the v4 reader because they cannot be checked after the
 fact (duplicates and the `inverted` byte are gone once decoded):
 
-1. `inverted` must be 0 or 1 (C2SP MUST; upstream reads `!= 0`).
+1. `inverted` must be 0 or 1 (C2SP MUST; upstream's v4 reader takes `!= 0`; on v3 this is not a deviation, since
+   bincode 1.x rejects any `bool` byte other than 0 or 1).
 2. Index block ids strictly increasing (C2SP MUST; also rejects duplicates, which upstream silently overwrites).
 3. Coverage log ids distinct (C2SP MUST; upstream overwrites the earlier interval).
 4. `approx_filter_rank ≤` column count, checked at decode (upstream indexes out of bounds at query time).

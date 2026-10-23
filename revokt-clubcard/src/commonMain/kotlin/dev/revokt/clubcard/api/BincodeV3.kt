@@ -7,6 +7,7 @@ import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.port.ByteReader
 import dev.revokt.clubcard.port.Clubcard
 import dev.revokt.clubcard.port.ClubcardIndexEntry
+import dev.revokt.clubcard.port.Codec
 import dev.revokt.clubcard.port.CrliteCoverage
 import dev.revokt.clubcard.port.LogId
 import dev.revokt.clubcard.port.Timestamp
@@ -29,9 +30,11 @@ import okio.ByteString
  * ```
  *
  * Original code, not a translation: upstream decodes this through serde. The spec §6.3 strictness rules are the
- * same as the v4 reader's; in addition every `usize` must fit the v4 range (`u32`; rank and column count `u8`), so a
- * v3 filter that revokt accepts is one it could also have accepted as a v4 transcode. `BTreeMap` serializes its keys
- * in order, so the sorted-index rule holds for every producer-written v3 filter.
+ * same as the v4 reader's; in addition `approx_filter_m`, `exact_filter_m` and both offsets must fit `u32`, and the
+ * rank and the column count must fit `u8`, as in v4. Other v4 limits are not imposed on v3: a block id of any length
+ * (upstream accepts it too; it simply never matches a 32-byte issuer), an exception serial over 255 bytes, and more
+ * than 65535 exceptions or coverage entries all decode. `BTreeMap` serializes its keys in order, so the sorted-index
+ * rule holds for every producer-written v3 filter. `inverted` outside {0, 1} is rejected, as bincode 1.x does.
  */
 @OptIn(RevoktInternalApi::class)
 internal object BincodeV3 {
@@ -49,13 +52,7 @@ internal object BincodeV3 {
         }
         val approxFilter = Array(columnCount.toInt()) { readWords(buf) }
         val exactFilter = readWords(buf)
-        for ((blockId, entry) in index) {
-            if (entry.approxFilterRank > columnCount) {
-                throw ClubcardFormatException(
-                    "index entry ${blockId.hex()} has rank ${entry.approxFilterRank} but the filter has $columnCount columns",
-                )
-            }
-        }
+        Codec.checkRanks(index, columnCount.toInt())
         // Trailing bytes are accepted: bincode 1.x's `deserialize` does not check for them.
         return Clubcard(universe, index, approxFilter, exactFilter)
     }
@@ -63,10 +60,10 @@ internal object BincodeV3 {
     private fun readCoverage(buf: ByteReader): CrliteCoverage {
         val count = readCount(buf, "coverage", perItemBytes = COVERAGE_ENTRY_BYTES)
         val map = LinkedHashMap<LogId, TimestampInterval>(count.toInt())
-        for (i in 0 until count) {
+        repeat(count.toInt()) {
             val logId = LogId(buf.bytes(32, "LogId"))
-            val low = Timestamp(u64le(buf))
-            val high = Timestamp(u64le(buf))
+            val low = Timestamp(buf.readU64Le())
+            val high = Timestamp(buf.readU64Le())
             if (map.put(logId, TimestampInterval(low, high)) != null) {
                 throw ClubcardFormatException("coverage lists log ${logId.bytes.hex()} twice")
             }
@@ -90,19 +87,18 @@ internal object BincodeV3 {
     }
 
     private fun readIndexEntry(buf: ByteReader): ClubcardIndexEntry {
-        val approxFilterM = u32Range(buf, "approx_filter_m")
-        val exactFilterM = u32Range(buf, "exact_filter_m")
-        val approxFilterRank = u64le(buf)
+        val approxFilterM = readU64AsU32(buf, "approx_filter_m")
+        val exactFilterM = readU64AsU32(buf, "exact_filter_m")
+        val approxFilterRank = buf.readU64Le()
         if (approxFilterRank.toULong() > U8_MAX.toULong()) {
             throw ClubcardFormatException("v3 approx_filter_rank $approxFilterRank exceeds the v4 range (255)")
         }
-        val approxFilterOffset = u32Range(buf, "approx_filter_offset")
-        val exactFilterOffset = u32Range(buf, "exact_filter_offset")
-        val inverted = buf.u8()
+        val approxFilterOffset = readU64AsU32(buf, "approx_filter_offset")
+        val exactFilterOffset = readU64AsU32(buf, "exact_filter_offset")
+        val inverted = buf.readU8()
         if (inverted > 1) throw ClubcardFormatException("inverted byte is $inverted, expected 0 or 1")
         val exceptionCount = readCount(buf, "exceptions", perItemBytes = 8)
-        val exceptions = ArrayList<ByteString>(exceptionCount.toInt())
-        for (i in 0 until exceptionCount) exceptions.add(readBytes(buf, "exception serial"))
+        val exceptions = List(exceptionCount.toInt()) { readBytes(buf, "exception serial") }
         return ClubcardIndexEntry(
             approxFilterM = approxFilterM,
             exactFilterM = exactFilterM,
@@ -117,8 +113,9 @@ internal object BincodeV3 {
     /** `Vec<u64>`: a `u64` length, checked against the remaining input, then little-endian words plus one pad word (spec §6.4). */
     private fun readWords(buf: ByteReader): LongArray {
         val count = readCount(buf, "u64 sequence", perItemBytes = 8)
-        val words = LongArray(count.toInt() + 1)
-        for (i in 0 until count.toInt()) words[i] = u64le(buf)
+        val n = count.toInt()
+        val words = LongArray(n + 1)
+        for (i in 0 until n) words[i] = buf.readU64Le()
         return words
     }
 
@@ -128,7 +125,7 @@ internal object BincodeV3 {
         what: String,
         perItemBytes: Long,
     ): Long {
-        val count = u64le(buf)
+        val count = buf.readU64Le()
         if (count.toULong() > (buf.remaining / perItemBytes).toULong()) {
             throw ClubcardFormatException(
                 "not enough bytes for $what: $count items declared, ${buf.remaining} bytes remain",
@@ -145,22 +142,14 @@ internal object BincodeV3 {
         return buf.bytes(len.toInt(), what)
     }
 
-    private fun u32Range(
+    private fun readU64AsU32(
         buf: ByteReader,
         name: String,
     ): Long {
-        val value = u64le(buf)
+        val value = buf.readU64Le()
         if (value.toULong() > U32_MAX.toULong()) {
             throw ClubcardFormatException("v3 $name $value exceeds the v4 range (u32)")
         }
         return value
-    }
-
-    /** `u64`, little-endian (bincode's default), read through the port's big-endian reader. */
-    private fun u64le(buf: ByteReader): Long {
-        val be = buf.u64()
-        var v = 0L
-        for (i in 0 until 8) v = (v shl 8) or ((be ushr (8 * i)) and 0xff)
-        return v
     }
 }

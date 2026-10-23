@@ -38,12 +38,12 @@ class ClubcardDecoderFuzzTest {
                 } catch (_: ClubcardFormatException) {
                     return
                 }
-            for ((block, _) in filter.index) {
-                val key = CrliteKey.of(IssuerSpkiHash(block), serial)
-                val scts =
-                    filter.universe.logs.map { (log, interval) -> LogTimestamp(log, interval.low) } +
-                        LogTimestamp(LogId(block), Timestamp(0))
-                filter.contains(key, scts)
+            val covered = filter.universe.logs.map { (log, interval) -> LogTimestamp(log, interval.low) }
+            // A v3 block id of any length decodes (as upstream); only a 32-byte one can be an issuer, so only those
+            // are queried. The others stay in the index, unreachable, which is what upstream does with them too.
+            for (block in filter.index.keys.filter { it.size == 32 }) {
+                val key = CrliteKey(IssuerSpkiHash(block), serial)
+                filter.contains(key, covered + LogTimestamp(LogId(block), Timestamp(0)))
                 filter.contains(key, emptyList())
             }
         }

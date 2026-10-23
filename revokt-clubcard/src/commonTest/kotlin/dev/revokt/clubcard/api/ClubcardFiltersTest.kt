@@ -4,6 +4,7 @@
 package dev.revokt.clubcard.api
 
 import dev.revokt.clubcard.RevoktInternalApi
+import dev.revokt.clubcard.port.ByteReader
 import dev.revokt.clubcard.port.CrliteKey
 import dev.revokt.clubcard.port.CrliteStatus
 import dev.revokt.clubcard.port.Encoding
@@ -12,11 +13,14 @@ import dev.revokt.clubcard.port.LogId
 import dev.revokt.clubcard.port.LogTimestamp
 import dev.revokt.clubcard.port.Timestamp
 import okio.Buffer
+import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /** Spec §6.3 decode rules, one test per rule, each against both encodings where the rule applies to both. */
@@ -110,7 +114,7 @@ class ClubcardFiltersTest {
             val bytes = TestFilterWriter.v4(wellFormed)
             bytes[0] = version.toByte()
             val e = assertFailsWith<ClubcardFormatException>("version $version") { ClubcardFilters.decode(bytes) }
-            assertTrue(e.message!!.contains("unsupported clubcard version ($version)"), e.message)
+            assertContains(e.message.orEmpty(), "unsupported clubcard version ($version)")
         }
     }
 
@@ -127,7 +131,7 @@ class ClubcardFiltersTest {
         val filter = TestFilter(index = listOf(TestIndexEntry(issuerA, inverted = 2)))
         for ((name, bytes) in both(filter)) {
             val e = assertFailsWith<ClubcardFormatException>(name) { ClubcardFilters.decode(bytes) }
-            assertTrue(e.message!!.contains("inverted byte is 2"), name)
+            assertContains(e.message.orEmpty(), "inverted byte is 2", message = name)
         }
     }
 
@@ -138,7 +142,7 @@ class ClubcardFiltersTest {
         for (filter in listOf(unsorted, duplicated)) {
             for ((name, bytes) in both(filter)) {
                 val e = assertFailsWith<ClubcardFormatException>(name) { ClubcardFilters.decode(bytes) }
-                assertTrue(e.message!!.contains("not sorted"), name)
+                assertContains(e.message.orEmpty(), "not sorted", message = name)
             }
         }
     }
@@ -148,7 +152,7 @@ class ClubcardFiltersTest {
         val filter = TestFilter(coverage = listOf(TestCoverage(log0, 1, 2), TestCoverage(log0, 3, 4)))
         for ((name, bytes) in both(filter)) {
             val e = assertFailsWith<ClubcardFormatException>(name) { ClubcardFilters.decode(bytes) }
-            assertTrue(e.message!!.contains("twice"), name)
+            assertContains(e.message.orEmpty(), "twice", message = name)
         }
     }
 
@@ -162,7 +166,7 @@ class ClubcardFiltersTest {
             )
         for ((name, bytes) in both(filter)) {
             val e = assertFailsWith<ClubcardFormatException>(name) { ClubcardFilters.decode(bytes) }
-            assertTrue(e.message!!.contains("rank 3"), name)
+            assertContains(e.message.orEmpty(), "rank 3", message = name)
         }
         val fits =
             TestFilter(
@@ -194,7 +198,7 @@ class ClubcardFiltersTest {
             )
         for ((_, bytes) in both(filter)) {
             val decoded = ClubcardFilters.decode(bytes)
-            val key = CrliteKey.of(IssuerSpkiHash(issuerA), bytesOf(1, 8))
+            val key = CrliteKey(IssuerSpkiHash(issuerA), bytesOf(1, 8))
             assertEquals(CrliteStatus.NOT_COVERED, decoded.contains(key, emptyList()))
         }
     }
@@ -222,9 +226,8 @@ class ClubcardFiltersTest {
         assertFailsWith<ClubcardFormatException> { ClubcardFilters.decode(v3coverage) }
         val v3words =
             Buffer()
-                .writeByte(
-                    3,
-                ).writeByte(0)
+                .writeByte(3)
+                .writeByte(0)
                 .writeLongLe(0)
                 .writeLongLe(0)
                 .writeLongLe(1)
@@ -245,11 +248,11 @@ class ClubcardFiltersTest {
     fun `decode rejects v3 values outside the v4 range`() {
         val filter = TestFilter(index = listOf(TestIndexEntry(issuerA, approxM = 1L shl 32)))
         val e = assertFailsWith<ClubcardFormatException> { ClubcardFilters.decode(TestFilterWriter.v3(filter)) }
-        assertTrue(e.message!!.contains("approx_filter_m"), e.message)
-        val rank = TestFilter(index = listOf(TestIndexEntry(issuerA)))
+        assertContains(e.message.orEmpty(), "approx_filter_m", message = e.message)
+        val rank = TestFilter(index = listOf(TestIndexEntry(issuerA, rank = 256)))
         assertFailsWith<ClubcardFormatException> {
             ClubcardFilters.decode(
-                TestFilterWriter.v3(rank, rankOverride = 256),
+                TestFilterWriter.v3(rank),
             )
         }
         val columns = TestFilter(approx = List(256) { LongArray(0) })
@@ -261,7 +264,6 @@ class ClubcardFiltersTest {
         for ((name, whole) in both(wellFormed)) {
             for (len in 0 until whole.size) {
                 val cut = whole.copyOf(len)
-                if (name == "v3" && len >= whole.size) continue
                 assertFailsWith<ClubcardFormatException>("$name truncated to $len") { ClubcardFilters.decode(cut) }
             }
         }
@@ -270,7 +272,7 @@ class ClubcardFiltersTest {
     @Test
     fun `contains answers NOT_ENROLLED for an unknown issuer and NOT_COVERED without a covered sct`() {
         val filter = ClubcardFilters.decode(TestFilterWriter.v4(wellFormed))
-        val unknown = CrliteKey.of(IssuerSpkiHash(bytesOf(0xC)), bytesOf(1, 4))
+        val unknown = CrliteKey(IssuerSpkiHash(bytesOf(0xC)), bytesOf(1, 4))
         val covered = LogTimestamp(LogId(log0), Timestamp(1500))
         val outside = LogTimestamp(LogId(log0), Timestamp(2001))
         val unknownLog = LogTimestamp(LogId(bytesOf(9)), Timestamp(1500))
@@ -278,7 +280,7 @@ class ClubcardFiltersTest {
         assertEquals(CrliteStatus.NOT_COVERED, filter.contains(unknown, listOf(outside, unknownLog)))
         assertEquals(CrliteStatus.NOT_COVERED, filter.contains(unknown, emptyList()))
         // An empty approximate filter (approxM == 0) never includes anything; inverted, it includes everything.
-        val inB = CrliteKey.of(IssuerSpkiHash(issuerB), bytesOf(1, 4))
+        val inB = CrliteKey(IssuerSpkiHash(issuerB), bytesOf(1, 4))
         assertEquals(CrliteStatus.REVOKED, filter.contains(inB, listOf(outside, covered)))
     }
 
@@ -287,14 +289,73 @@ class ClubcardFiltersTest {
         assertTrue(Timestamp(-1) > Timestamp(Long.MAX_VALUE))
         assertTrue(Timestamp.MIN < Timestamp(1))
         val filter = ClubcardFilters.decode(TestFilterWriter.v4(wellFormed))
-        val key = CrliteKey.of(IssuerSpkiHash(issuerB), bytesOf(1, 4))
+        val key = CrliteKey(IssuerSpkiHash(issuerB), bytesOf(1, 4))
         assertEquals(CrliteStatus.REVOKED, filter.contains(key, listOf(LogTimestamp(LogId(log1), Timestamp(-2)))))
     }
 
     @Test
     fun `issuer-serial hash is sha256 of issuer then serial`() {
-        val key = CrliteKey.of(IssuerSpkiHash(issuerA), "abc".encodeToByteArray().toByteString())
+        val key = CrliteKey(IssuerSpkiHash(issuerA), "abc".encodeToByteArray().toByteString())
         val expected = Buffer().write(issuerA).writeUtf8("abc").sha256()
         assertEquals(expected, key.issuerSerialHash)
+    }
+
+    @Test
+    fun `contains answers GOOD for an exception serial and REVOKED for any other in the block`() {
+        // approxM = 1 and exactM = 1 over all-zero columns: every query evaluates to 0, so every serial is a member
+        // unless it is listed as an exception (spec §6.2 `meta.exceptions.none { … }`).
+        val exception = bytesOf(0x42, 9)
+        val filter =
+            TestFilter(
+                coverage = listOf(TestCoverage(log0, 0, -1)),
+                index =
+                    listOf(
+                        TestIndexEntry(issuerA, approxM = 1, rank = 0, exactM = 1, exceptions = listOf(exception)),
+                    ),
+                exact = LongArray(1),
+            )
+        val covered = listOf(LogTimestamp(LogId(log0), Timestamp(5)))
+        for ((name, bytes) in both(filter)) {
+            val decoded = ClubcardFilters.decode(bytes)
+            assertEquals(
+                CrliteStatus.GOOD,
+                decoded.contains(CrliteKey(IssuerSpkiHash(issuerA), exception), covered),
+                name,
+            )
+            assertEquals(
+                CrliteStatus.REVOKED,
+                decoded.contains(CrliteKey(IssuerSpkiHash(issuerA), bytesOf(0x43, 9)), covered),
+                name,
+            )
+            assertEquals(
+                CrliteStatus.REVOKED,
+                decoded.contains(CrliteKey(IssuerSpkiHash(issuerA), bytesOf(0x42, 8)), covered),
+                name,
+            )
+        }
+    }
+
+    @Test
+    fun `decode accepts a v3 block id that is not 32 bytes and never matches it`() {
+        // Upstream accepts any `Vec<u8>` key; such a block can never be an issuer, so it stays unreachable.
+        for (size in listOf(0, 31, 33)) {
+            val filter =
+                TestFilter(
+                    index = listOf(TestIndexEntry(bytesOf(1, size), approxM = 1, exactM = 1)),
+                    exact = LongArray(1),
+                )
+            val decoded = ClubcardFilters.decode(TestFilterWriter.v3(filter))
+            assertEquals(setOf(bytesOf(1, size)), decoded.index.keys, "size $size")
+        }
+    }
+
+    @Test
+    fun `reader shares one empty ByteString for zero-length reads and rejects a bad start`() {
+        val reader = ByteReader(ByteArray(4))
+        assertSame(ByteString.EMPTY, reader.bytes(0, "empty"))
+        assertSame(ByteString.EMPTY, reader.bytes(0, "empty"))
+        assertEquals(4, reader.remaining)
+        assertFailsWith<IllegalArgumentException> { ByteReader(ByteArray(4), 5) }
+        assertFailsWith<IllegalArgumentException> { ByteReader(ByteArray(4), -1) }
     }
 }

@@ -30,18 +30,12 @@ public interface AsQuery {
     public fun discriminant(): ByteString
 
     /** The query against the approximate filter: `asQuery(meta.approxFilterM)` shifted by `meta.approxFilterOffset`. */
-    public fun asApproxQuery(meta: ClubcardIndexEntry): Equation {
-        val approxEq = asQuery(meta.approxFilterM)
-        approxEq.s += meta.approxFilterOffset
-        return approxEq
-    }
+    public fun asApproxQuery(meta: ClubcardIndexEntry): Equation =
+        asQuery(meta.approxFilterM).apply { s += meta.approxFilterOffset }
 
     /** The query against the exact filter: `asQuery(meta.exactFilterM)` shifted by `meta.exactFilterOffset`. */
-    public fun asExactQuery(meta: ClubcardIndexEntry): Equation {
-        val exactEq = asQuery(meta.exactFilterM)
-        exactEq.s += meta.exactFilterOffset
-        return exactEq
-    }
+    public fun asExactQuery(meta: ClubcardIndexEntry): Equation =
+        asQuery(meta.exactFilterM).apply { s += meta.exactFilterOffset }
 }
 
 /**
