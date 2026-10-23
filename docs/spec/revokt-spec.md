@@ -49,9 +49,10 @@ Status: **draft spec / project proposal, revision 33** · Target: JVM 11+ and An
   time forms, now stated in §9.2 (the JDK's day rollover included) with a fail-closed rule for a null time; D2's
   Java fields gain `notBefore`/`notAfter`. §5.5's "structurally strict" is qualified.
   Oracle 3b walks the TBS tail by the same rule, and D7 gains the cases. `[0]` stays strict: ct-go does not
-  bound explicit `[0]`, so a trailing element there changes what ct-go accepts and which SPKI it records, the key's
-  SPKI when the certificate is an issuer. A crafted input could make the producer's key differ from revokt's, which
-  would be a `STRICT` bypass. The case is D1-dom by rule. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
+  bound explicit `[0]`, so a trailing element there changes what ct-go accepts and which SPKI it records. The keyed
+  serial is bounded (the stdlib `RawValue` re-parse) and is the JDK's. No input is known on which the filter key
+  differs, so the case is excluded conservatively, D1-dom by rule. The cost is `PARSE_FAILED` for such a leaf and a
+  dropped candidate for such an intermediate, both allowing in `DEFAULT`. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
   `producerKeyable`. The table models ct-go's struct walk. 3a's primitive-`[3]` reading is the declared class
   `3A_TBS_LAX`, stated in D2, D3 and the record schema. The end-to-end oracle excludes chains `x509-parser`
   rejects. D1's domain is defined against the reference view, with `[0]`-trailing input D1-dom outright. D2's
@@ -2646,7 +2647,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   a security advisory class once the input is CA/B-lint clean.
 - **D1-dom (recorded)**: platform-accepted inputs oracle 4 rejects, or accepts with key bytes other than the
   reference view's, and any input with content after the INTEGER inside `[0]`, excluded by rule (the `[0]`
-  flattening above). No filter can contain such a
+  flattening above). That case is excluded conservatively, not because its key is outside the universe. It costs
+  `PARSE_FAILED` for such a leaf and a dropped candidate for such an intermediate, both allowing in `DEFAULT`; such
+  certificates are not CA/B-conformant. For the other D1-dom inputs, no filter can contain such a
   certificate and its key is outside the filter's universe, so it must never be queried (a query
   would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and with high probability under
   an inverted issuer block); D8 enforces that; each entry is kept with the producer's error so a
