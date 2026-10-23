@@ -347,7 +347,7 @@ The spec's §9 tiers are the CI tiers. **What a PR can break, a PR must test; wh
 the nightly blocks the release.**
 
 **The local gate.** `./gradlew check` is **JDK-only and offline**: unit tests, committed fixtures and the
-corpus replay with recorded oracle goldens (§9.2 D1–D3 offline), Jazzer regression inputs (`JAZZER_FUZZ`
+corpus replay with recorded oracle goldens (§9.2 D1–D3 and D8 offline), Jazzer regression inputs (`JAZZER_FUZZ`
 unset), the `Rule`/precedence/golden-fixture tests, ktlint, detekt (including `detektCommonMain`),
 `apiCheck`, animal-sniffer, `verifyPomLicenses`, `verifyDependencyScopes`, `verifyHeaderLocations`,
 `verifyCorpusManifest` and the Kover per-package floors. It needs no Android SDK, no Rust, no Go, no network.

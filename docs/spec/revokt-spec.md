@@ -1,10 +1,50 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 33** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-22
+Status: **draft spec / project proposal, revision 34** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-23
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 34 (D8 made one-directional after a four-seat cohort, and the envelope re-encoding blocker closed, 2026-10-23)
+- **Decision (issue #11): `producerKeyable` is a conservative keyability profile** (§9.2 clauses K1–K8) instead of an
+  exact model of Mozilla's producer. The cohort (security, implementer, spec coherence, operator/data) was unanimous.
+  - An exact model meant about 2 000 lines tracking certificate-transparency-go strict and `lax`, zcrypto with its own
+    `asn1` fork, and Go's `net/url`, `time` and `crypto/elliptic`.
+  - An error in the model of one parser shows only when the other also rejects, so fuzzing finds it slowly, and each
+    is a false-`REVOKED` P0.
+  - A sample of 200 230 entries from 18 CRLite-enrolled logs found none outside a strict profile and none keyed only
+    by zcrypto (Appendix A).
+- **D8 gates one direction at zero tolerance**: `producerKeyable` ⇒ oracle 4 keys `canon(encoded)` through ct-go with
+  revokt's bytes; an oracle-4 crash counts as a rejection. The reverse is the measured **D8 gap**:
+  - `KEYABILITY_GAP` records carry oracle 4's parser, the failing clause and the zlint result;
+  - the gap is zero on the real fixtures, ratcheted against a baseline, and a lint-clean entry blocks the release;
+  - a re-decision trigger at 10^-4 applies on the #15 seed corpus.
+- **Unchanged**: D1's domain is still defined by oracle 4, and the `[0]` rule and key-byte equality stand. The SCT
+  extension is opaque to the profile, so its non-minimal inner lengths still extract and stay keyable.
+- **Removed**: the zcrypto-only list, the ct-go struct-walk model and conditions (i) and (ii).
+- **Blocker, present since `producerKeyable` was introduced (revision 23) under either form of D8**: nothing outside
+  `tbsCertificate` is signed.
+  - The JDK verifies a certificate whose outer `signatureAlgorithm` or `signatureValue` header has a non-minimal
+    length, whose outer NULL parameters are flipped, or whose RSA `signatureValue` has a non-zero unused-bits octet.
+    It keeps those bytes through `getEncoded()` (probed on JDK 17 and 21, Appendix A).
+  - revokt marked such a leaf unkeyable. A network attacker holding a revoked certificate's key could therefore turn
+    `REVOKED` into a `DEFAULT` allow.
+  - The profile now reads the signed TBS alone, and oracle 4 runs on `canon(encoded)` in D1, D1-dom and D8.
+- **The profile follows Go's checks with narrowed value domains, not X.690 everywhere.** It accepts what the producer
+  keys and honest or private-PKI certificates use: negative, zero and long serials, an explicit `FALSE`, an explicit
+  v1, and `*` or `&` in a PrintableString. It still needs the EC on-curve check (pure-Kotlin field arithmetic, §10).
+- **Corrected statements**: §5.1 step 3 and §10 item 8 no longer say an unkeyable leaf is in no filter. Appendix A
+  records that a fatal parse halts the producer's log ingestion rather than skipping the entry.
+- **Additions**:
+  - new §10 item 15: the producer keys the logged precertificate;
+  - `RevoktStatus.parseFailed` and `Finding.Path.keyabilityClause`, so the outcome can be counted;
+  - a scheduled producer job that builds oracle 4 at the pin and at `mozilla/crlite` `main` and samples fresh CT
+    entries;
+  - the boundary corpus;
+  - D8 in the §9.2 Acceptance list.
+- **Considered and not adopted**: deciding keyability at the query, after the walk. §10 item 8 says why, and when the
+  decision reopens.
 
 ### Changes in revision 33 (SCT list rule restated against `x509-parser` 0.18.1, with one mini consistency round, 2026-10-22)
 - §9.2 "Parser contract": the SCT-list parenthetical described a stricter parser than the one D2 compares
@@ -1121,6 +1161,7 @@ enum class Dataset { CRLITE /* M2: INTERMEDIATES, ONECRL, CRLSET, DENYLIST; M3: 
 enum class Freshness { RECORD_LAST_MODIFIED, LAST_VERIFIED_POLL, MANIFEST_LAST_MODIFIED, SEED_SIGNED_TIME, SEQUENCE_TIME, ARTIFACT_DATE }   // growable; what a generation's sourceTimestamp means
 enum class PathStatus { FOUND, NO_ISSUER, ISSUER_UNVERIFIED, PATH_BUDGET_EXCEEDED, PARSE_FAILED, NOT_WALKED }   // growable; M5: NOT_APPLICABLE
 enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable; parseReason != null ⇔ path.status == PARSE_FAILED (§5.1 step 3, §9.2 D8)
+enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; keyabilityClause != null ⇔ parseReason == PRODUCER_UNKEYABLE
 enum class TerminalKind { ANCHOR /* M2: PRELOAD */ }   // growable; the reported path's terminal (§5.1 invariant)
 enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
@@ -1164,6 +1205,7 @@ sealed interface Verdict {
 sealed class Finding {
     class Path : Finding() { val status: PathStatus; val source: ChainSource; val noIssuerReason: NoIssuerReason?; val walkerReason: NoIssuerReason?   // the walker's own reason before any PLATFORM_ONLY promotion
         val parseReason: ParseReason?                    // non-null ⇔ status == PARSE_FAILED
+        val keyabilityClause: KeyabilityClause?          // non-null ⇔ parseReason == PRODUCER_UNKEYABLE (§9.2 K1–K8)
         val terminalKind: TerminalKind?                  // null when the reported path is empty; else ANCHOR in M1; M2: PRELOAD for a preload-only path (a terminal of last resort), where anchorSha256 is null
         val rewalkEnd: WalkEnd?                          // null unless a re-walk ran; M2: the re-walk's WalkEnd (COMPLETE or its exhaustion), which never demotes the first walk's Found
         val endReason: WalkEnd?                          // COMPLETE on Found/NotFound (the step-6 fallback-skipped exit included), the Budget's end on Budget, EXPLORATION_BUDGET with endDepth = 0 for the step-3 no-walk cut, null only when no walk ran (NOT_WALKED, PLATFORM, the step-2 anchor leaf)
@@ -1206,7 +1248,7 @@ class RevoktEvent private constructor(…) { val sequence: Long; val atMillis: L
 interface RevoktListener { fun onVerdict(event: RevoktEvent); fun onStateChanged(state: RevoktState) {} }   // second method has a default body; Java alternative to the state flow
 class RevoktStatus private constructor(…) {            // snapshot; counters monotonic since build() for unevaluated, since start() for every other; maps zero-filled over Rule.entries
     val evaluations: Long; val rejects: Map<Rule, Long> /* ENFORCE only */; val wouldRejects: Map<Rule, Long> /* OBSERVE only */; val shadowWouldRejects: Map<Rule, Long> /* the shadow policy's Rejected verdicts by rule, under ENFORCE and OBSERVE */; val fired: Map<Rule, Long>; val exempted: Map<Rule, Long>
-    val noData: Map<Dataset, Long>; val stale: Map<Dataset, Long> /* loud flag seen */; val unsignedData: Map<Dataset, Long>; val noIssuer: Map<NoIssuerReason, Long> /* keyed by the reported (promoted) reason */; val walkEnds: Map<WalkEnd, Long>; val chainSources: Map<ChainSource, Long>; val fallbackUsed: Long
+    val noData: Map<Dataset, Long>; val stale: Map<Dataset, Long> /* loud flag seen */; val unsignedData: Map<Dataset, Long>; val noIssuer: Map<NoIssuerReason, Long> /* keyed by the reported (promoted) reason */; val parseFailed: Map<ParseReason, Long> /* fired[PARSE_FAILED] split by reason, zero-filled */; val walkEnds: Map<WalkEnd, Long>; val chainSources: Map<ChainSource, Long>; val fallbackUsed: Long
     val verifierErrors: Long; val candidatesDropped: Long; val verdictCacheHits: Long; val storeFailures: Long; val trustManagerCount: Int; val droppedEvents: Long; val droppedRejectedEvents: Long; val listenerFailures: Long
     val unevaluated: Map<UnevaluatedReason, Long>        // handshakes that returned after flow step 1 without reaching step 2, on every trust manager including fetcherTrustManager (FETCHER_SNAPSHOT_UNAVAILABLE counts only handshakes a consumer delivers to it directly while it has no snapshot; a sync whose build retry failed runs no fetch, §5.1); the one counter group that still advances in CREATED, after close() and under OFF, so an operator can tell "no traffic" from "not checking"
     val readinessWaits: Long; val readinessTimeouts: Long; val readinessWaitNanosTotal: Long   // flow step 0
@@ -1408,9 +1450,10 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    the parser dropped at index build never matches) → `Found([WalkPath([leaf], terminal = ANCHOR)])`, `leafKeys = {leaf.spkiHash}`.
 3. Parse the leaf. Unparseable → `PARSE_FAILED(STRUCTURE)`, over `MAX_CERT_BYTES` →
    `PARSE_FAILED(OVERSIZE)` (the size check runs before the parse), and a leaf the parser marks
-   `producerKeyable == false` (the exact predicate of §9.2, pinned to Mozilla's producer; D8) → `PARSE_FAILED(PRODUCER_UNKEYABLE)`:
-   such a certificate is in no filter and its key is outside the filter's universe, so it is never
-   queried (counters zero); walk and fallback do not run.
+   `producerKeyable == false` (the conservative keyability profile of §9.2, a function of the signed `tbsCertificate` alone; D8) → `PARSE_FAILED(PRODUCER_UNKEYABLE)` with its `keyabilityClause`:
+   the leaf is never queried (counters zero), because a query for a key outside the filter's universe answers
+   arbitrarily and revokt cannot show this key is inside it; such a leaf may still be in a filter (the D8 gap, §10 item 8).
+   Walk and fallback do not run. `producerKeyable` gates the leaf only: an issuer candidate is never dropped for it.
    `presented.size > MAX_PRESENTED` or summed DER > `MAX_PRESENTED_BYTES`, both over the raw presented chain before any candidate is dropped (`MAX_PRESENTED` bounds parsing, §10) → `Budget(EXPLORATION_BUDGET)` without a walk.
 4. Android with `host' != null`: `platformTrust.verifiedChain(delegate, chain, host')` → `Found([chain'], source = PLATFORM)`;
    a `PLATFORM` chain of one certificate yields `leafKeys = {leaf.spkiHash}` as step 2 does.
@@ -1763,7 +1806,7 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
 - **Caches**, per trust manager, LRU-bounded (a synchronized access-ordered `LinkedHashMap` or a
   striped LRU; touched from concurrent handshake threads): the path cache holds `Found`, `NotFound`,
   `Budget` and the fallback result alike. **A path-cache entry is exactly**: `status`, `source`,
-  `noIssuerReason`, `walkerReason`, `parseReason`, `terminalKind`, `endReason`, `endDepth`,
+  `noIssuerReason`, `walkerReason`, `parseReason`, `keyabilityClause`, `terminalKind`, `endReason`, `endDepth`,
   `usedFallback`, `pathsFound`, the reported path as (source, index) pairs for walker entries or, for
   `PLATFORM` entries, the leaf-issuer SPKI hash, the anchor hash and the path length (a
   Conscrypt-completed chain can contain certificates from neither source), `reportedPathSha256s`,
@@ -2533,7 +2576,7 @@ Conscrypt returns `i2d_X509` of the parsed object). `PARSE_FAILED` on the leaf a
 and an unparseable candidate is dropped (decision, §10 item 8). Two failure classes matter: (i) a
 certificate the platform accepts and revokt rejects is unchecked (a leaf) or invisible as an issuer
 (a dropped candidate ends the walk `NO_ISSUER`, which allows in `DEFAULT` for every leaf under that
-CA); (ii) a certificate from which revokt extracts **different bytes** than Mozilla's producer used
+CA), and a leaf revokt parses but cannot show producer-keyable is a sub-case, unchecked but never mis-answered (the D8 gap); (ii) a certificate from which revokt extracts **different bytes** than Mozilla's producer used
 to form the key (`SHA-256(SHA-256(issuer SPKI TLV) ‖ serial content bytes)`) or different SCT
 timestamps queries the wrong key or the wrong coverage, which can hide a revocation or, for a key
 outside the filter's universe, return an arbitrary answer. The oracle bounds both.
@@ -2554,7 +2597,7 @@ whose list parses under the SCT-list rule here. The rule follows `x509-parser` 0
 `NO_SCTS` iff the union is empty (the union is monotone under "one covered SCT
 suffices" and SCTs never enter the key).
 
-**Trailing elements are tolerated at least where the JDK's `X509CertInfo` tolerates them**; ct-go ignores extra elements at the end of a SEQUENCE, and the producer's outcome for each case is oracle 4's (D8). The JDK behaviour was probed on JDK 21 (Appendix A), and each case below is a D7 entry:
+**Trailing elements are tolerated at least where the JDK's `X509CertInfo` tolerates them**; ct-go ignores extra elements at the end of a SEQUENCE, and every ignored element puts the leaf outside the keyability profile (K2; oracle 4 records what the producer does, D8). The JDK behaviour was probed on JDK 21 (Appendix A), and each case below is a D7 entry:
 - **After `subjectPublicKeyInfo` in `tbsCertificate`,** the remaining elements are read in turn:
   - the next is `issuerUniqueID` if it is context tag 1 in either form (its content is not inspected);
   - then `subjectUniqueID` if it is context tag 2 in either form (likewise);
@@ -2564,9 +2607,9 @@ suffices" and SCTs never enter the key).
 - **Inside `[3]`,** the bytes after the `Extensions` SEQUENCE are ignored unparsed.
 - **Inside an `Extension`,** the bytes after `extnValue` are ignored unparsed.
 
-- **Inside `[0]` the parse stays strict:** nothing may follow the version INTEGER, and anything there is `STRUCTURE`. The JDK accepts it, but ct-go's explicit-tag walk does not bound `[0]` by its length (`parseField` advances by the inner element only), so ct-go reads the elements after the INTEGER as the next TBS fields. It rejects most such inputs. One it accepts carries an SPKI and other fields the JDK does not read, which matter when the certificate is an issuer, while the keyed serial comes from the length-bounded stdlib re-parse of (ii) and is the JDK's. Whether the producer keys the same bytes therefore depends on crafted content, and the case is excluded by rule: such input is D1-dom (D1 below), never queried. Confirmed by running the producer (Appendix A).
+- **Inside `[0]` the parse stays strict:** nothing may follow the version INTEGER, and anything there is `STRUCTURE`. The JDK accepts it, but ct-go's explicit-tag walk does not bound `[0]` by its length (`parseField` advances by the inner element only), so ct-go reads the elements after the INTEGER as the next TBS fields. It rejects most such inputs. One it accepts carries an SPKI and other fields the JDK does not read, which matter when the certificate is an issuer, while the keyed serial comes from the length-bounded stdlib re-parse (Appendix A) and is the JDK's. Whether the producer keys the same bytes therefore depends on crafted content, and the case is excluded by rule: such input is D1-dom (D1 below), never queried. Confirmed by running the producer (Appendix A).
 
-Ignored bytes contribute no field. Their offsets are recorded, and the `producerKeyable` table evaluates them as ct-go's struct walk sees them (below). For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, as the JDK reads it. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none (oracle 4 decides keyability, D8); revokt takes the JDK's view, which only adds extensions and SCTs.
+Ignored bytes contribute no field. Their offsets are recorded, and any ignored element makes the leaf unkeyable (K2). For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, as the JDK reads it. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none (outside the profile under K2, and a D8-gap entry where oracle 4 keys it); revokt takes the JDK's view, which only adds extensions and SCTs.
 
 **Where revokt is more lenient than the JDK** (the platform rejects such input first, so D1 is unaffected):
 - revokt does not gate on the version. The JDK rejects a v1 certificate with anything after `subjectPublicKeyInfo`, and a v2 certificate with any element after the unique IDs (a NULL or `extensions`).
@@ -2582,40 +2625,96 @@ Ignored bytes contribute no field. Their offsets are recorded, and the `producer
 revokt also accepts optional minutes, second 60 (the first second of the next minute) and an absent zone, which it takes as UTC. A time outside these forms is null; only platform-rejected input reaches that. A rule that needs a null time fails closed: M4's distrust-after treats a null `notBefore` as after any distrust date.
 
 **Everywhere else the parse is structurally strict.** Lengths must be definite, and tags and lengths well-formed (the SCT list's inner length follows the rule above). `Certificate`, `[0]` (exactly its INTEGER), `Validity`, the `Extensions` SEQUENCE and each `Extension` before its `extnValue` hold exactly their elements, and no bytes may follow `Certificate`; **non-minimal definite lengths are
-accepted for extraction but, at a header the producer's *fatal* walks visit, mark the certificate `producerKeyable = false`** (one inside an uninspected value does not, and neither does one reached only by a non-fatal sub-parse: ct-go reports every error of the SCT-list extension's inner `OCTET STRING` and TLS list through `NonFatalErrors`, Mozilla's `ParseCertificate` returns the certificate anyway and ct-fetch logs and continues, so a non-minimal length there is keyable, and revokt's §9.2 SCT-list rule accepts it and extracts the SCTs; the JDK preserves
-them through `getEncoded()`; the producer rejects them; decision step 3 then yields
-`PARSE_FAILED(PRODUCER_UNKEYABLE)` and never queries, property D8). **`producerKeyable` is an exact
-predicate**: the producer accepts the certificate **and** keys the same bytes, its serial content equal to `rawSerial`
-and its SPKI equal to `rawSpki`; an input the producer accepts with other key bytes is producer-unkeyable. It is a committed table in the parser package pinned to the producer's toolchain
-(`mozilla/crlite` commit, certificate-transparency-go and zcrypto versions, Go release; Appendix A),
-derived from the producer's code path `types.ParseCertificate` → `NewSerialFromCertificate` → `asn1.Unmarshal(RawTBSCertificate, tbsCertWithRawSerial)`:
-The table models ct-go's struct walk, not revokt's ignored set:
-- explicit `[0]` and `[3]` are prefixes, not length-bounded containers;
-- `[1]`/`[2]` match only primitive encodings;
-- `[3]` matches if constructed or of zero length, and a zero-length `[3]` is fatal;
-- the walk peeks at the first element no optional field matches, whose header is on the fatal path, and visits nothing after it.
+accepted for extraction**, and the JDK preserves them through `getEncoded()`; whether the leaf is queried is the keyability profile's (below).
 
-The conditions are:
-(i) ct-go `x509.ParseCertificate` returns a certificate (fatal errors only; `NonFatalErrors` are
-accepted), or, failing that, zcrypto `x509.ParseCertificate` does; both struct walks require a
-DER-minimal tag and a minimal definite length at **every TLV header they visit on a fatal path** (the SCT extension's sub-parse is non-fatal, above; the other non-fatal paths are content-level: SAN IP length, EKU, name constraints, subject/issuer strictness, empty AIA; ct-go and stdlib
-alike reject non-minimal tags, indefinite lengths, superfluous leading length zeros, long-form
-lengths under 128 and lengths ≥ 2^31 even in `lax` mode), while `lax` fields tolerate non-minimal
-INTEGER content, loose OIDs and PrintableString charsets, and content the walks never descend into
-(unknown extension values, key bits, signature bits) is uninspected; the fatal returns of
-`ParseCertificate`/`parsePublicKey` (trailing data after the certificate or a key, unknown named
-curve, non-positive RSA exponent, …) are enumerated in the table; (ii) the stdlib re-parse of the
-raw TBS succeeds: a minimal header on the TBS SEQUENCE, on the optional `[0]` version element and
-on the serial element (Go ignores trailing SEQUENCE elements), and **the serial is the content of
-the first TBS element after the optional `[0]`** (the producer's `RawValue.Bytes`; step (i) has
-already required the INTEGER tag there, since ct-go and zcrypto parse the serial into `*big.Int`,
-so the keyed bytes are always INTEGER content and revokt's `rawSerial` reproduces them exactly).
-The table is the implementation model; oracle 4 runs the
-producer's own code and is the truth: D8 is zero tolerance, and a fuzz-found mismatch in either
-direction is a P0 (unkeyable-but-accepted queries outside the universe; keyable-but-rejected
-leaves a platform-accepted leaf unchecked) fixed by extending the table, never by loosening D8. Semantically lenient: unknown OIDs, unknown critical extensions, non-DER
+**`producerKeyable` is a conservative keyability profile, not a model of the producer.** It is true only when every
+clause K1–K8 holds, and false for everything else, including certificates the producer does key (the D8 gap). It is
+evaluated for the leaf only.
+
+It reads the signed `tbsCertificate` alone. Nothing outside it is signed, so a network attacker can re-encode the
+envelope and the platform still verifies the certificate (Appendix A): the outer `signatureAlgorithm` and
+`signatureValue` headers, their NULL parameters, the RSA signature's unused-bits octet. The producer keyed the bytes
+the CA logged, not the presented envelope. Oracle 4 therefore runs on `canon(encoded)`, which is
+`SEQUENCE { the presented tbsCertificate TLV, the TBS signature AlgorithmIdentifier TLV, a BIT STRING with zero unused
+bits holding the presented signature octets }`, with minimal headers.
+
+The producer path is `types.ParseCertificate` (certificate-transparency-go, a `lax` retry, then zcrypto) →
+`NewSerialFromCertificate` (a stdlib `encoding/asn1` re-parse of the raw TBS). It keys on the serial's INTEGER content
+and the SPKI TLV (Appendix A). `types.ParseCertificate` keeps ct-go's certificate whenever ct-go returns one, so each
+clause is stated against ct-go's strict (non-`lax`) parse and the stdlib re-parse only. No clause relies on `lax` or
+zcrypto, so dropping either fallback cannot break D8.
+
+The baseline is Go's checks with narrowed value domains, not X.690 DER everywhere. Go keys honest encodings that DER
+forbids, such as an explicit `FALSE` BOOLEAN or an unsorted `SET OF`. A profile stricter there would reject valid
+certificates under `STRICT`.
+- **K1 headers**: every TLV header in `tbsCertificate` outside an opaque region has a single-octet tag and a minimal
+  definite length below 2^31.
+  - The opaque regions are the content of each `extnValue` whose OID is not in K8's list: the SCT list, the
+    precertificate poison, the RFC 3779 extensions and every unknown extension. There ct-go either reports errors as
+    non-fatal or does not look.
+  - Inside them only the §9.2 SCT-list rule applies, and only for extraction.
+- **K2 TBS shape**:
+  - `[0]` is absent, or holds exactly one INTEGER with content `00`, `01` or `02`, and `02` when `[3]` is present.
+  - There is no `issuerUniqueID` or `subjectUniqueID`.
+  - `[3]` is absent, or is constructed and holds exactly one non-empty `Extensions` SEQUENCE.
+  - No element is one the trailing-element rule ignores, and no bytes follow an `extnValue`.
+  - Each `AlgorithmIdentifier` is an OID and at most one further TLV. `Validity` holds exactly two times.
+  - Each name is a `SEQUENCE OF SET OF SEQUENCE { OID, value }`. Each `Extension` is an OID, an optional BOOLEAN and a
+    primitive `OCTET STRING`, and no OID appears twice in the extension list.
+- **K3 integers**: the serial's content is minimal. Any sign, zero, and any length up to `MAX_CERT_BYTES` are
+  accepted, because the producer keys them, mozilla::pkix and BoringSSL accept them, and private PKI issues them.
+  Every other INTEGER the profile reads is minimal and in the range its clause states.
+- **K4 OIDs**: every OID the profile reads is non-empty, with minimal subidentifiers each below 2^31, the first
+  (40X + Y) included. That covers algorithms, attribute types, extension IDs, curves, EKU purposes, policies and access
+  methods.
+- **K5 names**: each attribute value is one of:
+  - a `PrintableString` in Go's set: letters, digits, space, `'()+,-./:=?`, and the `*` and `&` Go also accepts;
+  - a `UTF8String` that is valid UTF-8;
+  - an `IA5String` of ASCII octets.
+
+  Any other type is outside the profile.
+- **K6 times**: `UTCTime` is `YYMMDDHHMMSSZ` and `GeneralizedTime` is `YYYYMMDDHHMMSSZ` with a year from 1950 to 9999.
+  The month is 1–12 and the day falls within the Gregorian month; a `UTCTime` year below 50 is 20YY, else 19YY. The
+  hour is at most 23, and the minute and second at most 59. revokt's own §9.2 time decoding is more lenient by design,
+  and the profile does not reuse it.
+- **K7 key**: the SPKI is an `AlgorithmIdentifier` and a BIT STRING with zero unused bits. The key is one of:
+  - `rsaEncryption` with NULL parameters and `RSAPublicKey { n > 0, 0 < e < 2^31 }`, both minimal, with nothing after;
+  - `id-ecPublicKey` with `namedCurve` P-256, P-384 or P-521 and an uncompressed point `04 ‖ X ‖ Y` of the curve's
+    length, with X and Y below p and on the curve;
+  - Ed25519 with absent parameters and 32 octets.
+
+  Any other algorithm is outside the profile, including those ct-go keys without inspecting them, so ct-go adding a
+  parser later cannot break D8.
+- **K8 extensions**: each extension ct-go parses with a fatal return is walked whole under K1 and must match the
+  table's grammar for its OID:
+  - keyUsage: a BIT STRING with at most 7 unused bits, all zero;
+  - basicConstraints: `SEQUENCE { cA BOOLEAN optional, pathLen INTEGER 0..2^31−1 optional }`;
+  - subjectAltName: non-empty, with only `dNSName` and `rfc822Name` of ASCII octets and `iPAddress` of 4 or 16 octets;
+  - cRLDistributionPoints: each point `[0] { [0] GeneralNames }`, holding only `[6]` URIs of ASCII octets;
+  - authorityKeyIdentifier: exactly `SEQUENCE { [0] }`, primitive;
+  - extKeyUsage: a non-empty `SEQUENCE OF OID`;
+  - subjectKeyIdentifier: a primitive `OCTET STRING`;
+  - certificatePolicies: `SEQUENCE OF SEQUENCE { OID, … }`;
+  - authorityInfoAccess: non-empty, each entry `SEQUENCE { OID, [6] }` with ASCII octets.
+
+  nameConstraints and subjectInfoAccess put the leaf outside the profile by their presence. A BOOLEAN anywhere is
+  `00` or `FF`.
+
+**The table is the proof.** Each clause's row cites the certificate-transparency-go and Go `encoding/asn1` return sites
+it covers: every fatal return of `ParseCertificate`, `parseCertificate`, `parsePublicKey` and the dispatched extension
+parsers, plus the per-type checks. It is pinned to the producer's toolchain: the `mozilla/crlite` commit, the
+certificate-transparency-go and zcrypto versions, and the Go release (Appendix A). The argument runs:
+1. Under K1 and K2, ct-go's struct walk visits exactly the TLVs revokt reads.
+2. Every visited header is minimal, and every leaf decode maps to a clause.
+3. So ct-go's strict parse succeeds, `lax` never runs and zcrypto is never reached.
+4. The stdlib re-parse then sees minimal headers and an exact `[0]`, so the keyed serial is `rawSerial` and the keyed
+   SPKI is `rawSpki`.
+
+A pin bump re-runs the audit as a diff of those files. Oracle 4 and fuzzing test the table; they do not replace it. A
+violation of D8's gated direction is a P0, fixed by narrowing the profile or adding the missed check, never by
+weakening D8. A widening is allowed only under D8. Extraction is semantically lenient: unknown OIDs, unknown critical extensions, non-DER
 times, any string type, negative or oversize serials and duplicate extensions are accepted and
-reported, never rejected. Result: `Parsed | ParseFailed(reason)`; no other exception may escape.
+reported, never rejected as `ParseFailed`; whether such a leaf is queried is the profile's. Result: `Parsed | ParseFailed(reason)`; no other exception may escape.
 
 **Oracles.** Each is wrapped to `Accept(fields, encoded) | Reject | Crash` by the rules in the table.
 
@@ -2626,11 +2725,11 @@ reported, never rejected. Result: `Parsed | ParseFailed(reason)`; no other excep
 | 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error | `Ok` | `Err` | caught panic |
 | 3b | `revokt-oracle`: a minimal independent TLV locator (walk `Certificate → tbs` with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located, slice serial content, SPKI TLV, subject, issuer, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; no other semantics) | raw bytes where 3a rejects | located | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
-| 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key this certificate and with which bytes | both calls return | `ParseCertificate` error or `NewSerialFromCertificate` panic (recovered in the shim) | unrecovered |
+| 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key `canon(encoded)` (above), with which bytes and through which parser (`ct` or `zc`) | both calls return | a `ParseCertificate` error, or a panic anywhere in the producer (the shim recovers around the whole call) | unrecovered; counts as `Reject` under D8 |
 
 A getter that throws on an accepted object (Conscrypt `getPublicKey()` on a damaged modulus is
 common) marks that field `unavailable`: the comparison is skipped and counted. Oracle `Crash`
-never fails revokt's gate; it is reported upstream. A `Crash` or `unavailable` rate above 0.1 % on
+never fails revokt's gate, except oracle 4's under D8, where it counts as `Reject`; it is reported upstream. A `Crash` or `unavailable` rate above 0.1 % on
 the secondary corpus fails the job as infrastructure. A Rust or Go abort that kills the JVM is
 attributed by re-running the input through the out-of-process CLI before it is filed against revokt.
 Java field normalisation: `getSerialNumber()` by value (`BigInteger` drops padding and sign-extends);
@@ -2642,28 +2741,56 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
 
 **Properties.** For each platform oracle *i* ∈ {1, 2} and each version *v* in the matrix:
 - **D1 leniency (security)**: `Accept_i,v(b)` ⇒ `parse(encoded_i,v)` is `Parsed`, for every input in
-  the D1 domain: platform-accepted and producer-keyable (oracle 4 `Accept` with serial and SPKI equal to the
-  reference view's, 3a else 3b). An input with any bytes after the version INTEGER inside `[0]` is D1-dom whatever
+  the D1 domain: platform-accepted and producer-keyable (oracle 4 `Accept` on `canon(encoded)`, through either parser, with serial and SPKI equal to the
+  reference view's, 3a else 3b). This is the producer's keyability, not revokt's profile, so the domain includes the D8 gap
+  and every issuer; over it each input is exactly one of: queried (`producerKeyable`), a D8-gap entry, or a D1 violation. An input with any bytes after the version INTEGER inside `[0]` is D1-dom whatever
   oracle 4 keys. A violation is a P0 and
   a security advisory class once the input is CA/B-lint clean.
-- **D1-dom (recorded)**: platform-accepted inputs oracle 4 rejects, or accepts with key bytes other than the
+- **D1-dom (recorded)**: platform-accepted inputs on whose `canon(encoded)` oracle 4 rejects, or accepts with key bytes other than the
   reference view's, and any input with content after the INTEGER inside `[0]`, excluded by rule (the `[0]`
   flattening above). That case is excluded conservatively, not because its key is outside the universe. It costs
   `PARSE_FAILED` for such a leaf and a dropped candidate for such an intermediate, both allowing in `DEFAULT`; such
   certificates are not CA/B-conformant. For the other D1-dom inputs, no filter can contain such a
   certificate and its key is outside the filter's universe, so it must never be queried (a query
   would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and with high probability under
-  an inverted issuer block); D8 enforces that; each entry is kept with the producer's error so a
+  an inverted issuer block); D8's gated direction enforces that; each entry is kept with the producer's error so a
   producer change can be re-evaluated.
-- **D8 producer-keyability (0.1 gate, zero tolerance)**: `producerKeyable(encoded) == (oracle 4
-  accepts with serial and SPKI equal to revokt's)` for every input where `parse(encoded)` is `Parsed`, on every corpus, committed and secondary, and on the fuzz corpus (the predicate has no value on `ParseFailed`: Go ignores trailing `SEQUENCE` elements, and revokt ignores them only where the rule above does, elsewhere rejecting them as `STRUCTURE`, and over-cap inputs never reach the parser; oracle-4 outcomes on `ParseFailed(STRUCTURE)` inputs are recorded as a D4-class metric); a zcrypto-only
-  acceptance is producer-keyable (in the D1 domain) and is recorded in a separate zcrypto-only list
-  with the ct-go error, so a producer change that drops the zcrypto fallback can be re-evaluated.
+- **D8 producer-keyability (0.1 gate, zero tolerance, one direction)**: `producerKeyable(encoded)` ⇒ oracle 4 on
+  `canon(encoded)` returns `Accept` through certificate-transparency-go (`ct`), with serial content equal to
+  `rawSerial` and SPKI equal to `rawSpki`.
+  - It holds for every input where `parse(encoded)` is `Parsed`, platform-accepted or not, on every corpus (committed,
+    boundary and secondary) and on the fuzz corpus.
+  - An oracle-4 `Crash` counts as `Reject`. Requiring `ct` means a producer that drops the zcrypto fallback cannot
+    break D8.
+  - The predicate has no value on `ParseFailed`. Go ignores trailing `SEQUENCE` elements; revokt ignores them only
+    where the rule above does and elsewhere rejects them as `STRUCTURE`; over-cap inputs never reach the parser.
+    Oracle-4 outcomes on `ParseFailed(STRUCTURE)` inputs outside the D1 domain are recorded as information. Inside the
+    domain they are D1 violations.
+  - The **boundary corpus** is committed accept-side inputs at each clause's edge, each with its oracle-4 golden:
+    - OID arcs at 2^31 − 1, and a first subidentifier at the limit;
+    - 29 February in 2000 and in 2024, and as `UTCTime` year 52;
+    - the years 1950, 2049, 2050 and 9999;
+    - RSA e = 2^31 − 1, and an EC coordinate of p − 1;
+    - an explicit `FALSE`, a negative serial and a 21-octet serial;
+    - `*` and `&` in a PrintableString;
+    - NIST and JDK-generated EC points, and single-bit flips of them.
+- **D8 gap (measured)**: inputs in the D1 domain where `parse(encoded)` is `Parsed` and `producerKeyable` is false.
+  - Each is a `KEYABILITY_GAP` record carrying oracle 4's parser (`ct` or `zc`), the first failing clause and the pinned
+    zlint result.
+  - They are never queried: `DEFAULT` allows them and `STRICT` rejects them (§10 item 8).
+  - The gap is zero on the committed real-certificate fixtures.
+  - The PR replay fails on a gap entry in the committed corpora that is not in the recorded baseline, until its record
+    carries a written justification.
+  - A gap entry with no zlint error is a profile defect. It blocks the release until the profile is widened under D8
+    or the entry is justified.
+  - The count by clause over the seed corpus is reported in each release's notes and in `docs/dev/status.md`.
+  - **Re-decision**: if the gap exceeds 10^-4 of the seed corpus's unexpired leaves when #15 pins it, exact keyability
+    is reconsidered in a spec revision before 0.1 ships.
 - **D1-raw (informational)**: inputs where `encoded ≠ b`, or `parse(b)` fails while
   `parse(encoded)` succeeds. This is the `EvaluationRequest.presented` raw-DER surface (§4), documented,
   not gated.
 - **D2 extraction agreement (security)**: on `parse(encoded_i,v)`: `rawSerial` equals oracle 4's
-  serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where `producerKeyable`;
+  serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where `producerKeyable` (implied by D8's gated direction, restated so that a mismatch names the field);
   `rawSerial`, `rawSpki`, `rawSubject`, `rawIssuer`, extension values and the SCT pair set equal 3a's
   where 3a accepts, else 3b's. The expected SCT pair set is the union over SCT extensions of a per-extension
   expectation: the reference's pairs for that extension, or ∅ when the extension value's first octet is not `0x04`.
@@ -2704,17 +2831,22 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   `UTCTime` used for a date in 2050 or later, PrintableString/UTF8String/TeletexString/BMPString
   names, an empty subject, duplicate extension OIDs, **two SCT extensions** (empty list first,
   covered SCT second → union queries), an unknown critical extension, an SCT list whose declared
-  length is longer than its content (the list fails) or shorter (the items that fit extracted), a malformed first SCT followed by valid ones (the list fails), a non-minimal length on the SCT extension's inner OCTET STRING, `81 nn` with nn < 0x80 and `84 00 00 00 nn` (required outcome: `Parsed`, `producerKeyable = true`, the list's SCTs extracted), an inner length `0x80` or `0xFF` (the list fails), an inner identifier other than `0x04` that is tag number 4 (for example `0x44`, `1F 04`; `3A_HEADER_LAX`: no pairs), a constructed inner OCTET STRING (the list fails), a non-zero SCT version (extracted), a truncated last SCT (the items before it extracted), trailing bytes after the inner OCTET STRING, after the declared list region and inside an SCT after its signature (ignored), an SCT hidden in ignored bytes (never extracted), a zero-length signature (extracted),
+  length is longer than its content (the list fails) or shorter (the items that fit extracted), a malformed first SCT followed by valid ones (the list fails), a non-minimal length on the SCT extension's inner OCTET STRING, `81 nn` with nn < 0x80 and `84 00 00 00 nn` (required outcome: `Parsed`, the list's SCTs extracted, `producerKeyable` unaffected because the SCT extension is opaque to the profile, K1), an inner length `0x80` or `0xFF` (the list fails), an inner identifier other than `0x04` that is tag number 4 (for example `0x44`, `1F 04`; `3A_HEADER_LAX`: no pairs), a constructed inner OCTET STRING (the list fails), a non-zero SCT version (extracted), a truncated last SCT (the items before it extracted), trailing bytes after the inner OCTET STRING, after the declared list region and inside an SCT after its signature (ignored), an SCT hidden in ignored bytes (never extracted), a zero-length signature (extracted),
   an inner identifier that is not tag number 4, such as `0x30` (the list fails in revokt and 3a alike, not `3A_HEADER_LAX`),
   the trailing-element cases of the §9.2 rule (bytes after `[3]`; an element between `subjectPublicKeyInfo` and `[3]`,
   dropping the extensions; `[2]` before `[1]` and `[1]` twice, dropping them; constructed `[1]`/`[2]`; a primitive
   `[3]`, ignored; two `[3]`, the second ignored; bytes after the Extensions SEQUENCE inside `[3]` and after `extnValue`,
   ignored; anything after the INTEGER inside `[0]`, `STRUCTURE`, with the flattening case whose producer SPKI
-  differs; a zero-length primitive `[3]` (`83 00`), `Parsed` and producer-unkeyable; a constructed `[1]` then `[3]`
-  carrying a non-minimal length, keyable because ct-go never visits `[3]` there), the more-lenient-than-JDK cases (a v1 or v2 certificate carrying
+  differs; a zero-length primitive `[3]` (`83 00`), `Parsed` and outside the profile; a constructed `[1]` then `[3]`
+  carrying a non-minimal length, `Parsed` and outside the profile (K2), a D8-gap entry because ct-go never visits `[3]` there and keys it), the more-lenient-than-JDK cases (a v1 or v2 certificate carrying
   elements its version does not allow; unique-id content that is not BIT STRING content), times with an offset, without
   seconds and with a day past the month's end (2026-02-31, rolling over to 2026-03-03), a 64 KB extension, BER indefinite lengths,
-  non-minimal definite lengths, and a `Certificate` with trailing bytes.
+  non-minimal definite lengths, and a `Certificate` with trailing bytes; the envelope re-encodings (a non-minimal
+  length on the outer `signatureAlgorithm` or `signatureValue` header, the outer NULL parameters flipped, a non-zero
+  unused-bits octet on an RSA `signatureValue`; required outcome: `Parsed`, with the `producerKeyable` of the
+  unmodified certificate, since the profile reads the TBS alone); and the D8-gap examples (a serial with non-minimal
+  INTEGER content, a keyUsage or basicConstraints value only zcrypto accepts, a `UTCTime` without seconds; each
+  `Parsed` and outside the profile).
 
 **Issuer corpus (zero tolerance).** Every certificate in Mozilla's `intermediates` Remote Settings
 collection, the CCADB all-certificate-records export, the JDK `cacerts` store, and Android's system
@@ -2726,9 +2858,9 @@ collection marks CRLite-enrolled, `SHA-256(rawSpki)` must be a key of the live f
 **Corpus record schema (one for all four kinds; committed).**
 `{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome,
 fields | unavailable}], class ∈ {D7_LENIENCY, D2_REENCODE_ALLOW, D3_DIVERGENCE, D1_DOM,
-FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, the
-duplicate-extension class, or a named 3c/Firefox class), justification, added}`. Goldens for 3a/3b/4 are computed at admission
-so the PR replay evaluates D1–D3 offline, JDK-only. The release review mechanically lists entries
+KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, the
+duplicate-extension class, or a named 3c/Firefox class), keyability: {parser, clause, zlint}? (required for `KEYABILITY_GAP`: `parser ∈ {ct, zc}` from oracle 4, `clause` a `KeyabilityClause`, `zlint` the pinned zlint result), justification, added}`. Goldens for 3a/3b/4 are computed at admission
+so the PR replay evaluates D1–D3 and D8 offline, JDK-only. The release review mechanically lists entries
 whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves across all enrolled
 CAs, the `x509-limbo` vectors, the D7 corpus, the issuer corpus) is pinned by a committed SHA-256
 manifest and a corpus-repository tag.
@@ -2750,19 +2882,25 @@ current feature release; Conscrypt uber: current and previous minor; Android sys
 revision, with the Conscrypt APEX version logged per run since it is updated out of band) with the
 roll rule "add the new version, keep the old until its support ends". A nightly job replays the
 committed corpus against the newest JDK EA and Conscrypt release and fails on any new D1 violation
-against the recorded baseline.
+against the recorded baseline. A scheduled **producer job** (weekly, on every change to the producer,
+certificate-transparency-go, zcrypto or Go pin, and before each release) builds oracle 4 at the pin and at
+`mozilla/crlite` `main`, replays D8's gated direction over the union corpus with both, and runs at least 100 000
+fresh entries from CRLite-enrolled logs, precertificates included, through oracle 4 and the profile. A violation
+at the pin is a P0; one only at `main` is a P0 for the next release and bumps the pin in a spec revision, since
+live filters come from Mozilla's current producer. The sample's gap by clause is published with each release; a
+new clause, or a rate above 10^-4 per unexpired entry, needs a recorded decision before the release.
 
 **Scope limits, stated.** The oracle set is a version matrix, not a proof; platform parsers drift
 and the platform Conscrypt differs per device. `Revokt.evaluate` over raw bytes is outside the
 platform-accepted premise and is documented as such (§4).
 
-**Acceptance.** 0.1 gate: zero D1, D2 and D3 violations on the pinned seed corpus, `x509-limbo`,
+**Acceptance.** 0.1 gate: zero D1, D2, D3 and D8 violations on the pinned seed corpus, `x509-limbo`,
 the D7 corpus and the issuer corpus against oracles 1 (every JDK in the matrix), 2 (uber versions
-in the matrix), 3a/3b and 4; the producer SPKI check green; zero platform-accepted inputs without a
+in the matrix), 3a/3b and 4; the producer SPKI check green; the D8-gap baseline recorded, and zero on the real-certificate fixtures; zero platform-accepted inputs without a
 raw-byte reference; Kover branch coverage of the parser package ≥ 90 % measured over the committed
 replay (fuzz-run coverage is reported only). 0.3 gate: the same replay on the platform Conscrypt
 tier (API 26, 31, 34, 36) at zero tolerance. Continuous: no open D1/D2 finding at any release; the
-divergence and D1-dom records reviewed at each release with every entry justified in writing.
+divergence, D1-dom and D8-gap records reviewed at each release with every entry justified in writing.
 
 ## 10. Security considerations
 
@@ -2815,11 +2953,32 @@ divergence and D1-dom records reviewed at each release with every entry justifie
      divergence). A list §9.2 accepts in part, which Firefox and webpki fail whole, is queried, so `STRICT`
      then sees the CRLite answer, not `NO_SCTS`. SCTs are not verified in M1: a forged covered SCT on a key
      outside a filter's universe gets an arbitrary answer, a residual that predates revision 33.
-  8. **Decided (revision 11): kept, matching Firefox.** `PARSE_FAILED` on the leaf allows in
-     `DEFAULT`, so a leaf encoding the platform accepts and the Kotlin parser rejects is unchecked;
-     the subscriber controls leaf content only at issuance under CA linting, and the §9.2
-     differential parser oracle (D1, a 0.1 gate) is the mitigation; a leaf the producer cannot key is
-     `PARSE_FAILED(PRODUCER_UNKEYABLE)` by design (D8): it is in no filter. `STRICT` rejects.
+  8. **Decided (revision 11): kept; revision 34 widens `PRODUCER_UNKEYABLE`.** `PARSE_FAILED` on the leaf allows in
+     `DEFAULT`, so a leaf encoding the platform accepts and the Kotlin parser rejects is unchecked. The subscriber
+     controls leaf content only at issuance, under CA linting, and the §9.2 differential parser oracle (D1, a 0.1
+     gate) is the mitigation.
+
+     A leaf outside the §9.2 keyability profile is `PARSE_FAILED(PRODUCER_UNKEYABLE)` and is never queried (D8). That
+     covers two kinds of leaf:
+     - a leaf the producer cannot key: its fatal parse halts Mozilla's ingestion of that log (Appendix A), so it is in
+       no filter;
+     - a leaf the producer did key that revokt cannot show keyable, the D8 gap: non-minimal INTEGER serial content,
+       encodings only `lax` or zcrypto accept, and ignored trailing elements.
+
+     A revoked gap leaf is unchecked in `DEFAULT`, an issuance-time opt-out like item 7 that only the issuing CA
+     controls. `STRICT` rejects a gap leaf even when it is valid. The gap is measured per release (§9.2 D8 gap); it
+     was zero in a 200 230-entry CT sample on 2026-10-23 (Appendix A).
+
+     The profile reads only the signed `tbsCertificate`, so a network attacker re-encoding the envelope cannot reach
+     `PRODUCER_UNKEYABLE`.
+
+     Firefox has no keyability notion. mozilla::pkix rejects most gap encodings before CRLite, and accepts the serial
+     forms (negative, zero, long) and the explicit `FALSE` that the profile also accepts.
+
+     Considered and not adopted (revision 34): deciding keyability at the query, after the walk. That would make the
+     outcome exemptable under `anchorIn`, and `NOT_ENROLLED` under an unenrolled issuer. The profile already accepts
+     the private-PKI serial forms, so the remaining unkeyable leaves are encodings that mozilla::pkix and BoringSSL
+     also reject. This reopens if a gap entry under a private anchor is reported.
   9. Walker CPU per uncached connection is bounded by `MAX_VERIFICATIONS`, about 250 ms of RSA-4096
      on a mid-range ART device, and both caches are defeated by one varying junk byte per connection;
      `MAX_PRESENTED` bounds parsing (counted over the raw chain, before dropping).
@@ -2841,6 +3000,17 @@ divergence and D1-dom records reviewed at each release with every entry justifie
   14. **`ISSUER_UNVERIFIED` relabelling, closed (revision 29)**: only the child's own signature OID
      counts, so a related decoy carrying an unsupported key OID cannot turn a `NO_ISSUER` into the
      separately exemptable `ISSUER_UNVERIFIED`; consumers scoping that exemption use `hostIn`/`hostSuffixIn` or `platformOnly()` (`anchorIn` never matches on an empty reported path, §4).
+  15. **Keyability is a prediction.** The producer keys the logged precertificate (about half of CT entries). It also
+     needs the logged `chain[0]` to parse, and `chain[1]` behind a precertificate signing certificate. revokt sees
+     only the final certificate, so `producerKeyable` predicts the producer's result through RFC 6962's identical-TBS
+     rule.
+     - **Mismatched precertificate**: a CA's precertificate and certificate differ, the precertificate is unparseable,
+       and the certificate is never logged. revokt then queries outside the filter's universe and gets an arbitrary
+       answer, which under an inverted issuer block is a false `REVOKED`. Ingestion halting at that entry usually
+       leaves its SCTs past coverage `high`, which gives `NOT_COVERED`. Firefox shares this residual.
+     - **Two SPKI encodings**: two enrolled issuer certificates carry one key with different SPKI encodings, for
+       example RSA with and without NULL parameters. A query under the encoding Mozilla did not key falls outside the
+       universe.
 - Feed authenticity: `SIGNED` by Mozilla/Google signatures; `MIRROR`/`SYSTEM` by TLS or the OS,
   **bootstrap only** (§7.3): never displaces a higher-class generation, evicted by the first signed
   one; `BUNDLED` is project-attested and availability-only. The §7.3 residual: a fresh install without a
@@ -2864,7 +3034,7 @@ divergence and D1-dom records reviewed at each release with every entry justifie
   so an unsigned manifest bounds neither heap nor disk nor metered bandwidth;
   x5u allowlisted, capped and path-validated; the parser is at least as lenient as the platforms,
   verified differentially (§9.2), and `PARSE_FAILED` applies to the leaf only.
-- Crypto never implemented in Kotlin except the raw-to-DER ECDSA conversion; `UNSUPPORTED` is decided
+- Crypto never implemented in Kotlin except the raw-to-DER ECDSA conversion and the §9.2 profile's EC on-curve check (public field arithmetic over P-256, P-384 and P-521, no secret data); `UNSUPPORTED` is decided
   by a startup probe, never by a server-chosen exception; provider exceptions never escape the
   trust manager.
 - Privacy: no per-connection lookups. Blast radius mitigated by `Enforcement.OBSERVE`, `shadowPolicy`, the runtime
@@ -2883,7 +3053,7 @@ APIs outside the promise, the growability contract in §4.
 
 | Release | Scope | Estimate |
 |---|---|---|
-| 0.1 | engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8); JSON tree; clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; the §9.1 chain generator, `SymVerifier` and the reference walker (the walker fuzzer itself is 0.2, with the walker); oracle CI | 5 weeks |
+| 0.1 | engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8 (gated direction; D8 gap reported)); JSON tree; clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; the §9.1 chain generator, `SymVerifier` and the reference walker (the walker fuzzer itself is 0.2, with the walker); oracle CI | 5 weeks |
 | 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists); candidate index and walker per §5.1, PKIX fallback on both platforms, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3); **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation; CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
 | 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2; caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `status()` and `state`; Android instrumented suite including the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
 
@@ -2957,7 +3127,7 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   key is `RawSubjectPublicKeyInfo` (the SPKI TLV); certificates are parsed by `ctx509.ParseCertificate`
   (certificate-transparency-go, `"lax"` fallback that allows non-minimal integers) with a zcrypto
   fallback. Go's stdlib `asn1` rejects non-minimal lengths and BER, so such a TBS panics in
-  `NewSerialFromCertificate` (killing ct-fetch's insert worker) and never reaches a filter. `rust-query-crlite` uses `x509-parser`'s
+  `NewSerialFromCertificate` (killing ct-fetch's insert worker) and never reaches a filter. A fatal `ParseCertificate` makes both ct-fetch workers' `storeLogEntry` return an error: the RFC 6962 worker sleeps and retries the same range, and the tiled worker halts (`tiled.go`: "(false, err) indicates a fatal error that should halt log ingestion"), so an unparseable entry stalls that log's ingestion rather than being skipped (verified 2026-10-23 at `0082998`). Trillian's CTFE rejects certificate-transparency-go fatal errors at submission (`trillian/ctfe/cert_checker.go`, `x509.IsFatal`, v1.3.2), so a zcrypto-only certificate cannot enter a log running it. `rust-query-crlite` uses `x509-parser`'s
   `raw_serial()`; webpki's `serial()` is also the raw content.
 - **upki** (`rustls/upki` tag v1.0.1, whose `Cargo.toml` says 1.0.1; crates.io's latest `upki`/`rustls-upki` is 1.0.0, 2026-10-05; `RevocationCheckInput::new`, `from_certificates`, `Store::check` and `Store::from_config` are `pub` at both; the stock FFI, not used for queries since revision 21, §3.2): `ffi.rs` `upki_check_revocation` wraps `catch_unwind`,
   builds `RevocationCheckInput::from_certificates` (end entity first; `find_issuer` by byte-equal
@@ -3058,6 +3228,33 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
 - Fuzzing: ClusterFuzzLite and OSS-Fuzz need a static entry point; OSS-Fuzz admission requires usage.
 - MTC: `draft-ietf-plants-merkle-tree-certs` -05; Chrome rollout with Cloudflare since Feb 2026.
 - Mozilla producer keyability, verified 2026-10-22 in `mozilla/crlite` `go/types.go` (package `types`) and `certificate-transparency-go` `asn1/asn1.go`, `x509/x509.go` (master): `ParseCertificate` tries ct-go then zcrypto and keeps whichever returns a certificate; `NewSerialFromCertificate` re-parses `RawTBSCertificate` with stdlib `encoding/asn1` into `{Raw RawContent; Version RawValue "optional,explicit,default:0,tag:0"; SerialNumber RawValue}` and **panics** on failure (so an unkeyable certificate never reaches a filter, it crashes the aggregator run), keying on `SerialNumber.Bytes`; ct-go's `parseTagAndLength` rejects non-minimal tags, indefinite lengths, superfluous leading length zeros, long-form lengths under 128 and lengths ≥ 2^31 regardless of `lax`; `lax` relaxes `checkInteger` (non-minimal INTEGER content), OID and PrintableString parsing; Go's struct parse ignores trailing SEQUENCE elements; ct-go's SCT-list branch (`asn1.Unmarshal(e.Value, &out.RawSCT)` then `tls.Unmarshal`) reports every error through `NonFatalErrors`, `ParseCertificate` returns the certificate when `ctCert != nil`, and both ct-fetch workers (`rfc6962.go` `storeLogEntry`, `tiled.go`) log "Nonfatal parsing error" and continue to `PrepareSetMember`; zcrypto's only length leniency is `AllowPermissiveParsing`, which crlite never sets.
+- Revision 34 probes, run 2026-10-23 against the oracle-4 binary at `0082998` (the cohort's scripts and outputs are kept
+  with the #11 records). The envelope probes ran on JDK 17 and JDK 21 `SUN`:
+  - **Envelope re-encodings**, applied to an RSA and an EC leaf. In each case `generateCertificate` accepts the
+    certificate, `getEncoded()` returns the input bytes and `verify(issuerKey)` passes:
+    - a non-minimal length on the outer `signatureAlgorithm` header (`30 0a` → `30 81 0a`);
+    - a non-minimal length on the `signatureValue` header (`03 47` → `03 82 00 47`);
+    - the outer NULL parameters flipped;
+    - for RSA only, an unused-bits octet of 1.
+
+    Oracle 4 rejects the two header cases ("non-minimal length", "superfluous leading zeros"). The NULL flip is keyed
+    through zcrypto only, because ct-go rejects "mismatching signature algorithm identifiers". The JDK re-encodes the
+    outer `Certificate` header, so that header is not a vector.
+  - **Content the JDK accepts and the producer rejects**: non-zero padding bits in the `signatureValue` or
+    `subjectPublicKey` BIT STRING; a day past the month's end ("day out of range"); a `GeneralizedTime` fraction;
+    invalid UTF-8 in a `UTF8String`; a BOOLEAN `01`; an EC point off the curve; secp256k1; RSA e < 0 and e longer than
+    64 bits. The producer also rejects an OID arc of 2^31 or more, including in an unknown extension ID, and a
+    constructed `extnValue` (JDK acceptance of these two not probed).
+  - **Content certificate-transparency-go keys outside X.690 DER**: a negative serial, a 21-octet serial, an explicit
+    `critical FALSE` and `cA FALSE`, an explicit v1, `*` and `&` in a PrintableString, and an unsorted multi-valued
+    RDN. ct-go also keys SPKIs it does not parse (RSA-PSS, ML-DSA, X25519) without inspecting them.
+  - **CT sample**: 200 230 entries from 14 RFC 6962 and 4 static-CT CRLite-enrolled logs, comprising 104 800
+    precertificates, 95 430 final certificates and 296 issuer CNs (153 532 unexpired). All were keyed through ct-go,
+    none only through zcrypto, and none deviated from a strict DER profile. That puts a 95 % upper bound of about
+    2·10^-5 per unexpired certificate.
+  - **Precertificates**: `rfc6962.go` (`storeLogEntry`, `types.ParseCertificate(rawLogEntry.Cert.Data)`, which holds
+    the precertificate for a precert entry) and `tiled.go` (`logEntry.PreCertificate`) parse the logged
+    precertificate, not the final certificate.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android API facts, verified 2026-10-22: `CompletableFuture.completeAsync`, `orTimeout`, `completeOnTimeout`, `failedFuture` and `delayedExecutor` were added at API 31 (API-31 diff page), outside core-library desugaring; libcore's `java.net.HttpURLConnection` declares no `setAuthenticator`; `ApplicationConfig.getTrustManager()` creates one `RootTrustManager` per config under `ensureInitialized()` and `RootTrustManagerFactorySpi.engineGetTrustManagers` returns that instance; `ApplicationConfig.getConfigForHostname` lowercases and strips a trailing dot; NSC pins are `NetworkSecurityTrustManager.checkPins` on every overload, absent without a `<domain-config>`.
 - OkHttp (master `ConnectPlan.kt`, `RealConnection.kt`, `CertificatePinner.kt`): the `Handshake` is built with a lazy lambda around `certificateChainCleaner.clean(peerCertificates, host)`, `CertificatePinner.check` returns before invoking it when no pin matches, and `RealConnection.supportsUrl`/`certificateSupportHost` read `handshake.peerCertificates` for HTTP/2 coalescing; `isEligible` refuses coalescing unless the address's `hostnameVerifier === OkHostnameVerifier`.
