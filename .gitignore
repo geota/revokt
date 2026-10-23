@@ -15,3 +15,5 @@ node_modules/
 
 # Gradle writes a binary keyring beside the ASCII one; only the .keys file is tracked (CONTRIBUTING §3)
 gradle/verification-keyring.gpg
+__pycache__/
+*.pyc
