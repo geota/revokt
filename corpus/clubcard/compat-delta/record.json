@@ -1,0 +1,10 @@
+{
+  "entry": "compat-delta",
+  "filters": [
+    {"path": "20261021-1-compat.filter.delta", "sha256": "98ad92e45efabebc14e651ac77ba5880ac388acdfba27c4923e06efdf9f93a87", "source": {"collection": "security-state/cert-revocations", "channel": "compat", "incremental": true, "effectiveTimestamp": 1792587524000, "attachment": "security-state-staging/cert-revocations/20261021154711--dc62e538-927e-4179-ac2b-02f4d7ce8361--b74a26a7-9e67-46c3-9099-62e3bb65b35d.delta", "attachmentHash": "98ad92e45efabebc14e651ac77ba5880ac388acdfba27c4923e06efdf9f93a87", "fetched": "2026-10-22"}},
+    {"path": "20261021-1-compat.filter.delta.v4", "sha256": "e7dbf5816a222b13f8ada75221db5df192414bab7fbb606b4d5e0a2bf47717ae", "source": "revokt-oracle transcode of the file above (Encoding::V4)"}
+  ],
+  "queries": {"generator": "revokt-oracle gen-queries", "seed": 20261022, "count": 1500},
+  "oracle": {"crate": "clubcard-crlite", "version": "0.6.2", "tool": "revokt-oracle", "commit": "this PR"},
+  "added": "2026-10-22"
+}
