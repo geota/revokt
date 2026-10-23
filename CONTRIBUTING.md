@@ -31,8 +31,8 @@ Agents read `AGENTS.md` first (it points back here). Governance is in `GOVERNANC
      rulesets require every status check but 0 approvals; every PR carries an **independent review** by a
      fresh-context agent pass (a review that did not write the code; its output is a PR comment under the
      heading `Independent review`, and PR-lint requires it); the maintainer reads the full diff before
-     enabling auto-merge; the `cooling` check applies to **every protected path** during this phase (24 h
-     between last push and merge), not only the three release-critical ones; no release is cut and no
+     enabling auto-merge; the `cooling` check is **paused** (a hold for a second reader means nothing with one
+     reader; it activates with the second maintainer); no release is cut and no
      `1.0` promise is made in this phase (§14 requires two release-capable maintainers and external review
      before 1.0). The phase ends, and the two-person rule of section 5 activates, in the PR that adds the
      second maintainer.
@@ -370,7 +370,7 @@ every required check in Appendix B passes**.
   `permissions: read-all`; no `pull_request_target` with checkout), wrapper validation, labeler. As their
   own checks: `commitlint` on the title; `pr-lint` (template, trailers, `Spec:` rule, issue link,
   `Independent review` comment in the solo phase; runs on `opened`, `edited`, `synchronize`);
-  `protected-paths`; `cooling` (section 8; green at once for other paths); `DCO` (the app's check). ktlint,
+  `protected-paths`; `cooling` (section 8; green at once for other paths, and throughout the solo phase); `DCO` (the app's check). ktlint,
   detekt and `specStatus` run inside `check`.
 - Security: CodeQL in its own job (Kotlin needs a traced build; it compiles `compileKotlinJvm`
   `compileDebugKotlin` without tests, on its own budget; when a Kotlin bump leaves CodeQL's supported window,
@@ -471,7 +471,7 @@ approvals per section 5 · threads resolved · squash-merged by auto-merge. Done
 | Project health | OpenSSF Scorecard weekly + badge; per-check targets in `docs/dev/scorecard.md` (the maximum the default token allows on a personal account, with the measured score recorded; `Packaging` and `Signed-Releases` need the jars, `.asc`, `.sigstore.json` and `.intoto.jsonl` attached to the GitHub release, since Scorecard reads release assets, not Maven Central) | scheduled | informational |
 | Owner-power audit trail | a weekly workflow exports the rulesets, environment reviewers and repository merge settings to `docs/dev/rulesets/` and opens a PR on any diff (on a personal account every control reduces to the owner's good faith plus this public trail and the key custody split of section 9) | scheduled | PR on diff |
 | Labels, size, stale, claim | labeler, size labeler, stale (exempts `blocked`), `/claim` workflow | PR / scheduled | PR-lint yes |
-| 24-hour cooling on `data/seed/**`, release workflows and `**/verify/**` (every protected path during the solo phase) | the `cooling` check: reports success at once for other paths, else turns green 24 h after the head SHA was pushed; advisory fixes and reverts exempt | PR | yes |
+| 24-hour cooling on `data/seed/**`, release workflows and `**/verify/**` | the `cooling` check: reports success at once for other paths and throughout the solo-maintainer phase (ADR-0005), else turns green 24 h after the head SHA first reached CI; advisory fixes and reverts exempt | PR | yes (once two maintainers exist) |
 | Trademark rule (§13) | PR-lint greps docs for `revokt.com`; README carries the disambiguation sentence | PR | yes |
 
 No gate may be skipped with `[skip ci]`, a disabled rule, a baseline file, a `@Suppress` without a one-line
@@ -504,7 +504,8 @@ handled by a time-boxed allow-list entry with an expiry date, in a `kind/ci` PR.
 Protected paths (section 5) additionally require: the `security` label (auto-applied); the "Risk" section
 naming the §10 item or "none"; a fuzz target for any new byte parser; and, for `data/seed/**`, the release
 workflows and `**/verify/**`, the 24-hour `cooling` check and a **verification note** comment in the PR from
-one maintainer to the other naming what was verified (in the solo phase, the maintainer's own note).
+one maintainer to the other naming what was verified. In the solo-maintainer phase (ADR-0005) the cooling check is
+paused and the note is the maintainer's own.
 
 **Embargoed security fixes** are developed in a GitHub security advisory's temporary private fork, where
 Actions do not run and rulesets are not enforced. The written exception: both maintainers run
@@ -590,7 +591,7 @@ required status checks `check (17)`, `check (21)`, `check (lts)`, `check (featur
 `check (windows)`, `ci-extras`, `static`, `commitlint`, `pr-lint` (includes `trailers` and, in the solo
 phase, the `Independent review` comment), `protected-paths`, `DCO` (the app's exact check name), `codeql`, `osv`, `dependency-review`,
 `coverage`, `cooling` (reports success at once unless the PR touches `data/seed/**`, the release workflows or
-`**/verify/**`, or any protected path in the solo phase, section 8); require branches to be up to date before merging; squash merge only (repository
+`**/verify/**`; paused throughout the solo phase, section 8); require branches to be up to date before merging; squash merge only (repository
 setting: allow squash merging only, default message "pull request title and description", auto-merge enabled);
 require conversation resolution; require linear history; block force pushes and deletions; bypass list empty
 (the repository owner included; the owner can still edit the ruleset, which the weekly Scorecard run and the

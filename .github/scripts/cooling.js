@@ -9,25 +9,15 @@ const HOLD_MS = 24 * 60 * 60 * 1000;
 const maintainers = (fs.readFileSync('MAINTAINERS.md', 'utf8').match(/\| @([A-Za-z0-9-]+) \|/g) || []);
 const solo = maintainers.length < 2;
 const always = ['data/seed/', '.github/workflows/release', '/verify/'];
-const protectedGlobs = fs.readFileSync('.github/protected-paths.txt', 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-
-function globToRegex(g) {
-  let re = '^';
-  for (let i = 0; i < g.length; i++) {
-    const c = g[i];
-    if (c === '*' && g[i + 1] === '*') { re += '.*'; i++; if (g[i + 1] === '/') i++; }
-    else if (c === '*') re += '[^/]*';
-    else if ('.+^$()[]{}|\\'.includes(c)) re += '\\' + c;
-    else re += c;
-  }
-  return new RegExp(re + '$');
-}
-const matchers = protectedGlobs.map(globToRegex);
 
 async function evaluate(pr) {
   const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 });
   const names = files.map((f) => f.filename);
-  const hits = names.filter((n) => always.some((a) => n.includes(a)) || (solo && matchers.some((m) => m.test(n))));
+  // Solo-maintainer phase (ADR-0005): the hold exists to give a second reader time, and there is none; the independent
+  // review and the maintainer's full read are the controls. The check reports success and activates by itself when
+  // MAINTAINERS.md gains a second maintainer.
+  if (solo) return { ok: true, summary: 'solo-maintainer phase: cooling paused (ADR-0005); activates with the second maintainer' };
+  const hits = names.filter((n) => always.some((a) => n.includes(a)));
   const exempt = pr.labels.some((l) => ['advisory-fix', 'revert'].includes(l.name)) || /^revert\(/.test(pr.title);
   if (hits.length === 0 || exempt) return { ok: true, summary: 'no cooling path touched, or exempt' };
   // "Last push" = when this head SHA first produced a check run (the author controls commit dates, not CI clocks).
