@@ -1,3 +1,12 @@
+public final class dev/revokt/ParseReason : java/lang/Enum {
+	public static final field OVERSIZE Ldev/revokt/ParseReason;
+	public static final field PRODUCER_UNKEYABLE Ldev/revokt/ParseReason;
+	public static final field STRUCTURE Ldev/revokt/ParseReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/ParseReason;
+	public static fun values ()[Ldev/revokt/ParseReason;
+}
+
 public abstract interface annotation class dev/revokt/RevoktInternalApi : java/lang/annotation/Annotation {
 }
 
