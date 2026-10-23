@@ -50,7 +50,8 @@ Status: **draft spec / project proposal, revision 33** · Target: JVM 11+ and An
   Java fields gain `notBefore`/`notAfter`. §5.5's "structurally strict" is qualified.
   Oracle 3b walks the TBS tail by the same rule, and D7 gains the cases. `[0]` stays strict: ct-go does not
   bound explicit `[0]`, so a trailing element there changes what ct-go accepts and which SPKI it records. The keyed
-  serial is bounded (the stdlib `RawValue` re-parse) and is the JDK's. No input is known on which the filter key
+  serial is bounded (the stdlib `RawValue` re-parse) and is the JDK's. Both are confirmed by running the producer
+  (Appendix A). No input is known on which the filter key
   differs, so the case is excluded conservatively, D1-dom by rule. The cost is `PARSE_FAILED` for such a leaf and a
   dropped candidate for such an intermediate, both allowing in `DEFAULT`. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
   `producerKeyable`. The table models ct-go's struct walk. 3a's primitive-`[3]` reading is the declared class
@@ -3018,7 +3019,9 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   (Go 1.27.3, certificate-transparency-go v1.3.2, zcrypto `v0.0.0-20260109180747-df961ee46a6c`):
   - a NULL after the version INTEGER inside `[0]` is rejected ("SerialNumber: tags don't match"), so ct-go read the
     NULL as the serial, which shows that the explicit `[0]` is not bounded;
-  - a `[0]` holding a complete fake TBS prefix is accepted. The producer keys the outer serial, the JDK's (the
+  - a `[0]` holding a fake serial `0f ac` and a complete fake TBS prefix, followed by the real serial `0e a1`, is
+    accepted and keyed `0ea1`, the outer serial and the JDK's (`getSerialNumber()` = `0xea1`);
+  - a `[0]` holding a complete fake TBS prefix with a different SPKI is accepted. The producer keys the outer serial, the JDK's (the
     `RawValue` re-parse is bounded), but records the inner SPKI as `RawSubjectPublicKeyInfo`, which the JDK does not
     read. As an issuer, such a certificate's children would be keyed under an SPKI the platform never sees.
   - The producer rejects a zero-length explicit `[3]` (`83 00`, `a3 00`): "explicit tag has no child".
