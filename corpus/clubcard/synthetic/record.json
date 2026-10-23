@@ -1,0 +1,10 @@
+{
+  "entry": "synthetic",
+  "filters": [
+    {"path": "synthetic.v3.filter", "sha256": "54e34310d898f7c857e315c0ad63351252739c4784327091914a75aa5141fbbb", "source": "revokt-oracle build-synthetic (clubcard 0.3.4 builder): issuers [i;32] for i in 0..4 over serials 0..4095 (LE u64); revoked counts [1024, 256, 2048, 3072 (inverted), 0]; coverage log [0;32] over [1000, 2000], log [1;32] over [0, 2^64-1]"},
+    {"path": "synthetic.v4.filter", "sha256": "c42f112659dc562a76939e68817f5a8482dc1634f05db476d8699b2da5441229", "source": "same filter, Encoding::V4"}
+  ],
+  "queries": {"generator": "revokt-oracle build-synthetic", "seed": "0x5eedc1abca7d0001", "count": 2171},
+  "oracle": {"crate": "clubcard-crlite", "version": "0.6.2", "tool": "revokt-oracle", "commit": "this PR"},
+  "added": "2026-10-22"
+}

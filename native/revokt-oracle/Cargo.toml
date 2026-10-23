@@ -11,5 +11,14 @@ publish.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "revokt-oracle"
+path = "src/main.rs"
+
 [dependencies]
-# clubcard-crlite, upki, x509-parser, canonical_json: added by the 0.1 oracle issue, pinned in Cargo.lock.
+# The clubcard oracle (spec §9, the 0.1 "clubcard port" issue). upki, x509-parser and canonical_json follow with the
+# 0.1 oracle issue. Exact pins: the oracle decides what revokt must agree with, so a version bump is a `spec` change.
+clubcard-crlite = { version = "=0.6.2", features = ["builder", "bincode", "sha2"] }
+clubcard = { version = "=0.3.4", features = ["builder"] }
+# Already a dependency of clubcard-crlite; used only to write the ct-logs.json the builder reads.
+base64 = "0.23"

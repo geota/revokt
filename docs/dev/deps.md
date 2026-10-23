@@ -13,12 +13,21 @@
   -Prevokt.purityGate -Prevokt.native -Prevokt.ci --no-configuration-cache
 ```
 
+`-Prevokt.native` includes `revokt-engine-upki`, which does not exist until the 0.2 upki issue; until then the command
+fails at settings evaluation with it, so drop that flag.
+
 Commit the catalog, the lockfiles, `verification-metadata.xml` and `verification-keyring.keys` together. For a new
 trusted key, check the fingerprint against the upstream project's published key before committing it; the reviewer
 checks it again (CONTRIBUTING §3). Renovate cannot regenerate these files on the hosted plan, so a maintainer runs the
 command on the Renovate branch and pushes.
 
 The dependency ingress files are protected paths (CODEOWNERS).
+
+## Keys added after the bootstrap
+
+| Key | Owner (key server uid) | Checked against | Added |
+|---|---|---|---|
+| `D233B6C6E7EDC0866D486C166054D87C226DFDC2` | Code Intelligence GmbH - Signing `<fuzzing@code-intelligence.com>` (`com.code-intelligence`, Jazzer) | the `.asc` signatures on Maven Central for `jazzer-junit` 0.30.0 carry this key id; uid on `keyserver.ubuntu.com` | 2026-10-22, clubcard port PR |
 
 ## State of signature verification
 

@@ -1,0 +1,9 @@
+{
+  "entry": "compat-full",
+  "filters": [
+    {"path": "20261017-1-compat.filter", "sha256": "84754db048341a3df406a0b65bdd3528e2fa2f89ed2ccdaa078b69da3c04f316", "source": {"collection": "security-state/cert-revocations", "channel": "compat", "incremental": false, "effectiveTimestamp": 1792241654000, "attachment": "security-state-staging/cert-revocations/20261017154830--5cc04cc0-2229-4273-bdd3-be095a8f0468--88b81362-120b-46af-8bdc-3aa52cea3441.filter", "attachmentHash": "84754db048341a3df406a0b65bdd3528e2fa2f89ed2ccdaa078b69da3c04f316", "fetched": "2026-10-22"}}
+  ],
+  "queries": {"generator": "revokt-oracle gen-queries", "seed": 20261017, "count": 2000},
+  "oracle": {"crate": "clubcard-crlite", "version": "0.6.2", "tool": "revokt-oracle", "commit": "this PR"},
+  "added": "2026-10-22"
+}

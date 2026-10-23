@@ -17,7 +17,15 @@ kotlin {
             implementation(libs.kotlin.test.junit5)
             implementation(project.dependencies.platform(libs.junit.bom))
             implementation(libs.junit.jupiter)
+            implementation(libs.jazzer.junit)
             runtimeOnly(libs.junit.platform.launcher)
         }
     }
+}
+
+// The clubcard corpus replay (docs/dev/corpus.md "Clubcard corpus"): the oracle goldens are a test input.
+val clubcardCorpus = rootProject.layout.projectDirectory.dir("corpus/clubcard")
+tasks.withType<Test>().configureEach {
+    inputs.dir(clubcardCorpus).withPathSensitivity(PathSensitivity.RELATIVE)
+    systemProperty("revokt.clubcardCorpus", clubcardCorpus.asFile.path)
 }

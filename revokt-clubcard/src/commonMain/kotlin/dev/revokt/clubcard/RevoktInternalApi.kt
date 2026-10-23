@@ -13,5 +13,11 @@ package dev.revokt.clubcard
     message = "Internal to revokt: the clubcard port carries no compatibility promise and is MPL-2.0 contained.",
 )
 @Retention(AnnotationRetention.BINARY)
-@Target(AnnotationTarget.CLASS, AnnotationTarget.FUNCTION, AnnotationTarget.PROPERTY, AnnotationTarget.CONSTRUCTOR)
+@Target(
+    AnnotationTarget.CLASS,
+    AnnotationTarget.FUNCTION,
+    AnnotationTarget.PROPERTY,
+    AnnotationTarget.CONSTRUCTOR,
+    AnnotationTarget.TYPEALIAS,
+)
 public annotation class RevoktInternalApi
