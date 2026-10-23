@@ -13,7 +13,9 @@ agent operated by the maintainer, one task at a time.
 
 Compensating controls, all enforced:
 
-- rulesets require every status check but 0 approvals;
+- rulesets require every status check but 0 approvals, and "require review from code owners" is off (with one code
+  owner who cannot approve their own PRs it would block every PR on a protected path); both switch on in the PR that
+  adds the second maintainer;
 - every PR carries an **independent review**: a fresh-context agent pass over the diff that did not write it, posted as
   a PR comment under the heading `Independent review`; `pr-lint` requires it before the PR can leave draft;
 - the maintainer reads the full diff before enabling auto-merge;
