@@ -3,7 +3,8 @@
 // Translation of clubcard-crlite 0.6.2 src/query.rs (git b8ca6961975d51518097dd4eb99d0fdeabee7845), spec §3.1.
 // Decoding and querying only: `to_bytes`, the `encode` halves, `Display` and `ApproximateSizeOf` are not translated;
 // `impl Codec for ClubcardIndex` is in Codec.kt beside the entry reader. The bincode (v3) path is not part of the
-// port: it is decoded by `dev.revokt.clubcard.api.ClubcardFilters`. Lines marked `revokt:` are spec §6.3 additions.
+// port: it is decoded by `dev.revokt.clubcard.api.ClubcardFilters`. Lines marked `revokt:` are spec §6.3 additions
+// and the allocation deviations of #7 (UPSTREAM.md).
 //
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not
 // distributed with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -69,6 +70,12 @@ public data class TimestampInterval(
     public val low: Timestamp,
     public val high: Timestamp,
 ) {
+    /**
+     * revokt: `low <= timestamp && timestamp <= high`, unsigned and inclusive, which upstream writes inline in
+     * `in_universe` (#7). Never `low..high`: a `Comparable` range is allocated per query.
+     */
+    public operator fun contains(timestamp: Timestamp): Boolean = low <= timestamp && timestamp <= high
+
     @RevoktInternalApi
     public companion object {
         public fun read(buf: ByteReader): TimestampInterval {
@@ -156,7 +163,8 @@ public class CrliteQuery(
         }
         a[0] = a[0] or 1L
         val s = (a[3].toULong() % maxOf(m.toULong(), 1uL)).toLong()
-        return Equation.homogeneous(s, a)
+        // revokt: `a` is fresh and owned by this query, so the equation takes it instead of copying it (#7).
+        return Equation.owning(s, a, 0)
     }
 
     override fun discriminant(): ByteString = key.serial
@@ -164,7 +172,7 @@ public class CrliteQuery(
     override fun inUniverse(meta: CrliteCoverage): Boolean {
         val (logId, timestamp) = logTimestamp ?: return false
         val interval = meta.logs[logId] ?: return false
-        return interval.low <= timestamp && timestamp <= interval.high
+        return timestamp in interval // revokt: TimestampInterval.contains (#7)
     }
 }
 
