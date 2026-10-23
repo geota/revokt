@@ -2773,7 +2773,7 @@ reported, never rejected as `ParseFailed`; whether such a leaf is queried is the
 |---|---|---|---|---|---|
 | 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()` | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
 | 2 | Conscrypt `CertificateFactory` (BoringSSL): `conscrypt-openjdk-uber` versions in the matrix; the **platform** Conscrypt on the instrumented tier | platform acceptance on Android; `encoded = getEncoded()` (`i2d_X509`) | as above | as above | as above |
-| 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error | `Ok` | `Err` | caught panic |
+| 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error; the TBS TLV re-headed to minimal, its signature AlgorithmIdentifier and the `signatureValue` octets, for `canon` | `Ok` | `Err` | caught panic |
 | 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate` and the outer `signatureAlgorithm` and re-encode the TBS under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the `signatureValue` octets for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
 | 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key `canon(encoded)` (above), with which bytes and through which path (`ct` for certificate-transparency-go's strict parse, `lax` for ct-go only through a `lax` retry, `zc` for the zcrypto fallback) | both calls return | a `ParseCertificate` error, or a panic anywhere in the producer (the shim recovers around the whole call) | unrecovered; counts as `Reject` under D8 |
@@ -2909,11 +2909,11 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   NULL as `05 81 00` inside it, a `tbsCertificate` header with a long-form length carrying leading zero octets or an
   indefinite length, an indefinite TBS with an indefinite Validity, subject RDN chain, `[0]`, or `[3]` down to an
   `extnValue` as `04 80 … 00 00`, an outer AlgorithmIdentifier `30 80 <OID> 05 80 00 00 00 00`, an RSA `signatureValue`
-  with unused-bits octet `01` and the padding bit set (and, as a JDK-rejected entry, an indefinite outer
-  AlgorithmIdentifier holding a non-minimal OID header, `30 80 06 81 08 … 00 00`); required outcome for each: `Parsed`, with the `producerKeyable`
+  with unused-bits octet `01` and the padding bit set; required outcome for each: `Parsed`, with the `producerKeyable`
   and key bytes of the unmodified certificate and a `VERIFIED` link, since the profile reads `Cert.tbs`; and on the
   reject side an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI `30 82 00 …`), which the JDK
-  accepts and fails to verify, `STRUCTURE`); and the D8-gap examples (a serial with non-minimal
+  accepts and fails to verify, and an indefinite outer AlgorithmIdentifier holding a non-minimal OID header
+  (`30 80 06 81 08 … 00 00`), which the JDK rejects; each `STRUCTURE`); and the D8-gap examples (a serial with non-minimal
   INTEGER content, a keyUsage or basicConstraints value only zcrypto accepts, a `UTCTime` without seconds; each
   `Parsed` and outside the profile).
 
@@ -2927,7 +2927,7 @@ collection marks CRLite-enrolled, `SHA-256(rawSpki)` must be a key of the live f
 **Corpus record schema (one for all four kinds; committed).**
 `{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome,
 fields | unavailable}], class ∈ {D7_LENIENCY, D2_REENCODE_ALLOW, D3_DIVERGENCE, D1_DOM,
-KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, the
+KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, `CONSCRYPT_TBS` (D2: `Cert.tbs` differs from oracle 2's `getTBSCertificate()`), the
 duplicate-extension class, or a named 3c/Firefox class), keyability: {parser, clause, zlint}? (required on every D8-gap entry whatever its class, and on every `KEYABILITY_GAP` record: `parser ∈ {ct, lax, zc}` from oracle 4, `clause` a `KeyabilityClause`, `zlint` the pinned zlint result), justification, added}`. Goldens for 3a/3b/4 are computed at admission
 so the PR replay evaluates D1–D3 and D8 offline, JDK-only. The release review mechanically lists entries
 whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves across all enrolled
