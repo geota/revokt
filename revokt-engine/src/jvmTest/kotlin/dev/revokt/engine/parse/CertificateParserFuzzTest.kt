@@ -29,19 +29,22 @@ class CertificateParserFuzzTest {
                 check(
                     second is CertificateParse.Parsed && sameFields(c, second.certificate),
                 ) { "D6: second parse differs" }
+                val tbs = c.tbsBytes
                 val spans =
-                    listOf(c.tbs.tlv, c.tbs.signature, c.tbs.issuer, c.tbs.subject, c.tbs.spki, c.signatureAlgorithm) +
+                    listOf(c.tbs.tlv, c.tbs.signature, c.tbs.issuer, c.tbs.subject, c.tbs.spki) +
                         c.tbs.extensions.map { it.tlv }
                 for (span in listOfNotNull(c.fields.ski, c.fields.akiKeyId)) {
-                    check(span.start >= 0 && span.start <= span.end && span.end <= data.size) {
-                        "D6: key id span $span outside ${data.size} bytes"
+                    check(span.start >= 0 && span.start <= span.end && span.end <= tbs.size) {
+                        "D6: key id span $span outside ${tbs.size} bytes"
                     }
                 }
                 for (span in spans) {
-                    check(span.start >= 0 && span.end <= data.size) { "D6: span $span outside ${data.size} bytes" }
-                    val again = DerReader(data, span.start, span.end, ParseContext()).readAny(HeaderSite.CERTIFICATE)
+                    check(span.start >= 0 && span.end <= tbs.size) { "D6: span $span outside ${tbs.size} bytes" }
+                    val again = DerReader(tbs, span.start, span.end, ParseContext()).readAny(HeaderSite.CERTIFICATE)
                     check(again.tlv == span) { "D6: TLV at $span re-reads to ${again.tlv}" }
                 }
+                val outer = c.envelope.signatureAlgorithm
+                check(outer.start >= 0 && outer.end <= data.size) { "D6: span $outer outside ${data.size} bytes" }
             } else {
                 first as CertificateParse.Failed
                 check(
@@ -55,13 +58,30 @@ class CertificateParserFuzzTest {
         private fun sameFields(
             a: ParsedCertificate,
             b: ParsedCertificate,
+        ): Boolean = sameEnvelope(a, b) && sameTbs(a.tbs, b.tbs) && sameRecords(a, b)
+
+        private fun sameEnvelope(
+            a: ParsedCertificate,
+            b: ParsedCertificate,
         ): Boolean =
-            a.tbs.tlv == b.tbs.tlv && a.tbs.serial == b.tbs.serial && a.tbs.spki == b.tbs.spki &&
-                a.tbs.subject == b.tbs.subject &&
-                a.tbs.issuer == b.tbs.issuer && a.tbs.extensions.map { it.tlv } == b.tbs.extensions.map { it.tlv } &&
-                a.tbs.validity.notBeforeMillis == b.tbs.validity.notBeforeMillis &&
-                a.tbs.validity.notAfterMillis == b.tbs.validity.notAfterMillis &&
-                a.nonMinimalHeaders.map { it.offset } == b.nonMinimalHeaders.map { it.offset } &&
+            a.tbsBytes.contentEquals(b.tbsBytes) && a.envelope.signature.contentEquals(b.envelope.signature) &&
+                a.envelope.algorithmIdMismatch == b.envelope.algorithmIdMismatch
+
+        private fun sameTbs(
+            a: Tbs,
+            b: Tbs,
+        ): Boolean =
+            a.tlv == b.tlv && a.serial == b.serial && a.spki == b.spki && a.subject == b.subject &&
+                a.issuer == b.issuer &&
+                a.extensions.map { it.tlv } == b.extensions.map { it.tlv } &&
+                a.validity.notBeforeMillis == b.validity.notBeforeMillis &&
+                a.validity.notAfterMillis == b.validity.notAfterMillis
+
+        private fun sameRecords(
+            a: ParsedCertificate,
+            b: ParsedCertificate,
+        ): Boolean =
+            a.nonMinimalHeaders.map { it.offset } == b.nonMinimalHeaders.map { it.offset } &&
                 a.ignoredElements.map { it.span } == b.ignoredElements.map { it.span } &&
                 a.fields.scts == b.fields.scts && a.fields.ski == b.fields.ski && a.fields.akiKeyId == b.fields.akiKeyId
     }

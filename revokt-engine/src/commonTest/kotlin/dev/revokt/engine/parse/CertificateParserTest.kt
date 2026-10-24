@@ -49,15 +49,16 @@ class CertificateParserTest {
     fun `parser extracts every field of a v3 certificate`() {
         val cert = TestCert()
         val p = parsed(cert)
-        assertContentEquals(cert.tbs, p.tbs.tlv.bytes(p.der))
+        assertContentEquals(cert.tbs, p.tbsBytes)
+        assertContentEquals(cert.tbs, p.tbs.tlv.bytes(p.tbsBytes))
         assertContentEquals(bytes(0x00, 0x8f, 0x12, 0x34), p.rawSerial())
-        assertContentEquals(cert.tbsSignature, p.tbs.signature.bytes(p.der))
+        assertContentEquals(cert.tbsSignature, p.tbs.signature.bytes(p.tbsBytes))
         assertContentEquals(cert.issuer, p.rawIssuer())
         assertContentEquals(cert.subject, p.rawSubject())
         assertContentEquals(cert.spki, p.rawSpki())
-        assertContentEquals(cert.outerAlgorithm, p.signatureAlgorithm.bytes(p.der))
-        assertContentEquals(content(cert.signature), p.signatureValue.bytes(p.der))
-        assertContentEquals(bytes(2), p.tbs.version!!.bytes(p.der))
+        assertContentEquals(cert.outerAlgorithm, p.envelope.signatureAlgorithm.bytes(p.der))
+        assertContentEquals(content(cert.signature), p.envelope.signatureValue.bytes(p.der))
+        assertContentEquals(bytes(2), p.tbs.version!!.bytes(p.tbsBytes))
         assertEquals(1_792_676_730_000, p.tbs.validity.notBeforeMillis)
         assertEquals(2_524_608_000_000, p.tbs.validity.notAfterMillis)
         assertEquals(listOf(Oid.SUBJECT_KEY_IDENTIFIER, "2.5.29.19"), p.tbs.extensions.map { it.oidDotted })
@@ -68,7 +69,7 @@ class CertificateParserTest {
                 .extensions(Oid.SUBJECT_KEY_IDENTIFIER)
                 .single()
                 .value
-                .bytes(p.der),
+                .bytes(p.tbsBytes),
         )
         assertEquals(emptyList(), p.nonMinimalHeaders.map { it.site })
     }
@@ -262,7 +263,7 @@ class CertificateParserTest {
             p.tbs.extensions
                 .single()
                 .value
-                .bytes(p.der),
+                .bytes(p.tbsBytes),
         )
         assertEquals(listOf(IgnoredSite.EXTENSION_TRAILING), p.ignoredElements.map { it.site })
         // ct-go flattens [0], so a trailing element there would make the producer key a different serial.
@@ -310,9 +311,10 @@ class CertificateParserTest {
 
     @Test
     fun `parser step count is pinned for the reference certificate`() {
-        // Headers, one per element, OID and time content, and the SKI read: a change here is a change to what D5 measures.
+        // Headers, one per element, OID and time content, and the SKI read, plus the TBS header read again on Cert.tbs:
+        // a change here is a change to what D5 measures.
         val p = parsed(TestCert())
-        assertEquals(108, p.steps)
+        assertEquals(112, p.steps)
         assertTrue(p.steps <= 8L * p.der.size + 1024)
     }
 
@@ -380,12 +382,18 @@ class CertificateParserTest {
 
     @Test
     fun `parser is deterministic, within its step budget and its spans re-slice the input under mutation`() {
-        val seeds = listOf(TestCert().der, TestCert(version = ByteArray(0), extensions = emptyList()).der)
+        val base = TestCert()
+        val indefiniteTbs = bytes(0x30, 0x80) + content(base.tbs) + bytes(0, 0)
+        val seeds =
+            listOf(
+                base.der,
+                TestCert(version = ByteArray(0), extensions = emptyList()).der,
+                seq(indefiniteTbs, base.outerAlgorithm, base.signature),
+            )
         val random = Random(20261023)
         var parsedCount = 0
         repeat(5000) { n ->
-            val base = seeds[n % seeds.size]
-            val der = mutate(base, random)
+            val der = mutate(seeds[n % seeds.size], random)
             val first = CertificateParser.parse(der)
             val second = CertificateParser.parse(der)
             when (first) {
@@ -451,16 +459,24 @@ class CertificateParserTest {
     /** Spec §9.2 D6: every reported offset re-slices the input to the reported value. */
     private fun assertSpansReslice(c: ParsedCertificate) {
         val tlvSpans =
-            listOf(c.tbs.tlv, c.tbs.signature, c.tbs.issuer, c.tbs.subject, c.tbs.spki, c.signatureAlgorithm) +
+            listOf(c.tbs.tlv, c.tbs.signature, c.tbs.issuer, c.tbs.subject, c.tbs.spki) +
                 c.tbs.extensions.map { it.tlv }
+        // TBS offsets index Cert.tbs and, shifted by the TBS content's start, the input when the TBS header is definite.
+        val shift = c.envelope.presentedTbs.content.start - (c.tbsBytes.size - (c.envelope.presentedTbs.content.length))
         for (span in tlvSpans) {
-            assertTrue(span.start >= 0 && span.end <= c.der.size && span.start < span.end, "span $span")
-            val again = DerReader(c.der, span.start, span.end, ParseContext()).readAny(HeaderSite.CERTIFICATE)
+            assertTrue(span.start >= 0 && span.end <= c.tbsBytes.size && span.start < span.end, "span $span")
+            val again = DerReader(c.tbsBytes, span.start, span.end, ParseContext()).readAny(HeaderSite.CERTIFICATE)
             assertEquals(span, again.tlv, "TLV at $span re-reads to ${again.tlv}")
+            if (!c.envelope.tbsIndefinite && span != c.tbs.tlv) {
+                assertContentEquals(span.bytes(c.tbsBytes), c.der.copyOfRange(span.start + shift, span.end + shift))
+            }
         }
+        val outer =
+            DerReader(c.der, c.envelope.signatureAlgorithm.start, c.envelope.signatureAlgorithm.end, ParseContext())
+        assertEquals(c.envelope.signatureAlgorithm, outer.readAny(HeaderSite.SIGNATURE_ALGORITHM).tlv)
         for (e in c.tbs.extensions) {
             assertTrue(e.value.start >= e.tlv.start && e.value.end <= e.tlv.end, "extension value inside its TLV")
-            assertEquals(e.oidDotted, Oid.dotted(c.der, e.oid))
+            assertEquals(e.oidDotted, Oid.dotted(c.tbsBytes, e.oid))
         }
         assertTrue(c.tbs.serial.start > c.tbs.tlv.start && c.tbs.serial.end < c.tbs.tlv.end, "serial inside TBS")
     }
