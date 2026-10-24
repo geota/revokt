@@ -2656,17 +2656,18 @@ definite length and no indefinite element below the TBS, but still verifies an i
 and an indefinite outer `signatureAlgorithm` (Appendix A).
 
 An indefinite element at the first two places is delimited and re-encoded as the JDK's converter does:
+- Each TLV header met in the reading below, other than end-of-contents, is read as the JDK's converter reads it: one
+  tag octet, whatever its low five bits, then a length octet that is `80`, short form, or `81` to `84` followed by
+  that many octets. A definite length must be minimal; a non-minimal length, or any other length octet, is
+  `STRUCTURE`: under the TBS it makes the JDK's message differ from the signed bytes, and under the outer
+  `signatureAlgorithm` the JDK fails to parse the certificate (Appendix A). A multi-octet tag is so misread; it
+  survives in `Cert.tbs` only where the TBS rules after this list leave bytes unparsed.
 - From its first content octet, TLVs are read in turn. Every byte up to its end-of-contents is part of a TLV,
   including elements the trailing-element rule ignores.
 - `00 00` at a tag position closes the innermost open indefinite element.
 - A TLV whose length octet is `80`, constructed or primitive, opens a nested indefinite element whose content is read
   the same way.
-- A definite TLV is skipped whole by its length, so `00 00` inside it is never end-of-contents. Its header is read as
-  the JDK's converter reads it: one tag octet, whatever its low five bits, then a length octet that is short form or
-  `81` to `84` followed by that many octets. The length must be minimal, and any other length is `STRUCTURE`: under
-  the TBS it makes the JDK's message differ from the signed bytes, and under the outer `signatureAlgorithm` the JDK
-  fails to parse the certificate (Appendix A). `Cert.tbs` is then parsed under the rules below; a multi-octet tag
-  survives there only where those rules leave bytes unparsed.
+- A definite TLV is skipped whole by its length, so `00 00` inside it is never end-of-contents.
 - The re-encoding replaces each indefinite header and its end-of-contents octets with a minimal definite header, and
   copies every other octet unchanged.
 
