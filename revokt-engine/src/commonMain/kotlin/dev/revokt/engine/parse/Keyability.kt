@@ -141,7 +141,7 @@ internal object Keyability {
                 val fields = r.child(r.read(SEQUENCE, HeaderSite.EXTENSION))
                 fields.read(OBJECT_IDENTIFIER, HeaderSite.EXTENSION_OID)
                 val flag = fields.readOptional(BOOLEAN, HeaderSite.EXTENSION_CRITICAL)?.content
-                val flagOk = flag == null || b[flag.start].toInt() and 0xff in setOf(0x00, 0xff)
+                val flagOk = flag == null || (flag.length == 1 && b[flag.start].toInt() and 0xff in setOf(0x00, 0xff))
                 flagOk && FATAL_EXTENSIONS.none { Oid.matches(b, e.oid, it) }
             }
         }

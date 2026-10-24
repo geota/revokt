@@ -435,4 +435,126 @@ class KeyabilityTest {
         assertEquals(true, cert.der.size <= dev.revokt.RevoktLimits.MAX_CERT_BYTES)
         assertEquals(KeyabilityClause.EXTENSION, clause(cert))
     }
+
+    @Test
+    fun `K5 and K6 reject the edges a looser check would let through`() {
+        fun gen(t: String) = keyable(validity = seq(tlv(0x17, ascii("500101000000Z")), tlv(0x18, ascii(t))))
+        assertClause(
+            KeyabilityClause.NAME,
+            mapOf(
+                "UTF-8 lead C1" to keyable(subject = name(tlv(0x0c, bytes(0xc1, 0xbf)))),
+                "UTF-8 overlong E0 80 80" to keyable(subject = name(tlv(0x0c, bytes(0xe0, 0x80, 0x80)))),
+                "UTF-8 overlong F0 80 80 80" to keyable(subject = name(tlv(0x0c, bytes(0xf0, 0x80, 0x80, 0x80)))),
+                "UTF-8 third octet not a continuation" to keyable(subject = name(tlv(0x0c, bytes(0xe2, 0x82, 0x41)))),
+            ),
+        )
+        assertClause(
+            KeyabilityClause.TIME,
+            mapOf(
+                "no Z" to gen("205001010000000"),
+                "slash before Z" to gen("2026010100000/Z"),
+                "month 00" to gen("20260001000000Z"),
+                "day 00" to gen("20260100000000Z"),
+                "minute 60" to gen("20260101006000Z"),
+                "31 June" to gen("20260631000000Z"),
+                "31 September" to gen("20260931000000Z"),
+            ),
+        )
+    }
+
+    @Test
+    fun `PrintableString accepts exactly Go's set with star and ampersand`() {
+        val allowed = ('a'..'z') + ('A'..'Z') + ('0'..'9') + " '()+,-./:=?*&".toList()
+        for (c in 0..255) {
+            val value = tlv(0x13, bytes(c))
+            val expected = if (c.toChar() in allowed && c < 0x80) KeyabilityClause.TIME else KeyabilityClause.NAME
+            // A PrintableString passing K5 reaches K6, failed here on purpose to keep the case cheap.
+            val cert =
+                keyable(
+                    subject = name(value),
+                    validity = seq(tlv(0x17, ascii("5001010000Z")), tlv(0x17, ascii("5001010000Z"))),
+                )
+            assertEquals(expected, clause(cert), "octet $c")
+        }
+    }
+
+    @Test
+    fun `K7 rejects the key forms ct-go rejects or the profile narrows`() {
+        val curveBytes = TestDer.oidContent("1.2.840.10045.3.1.7")
+        val point = bytes(0x04) + p256X + p256Y
+        assertClause(
+            KeyabilityClause.KEY,
+            mapOf(
+                "Ed25519 with unused bits" to
+                    keyable(spki = seq(seq(oid("1.3.101.112")), tlv(0x03, bytes(4), ByteArray(32)))),
+                "Ed25519 33 octets" to keyable(spki = seq(seq(oid("1.3.101.112")), tlv(0x03, bytes(0), ByteArray(33)))),
+                "EC curve bytes under an OCTET STRING tag" to keyable(spki = ecSpki(curve = tlv(0x04, curveBytes))),
+                "EC point prefix 03" to keyable(spki = ecSpki(point = bytes(0x03) + point.copyOfRange(1, point.size))),
+                "EC point prefix 06" to keyable(spki = ecSpki(point = bytes(0x06) + point.copyOfRange(1, point.size))),
+                "RSA parameters an empty OCTET STRING" to keyable(spki = rsaSpki(parameters = tlv(0x04))),
+                "RSA parameters NULL with content" to keyable(spki = rsaSpki(parameters = tlv(0x05, bytes(0)))),
+                "RSA with a third INTEGER" to
+                    keyable(
+                        spki =
+                            seq(
+                                seq(oid("1.2.840.113549.1.1.1"), tlv(0x05)),
+                                tlv(
+                                    0x03,
+                                    bytes(0),
+                                    seq(
+                                        tlv(0x02, bytes(0x00, 0xc1, 0x23)),
+                                        tlv(0x02, bytes(1, 0, 1)),
+                                        tlv(0x02, bytes(1)),
+                                    ),
+                                ),
+                            ),
+                    ),
+                "RSAPublicKey header non-minimal" to
+                    keyable(
+                        spki =
+                            seq(
+                                seq(oid("1.2.840.113549.1.1.1"), tlv(0x05)),
+                                tlv(
+                                    0x03,
+                                    bytes(0),
+                                    tlvWithLength(
+                                        0x30,
+                                        bytes(0x81, 0x0a),
+                                        tlv(0x02, bytes(0x00, 0xc1, 0x23)) + tlv(0x02, bytes(1, 0, 1)),
+                                    ),
+                                ),
+                            ),
+                    ),
+            ),
+        )
+        // KEY comes before EXTENSION.
+        assertEquals(
+            KeyabilityClause.KEY,
+            clause(keyable(spki = rsaSpki(e = bytes(0)), extensions = listOf(TestDer.extension("2.5.29.19", seq())))),
+        )
+    }
+
+    @Test
+    fun `the K8 stub rejects every OID on K8's list`() {
+        val listed =
+            listOf(
+                "2.5.29.15",
+                "2.5.29.19",
+                "2.5.29.17",
+                "2.5.29.31",
+                "2.5.29.35",
+                "2.5.29.37",
+                "2.5.29.14",
+                "2.5.29.32",
+                "1.3.6.1.5.5.7.1.1",
+                "2.5.29.30",
+                "1.3.6.1.5.5.7.1.11",
+            )
+        assertClause(
+            KeyabilityClause.EXTENSION,
+            listed.associateWith {
+                keyable(extensions = listOf(TestDer.extension(it, seq())))
+            },
+        )
+    }
 }

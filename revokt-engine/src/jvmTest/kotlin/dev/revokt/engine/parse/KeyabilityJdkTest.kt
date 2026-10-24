@@ -75,6 +75,82 @@ class KeyabilityJdkTest {
         }
     }
 
+    /**
+     * The curve arithmetic against `BigInteger`: on-curve points from random x (where the right-hand side is a square),
+     * their negation, ±1 and bit-flip neighbours, x + p and y + p where they fit, and random byte pairs.
+     */
+    @Test
+    fun `onCurve agrees with BigInteger arithmetic on and off the curve`() {
+        val random = java.util.Random(20261024)
+        for ((name, curve) in curves) {
+            val spec = spec(name)
+            val p = (spec.curve.field as java.security.spec.ECFieldFp).p
+            val b = spec.curve.b
+            val n = curve.byteLength
+
+            fun expected(
+                x: BigInteger,
+                y: BigInteger,
+            ) = x < p && y < p &&
+                y.multiply(y).mod(p) ==
+                x
+                    .pow(3)
+                    .subtract(x.multiply(BigInteger.valueOf(3)))
+                    .add(b)
+                    .mod(p)
+
+            fun check(
+                x: BigInteger,
+                y: BigInteger,
+            ) {
+                if (x.bitLength() > n * 8 || y.bitLength() > n * 8 || x.signum() < 0 || y.signum() < 0) return
+                assertEquals(expected(x, y), curve.onCurve(fixed(x, n), fixed(y, n)), "$name x=$x y=$y")
+            }
+            var on = 0
+            repeat(300) { k ->
+                val x =
+                    if (k <
+                        20
+                    ) {
+                        BigInteger.valueOf(k.toLong())
+                    } else if (k <
+                        40
+                    ) {
+                        p - BigInteger.valueOf(k - 19L)
+                    } else {
+                        BigInteger(p.bitLength(), random).mod(p)
+                    }
+                val rhs =
+                    x
+                        .pow(3)
+                        .subtract(x.multiply(BigInteger.valueOf(3)))
+                        .add(b)
+                        .mod(p)
+                val y = rhs.modPow(p.add(BigInteger.ONE).shiftRight(2), p)
+                if (y.multiply(y).mod(p) == rhs) on++
+                for (candidate in listOf(y, p - y, y + BigInteger.ONE, y.flipBit(random.nextInt(p.bitLength())))) {
+                    check(x, candidate)
+                    check(x + p, candidate)
+                    check(x, candidate + p)
+                }
+            }
+            assertTrue(on > 100, "$name: only $on on-curve points")
+            repeat(2000) { check(BigInteger(n * 8, random), BigInteger(n * 8, random)) }
+            // x = p with y² = b: on the curve modulo p, outside because x is not below p.
+            val rootB = b.modPow(p.add(BigInteger.ONE).shiftRight(2), p)
+            assertEquals(b, rootB.multiply(rootB).mod(p), "$name: b is a square")
+            assertFalse(curve.onCurve(fixed(p, n), fixed(rootB, n)), "$name x = p, y = sqrt(b)")
+        }
+        // x = p − 1 on P-384: below p in every limb but the lowest.
+        val p384 = (spec("secp384r1").curve.field as java.security.spec.ECFieldFp).p
+        val y =
+            BigInteger(
+                "8cdeadbbd04911a3c1931e26df3fa6439dca9c7eb286fbd46fc319f0e2bb780232baf57825fc0c1912ada2fefe84024c",
+                16,
+            )
+        assertTrue(PrimeCurve.P384.onCurve(fixed(p384 - BigInteger.ONE, 48), fixed(y, 48)), "P-384 x = p - 1")
+    }
+
     @Test
     fun `the committed real certificates are inside the profile through K7`() {
         val names =
