@@ -55,7 +55,8 @@ Status: **draft spec / project proposal, revision 34** · Target: JVM 11+ and An
   JDK 27 differs only on an indefinite header under a definite parent: it parses every such case and then fails to
   verify it. JDK 11 verifies a strict subset of JDK 17's inputs, with the same `getTBSCertificate()`, so the §9.2
   rule holds there too. The bypass remains on JDK 11 through an indefinite `tbsCertificate` header, an indefinite
-  outer AlgorithmIdentifier, the NULL flip and the RSA padding bits.
+  outer AlgorithmIdentifier, the NULL flip and the RSA padding bits. JDK 11, the bytecode target, joins the §9.2
+  version matrix (#20).
 - **Considered and not adopted**: deciding keyability at the query, after the walk. §10 item 8 says why, and when the
   decision reopens.
 
@@ -2959,12 +2960,13 @@ entry count and bytes, stored in the corpus repository, re-seeded each run.
 **Tiers and matrix.** Fuzzing runs on one pinned JDK ≥ 22 (Panama) with oracle 1 of that JDK, one
 Conscrypt uber artifact and 3a/3b/3c in-process, oracle 4 out of process; one ClusterFuzzLite job per generator. The
 **version matrix** is a replay of the union corpus (committed, secondary, divergence): one job per
-(JDK, Conscrypt) pair, with 3a/3b/4 goldens read from the records so the JDK 17 and 21 jobs need no
-native oracle. Versions are named in a committed matrix file (JDK: 17, 21, the current LTS, the
+(JDK, Conscrypt) pair, with 3a/3b/4 goldens read from the records so no matrix job needs a
+native oracle. Versions are named in a committed matrix file (JDK: 11, 17, 21, the current LTS, the
 current feature release; Conscrypt uber: current and previous minor; Android system images by
 revision, with the Conscrypt APEX version logged per run since it is updated out of band) with the
-roll rule "add the new version, keep the old until its support ends". A nightly job replays the
-committed corpus against the newest JDK EA and Conscrypt release and fails on any new D1 violation
+roll rule "add the new version, keep the old until its support ends", except that the bytecode
+target (JDK 11) stays while it is the target. A nightly job replays the committed corpus against the
+newest JDK EA and Conscrypt release and fails on any new D1 violation
 against the recorded baseline. A scheduled **producer job** (weekly, on every change to the producer,
 certificate-transparency-go, zcrypto or Go pin, and before each release) builds oracle 4 at the pin and at
 `mozilla/crlite` `main`, replays D8's gated direction over the union corpus with both, and runs at least 100 000
