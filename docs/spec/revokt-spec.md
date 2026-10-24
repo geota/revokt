@@ -27,7 +27,7 @@ Status: **draft spec / project proposal, revision 34** · Target: JVM 11+ and An
   `tbsCertificate` is signed.
   - The JDK verifies a certificate whose outer `signatureAlgorithm` or `signatureValue` header has a non-minimal
     length, whose outer NULL parameters are flipped, or whose RSA `signatureValue` has a non-zero unused-bits octet.
-    It keeps those bytes through `getEncoded()` (probed on JDK 21 and 27, Appendix A).
+    It keeps those bytes through `getEncoded()` (probed on JDK 17, 21 and 27, Appendix A).
   - revokt marked such a leaf unkeyable. A network attacker holding a revoked certificate's key could therefore turn
     `REVOKED` into a `DEFAULT` allow.
   - The `tbsCertificate` header is unsigned too: the JDK verifies over the TBS after `DerIndefLenConverter`, under a
@@ -50,6 +50,9 @@ Status: **draft spec / project proposal, revision 34** · Target: JVM 11+ and An
     entries;
   - the boundary corpus;
   - D8 in the §9.2 Acceptance list.
+- **JDK 17 probed**: every revision 34 JDK probe was re-run on JDK 17.0.21, 21.0.13 and 27 `SUN`. JDK 17 matches
+  JDK 21 on every input, so the blocker entry above, §9.2 and Appendix A cite JDK 17, 21 and 27. JDK 27 differs
+  only on an indefinite header under a definite parent: it parses every such case and then fails to verify it.
 - **Considered and not adopted**: deciding keyability at the query, after the walk. §10 item 8 says why, and when the
   decision reopens.
 
@@ -2636,7 +2639,7 @@ revokt also accepts optional minutes, second 60 (the first second of the next mi
 **The unsigned headers.** The JDK verifies the signature over `DerValue.toByteArray()` of the TBS: its content under
 a minimal definite header, after `DerIndefLenConverter` has re-encoded every indefinite length reachable from the TBS
 through indefinite elements only. `getEncoded()` keeps the presented bytes. So the `tbsCertificate` header is not
-signed, nor is any header on that indefinite chain (JDK 21 and 27; Appendix A). A non-minimal definite header
+signed, nor is any header on that indefinite chain (JDK 17, 21 and 27; Appendix A). A non-minimal definite header
 inside the TBS, and an indefinite header under a definite parent, break the signature. The parser therefore accepts
 these forms (indefinite lengths only at the first two places and on the indefinite chain below them):
 - the `tbsCertificate` header (`30`) in any definite form, or indefinite;
@@ -3309,8 +3312,9 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
 - MTC: `draft-ietf-plants-merkle-tree-certs` -05; Chrome rollout with Cloudflare since Feb 2026.
 - Mozilla producer keyability, verified 2026-10-22 in `mozilla/crlite` `go/types.go` (package `types`) and `certificate-transparency-go` `asn1/asn1.go`, `x509/x509.go` (master): `ParseCertificate` tries ct-go then zcrypto and keeps whichever returns a certificate; `NewSerialFromCertificate` re-parses `RawTBSCertificate` with stdlib `encoding/asn1` into `{Raw RawContent; Version RawValue "optional,explicit,default:0,tag:0"; SerialNumber RawValue}` and **panics** on failure (so a certificate the re-parse rejects never reaches a filter), keying on `SerialNumber.Bytes`; ct-go's `parseTagAndLength` rejects non-minimal tags, indefinite lengths, superfluous leading length zeros, long-form lengths under 128 and lengths ≥ 2^31 regardless of `lax`; `lax` relaxes `checkInteger` (non-minimal INTEGER content), OID and PrintableString parsing; Go's struct parse ignores trailing SEQUENCE elements; ct-go's SCT-list branch (`asn1.Unmarshal(e.Value, &out.RawSCT)` then `tls.Unmarshal`) reports every error through `NonFatalErrors`, `ParseCertificate` returns the certificate when `ctCert != nil`, and both ct-fetch workers (`rfc6962.go` `storeLogEntry`, `tiled.go`) log "Nonfatal parsing error" and continue to `PrepareSetMember`; zcrypto's only length leniency is `AllowPermissiveParsing`, which crlite never sets.
 - Revision 34 probes, run 2026-10-23 against the oracle-4 binary at `0082998` (the cohort's scripts and outputs are kept
-  with the #11 records). The envelope probes ran on JDK 21 and 27 `SUN`; JDK 17, in the §9.2 matrix, is re-probed by
-  the matrix replay once the D7 entries land:
+  with the #11 records). Every JDK probe below ran on JDK 17.0.21, 21.0.13 and 27 `SUN`. The verdicts and, where
+  recorded, the `getTBSCertificate()` outputs agree across the three, except where noted. The matrix replay
+  re-checks them once the D7 entries land:
   - **Envelope re-encodings**, applied to an RSA and an EC leaf. In each case `generateCertificate` accepts the
     certificate, `getEncoded()` returns the input bytes and `verify(issuerKey)` passes:
     - a non-minimal length on the outer `signatureAlgorithm` header (`30 0a` → `30 81 0a`);
@@ -3325,12 +3329,15 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     inside a definite one. Under an indefinite TBS, an indefinite header on any element whose ancestors up to the TBS
     are all indefinite verifies, primitive ones included (Validity, a subject RDN chain, `[0]`, `[3]` down to an
     `extnValue` as `04 80 … 00 00`), because `DerIndefLenConverter` re-encodes it; a non-minimal definite header
-    there, or anywhere in the TBS, breaks the signature, and so does an indefinite header under a definite parent.
+    there, or anywhere in the TBS, breaks the signature, and so does an indefinite header under a definite parent
+    (JDK 17 and 21 reject some of these in `generateCertificate` and the rest fail `verify`; JDK 27 parses them all
+    and `verify` fails).
     An indefinite outer AlgorithmIdentifier holding a non-minimal OID header (`30 80 06 81 08 … 00 00`) is rejected by
     `generateCertificate` ("Too short"), and one holding `05 81 00` is rejected ("extra data").
-    The re-encoding rule of §9.2 reproduces `getTBSCertificate()` on every input the JDK verifies (JDK 21 and 27). The JDK rejects a constructed or indefinite `signatureValue`, a fourth `Certificate` element
-    and a high-tag signature OID, and normalises the outer `Certificate` header and trailing bytes away in
-    `getEncoded()`. Conscrypt was not probed; BoringSSL parses strict DER.
+    The re-encoding rule of §9.2 reproduces `getTBSCertificate()` on every input the JDK verifies. The JDK rejects a
+    constructed or indefinite `signatureValue`, a fourth `Certificate` element and a high-tag signature OID, and
+    normalises the outer `Certificate` header and trailing bytes away in `getEncoded()`. Conscrypt was not probed;
+    BoringSSL parses strict DER.
 
     Oracle 4 rejects the two header cases ("non-minimal length", "superfluous leading zeros"). The NULL flip is keyed
     through zcrypto only, because ct-go rejects "mismatching signature algorithm identifiers". The JDK re-encodes the
