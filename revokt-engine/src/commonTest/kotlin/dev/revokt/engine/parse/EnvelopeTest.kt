@@ -112,10 +112,63 @@ class EnvelopeTest {
     fun `an indefinite element under a definite parent is a structure error`() {
         val cert = TestCert(validity = indefinite(TestCert().validity))
         assertEquals(ParseReason.STRUCTURE, failed(cert.der).reason)
+    }
+
+    @Test
+    fun `an indefinite signatureValue is delimited by the converter, as JDK 11 reads it`() {
+        // Spec §9.2 revision 35: the content from the unused-bits octet on must read as a chain of minimal TLVs.
+        val content = bytes(0x00, 0x02, 0x01, 0x05) // u = 00 read as a tag, then length 02 and two octets
+        val p = parsed(TestCert(signature = bytes(0x03, 0x80) + content + bytes(0, 0)).der)
+        assertContentEquals(bytes(0x02, 0x01, 0x05), p.envelope.signature)
+        assertContentEquals(parsed(TestCert(signature = tlv(0x03, content)).der).tbsBytes, p.tbsBytes)
+        val nonMinimal = bytes(0x03, 0x80, 0x00, 0x81, 0x02, 0x01, 0x05, 0x00, 0x00)
         assertContains(
-            failed(TestCert(signature = bytes(0x03, 0x80, 0x00, 0x00)).der).detail,
-            "indefinite length for SIGNATURE_VALUE",
+            failed(TestCert(signature = nonMinimal).der).detail,
+            "non-minimal length in indefinite SIGNATURE_VALUE",
         )
+        assertContains(failed(TestCert(signature = bytes(0x03, 0x80, 0x00, 0x05)).der).detail, "SIGNATURE_VALUE")
+    }
+
+    @Test
+    fun `every length bound fails as a structure error, never an exception`() {
+        val cert = TestCert()
+        val open = bytes(0x30, 0x80) + contentOf(cert.tbs)
+        val cases =
+            mapOf(
+                "TBS length over every byte left" to
+                    seq(bytes(0x30, 0x88, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xf0)),
+                "signatureValue one byte longer than left" to
+                    TestCert(signature = tlvWithLength(0x03, bytes(0x0a), bytes(0, 1, 2, 3, 4, 5, 6, 7, 8))).der,
+                "signatureValue length octets cut off" to seq(cert.tbs, cert.outerAlgorithm, bytes(0x03, 0x82, 0x01)),
+                "one byte after an open indefinite TBS" to seq(open + bytes(0x05)),
+                "length octets cut off on the chain" to seq(open + bytes(0x02, 0x82, 0x01)),
+            )
+        for ((name, der) in cases) assertEquals(ParseReason.STRUCTURE, failed(der).reason, name)
+    }
+
+    @Test
+    fun `end-of-contents needs both octets zero, and the step count covers both passes`() {
+        val trailing = TestCert(tbsTrailing = bytes(0x00, 0x01, 0x05))
+        val viaConverter = parsed(withTbs(trailing, indefinite(trailing.tbs)))
+        assertContentEquals(parsed(trailing.der).tbsBytes, viaConverter.tbsBytes)
+        // Two converter passes over the TBS content, then the TBS read on Cert.tbs: pinned as D5 measures it.
+        val cert = TestCert()
+        assertEquals(112, parsed(cert.der).steps)
+        assertEquals(440, parsed(withTbs(cert, indefinite(cert.tbs))).steps)
+    }
+
+    @Test
+    fun `minimal lengths switch form at 128, 256 and 65536 octets`() {
+        val expected =
+            mapOf(
+                127 to bytes(0x7f),
+                128 to bytes(0x81, 0x80),
+                255 to bytes(0x81, 0xff),
+                256 to bytes(0x82, 0x01, 0x00),
+                65_535 to bytes(0x82, 0xff, 0xff),
+                65_536 to bytes(0x83, 0x01, 0x00, 0x00),
+            )
+        for ((n, b) in expected) assertContentEquals(b, minimalLength(n), "$n")
     }
 
     @Test
@@ -134,6 +187,13 @@ class EnvelopeTest {
             "an envelope site's offset indexes the input",
         )
         val sigContent = cert.signature.copyOfRange(2, cert.signature.size)
+        val alg =
+            parsed(
+                TestCert(
+                    outerAlgorithm = tlvWithLength(0x30, bytes(0x81, 0x0a), TestDer.oid("1.2.840.10045.4.3.2")),
+                ).der,
+            )
+        assertEquals(listOf(HeaderSite.SIGNATURE_ALGORITHM), alg.nonMinimalHeaders.map { it.site }, "81 0a is recorded")
         val q = parsed(TestCert(signature = tlvWithLength(0x03, bytes(0x84, 0, 0, 0, sigContent.size), sigContent)).der)
         assertContentEquals(parsed(cert.der).envelope.signature, q.envelope.signature)
         assertEquals(listOf(HeaderSite.SIGNATURE_VALUE), q.nonMinimalHeaders.map { it.site })

@@ -169,7 +169,7 @@ internal object CertificateParser {
         val certificate = top.read(SEQUENCE, HeaderSite.CERTIFICATE)
         top.requireEnd("Certificate")
         val end = certificate.content.end
-        val tbsElement = Envelope.read(der, certificate.content.start, end, SEQUENCE, HeaderSite.TBS, true, ctx)
+        val tbsElement = Envelope.read(der, certificate.content.start, end, SEQUENCE, HeaderSite.TBS, ctx)
         val algorithm =
             Envelope.read(
                 der,
@@ -177,7 +177,6 @@ internal object CertificateParser {
                 end,
                 SEQUENCE,
                 HeaderSite.SIGNATURE_ALGORITHM,
-                true,
                 ctx,
             )
         val signature =
@@ -187,7 +186,6 @@ internal object CertificateParser {
                 end,
                 BIT_STRING,
                 HeaderSite.SIGNATURE_VALUE,
-                false,
                 ctx,
             )
         if (signature.presented.tlv.end !=
@@ -220,7 +218,8 @@ internal object CertificateParser {
     }
 
     /**
-     * `Cert.sig` (spec §9.2): the BIT STRING content after its unused-bits octet u, with the last octet's u low bits
+     * `Cert.sig` (spec §9.2): the BIT STRING content, re-encoded when indefinite (JDK 11 verifies that form), after its
+     * unused-bits octet u, with the last octet's u low bits
      * cleared as `DerValue.getBitString` returns it. The forms the JDK rejects (no octet, u > 7, u > 0 with no further
      * octet) give the octets left with their padding cleared and are harmless: the platform rejects such input first.
      */
