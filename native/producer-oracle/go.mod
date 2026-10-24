@@ -10,7 +10,7 @@ require (
 require (
 	github.com/weppos/publicsuffix-go v0.50.3-0.20260108123922-15eaa75052c0 // indirect
 	github.com/zmap/zcrypto v0.0.0-20260109180747-df961ee46a6c // indirect
-	golang.org/x/crypto v0.58.0 // indirect
-	golang.org/x/net v0.61.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )
