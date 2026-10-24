@@ -180,13 +180,13 @@ class ProducerD8Test {
                     !it.startsWith("#")
             }
         assertEquals(
-            (baseline - lines.toSet()).toSet(),
             emptySet(),
+            (baseline - lines.toSet()).toSet(),
             "entries gone from the gap: re-record the baseline",
         )
         assertEquals(
-            (lines - baseline.toSet()).toSet(),
             emptySet(),
+            (lines - baseline.toSet()).toSet(),
             "new or changed gap entries: justify them and re-record",
         )
         println(

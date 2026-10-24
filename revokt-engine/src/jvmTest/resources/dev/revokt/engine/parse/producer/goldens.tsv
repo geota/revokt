@@ -347,6 +347,7 @@
 3457badc3869f70a1d4885cc0da727ce31be56fabb88633dd85f0581c47c6129	REJECT asn1: structure error: superfluous leading zeros in length
 345bf28525693b8bfc0d6b21527e3a028ba07c81a6897643bebd3100661aacd9	REJECT asn1: structure error: superfluous leading zeros in length
 34844cde202ecf611c3caa115f02ccf6568be8182473af8d103a31f3a215cd18	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
+3530384beb92aa8a79ffc72addc58596346940ce1cb275803f45bf8e3d633113	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
 3533a1e775886c65664e1eaba01d94c26c6824888be7442b58d43f4f601fbf44	REJECT asn1: structure error: superfluous leading zeros in length
 354c936fb9c0b30ddcabc93119057b687da3327c3fcc45bbd1709c6ee71d0deb	REJECT asn1: structure error: Value: superfluous leading zeros in length
 356de7f1ff62293a6653380695793c49d07ddd4610d5c8efd6694a9a9df60899	REJECT asn1: structure error: SerialNumber: superfluous leading zeros in length

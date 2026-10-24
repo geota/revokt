@@ -137,6 +137,8 @@ internal object BoundaryCorpus {
         out += "v1-without-extensions" to base(version = ByteArray(0), extensions = emptyList())
         out += "explicit-v1" to base(version = tlv(0xa0, tlv(0x02, bytes(0))), extensions = emptyList())
         out += "zero-serial" to base(serial = tlv(0x02, bytes(0)))
+        // Unused bits 3 with padding set: Cert.sig clears them, canon keeps them (D2's Cert.sig check).
+        out += "signature-padding-bits" to base(signature = bytes(0x03, 0x03, 0x04, 0x12, 0x3f))
         out +=
             "critical-ff" to base(extensions = listOf(extension("1.3.6.1.4.1.99999.3", ByteArray(0), critical = true)))
         // D8-gap examples the producer keys only through ct-go's lax retry (spec §9.2 D7): outside the profile.
