@@ -1,10 +1,16 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 35** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-24
+Status: **draft spec / project proposal, revision 36** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-24
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 36 (oracle 4's reply carries its parse path, 2026-10-24)
+- **Corrected** (found by the independent review of #30): §9.1's pipe protocol gave oracle 4's reply as
+  `OK <serial-hex> <spki-sha256-hex>`, without the `ct`, `lax` or `zc` path §9.2's oracle table and D8 require. The
+  reply is now `OK <serial-hex> <spki-sha256-hex> <ct|lax|zc>`, and an empty input line is answered `REJECT` so the
+  replies stay one per input.
 
 ### Changes in revision 35 (an indefinite `signatureValue` verifies on JDK 11, 2026-10-24)
 - **Blocker, found by the independent review of #24 (the unsigned-header parser)**: JDK 11.0.32, the bytecode target,
@@ -2568,7 +2574,7 @@ list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput`
 `-Xmx256m -rss_limit_mb=1024 -timeout=10` (the §9.2 parser target overrides with `-timeout=1`); `-max_len` = each target's cap + 1 (filters:
 `MAX_FILTER_BYTES + 1`); allocation budgets in each decoder; differential oracles in-process through
 the `revokt-oracle` Rust cdylib and the Panama shim; the Go producer oracle runs **out of process**
-(the CLI, batched over a pipe: one base64 DER per line in; one line per input out, `OK <serial-hex> <spki-sha256-hex>` or `REJECT <error>`, with `##` terminating a batch, so the Go CLI and the Kotlin driver are written independently) during fuzzing, since a third set of signal handlers beside the JVM's
+(the CLI, batched over a pipe: one base64 DER per line in; one line per input out, `OK <serial-hex> <spki-sha256-hex> <ct|lax|zc>` or `REJECT <error>` (an empty line, the encoding of an empty input, is answered `REJECT`), with `##` terminating a batch, so the Go CLI and the Kotlin driver are written independently) during fuzzing, since a third set of signal handlers beside the JVM's
 and libFuzzer's is not safe in-process. **Tiers**: PR = committed-corpus
 replay as unit tests, JDK only; nightly = ClusterFuzzLite batch matrix, one job per target; OSS-Fuzz
 once the project has users. **Findings**: any exception other than the declared result, any
