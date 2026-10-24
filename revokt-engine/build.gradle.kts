@@ -25,11 +25,9 @@ kotlin {
     }
 }
 
-// The D8 replay's recording hook (native/producer-oracle/record-goldens.sh) passes its output path through.
+// The D8 replay's recording hooks (native/producer-oracle/record-goldens.sh) pass their output paths through.
 tasks.withType<Test>().configureEach {
-    providers
-        .systemProperty(
-            "revokt.writeProducerInputs",
-        ).orNull
-        ?.let { systemProperty("revokt.writeProducerInputs", it) }
+    for (name in listOf("revokt.writeProducerInputs", "revokt.writeGapBaseline")) {
+        providers.systemProperty(name).orNull?.let { systemProperty(name, it) }
+    }
 }

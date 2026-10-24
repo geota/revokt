@@ -111,6 +111,7 @@
 0fc0901cca2bae9e9fdbb02d50d02f1094f7b36672086991b9e897626dc485f0	OK 00872165fc34b6e5fba8add5b3705fb53a b0292ae545978e0fbb98abbd94c861605e5b18bb32ed523f50d5b7b5c71d47bc ct
 0fcbd788640de3f42d6a0242ed9d95a7e297e70f571a6c286784a93434cbc9e0	REJECT asn1: structure error: superfluous leading zeros in length
 0ff277385d48c3049b20b3b9045f8b0641dbdc4b49617fb21cedad71669db6ed	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
+102154fa8b834db570f5aebb9c4050cdbfa555caba60c6283dbfd70b69f1235d	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
 103fd60fa6e15e565ca54259935131e0f668f7a7298d7098eda90ffa208237e4	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 10a258a901d07b989d2fede0e71c97babcdf955cfd89b91d42eb56e3cd4f07b3	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 10d9860e7d9b4901c4ba3e1d68b54600f199fd9a02105fc51f3eafeda8808be1	REJECT asn1: structure error: superfluous leading zeros in length
@@ -200,6 +201,7 @@
 1c739201d9fc9da532adb006de0074314bba54d28e5911821915467aad90a98b	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 1c891401adff2e30e714763839d8a752b584bc09e59c0bcb6d1b601df1ffd977	REJECT asn1: structure error: Type: superfluous leading zeros in length
 1c9dae5b9f16a67c6027c7d01e66e60e8e9c51e419a6da7ab9afedff2b71f8b3	REJECT asn1: structure error: NotAfter: superfluous leading zeros in length
+1cc1ac82fcae1d6a3683056be932660717873133cc91f9b975c0e94a7c573ccb	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
 1d2c9da9619ae0f4cfe4a15fa86ec029c8c30daaf5bc1a14728af3bea51fcda2	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 1d60c2a20e751899389f5800e0fa3334e9d9bf176bd3954a7abe46fbe34217bc	OK 4df3b15dd6c0784c507cd37b58e6f115 b3fb5d00e994cddf2cc9a4eea9f806bc5727e83cc0e4299bf956f2d524fe5376 ct
 1d737977da57247435de20a09885d53422510369ad5693081cc7bddb2013d181	REJECT asn1: structure error: Parameters: superfluous leading zeros in length
@@ -230,12 +232,14 @@
 2111a4e49f5a2a8006136675f41e8e0f8609668c4c84a196452121425839ab11	REJECT asn1: structure error: Type: superfluous leading zeros in length
 2161c86bd8536d4ee7987bab528d76cae17fe91e475a9946ceea412d18a9e01d	REJECT asn1: structure error: Issuer: superfluous leading zeros in length
 2164505d3dd884b9b52004a1c27b18a84e25fbd0366a2c115b4e3f74a5f028ec	REJECT asn1: structure error: superfluous leading zeros in length
+21ef46f07d1b166dfe7113be9254426fbcedfc6ba16730303af3538a492a00a3	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 lax
 21f688dcfbba1a27e7eb3a2ee48f83c756c1f3a022ccdce562844859188f8337	OK 1a9eafec6de8e19b5c193141b68d90dd b0b56335468561f5bb9fa12d801784a633a572705d34f32b643445dfa8b005d1 zc
 2232c8c91196b8daa5835027f58086dd144a4d7adf7a01a669da8b4b7a13b578	REJECT asn1: structure error: PublicKey: superfluous leading zeros in length
 223b71bb7702565349b7c543356375dd226a5276ee148a13bee5baf1746654c1	REJECT x509: invalid NameConstraints extension
 224dea90ee5672fa95a48954e8ec0fa21d6c3b648edae2420a941dc1b9603326	REJECT asn1: structure error: superfluous leading zeros in length
 2277499cf3f2925c3e018b0c7ba12fb768164b01357075fd1ff7fc67f37c3f5b	REJECT asn1: structure error: FullName: superfluous leading zeros in length
 22a74276609649e4e152e7460d4e4c959ded3c3057284a0ea29bda89874acace	REJECT asn1: structure error: Parameters: superfluous leading zeros in length
+22b548f98d10140264fd2b7f2eceba699d34ce1262d4dc4f679ec4bb12fa65ae	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
 22bb1e1df37638c6cf1c86377b164c8b26244b09f77b2874d0aee05335d0f6a7	REJECT asn1: structure error: Type: superfluous leading zeros in length
 2306ef6a0aee9afef0e296143c9cc80a968f248491fa7d9028930505fb06efe1	REJECT asn1: structure error: Type: superfluous leading zeros in length
 23b0cb473b9bbbe1600d23270e2297d6724e8d2f4cd0854821ee825b1524845e	REJECT asn1: structure error: superfluous leading zeros in length
@@ -338,6 +342,7 @@
 332ab85ed6b4594adc489273cf1ef8613583ce853644ac051c04d7e9c66f9347	REJECT asn1: structure error: superfluous leading zeros in length
 339761a0b0c52f86c96881ed18736f4b0bc7335ec403d0037bec656949278395	REJECT asn1: structure error: superfluous leading zeros in length
 33e96ddf4bd0fcea1145736b65579eba360431cb7140e1acc9065b440ede26ad	REJECT asn1: structure error: Value: superfluous leading zeros in length
+33fa3dcea4a87483c0b1987a03407a255b27a93659335b36ae431621ffcf9761	REJECT x509: failed to unmarshal elliptic curve point
 345442775f9065cca45183afa79942ada826fa1927f39cc972f86c2e8ca25ea4	OK 4df3b15dd6c0784c507cd37b58e6f115 b3fb5d00e994cddf2cc9a4eea9f806bc5727e83cc0e4299bf956f2d524fe5376 ct
 3457badc3869f70a1d4885cc0da727ce31be56fabb88633dd85f0581c47c6129	REJECT asn1: structure error: superfluous leading zeros in length
 345bf28525693b8bfc0d6b21527e3a028ba07c81a6897643bebd3100661aacd9	REJECT asn1: structure error: superfluous leading zeros in length
@@ -352,6 +357,7 @@
 3656b28889dfd84a3e7f7c667b39ea7dee3bfc6765089fe6c36420fe47c24fa3	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 3672154c82657ae751d961d049f1ee4e3369b932f243178a644c03f516a36ad2	REJECT asn1: structure error: superfluous leading zeros in length
 36972e4fc0f13f584da2f48367089475489666e099bd0da5b2f8f74e11ad6d79	REJECT asn1: structure error: UniqueId: superfluous leading zeros in length
+36c37c8770db5469c5a33cf483613655df5b2d82759ed340f6f32a41906a3b68	REJECT x509: failed to unmarshal elliptic curve point
 36cd199c529f02d113ca0e82315ff252b14c6c0bb33830e16f0afdeb9421d61b	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 36df07aa83d2bf3df54c72ea1030af6a9d68807b51a243a28004841ff43f169b	REJECT asn1: structure error: Type: superfluous leading zeros in length
 36ebc6d909237974f01c900e789df8fddc6b572205e497cc5ea0981edef76db4	REJECT asn1: structure error: superfluous leading zeros in length
@@ -417,6 +423,7 @@
 40bd77d4652a59d3d4b69197c0e088d50dddf1f9e972aa73db022df9b3a56ffc	REJECT asn1: structure error: Value: superfluous leading zeros in length
 40be2aa7a5d985d9160112076df14fbfd42fffd1eca7c9920b6c2be06550dacd	OK 0590f778e5ef7c2dae6a8135bdc04ef77b4a 242de3a046ceafa562cc7e94a539624f06dd5135154494e9bd0e6288bc29ba42 ct
 40de01e7fc1d2ddd0386e7224569acffba26885a8543c4d9b7331d22d2628447	REJECT asn1: structure error: Critical: superfluous leading zeros in length
+4114dc944ab86a14b15a7c51a078596b423445987f8a2581e3a83e9bb5760860	REJECT x509: failed to unmarshal elliptic curve point
 413c6449ef64df67d9ebaa86e98013a6393915e99e91c8ad005602804eefe0b5	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
 41d5c8d1a4bf8293b5de6b2a3414df64a8e7b76a62f8d3fc5c9b556c77eaf592	REJECT asn1: structure error: Policy: superfluous leading zeros in length
 42a300d2095c67289455fdbda089d3a384c6d1875509ef9aa5f539a31f3a63ac	REJECT asn1: structure error: Value: superfluous leading zeros in length
@@ -506,6 +513,7 @@
 5092402c969d43607dc91fba9f99d096c7d2138d2ba66e4f4d4530fbb4b81a7f	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 50a4e94fe9353a508c489f2387a2ca601ee4cde9cd762375d601697b7acc0657	REJECT asn1: structure error: superfluous leading zeros in length
 50cb66d2e5878e478fe1ed50b8a512d90536219d38b49e045a7776a5363a023c	REJECT asn1: structure error: Critical: superfluous leading zeros in length
+50ef8b7c8c3bbdc2225bc6d425eb2f7d214fccbb652181694230722cd0b8c82e	REJECT x509: failed to unmarshal elliptic curve point
 50f1baa899ea8a60ba9dfc3a5ae9c29ef45875d4610dfa67856684b7c6644ff2	OK 4df3b15dd6c0784c507cd37b58e6f115 b3fb5d00e994cddf2cc9a4eea9f806bc5727e83cc0e4299bf956f2d524fe5376 zc
 50f784ac4010e6d5d9dba21ed1d219e682fedb51b8ab8c1b1a5e49721d8383df	REJECT asn1: structure error: Algorithm: superfluous leading zeros in length
 51071527fd21cda25b97e355df435589a4a35ad40a9395322307b786713b0aa0	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
@@ -606,6 +614,7 @@
 5ff99741f619143dec8833f921e20da4b0daaede5965adf4f3866a0f63fb6d9d	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 6031e4d863ea0c9ea6a3d2f0c2ce71da52dfed7365ca0caa9f281db9fe4604e9	REJECT asn1: structure error: UniqueId: superfluous leading zeros in length
 603fa87fda8251949e2c8ac87ed54a752adbb5d3f2f6bf503909b39da62fc788	REJECT asn1: structure error: Type: superfluous leading zeros in length
+603fafa3ba40436280c4195f3618501dc9407cc95e90a28cbb61f5ae82c34f7b	REJECT x509: failed to unmarshal elliptic curve point
 60de5a614d5fd34648079b9d92ab823bf9ce63905c1165a1aae1071c96ecc76e	REJECT asn1: structure error: Policy: superfluous leading zeros in length
 60f7d1bfd5ad0832093e22a8a3cb856d16b1c16fe40279837e6d13d68f65a008	REJECT asn1: structure error: superfluous leading zeros in length
 61152c60c634584d89615c0ca9a5f806aad7003c31efbc9e89fdc151a214643e	REJECT asn1: structure error: superfluous leading zeros in length
@@ -637,6 +646,7 @@
 64e955573c9b1791ed7affb7de4ad3604e0b4e0aa83e14a791bf59398213f657	REJECT asn1: structure error: superfluous leading zeros in length
 6540b025404a86f5c0b7fd219243d27a6947af65e7e3fc9d0617929f7c4385ae	REJECT asn1: structure error: Value: superfluous leading zeros in length
 65633ecb500bc1b93f39794043b79daade0b159c94a207baaf4a6a09e10ce5be	REJECT asn1: structure error: Id: superfluous leading zeros in length
+658f4e5aa0e7b09f8bfb85a022c49ca957d9349ed8c9cc14fdbae6785145dc58	OK 000f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 lax
 659fc3ed4f8d353d3c943fe225bf62a849e748ffb69095fca8d529ea93631fa6	OK 1729108740 aa735d0b9a372af43fa286b23034603991d82bb07052b43bb9f7f966641d226c ct
 65f8746d82f6952205f71d2f66584410403e07c76e6c8ec31714c153ea7bbea9	OK 008f1234 613c3f60a904b4da6fa8d5959a45afb52e65a661723b8e3968f78e276120b50f ct
 664c219a4db075c4733e1c7889339a0bf7373fd1df8d98d8095ac55e2d9dcbeb	REJECT asn1: structure error: PublicKey: superfluous leading zeros in length
@@ -772,6 +782,7 @@
 7acdea79d64bb0a744115878983b61fcef5e2f4037374d6a4788939b4d7447e8	REJECT asn1: structure error: NotBefore: superfluous leading zeros in length
 7af697bf0bee6392726cfdf85c09537f9d04d8ea446a02c753dafb78aac22c03	REJECT asn1: structure error: UniqueId: superfluous leading zeros in length
 7b15570725d94568775aa1393e7e69419d6909da9ab1389dd69ca18732e22e52	REJECT asn1: structure error: superfluous leading zeros in length
+7b2555de73ae35a8c61305678752639ac377e1deea0f6ec6663a242606e1fda7	REJECT x509: failed to unmarshal elliptic curve point
 7b841e32232cc34cac7909ddbdd6ce1af9e9473ea15bfcbbeac272a8fec9c452	REJECT asn1: structure error: Version: superfluous leading zeros in length
 7bc409d0085b4e38de7c9d6de1e78fe69efd699020c601de45e7cb8e2331c56e	REJECT asn1: structure error: Id: superfluous leading zeros in length
 7bcfa757a3276c71210349715a2143d6b6fd35791da6c3381aac9e35f8d99f23	REJECT asn1: structure error: Policy: superfluous leading zeros in length
@@ -783,6 +794,7 @@
 7cc3886dd2e776f142d59f33f4241cfc0e3522819a2012ccccee54eead7eae50	OK 008f1234 242de3a046ceafa562cc7e94a539624f06dd5135154494e9bd0e6288bc29ba42 ct
 7cc81cd71938925548e09ea10cff6cee3548580dfa6cb2812446b1676b36e5e6	REJECT asn1: structure error: superfluous leading zeros in length
 7cd2a957a824333bade0021314fff5447ce509a27c430796e7eb40af4cc49aa5	REJECT x509: failed to unmarshal elliptic curve point
+7ce1f53fdbe467b21f66a957d59ca88f0fa4e58f74dc04330b04aad3d4feee7b	REJECT x509: failed to unmarshal elliptic curve point
 7ce324db2565156c27851d080910faad48284c764a2190f9e50f5514e50a0734	REJECT asn1: structure error: Version: superfluous leading zeros in length
 7cf5cb5526a26fb2171ba61524ccd60fd88a3d8ccac75c013673d6d02e9f8df7	REJECT asn1: structure error: Type: superfluous leading zeros in length
 7d1fe532c44581c0839807baa12c9d323af3da3420d89580994a42611faad808	REJECT asn1: structure error: Version: superfluous leading zeros in length
@@ -846,6 +858,7 @@
 86174fbb87b21850e75e5b866197d0c41e58babfc2a3217f22d626dfe155ceca	REJECT asn1: structure error: Value: superfluous leading zeros in length
 8623f1e09057fa9e117fda927f286f1bfb3ae2f2be64100a099d09681233f75e	REJECT asn1: structure error: Value: superfluous leading zeros in length
 863b6d06a6b4526427c63f46527829bece3c5f5222160fac3c37e1e4d8ea8079	REJECT asn1: structure error: Algorithm: superfluous leading zeros in length
+86a08ebebfa45049a0da61aa01150aad106975f24952962f97097384fb39806e	REJECT x509: failed to unmarshal elliptic curve point
 86d7879e69e6216f37b7662b8b5b01000eb27211aece513738b947930b048b0a	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 86d8f063d38533e6078279a37f77c9b1527f1b57018f27b6e6207e151823993a	REJECT asn1: structure error: PublicKey: superfluous leading zeros in length
 86fa996b7d45cc680b9d32300c4f3e32786930be805e42f3689be0e782141a95	REJECT asn1: structure error: superfluous leading zeros in length
@@ -881,6 +894,7 @@
 8d055bf516248f4970703db97e3dc2649219415281dce3b246206ead0d12eb59	REJECT asn1: structure error: superfluous leading zeros in length
 8d2062f93da7e0156ecda8f68c8988ecf01e8de8b2ed23ee46b26fd342a88080	REJECT asn1: structure error: Value: superfluous leading zeros in length
 8d3629180d3d95b011056b52b407bbd0e8c3f9d54c3b3f4fb5e642aeabb63be3	REJECT asn1: structure error: superfluous leading zeros in length
+8d4bf863b47bf1e55f68d2f9ab4860d4628310a9e121e2e557a000e7710312d9	REJECT x509: failed to unmarshal elliptic curve point
 8d934a366bfd5037c4d3a035d51a43442ad9c6ffb829df3307ac5c17c83bd001	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 8df0c008dc5abb7ec9243c82f672380c245e19ec262af41b7fea781dd20defdf	REJECT asn1: structure error: Id: superfluous leading zeros in length
 8e065208b920ae3f62f1f7b8478307f5f9acae0757c32cc2fa07a46b1e392cc8	REJECT asn1: structure error: Critical: superfluous leading zeros in length
@@ -932,12 +946,14 @@
 96489eb4988d7ae0b94f5235c4b8db4f45c85aaf31668c2e7682b0966048b930	REJECT asn1: structure error: Location: superfluous leading zeros in length
 964e67fe2df4492458678b50aa96acb95d4262bf1984ba231907a02f83db3194	REJECT asn1: structure error: superfluous leading zeros in length
 9656f79279ba98f4ab2e5494d8d20e450a9d6fb8978b3f40602b82b30c626e6e	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
+9662efaa257f0e81882ab79bf36ef01af4e1560be75313d810da626593279540	REJECT x509: failed to unmarshal elliptic curve point
 96889e5490a8f5e3f67c747094d392a552b369f7cfa3acdc30a06447180450ca	REJECT asn1: structure error: superfluous leading zeros in length
 968d8bb427084208a44245e62f4c5ba70076bdbf7ffa6106de5736e478e79668	REJECT asn1: structure error: FullName: superfluous leading zeros in length
 96a2a9db7e54b415e079b5832f71349e76df52a7b926d59d3218850631adf0d5	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 96c406b3f967ca9fa97437ec17d0dbe88e51c0a501dba09f74326909fee6c1b8	REJECT asn1: structure error: Parameters: superfluous leading zeros in length
 96de8ba222f1125fdc5551d4f02a8e2e1b22b79b5e88e06dc6debcad508bbf53	REJECT asn1: structure error: superfluous leading zeros in length
 96ebffc9981e3e40b510568e033d8a422c5aa84286077853df80bd80bc43c259	REJECT asn1: structure error: Critical: superfluous leading zeros in length
+9743be7ab7372722b00178242be172e42890cebaf1842fa31c2a88e3ab9da924	REJECT x509: failed to unmarshal elliptic curve point
 97658de8c68dfa98ace1e5028a63d54a1aae911b3e21471076c6850cd08cbab4	OK 4df3b15dd6c0784c507cd37b58e6f115 b3fb5d00e994cddf2cc9a4eea9f806bc5727e83cc0e4299bf956f2d524fe5376 ct
 97879de50f2297442e84c842b6173c8cc11dc1b1f970c15a322ba048db497f94	REJECT asn1: structure error: E: superfluous leading zeros in length
 97afbe57cc6dd274dbbc77666cc5ddecc539162808b697fca3d772efdb7b614e	REJECT asn1: structure error: Type: superfluous leading zeros in length
@@ -1103,6 +1119,7 @@ b43fcbf07c5e3036b46b7024a41d0ad15d6f59f1d55b3b86137c9d1acd70cb41	REJECT asn1: st
 b49bb936b167c3cac846dd1910a9116d77d4e18333f468c8576f9d2701b1402e	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 b4aca0c68be722e76cfa778c8ced47ad4603df96cd7b041cc8f9068c9b12865f	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 b504a50f07c2ce0fa1ffbe88babb25638884b9a912c74afd0d960ffb65a61127	REJECT asn1: structure error: FullName: superfluous leading zeros in length
+b51741a33d81aaef91d1450501d67ef922ad7df06b3ee4b4ceb57dd1cf841cea	REJECT x509: failed to unmarshal elliptic curve point
 b58459e7737756c71dc3cd4518b42397ac4a1cf967cf638c345b16dbb530f5ab	REJECT asn1: structure error: superfluous leading zeros in length
 b58f5f6abb465ae4452b39191fcaf264800685599c79d656e71aab0436774ace	REJECT asn1: structure error: superfluous leading zeros in length
 b5d0179e6728a39688a2049fe6f501851254848b10d3d172067875f2eeddef56	REJECT asn1: structure error: Algorithm: superfluous leading zeros in length
@@ -1186,6 +1203,7 @@ c2177d6ecc91d12b4bd35c87af7f537e20086a60f2dfcc4ec880ae31e0eb52dc	REJECT asn1: st
 c238033e882bc4410ef84b6a90f9c978f377ed7a192cdca8ac905df8535a194d	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
 c24436c0e62cc8cacf32f29dbeb03b92121fbf9b30c71e0f6b7e41d202554550	REJECT asn1: structure error: Type: superfluous leading zeros in length
 c257012a601af178d717fc13fae9f3efc4bb8f3bec6f004bec1303328cb6469e	REJECT asn1: structure error: Version: superfluous leading zeros in length
+c25e2f95042e31c865f83c4fd4f65acaf58888c066960fa881a0ec654e53d8c6	OK 00 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
 c261bb0d3b8b72fab3eba12d2254281720ffc9e858e273f0898bad5b040d8756	REJECT asn1: structure error: Version: superfluous leading zeros in length
 c285f1bc74b1eb7d3061296fc6d76f88f67e74c947a5f2ac2c176204a91fc67e	REJECT asn1: structure error: Value: superfluous leading zeros in length
 c31212d394e43977dae82fe0284cbf7b01e2abe3334b731b4c0476fa729c6e60	REJECT asn1: structure error: Id: superfluous leading zeros in length
@@ -1461,6 +1479,7 @@ ee0501d76928a1fe4ed7ebc33b8088b5639c2580e2cb4919ca61c4a22ab13de4	REJECT asn1: st
 ee38a6cb9d24afcc1d618bc3c977c2a080fe79bcddc4090a2821d49eb8ed0ccc	REJECT asn1: structure error: Id: superfluous leading zeros in length
 ee57739c5eca6a533467f5927612adbfc73ace5e8db27b01a89449feba5a5fbd	REJECT asn1: structure error: Type: superfluous leading zeros in length
 ee5f7abd6981bb0255632cd8f49283451b4b18844d12040b44ee00f07b8fe2c6	OK 6c8f1dc727c7117f7baf853ac980f9cd 762195c225586ee6c0237456e2107dc54f1efc21f61a792ebd515913cce68332 ct
+ee7df7982e59fa1c4dacef910e6079064fda196c4b0b6b349c38c65683cc88ff	REJECT x509: failed to unmarshal elliptic curve point
 ee974739aa56c3ac7d95bc484b1f94319fe0cda1579ed7f7253e0f764ebbf3e4	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 ef1cbe787146dc3af6f4d08f47e6ddcff3135ed3bdba2ffa1f1a1450e7ebbe45	REJECT asn1: structure error: NotAfter: superfluous leading zeros in length
 ef2b05a6474d1748cc7c56900d4f98802b952fd5c84d612aee0c768972e511b5	REJECT asn1: structure error: superfluous leading zeros in length
@@ -1546,6 +1565,7 @@ f9c310220a4d3cd65a40eea7ccbec9843747062181ca48bf0d60582251e780cc	REJECT asn1: st
 f9d3044f63cb01259bca4f9426a2bfc8b56cd4d2495f11e780b9acd0bc11d271	REJECT asn1: structure error: superfluous leading zeros in length
 fa33e031dce340adc6f80e21945157fce1e4359b8be5da1333badc331696e863	REJECT asn1: structure error: superfluous leading zeros in length
 fa5aebbabc729612787b760d210ca60d3f51d30a1c0917840a7f2981454904c7	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
+fa66e08550ecaf7e478a6eee09e93ee9e580d16564f2cd3eb1cfbf1f76781431	REJECT x509: failed to unmarshal elliptic curve point
 fa945ec2fc13dde106879b5c2157442af093a5634601aebe87efa05716073dd5	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 fa9d99de803d4eb6407f6cc90006610a67c5abce3a68bd023beeeca360fd9631	REJECT asn1: structure error: FullName: superfluous leading zeros in length
 facef1ea70fb442a0552ef714a96440bf75ad8b39daa06e1f99cdbfd5e2b3db0	REJECT asn1: structure error: Value: superfluous leading zeros in length
