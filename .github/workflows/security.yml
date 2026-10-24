@@ -68,8 +68,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: licence waivers (CONTRIBUTING §7)
+        env:
+          WAIVER_UNTIL: "2027-04-30"
+        run: |
+          echo "Licence check waived for pkg:golang/golang.org/x/net and pkg:golang/golang.org/x/text until ${WAIVER_UNTIL} (#33)." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(date -u +%F)" \> "${WAIVER_UNTIL}" ]; then
+            echo "::error::the licence waiver of #33 expired on ${WAIVER_UNTIL}: renew it with a reason or remove it"
+            exit 1
+          fi
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: moderate
           allow-licenses: Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, EPL-1.0, EPL-2.0, CC0-1.0, Unicode-DFS-2016, Unicode-3.0, Zlib, BSL-1.0
+          # Licence waiver (CONTRIBUTING §7, #33): the test-only producer oracle (native/producer-oracle, never linked or
+          # published) needs these Go modules, detected as BSD-3-Clause plus Google's standard Go PATENTS grant. Only
+          # their licence check is waived, repo-wide and for any version; the vulnerability check still applies. It
+          # expires on the previous step's WAIVER_UNTIL; remove it with the oracle.
+          allow-dependencies-licenses: pkg:golang/golang.org/x/net, pkg:golang/golang.org/x/text
           comment-summary-in-pr: on-failure
