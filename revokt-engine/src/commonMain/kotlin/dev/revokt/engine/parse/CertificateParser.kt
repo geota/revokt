@@ -27,7 +27,7 @@ internal class Validity(
  * The fields of `tbsCertificate` the engine reads (spec §5.5, §9.2 "Parser contract"). Spans index
  * [ParsedCertificate.tbsBytes], the re-encoded TBS: [serial] is the INTEGER content as encoded (sign and leading zeros
  * preserved, the producer's `RawValue.Bytes`); [signature], [issuer], [subject] and [spki] are complete TLVs. [version]
- * is null when the `[0]` element is absent.
+ * is null when the `[0]` element is absent. [tail] is what was read after the SPKI.
  */
 internal class Tbs(
     val tlv: Span,
@@ -38,7 +38,19 @@ internal class Tbs(
     val validity: Validity,
     val subject: Span,
     val spki: Span,
+    val tail: Tail,
+) {
+    val extensions: List<Extension> get() = tail.extensions
+}
+
+/**
+ * What the TBS tail held: the extensions, whether a unique id was read, and the `[3]` element if it was read (the
+ * keyability profile's K2 reads both).
+ */
+internal class Tail(
     val extensions: List<Extension>,
+    val uniqueIds: Boolean,
+    val wrapper: Span?,
 )
 
 /**
@@ -239,7 +251,7 @@ internal object CertificateParser {
         val validity = parseValidity(der, r.child(r.read(SEQUENCE, HeaderSite.VALIDITY)), ctx)
         val subject = r.read(SEQUENCE, HeaderSite.SUBJECT)
         val spki = r.read(SEQUENCE, HeaderSite.SPKI)
-        val extensions = parseTail(der, r, ctx)
+        val tail = parseTail(der, r, ctx)
         return Tbs(
             tlv.tlv,
             version,
@@ -249,7 +261,7 @@ internal object CertificateParser {
             validity,
             subject.tlv,
             spki.tlv,
-            extensions.orEmpty(),
+            tail,
         )
     }
 
@@ -287,27 +299,31 @@ internal object CertificateParser {
         der: ByteArray,
         r: DerReader,
         ctx: ParseContext,
-    ): List<Extension> {
+    ): Tail {
         var tag = r.peekTag()
+        var uniqueIds = false
         if (tag and CONSTRUCTED.inv() == ISSUER_UID) {
             r.readAny(HeaderSite.ISSUER_UID)
+            uniqueIds = true
             tag = r.peekTag()
         }
         if (tag and CONSTRUCTED.inv() == SUBJECT_UID) {
             r.readAny(HeaderSite.SUBJECT_UID)
+            uniqueIds = true
             tag = r.peekTag()
         }
         if (tag == EXTENSIONS) {
-            val extensions = parseExtensions(der, r.child(r.readAny(HeaderSite.EXTENSIONS_WRAPPER)), ctx)
+            val wrapper = r.readAny(HeaderSite.EXTENSIONS_WRAPPER)
+            val extensions = parseExtensions(der, r.child(wrapper), ctx)
             r.ignoreRest(IgnoredSite.TBS_AFTER_EXTENSIONS)
-            return extensions
+            return Tail(extensions, uniqueIds, wrapper.tlv)
         }
         if (r.hasMore()) {
             val stop = r.readAny(HeaderSite.TBS_STOP)
             ctx.ignored.add(IgnoredElement(stop.tlv, IgnoredSite.TBS_AFTER_STOP))
             r.ignoreRest(IgnoredSite.TBS_AFTER_STOP)
         }
-        return emptyList()
+        return Tail(emptyList(), uniqueIds, null)
     }
 
     /** Spec §9.2: the SCT pairs are the union over every SCT-list extension of the items its list keeps. */
