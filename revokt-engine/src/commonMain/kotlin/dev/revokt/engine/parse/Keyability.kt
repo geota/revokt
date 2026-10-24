@@ -8,15 +8,16 @@ import dev.revokt.KeyabilityClause
 /**
  * The conservative keyability profile of spec §9.2 (revision 34), read on `Cert.tbs` alone: true only when every clause
  * K1–K8 holds. It is not a model of the producer; a leaf outside it is never queried even when the producer keys it
- * (the D8 gap). Evaluated for the leaf only. K1–K4 are here; K5–K7, and a K8 that accepts no extension ct-go parses
- * fatally and requires every critical flag `00` or `FF`, land with #25, and K8's grammars with #28. Until then no
- * certificate passes K5. The SPKI's own shape is K7's; K2 and K4 read only its algorithm and BIT STRING.
+ * (the D8 gap). Evaluated for the leaf only. K8 accepts no extension that ct-go parses fatally, and requires every
+ * critical flag `00` or `FF`, until its grammars land (#28). The SPKI's own shape is K7's; K2 and K4 read only its
+ * algorithm and BIT STRING.
  */
 internal object Keyability {
     private const val SEQUENCE = 0x30
     private const val SET = 0x31
     private const val OBJECT_IDENTIFIER = 0x06
     private const val BIT_STRING = 0x03
+    private const val BOOLEAN = 0x01
     private const val OCTET_STRING = 0x04
     private const val CONSTRUCTED = 0x20
     private const val OID_ARC_LIMIT = 1L shl 31
@@ -45,7 +46,11 @@ internal object Keyability {
             !shape(c) -> KeyabilityClause.TBS_SHAPE
             !minimalInteger(c.tbsBytes, c.tbs.serial) -> KeyabilityClause.INTEGER
             !oids(c) -> KeyabilityClause.OID
-            else -> KeyabilityClause.NAME // K5 onward: #25
+            !names(c) -> KeyabilityClause.NAME
+            !times(c) -> KeyabilityClause.TIME
+            !KeyabilityKey.keyable(c.tbsBytes, c.tbs.spki) -> KeyabilityClause.KEY
+            !extensions(c) -> KeyabilityClause.EXTENSION
+            else -> null
         }
 
     /**
@@ -109,6 +114,37 @@ internal object Keyability {
                 c.tbs.extensions.map { it.oid }
         return spans.all { minimalOid(b, it) }
     }
+
+    /** K5: each attribute value is a PrintableString in Go's set, valid UTF-8 or an ASCII IA5String. */
+    private fun names(c: ParsedCertificate): Boolean {
+        val b = c.tbsBytes
+        val values = attributes(b, c.tbs.issuer).orEmpty() + attributes(b, c.tbs.subject).orEmpty()
+        return values.all { (_, v) -> DirectoryStrings.valid(v.tag, b, v.content) }
+    }
+
+    /** K6: both times in the profile's exact form. */
+    private fun times(c: ParsedCertificate): Boolean =
+        derOk {
+            val v = c.tbs.validity
+            listOf(v.notBefore, v.notAfter).all { span ->
+                val t = DerReader(c.tbsBytes, span.start, span.end, ParseContext()).readAny(HeaderSite.NOT_BEFORE)
+                ProfileTime.valid(t.tag, c.tbsBytes, t.content)
+            }
+        }
+
+    /** K8, until #28: no extension on K8's list, and every critical flag `00` or `FF`. */
+    private fun extensions(c: ParsedCertificate): Boolean =
+        derOk {
+            val b = c.tbsBytes
+            c.tbs.extensions.all { e ->
+                val r = DerReader(b, e.tlv.start, e.tlv.end, ParseContext())
+                val fields = r.child(r.read(SEQUENCE, HeaderSite.EXTENSION))
+                fields.read(OBJECT_IDENTIFIER, HeaderSite.EXTENSION_OID)
+                val flag = fields.readOptional(BOOLEAN, HeaderSite.EXTENSION_CRITICAL)?.content
+                val flagOk = flag == null || (flag.length == 1 && b[flag.start].toInt() and 0xff in setOf(0x00, 0xff))
+                flagOk && FATAL_EXTENSIONS.none { Oid.matches(b, e.oid, it) }
+            }
+        }
 
     /** The OID content and the optional parameters of the `AlgorithmIdentifier` at [span], or null for another shape. */
     fun algorithm(
