@@ -103,7 +103,8 @@ class KeyabilityJdkTest {
                 x: BigInteger,
                 y: BigInteger,
             ) {
-                if (x.bitLength() > n * 8 || y.bitLength() > n * 8 || x.signum() < 0 || y.signum() < 0) return
+                if (x.signum() < 0 || y.signum() < 0) return
+                if (x.bitLength() > n * 8 || y.bitLength() > n * 8) return
                 assertEquals(expected(x, y), curve.onCurve(fixed(x, n), fixed(y, n)), "$name x=$x y=$y")
             }
             var on = 0
