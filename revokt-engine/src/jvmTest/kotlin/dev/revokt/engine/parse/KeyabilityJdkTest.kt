@@ -153,7 +153,7 @@ class KeyabilityJdkTest {
     }
 
     @Test
-    fun `the committed real certificates are inside the profile through K7`() {
+    fun `the committed real end-entity certificates are inside the profile`() {
         val names =
             listOf("github.com", "letsencrypt.org", "www.google.com", "www.mozilla.org").flatMap { site ->
                 (1..3).map { "$site-$it" }
@@ -164,14 +164,24 @@ class KeyabilityJdkTest {
                     "mozilla-content-signing-c1",
                     "mozilla-content-signing-c2",
                 )
-        for (name in names) {
-            val der =
-                checkNotNull(
-                    javaClass.getResourceAsStream("certs/$name.der"),
-                ) { "missing $name" }.use { it.readBytes() }
-            val p = (CertificateParser.parse(der) as CertificateParse.Parsed).certificate
-            // Every one carries extensions K8 lists, so until #28 the first failing clause is K8 and nothing earlier.
-            assertEquals(KeyabilityClause.EXTENSION, Keyability.firstFailing(p), name)
+        val clauses =
+            names.associateWith { name ->
+                val der =
+                    checkNotNull(
+                        javaClass.getResourceAsStream("certs/$name.der"),
+                    ) { "missing $name" }.use { it.readBytes() }
+                Keyability.firstFailing((CertificateParser.parse(der) as CertificateParse.Parsed).certificate)
+            }
+        println("keyability of the committed real certificates: $clauses")
+        // The D8 gap is zero on the real end-entity fixtures (spec §9.2); the profile is a leaf predicate.
+        for (leaf in listOf(
+            "github.com-1",
+            "letsencrypt.org-1",
+            "www.google.com-1",
+            "www.mozilla.org-1",
+            "mozilla-content-signing-c0",
+        )) {
+            assertEquals(null, clauses[leaf], leaf)
         }
     }
 }

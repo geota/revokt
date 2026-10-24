@@ -13,7 +13,7 @@ import dev.revokt.engine.parse.TestDer.tlv
 import dev.revokt.engine.parse.TestDer.tlvWithLength
 
 /**
- * The boundary corpus of spec §9.2 D8 (revision 35), K1–K7 edges: synthetic leaves at each clause's edge, accept side
+ * The boundary corpus of spec §9.2 D8 (revision 35), K1–K8 edges: synthetic leaves at each clause's edge, accept side
  * unless named `reject-`. Every input is deterministic; the oracle-4 verdicts are recorded in `producer/goldens.tsv`.
  * The real-certificate entries (the unsigned-header forms) are in [ProducerCorpus].
  */
@@ -160,6 +160,10 @@ internal object BoundaryCorpus {
             out += "reject-ec-point-$i-flipped" to
                 base(spki = seq(seq(ecPublicKey, oid(curve)), tlv(0x03, bytes(0, 0x04), hex(x), flipped)))
         }
+        out += "reject-key-usage-03-00" to base(extensions = listOf(extension("2.5.29.15", tlv(0x03))))
+        out +=
+            "reject-key-usage-03-01-05" to
+            base(extensions = listOf(extension("2.5.29.15", tlv(0x03, bytes(0x01, 0x05)))))
         out +=
             "reject-rsa-key-header-non-minimal" to
             base(spki = rsa(rsaModulus, bytes(0x01, 0x00, 0x01), nonMinimalKeyHeader = true))

@@ -179,6 +179,7 @@
 19a405efcf76c593153fe5792e0801056760ca7ace984fe47ca029053de47832	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 19aca0a29ca0f63388446f0889bf9e8c0166f8ace0a409a9578f5709f72c675c	REJECT asn1: structure error: Type: superfluous leading zeros in length
 19b720f360d5b631c5df862c8b48ea4b0311ffd9b1e4f28bae4b2bf26c42be24	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
+19cea28460a6f98dac352c28ef5910cce36998c26d727b41ea22682715020d37	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 zc
 1a0048b32103d640866c517e88a899565b7784ebdf87fce3b59fec68ccbd460a	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 1a073da3169c21d11369e9d3c244f426ae5a1b35e7408dd7c43daeda29e457d9	REJECT asn1: structure error: superfluous leading zeros in length
 1a5efd2ea755e5c157cf292fdfa1647af2809fe8531040e715cb64ca39a495c8	REJECT asn1: structure error: superfluous leading zeros in length
@@ -798,6 +799,7 @@
 7fc2c2d7c95b6fc12d01b6f527a41413d575b78009c1c5b8513b96e1a17a16ca	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 803c83bee5241001181dec7dfad3d99eac7c7cde626258fb550c901fc6e09a92	REJECT asn1: structure error: NotAfter: superfluous leading zeros in length
 80533ebe60c68be82c32da3639f5021d0cd06f390f171f6ade79ea173cab183a	REJECT asn1: structure error: superfluous leading zeros in length
+805d5797c326daa1cccfe3f6af942950ce9f8aa174d7e3e92124f1fdc0f87359	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 zc
 8060a6b1e1a6b46d0f3ea8b6470412bca1ff99fe31f2e79d8c92140d2e9ea115	REJECT asn1: structure error: Id: superfluous leading zeros in length
 80835712af023277b8edb6acf6e6e624873a704188ae23ae0731bc7e8a18283c	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 80a42bba0d6ad2677168ec98b9808a331c4fac1ce36ac9dc092826c3d3083f93	REJECT asn1: structure error: superfluous leading zeros in length

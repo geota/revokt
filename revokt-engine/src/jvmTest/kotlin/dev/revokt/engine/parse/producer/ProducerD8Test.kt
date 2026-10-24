@@ -81,6 +81,23 @@ class ProducerD8Test {
     }
 
     @Test
+    fun `the D8 gap is zero on the committed real end-entity certificates`() {
+        val leaves =
+            listOf(
+                "github.com-1",
+                "letsencrypt.org-1",
+                "www.google.com-1",
+                "www.mozilla.org-1",
+                "mozilla-content-signing-c0",
+            )
+        for (leaf in leaves) {
+            val o = outcomes.single { it.input.name == "certs/$leaf" }
+            assertEquals(null, o.clause, "$leaf is inside the profile (producer: ${o.golden})")
+            assertTrue(o.golden.endsWith(" ct"), "$leaf is keyed through ct")
+        }
+    }
+
+    @Test
     fun `the boundary corpus's accept side is inside the profile and its reject side outside`() {
         for (o in outcomes.filter { it.input.name.startsWith("boundary/") }) {
             val reject =
@@ -88,12 +105,8 @@ class ProducerD8Test {
                     .substringAfter("boundary/")
                     .startsWith("reject-")
             assertEquals(reject, o.clause != null, "${o.input.name}: clause ${o.clause}, producer ${o.golden}")
-            if (reject) {
-                assertTrue(
-                    o.golden.startsWith("REJECT"),
-                    "${o.input.name}: the producer rejects it (${o.golden})",
-                )
-            }
+            // Reject side: the strict ct-go parse does not key it (keyUsage 03 00 and 03 01 05 are keyed by zcrypto only).
+            if (reject) assertTrue(!o.golden.endsWith(" ct"), "${o.input.name}: not keyed through ct (${o.golden})")
         }
     }
 

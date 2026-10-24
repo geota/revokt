@@ -14,7 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.fail
 
-/** Spec §9.2 K1–K7 (revision 35) on both sides of each edge; K8 is the #28 stub (any K8-listed extension fails). */
+/** Spec §9.2 K1–K7 (revision 35) on both sides of each edge; K8 checks each listed extension's grammar. */
 class KeyabilityTest {
     private fun hex(s: String): ByteArray =
         ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
@@ -316,22 +316,6 @@ class KeyabilityTest {
     }
 
     @Test
-    fun `K8 stub rejects every extension ct-go parses fatally and a critical flag other than 00 or FF`() {
-        assertClause(
-            KeyabilityClause.EXTENSION,
-            mapOf(
-                "SKI" to
-                    keyable(extensions = listOf(TestDer.extension(Oid.SUBJECT_KEY_IDENTIFIER, tlv(0x04, bytes(1))))),
-                "basicConstraints" to keyable(extensions = listOf(TestDer.extension("2.5.29.19", seq()))),
-                "nameConstraints" to keyable(extensions = listOf(TestDer.extension("2.5.29.30", seq()))),
-                "subjectInfoAccess" to keyable(extensions = listOf(TestDer.extension("1.3.6.1.5.5.7.1.11", seq()))),
-                "critical 01" to
-                    keyable(extensions = listOf(seq(oid("1.3.6.1.4.1.99999.1"), tlv(0x01, bytes(1)), tlv(0x04)))),
-            ),
-        )
-    }
-
-    @Test
     fun `the first failing clause is reported in K1 to K8 order`() {
         val many =
             keyable(
@@ -544,26 +528,141 @@ class KeyabilityTest {
     }
 
     @Test
-    fun `the K8 stub rejects every OID on K8's list`() {
-        val listed =
-            listOf(
-                "2.5.29.15",
-                "2.5.29.19",
-                "2.5.29.17",
-                "2.5.29.31",
-                "2.5.29.35",
-                "2.5.29.37",
-                "2.5.29.14",
-                "2.5.29.32",
-                "1.3.6.1.5.5.7.1.1",
-                "2.5.29.30",
-                "1.3.6.1.5.5.7.1.11",
-            )
+    fun `K8 accepts each listed extension in its grammar`() {
+        fun ext(
+            oid: String,
+            value: ByteArray,
+        ) = keyable(extensions = listOf(TestDer.extension(oid, value)))
+        val uri = tlv(0x86, ascii("http://crl.example/x.crl"))
+        assertClause(
+            null,
+            mapOf(
+                "keyUsage digitalSignature" to ext("2.5.29.15", tlv(0x03, bytes(0x07, 0x80))),
+                "keyUsage nine bits" to ext("2.5.29.15", tlv(0x03, bytes(0x07, 0xff, 0x80))),
+                "basicConstraints empty" to ext("2.5.29.19", seq()),
+                "basicConstraints explicit FALSE" to ext("2.5.29.19", seq(tlv(0x01, bytes(0x00)))),
+                "basicConstraints CA, pathLen 0" to ext("2.5.29.19", seq(tlv(0x01, bytes(0xff)), tlv(0x02, bytes(0)))),
+                "basicConstraints pathLen 2^31 - 1" to ext("2.5.29.19", seq(tlv(0x02, bytes(0x7f, 0xff, 0xff, 0xff)))),
+                "SAN dNSName, rfc822Name, IPv4, IPv6" to
+                    ext(
+                        "2.5.29.17",
+                        seq(
+                            tlv(0x82, ascii("a.example")),
+                            tlv(0x81, ascii("a@b.example")),
+                            tlv(0x87, bytes(1, 2, 3, 4)),
+                            tlv(0x87, ByteArray(16)),
+                        ),
+                    ),
+                "CRLDP one URI" to ext("2.5.29.31", seq(seq(tlv(0xa0, tlv(0xa0, uri))))),
+                "CRLDP none" to ext("2.5.29.31", seq()),
+                "AKI keyIdentifier" to ext("2.5.29.35", seq(tlv(0x80, bytes(1, 2)))),
+                "EKU serverAuth" to ext("2.5.29.37", seq(oid("1.3.6.1.5.5.7.3.1"))),
+                "SKI" to ext(Oid.SUBJECT_KEY_IDENTIFIER, tlv(0x04, bytes(1, 2))),
+                "certificatePolicies with a qualifier" to
+                    ext(
+                        "2.5.29.32",
+                        seq(seq(oid("2.23.140.1.2.1"), seq(seq(oid("1.3.6.1.5.5.7.2.1"), tlv(0x16, ascii("x")))))),
+                    ),
+                "certificatePolicies none" to ext("2.5.29.32", seq()),
+                "AIA OCSP and caIssuers" to
+                    ext(
+                        "1.3.6.1.5.5.7.1.1",
+                        seq(
+                            seq(oid("1.3.6.1.5.5.7.48.1"), tlv(0x86, ascii("http://o.example"))),
+                            seq(oid("1.3.6.1.5.5.7.48.2"), tlv(0x86, ascii("http://i.example"))),
+                        ),
+                    ),
+            ),
+        )
+    }
+
+    @Test
+    fun `K8 rejects each listed extension outside its grammar`() {
+        fun ext(
+            oid: String,
+            value: ByteArray,
+        ) = keyable(extensions = listOf(TestDer.extension(oid, value)))
+        val uri = tlv(0x86, ascii("http://crl.example/x.crl"))
         assertClause(
             KeyabilityClause.EXTENSION,
-            listed.associateWith {
-                keyable(extensions = listOf(TestDer.extension(it, seq())))
-            },
+            mapOf(
+                "keyUsage 03 00, which only zcrypto keys" to ext("2.5.29.15", tlv(0x03)),
+                "keyUsage 03 01 05, which only zcrypto keys" to ext("2.5.29.15", tlv(0x03, bytes(0x01, 0x05))),
+                "keyUsage padding bit set" to ext("2.5.29.15", tlv(0x03, bytes(0x07, 0x81))),
+                "keyUsage with trailing bytes" to ext("2.5.29.15", tlv(0x03, bytes(0x07, 0x80)) + tlv(0x05)),
+                "keyUsage not a BIT STRING" to ext("2.5.29.15", tlv(0x04, bytes(0x80))),
+                "basicConstraints cA 01" to ext("2.5.29.19", seq(tlv(0x01, bytes(0x01)))),
+                "basicConstraints negative pathLen" to ext("2.5.29.19", seq(tlv(0x02, bytes(0xff)))),
+                "basicConstraints pathLen 2^31" to
+                    ext(
+                        "2.5.29.19",
+                        seq(tlv(0x02, bytes(0x00, 0x80, 0x00, 0x00, 0x00))),
+                    ),
+                "basicConstraints pathLen not minimal" to ext("2.5.29.19", seq(tlv(0x02, bytes(0x00, 0x01)))),
+                "basicConstraints pathLen before cA" to
+                    ext("2.5.29.19", seq(tlv(0x02, bytes(1)), tlv(0x01, bytes(0xff)))),
+                "basicConstraints trailing element" to ext("2.5.29.19", seq(tlv(0x05))),
+                "SAN empty" to ext("2.5.29.17", seq()),
+                "SAN URI" to ext("2.5.29.17", seq(tlv(0x86, ascii("http://a.example")))),
+                "SAN directoryName" to ext("2.5.29.17", seq(tlv(0xa4, TestCert.name("x")))),
+                "SAN dNSName not ASCII" to ext("2.5.29.17", seq(tlv(0x82, bytes(0xc3, 0xa9)))),
+                "SAN IP of 5 octets" to ext("2.5.29.17", seq(tlv(0x87, bytes(1, 2, 3, 4, 5)))),
+                "CRLDP reasons" to ext("2.5.29.31", seq(seq(tlv(0xa0, tlv(0xa0, uri)), tlv(0x81, bytes(0x07, 0x80))))),
+                "CRLDP cRLIssuer only" to ext("2.5.29.31", seq(seq(tlv(0xa2, tlv(0x82, ascii("a")))))),
+                "CRLDP relative name" to ext("2.5.29.31", seq(seq(tlv(0xa0, tlv(0xa1, tlv(0x31)))))),
+                "CRLDP dNSName in fullName" to ext("2.5.29.31", seq(seq(tlv(0xa0, tlv(0xa0, tlv(0x82, ascii("a"))))))),
+                "CRLDP empty fullName" to ext("2.5.29.31", seq(seq(tlv(0xa0, tlv(0xa0))))),
+                "AKI empty" to ext("2.5.29.35", seq()),
+                "AKI with issuer and serial" to
+                    ext(
+                        "2.5.29.35",
+                        seq(tlv(0x80, bytes(1)), tlv(0xa1, tlv(0xa4, TestCert.name("x"))), tlv(0x82, bytes(1))),
+                    ),
+                "AKI constructed [0]" to ext("2.5.29.35", seq(tlv(0xa0, tlv(0x04, bytes(1))))),
+                "EKU empty" to ext("2.5.29.37", seq()),
+                "EKU holding a non-OID" to ext("2.5.29.37", seq(tlv(0x05))),
+                "SKI constructed" to ext(Oid.SUBJECT_KEY_IDENTIFIER, tlv(0x24, tlv(0x04, bytes(1)))),
+                "certificatePolicies entry without an OID" to ext("2.5.29.32", seq(seq(tlv(0x05)))),
+                "AIA empty" to ext("1.3.6.1.5.5.7.1.1", seq()),
+                "AIA dNSName location" to
+                    ext("1.3.6.1.5.5.7.1.1", seq(seq(oid("1.3.6.1.5.5.7.48.1"), tlv(0x82, ascii("a"))))),
+                "AIA trailing element" to
+                    ext("1.3.6.1.5.5.7.1.1", seq(seq(oid("1.3.6.1.5.5.7.48.1"), tlv(0x86, ascii("a")), tlv(0x05)))),
+                "nameConstraints" to ext("2.5.29.30", seq()),
+                "subjectInfoAccess" to
+                    ext("1.3.6.1.5.5.7.1.11", seq(seq(oid("1.3.6.1.5.5.7.48.5"), tlv(0x86, ascii("a"))))),
+                "critical 01 on an opaque extension" to
+                    keyable(extensions = listOf(seq(oid("1.3.6.1.4.1.99999.1"), tlv(0x01, bytes(1)), tlv(0x04)))),
+            ),
+        )
+    }
+
+    @Test
+    fun `K4 reads the OIDs inside K8's values and K1 walks them`() {
+        fun ext(
+            oid: String,
+            value: ByteArray,
+        ) = keyable(extensions = listOf(TestDer.extension(oid, value)))
+        val leading80 = tlv(0x06, bytes(0x2b, 0x80, 0x06))
+        assertClause(
+            KeyabilityClause.OID,
+            mapOf(
+                "EKU purpose" to ext("2.5.29.37", seq(leading80)),
+                "policy identifier" to ext("2.5.29.32", seq(seq(leading80))),
+                "access method" to ext("1.3.6.1.5.5.7.1.1", seq(seq(leading80, tlv(0x86, ascii("a"))))),
+            ),
+        )
+        val deepQualifier =
+            seq(
+                seq(
+                    oid("2.23.140.1.2.1"),
+                    seq(seq(oid("1.3.6.1.5.5.7.2.1"), tlvWithLength(0x16, bytes(0x81, 0x01), ascii("x")))),
+                ),
+            )
+        assertEquals(
+            KeyabilityClause.HEADER,
+            clause(ext("2.5.29.32", deepQualifier)),
+            "a policy qualifier's header is walked by K1",
         )
     }
 }
