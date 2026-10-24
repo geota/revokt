@@ -17,9 +17,11 @@ internal class UnsignedElement(
 }
 
 /**
- * The three headers the signature does not cover, read as the JDK reads them (spec §9.2): `tbsCertificate` and the
- * outer `signatureAlgorithm` in any definite length form or indefinite, `signatureValue` with a definite length of any
- * form. A non-minimal header here is recorded but does not change what is verified.
+ * The three headers the signature does not cover, read as the JDK reads them (spec §9.2 revision 35): `tbsCertificate`,
+ * the outer `signatureAlgorithm` and `signatureValue`, each in any definite length form or indefinite (JDK 11 alone
+ * verifies an indefinite `signatureValue`). A non-minimal header here is recorded but does not change what is verified.
+ * Re-encoding can grow an element (a 4-octet indefinite frame becomes up to 5 octets of header), so `Cert.tbs` may
+ * exceed the input by about a fifth at most, as the JDK's own message does.
  */
 internal object Envelope {
     private const val INDEFINITE = 0x80
@@ -32,7 +34,6 @@ internal object Envelope {
         limit: Int,
         tag: Int,
         site: HeaderSite,
-        indefiniteAllowed: Boolean,
         ctx: ParseContext,
     ): UnsignedElement {
         if (position >= limit) fail("missing $site at $position")
@@ -45,7 +46,6 @@ internal object Envelope {
         if (position + 1 >= limit) fail("missing length for $site at $position")
         val first = der[position + 1].toInt() and 0xff
         if (first == INDEFINITE) {
-            if (!indefiniteAllowed) fail("indefinite length for $site at $position")
             val (end, content) = convert(der, position + 2, limit, site, ctx)
             return UnsignedElement(Tlv(tag, Span(position, end), Span(position + 2, end - 2)), true, content)
         }
@@ -190,7 +190,9 @@ internal fun minimalLength(n: Int): ByteArray =
 /**
  * Spec §5.1 `AlgorithmIdMismatch`, computed at parse time: the outer `signatureAlgorithm` matches only when it and the
  * TBS `signature` are both minimal DER `SEQUENCE { OID, parameters OPTIONAL }` and equal once NULL parameters are taken
- * as absent. Any other outer form (indefinite, a non-minimal header anywhere in it, other content) is a mismatch.
+ * as absent. Any other outer form (indefinite, a non-minimal header anywhere in it, other content) is a mismatch. A
+ * non-minimal TBS `signature` is also reported as a mismatch, which is narrower than the JDK's `AlgorithmId` comparison;
+ * the result is only a finding, and such a TBS is outside the keyability profile anyway (K1).
  */
 internal object AlgorithmIdentifiers {
     private val NULL_PARAMETERS = byteArrayOf(0x05, 0x00)
