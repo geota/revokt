@@ -157,7 +157,7 @@ internal object CertificateParser {
         val certificate = top.read(SEQUENCE, HeaderSite.CERTIFICATE)
         top.requireEnd("Certificate")
         val end = certificate.content.end
-        val tbsElement = Envelope.read(der, certificate.content.start, end, SEQUENCE, HeaderSite.TBS, true, ctx)
+        val tbsElement = Envelope.read(der, certificate.content.start, end, SEQUENCE, HeaderSite.TBS, ctx)
         val algorithm =
             Envelope.read(
                 der,
@@ -165,7 +165,6 @@ internal object CertificateParser {
                 end,
                 SEQUENCE,
                 HeaderSite.SIGNATURE_ALGORITHM,
-                true,
                 ctx,
             )
         val signature =
@@ -175,7 +174,6 @@ internal object CertificateParser {
                 end,
                 BIT_STRING,
                 HeaderSite.SIGNATURE_VALUE,
-                true,
                 ctx,
             )
         if (signature.presented.tlv.end !=

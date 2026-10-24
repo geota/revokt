@@ -34,7 +34,6 @@ internal object Envelope {
         limit: Int,
         tag: Int,
         site: HeaderSite,
-        indefiniteAllowed: Boolean,
         ctx: ParseContext,
     ): UnsignedElement {
         if (position >= limit) fail("missing $site at $position")
@@ -47,7 +46,6 @@ internal object Envelope {
         if (position + 1 >= limit) fail("missing length for $site at $position")
         val first = der[position + 1].toInt() and 0xff
         if (first == INDEFINITE) {
-            if (!indefiniteAllowed) fail("indefinite length for $site at $position")
             val (end, content) = convert(der, position + 2, limit, site, ctx)
             return UnsignedElement(Tlv(tag, Span(position, end), Span(position + 2, end - 2)), true, content)
         }
