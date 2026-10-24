@@ -93,7 +93,7 @@ class KeyabilityJdkTest {
                     javaClass.getResourceAsStream("certs/$name.der"),
                 ) { "missing $name" }.use { it.readBytes() }
             val p = (CertificateParser.parse(der) as CertificateParse.Parsed).certificate
-            // Every one carries extensions K8 lists, so until #11 the first failing clause is K8 and nothing earlier.
+            // Every one carries extensions K8 lists, so until #28 the first failing clause is K8 and nothing earlier.
             assertEquals(KeyabilityClause.EXTENSION, Keyability.firstFailing(p), name)
         }
     }

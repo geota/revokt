@@ -14,7 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.fail
 
-/** Spec §9.2 K1–K7 (revision 34) on both sides of each edge; K8 is the #11 stub (any K8-listed extension fails). */
+/** Spec §9.2 K1–K7 (revision 35) on both sides of each edge; K8 is the #28 stub (any K8-listed extension fails). */
 class KeyabilityTest {
     private fun hex(s: String): ByteArray =
         ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
@@ -342,5 +342,92 @@ class KeyabilityTest {
             KeyabilityClause.NAME,
             clause(keyable(subject = name(tlv(0x14, ascii("x"))), spki = rsaSpki(e = bytes(0)))),
         )
+    }
+
+    @Test
+    fun `K1 walks the value of every extension on K8's list, matched on canonical OID content`() {
+        val listed =
+            listOf(
+                "2.5.29.15",
+                "2.5.29.19",
+                "2.5.29.17",
+                "2.5.29.31",
+                "2.5.29.35",
+                "2.5.29.37",
+                "2.5.29.14",
+                "2.5.29.32",
+                "1.3.6.1.5.5.7.1.1",
+                "2.5.29.30",
+                "1.3.6.1.5.5.7.1.11",
+            )
+        assertClause(
+            KeyabilityClause.HEADER,
+            listed.associateWith { keyable(extensions = listOf(TestDer.extension(it, bytes(0x04, 0x81, 0x01, 0x00)))) },
+        )
+        // keyUsage spelled with a non-minimal arc is opaque to K1 and fails K4.
+        val spelled = seq(tlv(0x06, bytes(0x55, 0x1d, 0x80, 0x0f)), tlv(0x04, bytes(0x04, 0x81, 0x01, 0x00)))
+        assertEquals(KeyabilityClause.OID, clause(keyable(extensions = listOf(spelled))))
+    }
+
+    @Test
+    fun `K2 checks the version, both unique ids, the issuer and the SPKI padding on their own`() {
+        fun spki(bits: ByteArray) = seq(seq(oid("1.2.840.10045.2.1"), p256), bits)
+        assertClause(
+            KeyabilityClause.TBS_SHAPE,
+            mapOf(
+                "version 3 without [3]" to keyable(version = tlv(0xa0, tlv(0x02, bytes(3))), extensions = emptyList()),
+                "version 00 02 without [3]" to
+                    keyable(version = tlv(0xa0, tlv(0x02, bytes(0, 2))), extensions = emptyList()),
+                "version FF without [3]" to
+                    keyable(version = tlv(0xa0, tlv(0x02, bytes(0xff))), extensions = emptyList()),
+                "primitive [2]" to keyable(uniqueIds = bytes(0x82, 0x00)),
+                "constructed [2]" to keyable(uniqueIds = bytes(0xa2, 0x00)),
+                "issuer RDN that is not a SET" to keyable(issuer = seq(seq(oid("2.5.4.3"), tlv(0x0c, ascii("a"))))),
+                "SPKI BIT STRING empty" to keyable(spki = spki(tlv(0x03))),
+                "SPKI unused bits 1 and no octet" to keyable(spki = spki(tlv(0x03, bytes(0x01)))),
+                "SPKI unused bits 8" to keyable(spki = spki(tlv(0x03, bytes(0x08, 0x00)))),
+            ),
+        )
+        assertClause(
+            KeyabilityClause.KEY,
+            mapOf(
+                "SPKI with no key octets" to keyable(spki = spki(tlv(0x03, bytes(0x00)))),
+                // The SPKI's own shape and a non-EC key's parameters are K7's to judge, not K2's or K4's.
+                "SPKI with a third element" to
+                    keyable(spki = seq(seq(oid("1.2.840.10045.2.1"), p256), tlv(0x03, bytes(0)), tlv(0x05))),
+                "RSA parameters holding an OID" to
+                    keyable(spki = rsaSpki(parameters = tlv(0x06, bytes(0x2a, 0x80, 0x01)))),
+            ),
+        )
+        assertClause(
+            KeyabilityClause.OID,
+            mapOf(
+                "issuer attribute type leading 80" to
+                    keyable(issuer = seq(tlv(0x31, seq(tlv(0x06, bytes(0x55, 0x80, 0x04, 0x03)), tlv(0x0c))))),
+                "SPKI algorithm leading 80" to
+                    keyable(spki = seq(seq(tlv(0x06, bytes(0x2a, 0x80, 0x86, 0x48)), p256), tlv(0x03, bytes(0)))),
+            ),
+        )
+    }
+
+    @Test
+    fun `K2 before K3 before K4`() {
+        assertEquals(
+            KeyabilityClause.TBS_SHAPE,
+            clause(keyable(uniqueIds = tlv(0x81, bytes(0)), serial = tlv(0x02, bytes(0, 5)))),
+        )
+        assertEquals(
+            KeyabilityClause.INTEGER,
+            clause(keyable(serial = tlv(0x02, bytes(0, 5)), tbsSignature = seq(tlv(0x06)))),
+        )
+    }
+
+    @Test
+    fun `K1 stays linear with many K8-listed extensions`() {
+        // 22 000 repeated keyUsage extensions near the size cap: one hash lookup per TLV, not a scan of the values.
+        val keyUsage = TestDer.extension("2.5.29.15", tlv(0x05))
+        val cert = keyable(extensions = List(22_000) { keyUsage })
+        assertEquals(true, cert.der.size <= dev.revokt.RevoktLimits.MAX_CERT_BYTES)
+        assertEquals(KeyabilityClause.EXTENSION, clause(cert))
     }
 }

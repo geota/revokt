@@ -26,7 +26,7 @@ internal object KeyabilityKey {
         b: ByteArray,
         spki: Span,
     ): Boolean {
-        val (algorithm, bits) = Keyability.spki(b, spki) ?: return false
+        val (algorithm, bits) = Keyability.spki(b, spki, exact = true) ?: return false
         if (bits.length < 1 || b[bits.start].toInt() != 0) return false
         val key = Span(bits.start + 1, bits.end)
         val (oid, parameters) = algorithm
