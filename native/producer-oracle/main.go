@@ -90,7 +90,7 @@ func oneLine(err error) string {
 	if err == nil {
 		return "nil error"
 	}
-	return strings.ReplaceAll(err.Error(), "\n", " ")
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(err.Error())
 }
 
 func main() {
@@ -105,7 +105,8 @@ func main() {
 			fmt.Fprintln(out, "##")
 			out.Flush()
 		case line == "":
-			continue
+			// An empty DER base64-encodes to an empty line; answer it so replies stay one per input.
+			fmt.Fprintln(out, "REJECT empty input")
 		default:
 			der, err := base64.StdEncoding.DecodeString(line)
 			if err != nil {

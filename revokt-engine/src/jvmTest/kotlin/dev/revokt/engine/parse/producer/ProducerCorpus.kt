@@ -81,7 +81,22 @@ internal object ProducerCorpus {
         return DerNode.parse(spki.child(1).content.copyOfRange(1, spki.child(1).content.size)).child(0).content
     }
 
-    val inputs: List<Input> by lazy {
+    /** The replay corpus, built once per test run; [build] makes a fresh copy (the determinism check). */
+    val inputs: List<Input> by lazy { build() }
+
+    private val fuzzInputs =
+        listOf(
+            "empty",
+            "huge-length",
+            "indefinite",
+            "indefinite-tbs",
+            "leaf-with-scts",
+            "root-2200",
+            "trailing-byte",
+            "truncated-leaf",
+        )
+
+    fun build(): List<Input> {
         val out = ArrayList<Input>()
         for (f in fixtures) out += Input("certs/$f", resource("certs/$f.der"))
         for (v in variants) out += Input("variants/$v", resource("certs/variants/$v.der"))
@@ -96,11 +111,13 @@ internal object ProducerCorpus {
             }
         }
         for ((name, der) in BoundaryCorpus.inputs(rsaModulus())) out += Input("boundary/$name", der)
-        val mutated = fixtures.map { it to resource("certs/$it.der") } + ("boundary/base" to BoundaryCorpus.base())
+        for (f in fuzzInputs) out += Input("fuzz/$f", resource("CertificateParserFuzzTestInputs/$f"))
+        val mutated =
+            fixtures.map { "certs/$it" to resource("certs/$it.der") } + ("boundary/base" to BoundaryCorpus.base())
         for ((name, der) in mutated) {
             for (m in LengthMutants.of(der)) out += Input("mutant/$name${m.path}", m.der, name, m.path)
         }
-        out.distinctBy { it.der.toByteString() }
+        return out.distinctBy { it.der.toByteString() }
     }
 
     /** canon SHA-256 → the oracle's line (`OK <serial> <spki-sha256> <ct|lax|zc>` or `REJECT <error>`). */

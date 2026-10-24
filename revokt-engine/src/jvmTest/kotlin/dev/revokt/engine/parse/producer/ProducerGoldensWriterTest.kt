@@ -11,8 +11,8 @@ import kotlin.test.assertTrue
 class ProducerGoldensWriterTest {
     @Test
     fun `the replay corpus is deterministic and the recording hook writes it on request`() {
-        val first = ProducerCorpus.inputs.map { it.canonSha256 }
-        val again = ProducerCorpus.inputs.map { it.canonSha256 }
+        val first = ProducerCorpus.build().map { it.canonSha256 }
+        val again = ProducerCorpus.build().map { it.canonSha256 }
         assertEquals(first, again, "corpus generation is deterministic")
         assertTrue(first.size > 1000, "the mutation set is exercised (${first.size} inputs)")
         ProducerCorpus.writeInputsIfRequested()

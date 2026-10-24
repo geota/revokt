@@ -78,6 +78,7 @@ internal object BoundaryCorpus {
 
     /** A leaf inside the profile: v3, P-256, one opaque extension, nothing K8 lists. */
     fun base(
+        version: ByteArray = tlv(0xa0, tlv(0x02, bytes(2))),
         serial: ByteArray = tlv(0x02, bytes(0x00, 0x8f, 0x12, 0x34)),
         subject: ByteArray = TestCert.name("leaf.example"),
         validity: ByteArray = seq(tlv(0x17, ascii("261022134530Z")), tlv(0x18, ascii("20500101000000Z"))),
@@ -86,6 +87,7 @@ internal object BoundaryCorpus {
         signature: ByteArray = tlv(0x03, bytes(0x00, 0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01)),
     ): ByteArray =
         TestCert(
+            version = version,
             serial = serial,
             subject = subject,
             validity = validity,
@@ -132,6 +134,16 @@ internal object BoundaryCorpus {
     fun inputs(rsaModulus: ByteArray): List<Pair<String, ByteArray>> {
         val out = ArrayList<Pair<String, ByteArray>>()
         out += "base" to base()
+        out += "v1-without-extensions" to base(version = ByteArray(0), extensions = emptyList())
+        out += "explicit-v1" to base(version = tlv(0xa0, tlv(0x02, bytes(0))), extensions = emptyList())
+        out += "zero-serial" to base(serial = tlv(0x02, bytes(0)))
+        // Unused bits 3 with padding set: Cert.sig clears them, canon keeps them (D2's Cert.sig check).
+        out += "signature-padding-bits" to base(signature = bytes(0x03, 0x03, 0x04, 0x12, 0x3f))
+        out +=
+            "critical-ff" to base(extensions = listOf(extension("1.3.6.1.4.1.99999.3", ByteArray(0), critical = true)))
+        // D8-gap examples the producer keys only through ct-go's lax retry (spec §9.2 D7): outside the profile.
+        out += "reject-serial-non-minimal" to base(serial = tlv(0x02, bytes(0x00, 0x0f, 0x12, 0x34)))
+        out += "reject-printable-at" to base(subject = seq(tlv(0x31, seq(oid("2.5.4.3"), tlv(0x13, ascii("a@b"))))))
         out += "oid-arc-2^31-1" to base(extensions = listOf(extension("1.3.6.1.4.1.2147483647", ByteArray(0))))
         out += "oid-first-subidentifier-limit" to base(extensions = listOf(extension("2.2147483567", ByteArray(0))))
         out += "leap-day-2000" to times(gen("20000229000000Z"), gen("20500101000000Z"))
@@ -155,10 +167,15 @@ internal object BoundaryCorpus {
         out += "indefinite-signature-value" to base(signature = bytes(0x03, 0x80, 0x00, 0x02, 0x01, 0x05, 0x00, 0x00))
         for ((i, p) in points.withIndex()) {
             val (curve, x, y) = p
-            out += "ec-point-$i" to base(spki = ec(curve, x, y))
-            val flipped = hex(y).also { it[it.lastIndex] = (it[it.lastIndex].toInt() xor 1).toByte() }
-            out += "reject-ec-point-$i-flipped" to
-                base(spki = seq(seq(ecPublicKey, oid(curve)), tlv(0x03, bytes(0, 0x04), hex(x), flipped)))
+            if (i > 0) out += "ec-point-$i" to base(spki = ec(curve, x, y)) // point 0 is the base's own key
+            val flippedY = hex(y).also { it[it.lastIndex] = (it[it.lastIndex].toInt() xor 1).toByte() }
+            val flippedX = hex(x).also { it[it.size / 2] = (it[it.size / 2].toInt() xor 0x10).toByte() }
+            val point = { prefix: Int, px: ByteArray, py: ByteArray ->
+                base(spki = seq(seq(ecPublicKey, oid(curve)), tlv(0x03, bytes(0, prefix), px, py)))
+            }
+            out += "reject-ec-point-$i-flipped-y" to point(0x04, hex(x), flippedY)
+            out += "reject-ec-point-$i-flipped-x" to point(0x04, flippedX, hex(y))
+            out += "reject-ec-point-$i-prefix-05" to point(0x05, hex(x), hex(y))
         }
         out += "reject-key-usage-03-00" to base(extensions = listOf(extension("2.5.29.15", tlv(0x03))))
         out +=
