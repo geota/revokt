@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Mozilla Foundation and clubcard contributors; translation 2026 revokt contributors
 // SPDX-License-Identifier: MPL-2.0
 // Translation of clubcard 0.3.4 src/equation.rs (git ecca8d1a9e92f9f3b4b910c05fe11c190836501e), spec §3.1.
+// Lines marked `revokt:` are the allocation deviations of #7, listed in UPSTREAM.md.
 //
 // This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not
 // distributed with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -30,7 +31,7 @@ public class Equation(
     public val a: LongArray,
     b: Int,
 ) {
-    /** The row number. Written only by [add] and the `AsQuery` offset shifts in this module. */
+    /** The row number. Written by [add] and `align`, by `owning`, and by the `AsQuery` offset shifts in this module. */
     public var s: Long = s
         internal set
 
@@ -55,6 +56,12 @@ public class Equation(
             a[i] = a[i] xor other.a[i]
         }
         b = b xor other.b
+        // revokt: the alignment below is factored into align() so `owning` can align without allocating zero() (#7).
+        align()
+    }
+
+    /** The alignment half of upstream `add`: shift the first non-zero bit to position 0 and advance `s`. */
+    private fun align() {
         // Exit early if this equation is now zero.
         if (isZero()) return
         // Shift until there is a non-zero bit in the lowest limb.
@@ -116,9 +123,21 @@ public class Equation(
             s: Long,
             a: LongArray,
             b: Int,
+        ): Equation =
+            owning(s, a.copyOf(), b) // revokt: upstream builds the equation and calls `add(&zero())` here (#7)
+
+        /**
+         * revokt: `inhomogeneous` without the defensive copy, for callers that built [a] for this equation alone; the
+         * equation takes ownership of the array (#7). Upstream calls `eq.add(&Equation::zero())`, which xors nothing
+         * and then aligns, so aligning directly is the same result without the throwaway `zero()`.
+         */
+        internal fun owning(
+            s: Long,
+            a: LongArray,
+            b: Int,
         ): Equation {
-            val eq = Equation(0, a.copyOf(), b)
-            eq.add(zero())
+            val eq = Equation(0, a, b)
+            eq.align()
             eq.s += s
             return eq
         }
