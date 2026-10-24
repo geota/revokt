@@ -19,6 +19,7 @@ kotlin {
             implementation(libs.kotlin.test.junit5)
             implementation(project.dependencies.platform(libs.junit.bom))
             implementation(libs.junit.jupiter)
+            implementation(libs.jazzer.junit)
             runtimeOnly(libs.junit.platform.launcher)
         }
     }
