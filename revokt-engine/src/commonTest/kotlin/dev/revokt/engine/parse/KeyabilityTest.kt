@@ -263,6 +263,11 @@ class KeyabilityTest {
                 "SPKI BIT STRING empty" to keyable(spki = spki(tlv(0x03))),
                 "SPKI unused bits 1 and no octet" to keyable(spki = spki(tlv(0x03, bytes(0x01)))),
                 "SPKI unused bits 8" to keyable(spki = spki(tlv(0x03, bytes(0x08, 0x00)))),
+                "SPKI algorithm without an OID" to keyable(spki = seq(seq(tlv(0x05)), tlv(0x03, bytes(0)))),
+                "constructed SPKI BIT STRING" to
+                    keyable(spki = seq(seq(oid("1.2.840.10045.2.1"), p256), tlv(0x23, tlv(0x03, bytes(0))))),
+                "SPKI BIT STRING empty as the last TBS bytes of a v1 leaf" to
+                    keyable(version = ByteArray(0), extensions = emptyList(), spki = spki(tlv(0x03))),
             ),
         )
         assertClause(

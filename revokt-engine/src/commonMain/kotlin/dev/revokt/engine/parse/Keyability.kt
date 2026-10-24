@@ -174,12 +174,12 @@ internal object Keyability {
         return parameters.content
     }
 
-    /** K2's BIT STRING rule on the SPKI's key; an SPKI of another shape is left to K7. */
+    /** K2 on the SPKI: an AlgorithmIdentifier and a primitive BIT STRING with valid padding; trailing elements are K7's. */
     private fun spkiShape(
         b: ByteArray,
         span: Span,
     ): Boolean {
-        val bits = spki(b, span, exact = false)?.second ?: return true
+        val bits = spki(b, span, exact = false)?.second ?: return false
         return bitStringPadding(b, bits)
     }
 
