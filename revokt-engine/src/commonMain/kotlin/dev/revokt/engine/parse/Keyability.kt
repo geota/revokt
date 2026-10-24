@@ -8,16 +8,19 @@ import dev.revokt.KeyabilityClause
 /**
  * The conservative keyability profile of spec §9.2 (revision 34), read on `Cert.tbs` alone: true only when every clause
  * K1–K8 holds. It is not a model of the producer; a leaf outside it is never queried even when the producer keys it
- * (the D8 gap). Evaluated for the leaf only. K1–K4 are here; K5–K7 and a K8 that accepts no extension ct-go parses
- * fatally land with #25, and K8's grammars with #11. Until then no certificate passes K5.
+ * (the D8 gap). Evaluated for the leaf only. K1–K4 are here; K5–K7, and a K8 that accepts no extension ct-go parses
+ * fatally and requires every critical flag `00` or `FF`, land with #25, and K8's grammars with #28. Until then no
+ * certificate passes K5. The SPKI's own shape is K7's; K2 and K4 read only its algorithm and BIT STRING.
  */
 internal object Keyability {
     private const val SEQUENCE = 0x30
     private const val SET = 0x31
     private const val OBJECT_IDENTIFIER = 0x06
     private const val BIT_STRING = 0x03
+    private const val OCTET_STRING = 0x04
     private const val CONSTRUCTED = 0x20
     private const val OID_ARC_LIMIT = 1L shl 31
+    private val EC_PUBLIC_KEY = byteArrayOf(0x2a, 0x86.toByte(), 0x48, 0xce.toByte(), 0x3d, 0x02, 0x01)
 
     /** The extensions ct-go parses with a fatal return (K8's list), and the two whose presence alone is outside. */
     private val FATAL_EXTENSIONS: List<ByteArray> =
@@ -54,11 +57,11 @@ internal object Keyability {
         derOk {
             val b = c.tbsBytes
             val ctx = ParseContext()
+            // Extension values are distinct spans, so their starts identify them: one hash lookup per TLV keeps K1 linear.
             val walked =
                 c.tbs.extensions
-                    .filter { e ->
-                        FATAL_EXTENSIONS.any { Oid.matches(b, e.oid, it) }
-                    }.map { it.value }
+                    .filter { e -> FATAL_EXTENSIONS.any { Oid.matches(b, e.oid, it) } }
+                    .mapTo(HashSet()) { it.value.start }
             val content = DerReader(b, 0, b.size, ctx).readAny(HeaderSite.TBS).content
             val stack = arrayListOf(DerReader(b, content.start, content.end, ctx))
             while (stack.isNotEmpty()) {
@@ -67,9 +70,7 @@ internal object Keyability {
                     stack.removeAt(stack.lastIndex)
                 } else {
                     val t = r.readAny(HeaderSite.TBS)
-                    if (t.tag and CONSTRUCTED != 0 ||
-                        t.content in walked
-                    ) {
+                    if (t.tag and CONSTRUCTED != 0 || (t.tag == OCTET_STRING && t.content.start in walked)) {
                         stack.add(DerReader(b, t.content.start, t.content.end, ctx))
                     }
                 }
@@ -100,10 +101,9 @@ internal object Keyability {
     /** K4: the algorithm OIDs, the EC curve, every attribute type and every extension ID. */
     private fun oids(c: ParsedCertificate): Boolean {
         val b = c.tbsBytes
-        val spkiAlgorithm = spki(b, c.tbs.spki)?.first ?: return false
+        val spkiAlgorithm = spki(b, c.tbs.spki, exact = false)?.first
         val spans =
-            listOfNotNull(algorithm(b, c.tbs.signature)?.first, spkiAlgorithm.first) +
-                listOfNotNull(spkiAlgorithm.second?.takeIf { it.tag == OBJECT_IDENTIFIER }?.content) +
+            listOfNotNull(algorithm(b, c.tbs.signature)?.first, spkiAlgorithm?.first, curve(b, spkiAlgorithm)) +
                 attributes(b, c.tbs.issuer).orEmpty().map { it.first } +
                 attributes(b, c.tbs.subject).orEmpty().map { it.first } +
                 c.tbs.extensions.map { it.oid }
@@ -146,25 +146,40 @@ internal object Keyability {
             out
         }
 
-    /** The SPKI's algorithm (OID content, parameters) and BIT STRING content, or null for another shape than K7's. */
+    /**
+     * The SPKI's algorithm (OID content, parameters) and BIT STRING content, or null for another shape. [exact] also
+     * requires nothing after the BIT STRING (K7's shape); K2 and K4 read the first two elements only.
+     */
     fun spki(
         b: ByteArray,
         span: Span,
+        exact: Boolean,
     ): Pair<Pair<Span, Tlv?>, Span>? =
         derOrNull {
             val r = DerReader(b, span.start, span.end, ParseContext())
             val fields = r.child(r.read(SEQUENCE, HeaderSite.SPKI))
             val algorithm = fields.read(SEQUENCE, HeaderSite.SPKI)
             val bits = fields.read(BIT_STRING, HeaderSite.SPKI)
-            fields.requireEnd("subjectPublicKeyInfo")
+            if (exact) fields.requireEnd("subjectPublicKeyInfo")
             (algorithm(b, algorithm.tlv) ?: return null) to bits.content
         }
 
+    /** The named curve's OID content when the key is `id-ecPublicKey` with OID parameters (K4 reads only curves). */
+    private fun curve(
+        b: ByteArray,
+        algorithm: Pair<Span, Tlv?>?,
+    ): Span? {
+        val (oid, parameters) = algorithm ?: return null
+        if (!Oid.matches(b, oid, EC_PUBLIC_KEY) || parameters?.tag != OBJECT_IDENTIFIER) return null
+        return parameters.content
+    }
+
+    /** K2's BIT STRING rule on the SPKI's key; an SPKI of another shape is left to K7. */
     private fun spkiShape(
         b: ByteArray,
         span: Span,
     ): Boolean {
-        val bits = spki(b, span)?.second ?: return false
+        val bits = spki(b, span, exact = false)?.second ?: return true
         return bitStringPadding(b, bits)
     }
 
