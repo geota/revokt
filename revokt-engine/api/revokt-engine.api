@@ -1,3 +1,17 @@
+public final class dev/revokt/KeyabilityClause : java/lang/Enum {
+	public static final field EXTENSION Ldev/revokt/KeyabilityClause;
+	public static final field HEADER Ldev/revokt/KeyabilityClause;
+	public static final field INTEGER Ldev/revokt/KeyabilityClause;
+	public static final field KEY Ldev/revokt/KeyabilityClause;
+	public static final field NAME Ldev/revokt/KeyabilityClause;
+	public static final field OID Ldev/revokt/KeyabilityClause;
+	public static final field TBS_SHAPE Ldev/revokt/KeyabilityClause;
+	public static final field TIME Ldev/revokt/KeyabilityClause;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/KeyabilityClause;
+	public static fun values ()[Ldev/revokt/KeyabilityClause;
+}
+
 public final class dev/revokt/ParseReason : java/lang/Enum {
 	public static final field OVERSIZE Ldev/revokt/ParseReason;
 	public static final field PRODUCER_UNKEYABLE Ldev/revokt/ParseReason;
