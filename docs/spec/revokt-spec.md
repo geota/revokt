@@ -1,10 +1,38 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 34** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-23
+Status: **draft spec / project proposal, revision 35** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-24
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 35 (an indefinite `signatureValue` verifies on JDK 11, 2026-10-24)
+- **Blocker, found by the independent review of #24 (the unsigned-header parser)**: JDK 11.0.32, the bytecode target,
+  verifies a certificate whose `signatureValue` has an indefinite length (`03 80 … 00 00`) whenever its content, read
+  from the unused-bits octet on, is a chain of TLVs with minimal headers ending at the end-of-contents. `getEncoded()`
+  keeps the presented bytes. About 0.44 % of P-256 ECDSA signatures read that way (17 of 4 000 and 7 of 1 500
+  re-signed probes; 0 of 1 500 RSA-2048), and no CA signature is needed to present one. revokt answered `STRUCTURE`,
+  so such a leaf was `PARSE_FAILED`, an allow in `DEFAULT`. JDK 17, 21 and 27 reject the form (0 of 4 000). This
+  supersedes revision 34's statement that JDK 11 verifies a strict subset of JDK 17's inputs: that held on the
+  revision 34 probe sets only.
+  - §9.2 now accepts an indefinite `signatureValue`, delimited and re-encoded by the same converter rule; `Cert.sig`
+    is read from the re-encoded content. A non-minimal header on its chain stays `STRUCTURE`: JDK 11 does not verify
+    such a form (probed, Appendix A).
+  - Oracle 3b delimits and re-encodes the `signatureValue` too, and `canon` holds its content after the unused-bits
+    octet, re-encoded when indefinite. D2 also compares `Cert.sig` with that content, its padding bits cleared.
+  - D7 gains the case on both sides, and the boundary corpus gains the accept side.
+  - Appendix A records the case as a revision 35 probe, and its statement that the JDK rejects a constructed or
+    indefinite `signatureValue` now separates the two: every probed JDK rejects a constructed one (JDK 11 and 17 probed
+    again), and JDK 17, 21 and 27 reject an indefinite one.
+- **K7 states header minimality inside the RSA key** (found by the independent review of #26, the keyability
+  profile): ct-go parses `RSAPublicKey` out of the BIT STRING and rejects a non-minimal header there, with no `lax`
+  retry, while K1 walks no primitive content. **K1's K8 list is matched on canonical OID content**, so a non-minimal
+  spelling of a listed OID is opaque to K1 and fails K4. K4's minimality is noted as stricter than the pinned ct-go,
+  which keys a leading `80`.
+- **Corrected**: walker fixture (r) contradicted §5.1 and §9.2, which compute `AlgorithmIdMismatch` after NULL/absent
+  normalisation. (r) is now an OID mismatch with the finding, and a NULL-vs-absent pair gives no finding.
+- **Clarified**: D6's offsets of TBS fields index `Cert.tbs` from its tag octet; they re-slice `b`, for a definite TBS
+  header, shifted by the TBS content's start in `b` less `Cert.tbs`'s header length.
 
 ### Changes in revision 34 (D8 made one-directional after a four-seat cohort, and the envelope re-encoding blocker closed, 2026-10-23)
 - **Decision (issue #11): `producerKeyable` is a conservative keyability profile** (§9.2 clauses K1–K8) instead of an
@@ -54,9 +82,10 @@ Status: **draft spec / project proposal, revision 34** · Target: JVM 11+ and An
   JDK 17 matches JDK 21 on every input, so the blocker entry above, §9.2 and Appendix A cite JDK 17, 21 and 27.
   JDK 27 differs only on an indefinite header under a definite parent: it parses every such case and then fails to
   verify it. JDK 11 verifies a strict subset of JDK 17's inputs, with the same `getTBSCertificate()`, so the §9.2
-  rule holds there too. The bypass remains on JDK 11 through an indefinite `tbsCertificate` header, an indefinite
-  outer AlgorithmIdentifier, the NULL flip and the RSA padding bits. JDK 11, the bytecode target, joins the §9.2
-  version matrix (#20).
+  rule holds there too (on these probe sets; revision 35 found an indefinite `signatureValue` only JDK 11 verifies).
+  The bypass remains on JDK 11 through an indefinite `tbsCertificate` header, an indefinite outer
+  AlgorithmIdentifier, the NULL flip and the RSA padding bits. JDK 11, the bytecode target, joins the §9.2 version
+  matrix (#20).
 - **Considered and not adopted**: deciding keyability at the query, after the walk. §10 item 8 says why, and when the
   decision reopens.
 
@@ -1704,7 +1733,7 @@ the fallback is `PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback wh
 // Declarations the walker and the §9.1 harness compile against. Walk, WalkPath, Cert, CandidateIndex and reconstruct are `internal`
 // to revokt-engine; the walker-only harness and the Jazzer walker fuzzer live in revokt-engine's own test source set; revokt-testing's
 // reference walker takes List<ByteArray> and returns the Set<String> of lowercase-hex leaf-issuer SPKI hashes (value equality), so it needs no internal type.
-internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray /* the TBS re-encoded by the §9.2 unsigned-header rule: the verified message and the input of every TBS field */, val sig: ByteArray /* signatureValue content, padding bits cleared (§9.2) */, val tbsSigAlg: ByteArray, val tbsSigOid: String, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long? /* null when the time does not decode (§9.2; every JDK-accepted form decodes) */, val notAfter: Long?, val producerKeyable: Boolean, val keyabilityClause: KeyabilityClause? /* null ⇔ producerKeyable (§9.2 K1–K8); evaluated for the leaf at decision step 3 only */, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
+internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray /* the TBS re-encoded by the §9.2 unsigned-header rule: the verified message and the input of every TBS field */, val sig: ByteArray /* signatureValue content after the unused-bits octet, re-encoded when indefinite, padding bits cleared (§9.2) */, val tbsSigAlg: ByteArray, val tbsSigOid: String, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long? /* null when the time does not decode (§9.2; every JDK-accepted form decodes) */, val notAfter: Long?, val producerKeyable: Boolean, val keyabilityClause: KeyabilityClause? /* null ⇔ producerKeyable (§9.2 K1–K8); evaluated for the leaf at decision step 3 only */, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
 internal class WalkPath(val certs: List<Cert>, val terminal: TerminalKind)   // leaf → … → terminal; distinct from Finding.Path
 internal sealed interface Walk {                          // every variant carries unsupportedOids (related candidates only), findings and stats: WalkStats (verifications, candidatesExplored, relatedExploredAtLeaf, unrelatedExploredAtLeaf), built at the three return sites
     class Found(val paths: List<WalkPath>, val leafKeys: Set<ByteString>, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
@@ -2469,10 +2498,10 @@ tests; **live checks** are informational.
   `outcomeDepended = false`; (o) a second certified key verifying the leaf via an attacker-owned
   constrained sub-CA → both keys in `issuerSpkiSha256s`, `REVOKED`; (p) PrintableString/UTF8String
   issuer-name mismatch → `Found` via canonical ordering; (q) depth-9 bridge → `Found`; (r) TBS/outer
-  NULL-vs-absent mismatch → `Found` with the finding; **(s1)** (o) plus 62 related junk ahead of the
-  honest key (64 related in total) → `Found`, `pathsFound = 2`, `REVOKED`; **(s2)** (o) plus 63 junk
-  (65 related) → `Budget(RELATED_BUDGET)`, `Rejected` with `rule ∈ {REVOKED, PATH_BUDGET_EXCEEDED}`,
-  and `REVOKED ⇔ honestKey ∈ issuerSpkiSha256s`; **(t)** (o) plus 80 junk → same expectation as (s2); **(i), (s2), (t) and (y) present more than `MAX_PRESENTED` certificates and are walker-harness only; on every trust-manager path and `Revokt.evaluate` they are cut at step 3: `Budget(EXPLORATION_BUDGET)`, `endDepth = 0`, `PATH_BUDGET_EXCEEDED`, no CRLite query, as (ag) asserts**;
+  signature OID mismatch → `Found` with the finding, and a NULL-vs-absent pair → `Found` with no finding;
+  **(s1)** (o) plus 62 related junk ahead of the honest key (64 related in total) → `Found`, `pathsFound = 2`,
+  `REVOKED`; **(s2)** (o) plus 63 junk (65 related) → `Budget(RELATED_BUDGET)`, `Rejected` with `rule ∈ {REVOKED,
+  PATH_BUDGET_EXCEEDED}`, and `REVOKED ⇔ honestKey ∈ issuerSpkiSha256s`; **(t)** (o) plus 80 junk → same expectation as (s2); **(i), (s2), (t) and (y) present more than `MAX_PRESENTED` certificates and are walker-harness only; on every trust-manager path and `Revokt.evaluate` they are cut at step 3: `Budget(EXPLORATION_BUDGET)`, `endDepth = 0`, `PATH_BUDGET_EXCEEDED`, no CRLite query, as (ag) asserts**;
   (u) `getAcceptedIssuers()` throws during `refreshAnchors()` → the current snapshot is kept, `anchorSnapshotId` unchanged, the walk proceeds under it (the wiring and `start()` throw cases are lifecycle fixtures, (h));
   (v) honest chain against a 200-anchor snapshot → `verifications ≤ 4`, `COMPLETE`; (v2) the same
   with a retired-root cross-certificate presented → `≤ 4`; (w) dense cross-certified mesh (6 roots,
@@ -2645,23 +2674,25 @@ a minimal definite header, after `DerIndefLenConverter` has re-encoded every ind
 through indefinite elements only. `getEncoded()` keeps the presented bytes. So the `tbsCertificate` header is not
 signed, nor is any header on that indefinite chain (JDK 17, 21 and 27; Appendix A). A non-minimal definite header
 inside the TBS, and an indefinite header under a definite parent, break the signature. The parser therefore accepts
-these forms (indefinite lengths only at the first two places and on the indefinite chain below them):
+these forms (indefinite lengths only at these three places and on the indefinite chain below them):
 - the `tbsCertificate` header (`30`) in any definite form, or indefinite;
 - the outer `signatureAlgorithm` (`30`) in any definite form, or indefinite; its content is parsed only for the §5.1
   `AlgorithmIdMismatch` comparison, where any form other than minimal DER counts as a mismatch, and yields no field;
-- `signatureValue` as a primitive BIT STRING with a definite length of any form.
+- `signatureValue` as a primitive BIT STRING (`03`) with a definite length of any form, or indefinite.
 
 JDK 11 verifies a subset of these forms, with the same `getTBSCertificate()` on each. It verifies no non-minimal
 definite length and no indefinite element below the TBS, but still verifies an indefinite `tbsCertificate` header
-and an indefinite outer `signatureAlgorithm` (Appendix A).
+and an indefinite outer `signatureAlgorithm`. It alone verifies an indefinite `signatureValue`, when the content read
+from the unused-bits octet on is a chain of minimal TLVs; JDK 17, 21 and 27 reject that form (Appendix A).
 
-An indefinite element at the first two places is delimited and re-encoded as the JDK's converter does:
+An indefinite element at these three places is delimited and re-encoded as the JDK's converter does:
 - Each TLV header met in the reading below, other than end-of-contents, is read as the JDK's converter reads it: one
   tag octet, whatever its low five bits, then a length octet that is `80`, short form, or `81` to `84` followed by
   that many octets. A definite length must be minimal; a non-minimal length, or any other length octet, is
-  `STRUCTURE`: under the TBS it makes the JDK's message differ from the signed bytes, and under the outer
-  `signatureAlgorithm` the JDK fails to parse the certificate (Appendix A). A multi-octet tag is so misread; it
-  survives in `Cert.tbs` only where the TBS rules after this list leave bytes unparsed.
+  `STRUCTURE`: under the TBS it makes the JDK's message differ from the signed bytes, under the outer
+  `signatureAlgorithm` the JDK fails to parse the certificate, and under `signatureValue` JDK 11 does not verify it
+  (Appendix A). A multi-octet tag is so misread; it survives in `Cert.tbs` only where the TBS rules after this list
+  leave bytes unparsed.
 - From its first content octet, TLVs are read in turn. Every byte up to its end-of-contents is part of a TLV,
   including elements the trailing-element rule ignores.
 - `00 00` at a tag position closes the innermost open indefinite element.
@@ -2673,12 +2704,14 @@ An indefinite element at the first two places is delimited and re-encoded as the
 
 `Cert.tbs` is the TBS so re-encoded, under a minimal definite header; for a definite TBS that is its content byte for
 byte. It is the message the walker verifies, the input of every TBS field and of K1–K8, and the first element of
-`canon(encoded)`. D2 requires it to equal oracle 1's `getTBSCertificate()`. `Cert.sig` is the
-`signatureValue` content after its unused-bits octet u, with the last octet's u low bits cleared, as
+`canon(encoded)`. D2 requires it to equal oracle 1's `getTBSCertificate()`. `Cert.sig` is the `signatureValue`
+content, re-encoded when it is indefinite, after its unused-bits octet u, with the last octet's u low bits cleared, as
 `DerValue.getBitString` returns it. Forms the parser accepts and the JDK rejects are harmless for D1 and are not
 listed as accepted by the platform: a length of five or more octets on the TBS or `signatureValue` header; an empty
 `signatureValue`, more than 7 unused bits, or u > 0 with no further octet; outer AlgorithmIdentifier content the JDK
-refuses.
+refuses; an indefinite `signatureValue` on JDK 17, 21 and 27. A nested indefinite element inside an indefinite
+`signatureValue` is accepted and re-encoded as the JDK's converter does; JDK 11's verdict on it is not probed. If
+JDK 11 verifies it, it verifies the same re-encoded content; if it rejects it, the acceptance is harmless as above.
 
 **Everywhere else the parse is structurally strict.** Lengths must be definite (except on the indefinite chain under the unsigned headers above), and tags and lengths well-formed (the SCT list's inner length follows the rule above). `Certificate`, `[0]` (exactly its INTEGER), `Validity`, the `Extensions` SEQUENCE and each `Extension` before its `extnValue` hold exactly their elements, and no bytes may follow `Certificate`; **non-minimal definite lengths are
 accepted for extraction**, and the JDK preserves them through `getEncoded()`; whether the leaf is queried is the keyability profile's (below).
@@ -2690,10 +2723,11 @@ evaluated for the leaf only.
 It reads the signed content of `tbsCertificate` alone. Nothing outside that content is signed, so a network attacker
 can re-encode the envelope and the platform still verifies the certificate (Appendix A): the `tbsCertificate` header
 itself, the outer `signatureAlgorithm` in any length form with its NULL parameters flipped, the `signatureValue`
-header, and the RSA signature's unused-bits octet. The producer keyed the bytes
+header in any length form (indefinite on JDK 11), and the RSA signature's unused-bits octet. The producer keyed the bytes
 the CA logged, not the presented envelope. Oracle 4 therefore runs on `canon(encoded)`, which is
 `SEQUENCE { the TBS re-encoded by the unsigned-header rule above, the signature AlgorithmIdentifier TLV taken from
-that re-encoded TBS, a BIT STRING with zero unused bits holding the presented signature octets }`, each located by the reference view (3a, else
+that re-encoded TBS, a BIT STRING with zero unused bits holding the `signatureValue` content after its unused-bits
+octet, re-encoded when indefinite and with its padding bits not cleared }`, each located by the reference view (3a, else
 3b) and re-encoded by 3b's implementation of the rule, never by revokt's parser, so `canon` exists for inputs revokt
 fails to parse; for a parsed input its first element is `Cert.tbs` (D2). The new outer SEQUENCE and BIT STRING
 headers are minimal; the re-encoded TBS, and the AlgorithmIdentifier TLV from it, are copied byte for byte.
@@ -2711,7 +2745,8 @@ certificates under `STRICT`.
   an opaque region, read on `Cert.tbs`, has a single-octet tag and a minimal definite length below 2^31.
   - The opaque regions are the content of each `extnValue` whose OID is not in K8's list: the SCT list, the
     precertificate poison, the RFC 3779 extensions and every unknown extension. There ct-go either reports errors as
-    non-fatal or does not look.
+    non-fatal or does not look. The list is matched on canonical OID content; a non-minimal spelling of a listed OID is
+    opaque here and fails K4.
   - Inside them only the §9.2 SCT-list rule applies, and only for extraction.
 - **K2 TBS shape**:
   - `[0]` is absent, or is constructed (`A0`) and holds exactly one INTEGER with content `00`, `01` or `02`; when `[3]`
@@ -2731,7 +2766,8 @@ certificates under `STRICT`.
   Every other INTEGER the profile reads is non-empty, minimal and in the range its clause states.
 - **K4 OIDs**: every OID the profile reads is non-empty, with minimal subidentifiers each below 2^31, the first
   (40X + Y) included. That covers algorithms, attribute types, extension IDs, curves, EKU purposes, policies and access
-  methods.
+  methods. Minimality is stricter than the pinned ct-go, whose `parseBase128Int` keys a leading `80`; where the platform
+  accepts a leaf with such an OID, it is a D8-gap entry by rule, and its record carries a written justification.
 - **K5 names**: each attribute value is one of:
   - a `PrintableString` in Go's set: letters, digits, space, `'()+,-./:=?`, and the `*` and `&` Go also accepts;
   - a `UTF8String` that is valid UTF-8;
@@ -2743,7 +2779,9 @@ certificates under `STRICT`.
   hour is at most 23, and the minute and second at most 59. revokt's own §9.2 time decoding is more lenient by design,
   and the profile does not reuse it.
 - **K7 key**: the SPKI is an `AlgorithmIdentifier` and a BIT STRING with zero unused bits. The key is one of:
-  - `rsaEncryption` with NULL parameters and `RSAPublicKey { n > 0, 0 < e < 2^31 }`, both minimal, with nothing after;
+  - `rsaEncryption` with NULL parameters and `RSAPublicKey { n > 0, 0 < e < 2^31 }` filling the key, its three headers
+    each with a single-octet tag and a minimal definite length, and both INTEGERs minimal (ct-go parses it out of the BIT
+    STRING, which K1 does not walk);
   - `id-ecPublicKey` with `namedCurve` P-256, P-384 or P-521 and an uncompressed point `04 ‖ X ‖ Y` of the curve's
     length, with X and Y below p and on the curve;
   - Ed25519 with absent parameters and 32 octets.
@@ -2788,7 +2826,7 @@ reported, never rejected as `ParseFailed`; whether such a leaf is queried is the
 | 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()` | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
 | 2 | Conscrypt `CertificateFactory` (BoringSSL): `conscrypt-openjdk-uber` versions in the matrix; the **platform** Conscrypt on the instrumented tier | platform acceptance on Android; `encoded = getEncoded()` (`i2d_X509`) | as above | as above | as above |
 | 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error; the TBS TLV re-headed to minimal, its signature AlgorithmIdentifier and the `signatureValue` octets, for `canon` | `Ok` | `Err` | caught panic |
-| 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate` and the outer `signatureAlgorithm` and re-encode the TBS under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the `signatureValue` octets for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located | not located | caught panic |
+| 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate`, the outer `signatureAlgorithm` and the `signatureValue` and re-encode the TBS and the `signatureValue` under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the `signatureValue` content after its unused-bits octet, re-encoded when indefinite, for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
 | 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key `canon(encoded)` (above), with which bytes and through which path (`ct` for certificate-transparency-go's strict parse, `lax` for ct-go only through a `lax` retry, `zc` for the zcrypto fallback) | both calls return | a `ParseCertificate` error, or a panic anywhere in the producer (the shim recovers around the whole call) | unrecovered; counts as `Reject` under D8 |
 
@@ -2843,7 +2881,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
     - `*` and `&` in a PrintableString;
     - NIST and JDK-generated EC points, and single-bit flips of them;
     - the unsigned-header forms: a `tbsCertificate` header with a long-form length carrying leading zero octets, and
-      one with an indefinite length, each with the base certificate's key bytes and a `VERIFIED` link;
+      one with an indefinite length, each with the base certificate's key bytes and a `VERIFIED` link, and an EC leaf
+      whose `signatureValue` is indefinite with content that reads as a chain of minimal TLVs (a `VERIFIED` link on
+      JDK 11);
     - reject-side, each outside the profile with its golden: keyUsage `03 00` and `03 01 05`, which only zcrypto keys.
 - **D8 gap (measured)**: end-entity inputs in the D1 domain where `parse(encoded)` is `Parsed` and `producerKeyable`
   is false. The issuer corpus and CA certificates are never counted, since `producerKeyable` is a leaf predicate.
@@ -2864,7 +2904,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   not gated.
 - **D2 extraction agreement (security)**: on `parse(encoded_i,v)`: `Cert.tbs` equals `canon(encoded)`'s first element
   and oracle 1's `getTBSCertificate()`, while a difference from oracle 2's is recorded as a divergence, not a violation
-  (Conscrypt verifies over the presented TBS TLV, so a difference marks an input it cannot verify);
+  (Conscrypt verifies over the presented TBS TLV, so a difference marks an input it cannot verify); `Cert.sig` equals
+  `canon(encoded)`'s signature octets with the last octet's u low bits cleared, u being the presented unused-bits
+  octet as located by 3a, else 3b;
   `rawSerial` equals oracle 4's serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where `producerKeyable` (implied by D8's gated direction, restated so that a mismatch names the field);
   `rawSerial`, `rawSpki`, `rawSubject`, `rawIssuer`, extension values and the SCT pair set equal 3a's
   where 3a accepts, else 3b's. The expected SCT pair set is the union over SCT extensions of a per-extension
@@ -2896,10 +2938,10 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
 - **D5 crash-freedom and budgets**: no exception other than `ParseFailed`; allocation ≤ budget;
   `-max_len` = `RevoktLimits.MAX_CERT_BYTES + 1` (262145), so the over-cap behaviour is asserted;
   parse steps ≤ 8·len + 1024, asserted by a step counter in the replay; `-timeout=1`.
-- **D6 determinism and round trip**: `parse(b) == parse(b)`; offsets of TBS fields are relative to the
-  content of `Cert.tbs` and re-slice it to the reported values, and, shifted by the TBS content's start in `b`, also
-  re-slice `b` when the TBS header is definite; `parse(encoded_i,v)` has the same status and fields as `parse(b)` whenever both
-  are `Parsed`, for oracle 1 and for oracle 2 on the uber artifact and on the platform tier.
+- **D6 determinism and round trip**: `parse(b) == parse(b)`; offsets of TBS fields index `Cert.tbs` from its tag
+  octet and re-slice it to the reported values, and, shifted by the TBS content's start in `b` less `Cert.tbs`'s header
+  length, also re-slice `b` when the TBS header is definite; `parse(encoded_i,v)` has the same status and fields as
+  `parse(b)` whenever both are `Parsed`, for oracle 1 and for oracle 2 on the uber artifact and on the platform tier.
 - **D7 leniency corpus**: a committed corpus of real-world oddities, each entry carrying the
   recorded outcome of every oracle version and revokt's required outcome (the SCT-list outcomes named below follow from the rule above and are
   normative; for every other entry no outcome is asserted in this text and the corpus is the record): negative serial, serial over 20 bytes, serial with leading
@@ -2923,13 +2965,16 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   NULL as `05 81 00` inside it, a `tbsCertificate` header with a long-form length carrying leading zero octets or an
   indefinite length, an indefinite TBS with an indefinite Validity, subject RDN chain, `[0]`, or `[3]` down to an
   `extnValue` as `04 80 … 00 00`, an outer AlgorithmIdentifier `30 80 <OID> 05 80 00 00 00 00`, an RSA `signatureValue`
-  with unused-bits octet `01` and the padding bit set; required outcome for each: `Parsed`, with the `producerKeyable`
-  and key bytes of the unmodified certificate and a `VERIFIED` link, since the profile reads `Cert.tbs`; and on the
-  reject side an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI `30 82 00 …`), which the JDK
-  accepts and fails to verify, and an indefinite outer AlgorithmIdentifier holding a non-minimal OID header
-  (`30 80 06 81 08 … 00 00`), which the JDK rejects; each `STRUCTURE`); and a CA-signed TBS whose extensions are
-  followed by a trailing element with a multi-octet tag (`9f 01 02 05 00`), presented with a definite and with an
-  indefinite TBS header (`Parsed`, outside the profile under K2, the same outcome for both); and the D8-gap examples (a serial with non-minimal
+  with unused-bits octet `01` and the padding bit set, an EC `signatureValue` `03 80 <content> 00 00` whose content
+  reads as a chain of minimal TLVs (JDK 11 verifies it, JDK 17, 21 and 27 reject it); required outcome for each:
+  `Parsed`, with the `producerKeyable` and key bytes of the unmodified certificate and a `VERIFIED` link, since the
+  profile reads `Cert.tbs`; and on the reject side an indefinite TBS holding a non-minimal definite child (`02 81 …`,
+  an SPKI `30 82 00 …`), which the JDK accepts and fails to verify, an indefinite outer AlgorithmIdentifier holding a
+  non-minimal OID header (`30 80 06 81 08 … 00 00`), which the JDK rejects, and that indefinite `signatureValue` with
+  its chain's first header non-minimal (`03 80 00 81 30 … 00 00`), which JDK 11 does not verify; each `STRUCTURE`);
+  and a CA-signed TBS whose extensions are followed by a trailing element with a multi-octet tag (`9f 01 02 05 00`),
+  presented with a definite and with an indefinite TBS header (`Parsed`, outside the profile under K2, the same
+  outcome for both); and the D8-gap examples (a serial with non-minimal
   INTEGER content, a keyUsage or basicConstraints value only zcrypto accepts, a `UTCTime` without seconds; each
   `Parsed` and outside the profile).
 
@@ -3344,10 +3389,10 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     and `verify` fails).
     An indefinite outer AlgorithmIdentifier holding a non-minimal OID header (`30 80 06 81 08 … 00 00`) is rejected by
     `generateCertificate` ("Too short"), and one holding `05 81 00` is rejected ("extra data").
-    The re-encoding rule of §9.2 reproduces `getTBSCertificate()` on every input the JDK verifies. The JDK rejects a
-    constructed or indefinite `signatureValue`, a fourth `Certificate` element and a high-tag signature OID, and
-    normalises the outer `Certificate` header and trailing bytes away in `getEncoded()`. Conscrypt was not probed;
-    BoringSSL parses strict DER.
+    The re-encoding rule of §9.2 reproduces `getTBSCertificate()` on every input the JDK verifies. Every probed JDK
+    rejects a constructed `signatureValue`, and JDK 17, 21 and 27 an indefinite one; the JDK rejects a fourth
+    `Certificate` element and a high-tag signature OID, and normalises the outer `Certificate` header and trailing
+    bytes away in `getEncoded()`. Conscrypt was not probed; BoringSSL parses strict DER.
 
     Oracle 4 rejects the two header cases ("non-minimal length", "superfluous leading zeros"). The NULL flip is keyed
     through zcrypto only, because ct-go rejects "mismatching signature algorithm identifiers". The JDK re-encodes the
@@ -3369,7 +3414,8 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     the precertificate for a precert entry) and `tiled.go` (`logEntry.PreCertificate`) parse the logged
     precertificate, not the final certificate.
   - **JDK 11.0.32** `SUN`, on the same JDK probe sets: it verifies 31 of the 69 inputs JDK 17 verifies, and none
-    that JDK 17 does not. On each of the 31, `getTBSCertificate()` is byte-identical to JDK 17's.
+    that JDK 17 does not (revision 35 found one form outside these sets that it alone verifies, below). On each of
+    the 31, `getTBSCertificate()` is byte-identical to JDK 17's.
     - Under a definite TBS, `generateCertificate` rejects every non-minimal definite length ("Redundant length bytes
       found", "Should use short form for length"): the `tbsCertificate`, outer `Certificate`, `signatureAlgorithm`
       and `signatureValue` headers, and every probed TBS field header. Under an indefinite TBS, a non-minimal serial
@@ -3382,6 +3428,14 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
       and an indefinite outer `Certificate` header or trailing bytes, which `getEncoded()` normalises away.
     - Of the indefinite headers under a definite parent, it rejects only an indefinite `[3]` in
       `generateCertificate`; the rest, including those JDK 17 and 21 reject, parse and fail `verify`.
+- Revision 35 probe, run 2026-10-24 (the independent review of #24, then the maintainer's follow-up), on JDK 11.0.32
+  `SUN` unless noted:
+  - An indefinite `signatureValue` (`03 80 … 00 00`) verifies when its content, read from the unused-bits octet on, is
+    a chain of TLVs with minimal headers: 17 of 4 000 and 7 of 1 500 P-256 signatures re-signed over the
+    `letsencrypt.org-1` TBS, 0 of 1 500 RSA-2048. `getEncoded()` keeps it. JDK 17, 21 and 27 verified 0 of 4 000.
+  - Writing that chain's first header non-minimally (`00 81 30` for `00 30`) does not verify (3 of 3).
+  - A constructed `signatureValue`, definite or indefinite, is rejected by `generateCertificate` on JDK 11 and 17
+    ("not a bit string").
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android API facts, verified 2026-10-22: `CompletableFuture.completeAsync`, `orTimeout`, `completeOnTimeout`, `failedFuture` and `delayedExecutor` were added at API 31 (API-31 diff page), outside core-library desugaring; libcore's `java.net.HttpURLConnection` declares no `setAuthenticator`; `ApplicationConfig.getTrustManager()` creates one `RootTrustManager` per config under `ensureInitialized()` and `RootTrustManagerFactorySpi.engineGetTrustManagers` returns that instance; `ApplicationConfig.getConfigForHostname` lowercases and strips a trailing dot; NSC pins are `NetworkSecurityTrustManager.checkPins` on every overload, absent without a `<domain-config>`.
 - OkHttp (master `ConnectPlan.kt`, `RealConnection.kt`, `CertificatePinner.kt`): the `Handshake` is built with a lazy lambda around `certificateChainCleaner.clean(peerCertificates, host)`, `CertificatePinner.check` returns before invoking it when no pin matches, and `RealConnection.supportsUrl`/`certificateSupportHost` read `handshake.peerCertificates` for HTTP/2 coalescing; `isEligible` refuses coalescing unless the address's `hostnameVerifier === OkHostnameVerifier`.
