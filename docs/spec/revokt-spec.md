@@ -50,9 +50,12 @@ Status: **draft spec / project proposal, revision 34** · Target: JVM 11+ and An
     entries;
   - the boundary corpus;
   - D8 in the §9.2 Acceptance list.
-- **JDK 17 probed**: every revision 34 JDK probe was re-run on JDK 17.0.21, 21.0.13 and 27 `SUN`. JDK 17 matches
-  JDK 21 on every input, so the blocker entry above, §9.2 and Appendix A cite JDK 17, 21 and 27. JDK 27 differs
-  only on an indefinite header under a definite parent: it parses every such case and then fails to verify it.
+- **JDK 11 and 17 probed**: every revision 34 JDK probe was re-run on JDK 11.0.32, 17.0.21, 21.0.13 and 27 `SUN`.
+  JDK 17 matches JDK 21 on every input, so the blocker entry above, §9.2 and Appendix A cite JDK 17, 21 and 27.
+  JDK 27 differs only on an indefinite header under a definite parent: it parses every such case and then fails to
+  verify it. JDK 11 verifies a strict subset of JDK 17's inputs, with the same `getTBSCertificate()`, so the §9.2
+  rule holds there too. The bypass remains on JDK 11 through an indefinite `tbsCertificate` header, an indefinite
+  outer AlgorithmIdentifier, the NULL flip and the RSA padding bits.
 - **Considered and not adopted**: deciding keyability at the query, after the walk. §10 item 8 says why, and when the
   decision reopens.
 
@@ -2647,6 +2650,10 @@ these forms (indefinite lengths only at the first two places and on the indefini
   `AlgorithmIdMismatch` comparison, where any form other than minimal DER counts as a mismatch, and yields no field;
 - `signatureValue` as a primitive BIT STRING with a definite length of any form.
 
+JDK 11 verifies a subset of these forms, with the same `getTBSCertificate()` on each. It verifies no non-minimal
+definite length and no indefinite element below the TBS, but still verifies an indefinite `tbsCertificate` header
+and an indefinite outer `signatureAlgorithm` (Appendix A).
+
 An indefinite element at the first two places is delimited and re-encoded as the JDK's converter does:
 - From its first content octet, TLVs are read in turn. Every byte up to its end-of-contents is part of a TLV,
   including elements the trailing-element rule ignores.
@@ -3313,8 +3320,8 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
 - Mozilla producer keyability, verified 2026-10-22 in `mozilla/crlite` `go/types.go` (package `types`) and `certificate-transparency-go` `asn1/asn1.go`, `x509/x509.go` (master): `ParseCertificate` tries ct-go then zcrypto and keeps whichever returns a certificate; `NewSerialFromCertificate` re-parses `RawTBSCertificate` with stdlib `encoding/asn1` into `{Raw RawContent; Version RawValue "optional,explicit,default:0,tag:0"; SerialNumber RawValue}` and **panics** on failure (so a certificate the re-parse rejects never reaches a filter), keying on `SerialNumber.Bytes`; ct-go's `parseTagAndLength` rejects non-minimal tags, indefinite lengths, superfluous leading length zeros, long-form lengths under 128 and lengths ≥ 2^31 regardless of `lax`; `lax` relaxes `checkInteger` (non-minimal INTEGER content), OID and PrintableString parsing; Go's struct parse ignores trailing SEQUENCE elements; ct-go's SCT-list branch (`asn1.Unmarshal(e.Value, &out.RawSCT)` then `tls.Unmarshal`) reports every error through `NonFatalErrors`, `ParseCertificate` returns the certificate when `ctCert != nil`, and both ct-fetch workers (`rfc6962.go` `storeLogEntry`, `tiled.go`) log "Nonfatal parsing error" and continue to `PrepareSetMember`; zcrypto's only length leniency is `AllowPermissiveParsing`, which crlite never sets.
 - Revision 34 probes, run 2026-10-23 against the oracle-4 binary at `0082998` (the cohort's scripts and outputs are kept
   with the #11 records). Every JDK probe below ran on JDK 17.0.21, 21.0.13 and 27 `SUN`. The verdicts and, where
-  recorded, the `getTBSCertificate()` outputs agree across the three, except where noted. The matrix replay
-  re-checks them once the D7 entries land:
+  recorded, the `getTBSCertificate()` outputs agree across the three, except where noted; the JDK 11 results are
+  the last item. The matrix replay re-checks them once the D7 entries land:
   - **Envelope re-encodings**, applied to an RSA and an EC leaf. In each case `generateCertificate` accepts the
     certificate, `getEncoded()` returns the input bytes and `verify(issuerKey)` passes:
     - a non-minimal length on the outer `signatureAlgorithm` header (`30 0a` → `30 81 0a`);
@@ -3358,6 +3365,20 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   - **Precertificates**: `rfc6962.go` (`storeLogEntry`, `types.ParseCertificate(rawLogEntry.Cert.Data)`, which holds
     the precertificate for a precert entry) and `tiled.go` (`logEntry.PreCertificate`) parse the logged
     precertificate, not the final certificate.
+  - **JDK 11.0.32** `SUN`, on the same JDK probe sets: it verifies 31 of the 69 inputs JDK 17 verifies, and none
+    that JDK 17 does not. On each of the 31, `getTBSCertificate()` is byte-identical to JDK 17's.
+    - Under a definite TBS, `generateCertificate` rejects every non-minimal definite length ("Redundant length bytes
+      found", "Should use short form for length"): the `tbsCertificate`, outer `Certificate`, `signatureAlgorithm`
+      and `signatureValue` headers, and every probed TBS field header. Under an indefinite TBS, a non-minimal serial
+      or SPKI header inside it parses and fails `verify`, as on JDK 17.
+    - `generateCertificate` rejects an indefinite element on the indefinite chain below an indefinite TBS (the
+      Validity, subject, `[0]` and `[3]` chains), and an indefinite NULL inside an indefinite outer
+      AlgorithmIdentifier.
+    - Still verifying: the `tbsCertificate` header indefinite; the outer AlgorithmIdentifier indefinite with definite
+      content; the outer NULL parameters flipped; an RSA unused-bits octet of 1, with or without the padding bit;
+      and an indefinite outer `Certificate` header or trailing bytes, which `getEncoded()` normalises away.
+    - Of the indefinite headers under a definite parent, it rejects only an indefinite `[3]` in
+      `generateCertificate`; the rest, including those JDK 17 and 21 reject, parse and fail `verify`.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android API facts, verified 2026-10-22: `CompletableFuture.completeAsync`, `orTimeout`, `completeOnTimeout`, `failedFuture` and `delayedExecutor` were added at API 31 (API-31 diff page), outside core-library desugaring; libcore's `java.net.HttpURLConnection` declares no `setAuthenticator`; `ApplicationConfig.getTrustManager()` creates one `RootTrustManager` per config under `ensureInitialized()` and `RootTrustManagerFactorySpi.engineGetTrustManagers` returns that instance; `ApplicationConfig.getConfigForHostname` lowercases and strips a trailing dot; NSC pins are `NetworkSecurityTrustManager.checkPins` on every overload, absent without a `<domain-config>`.
 - OkHttp (master `ConnectPlan.kt`, `RealConnection.kt`, `CertificatePinner.kt`): the `Handshake` is built with a lazy lambda around `certificateChainCleaner.clean(peerCertificates, host)`, `CertificatePinner.check` returns before invoking it when no pin matches, and `RealConnection.supportsUrl`/`certificateSupportHost` read `handshake.peerCertificates` for HTTP/2 coalescing; `isEligible` refuses coalescing unless the address's `hostnameVerifier === OkHostnameVerifier`.
