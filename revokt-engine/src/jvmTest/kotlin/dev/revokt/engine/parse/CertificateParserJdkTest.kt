@@ -56,19 +56,15 @@ class CertificateParserJdkTest {
                     is CertificateParse.Parsed -> r.certificate
                     is CertificateParse.Failed -> fail("$name: ${r.reason} ${r.detail}")
                 }
-            assertContentEquals(jdk.tbsCertificate, p.tbs.tlv.bytes(der), "$name tbs")
+            assertContentEquals(jdk.tbsCertificate, p.tbsBytes, "$name tbs")
             assertEquals(jdk.serialNumber, BigInteger(p.rawSerial()), "$name serial")
             assertContentEquals(jdk.issuerX500Principal.encoded, p.rawIssuer(), "$name issuer")
             assertContentEquals(jdk.subjectX500Principal.encoded, p.rawSubject(), "$name subject")
             assertContentEquals(jdk.publicKey.encoded, p.rawSpki(), "$name spki")
             assertEquals(jdk.notBefore.time, p.tbs.validity.notBeforeMillis, "$name notBefore")
             assertEquals(jdk.notAfter.time, p.tbs.validity.notAfterMillis, "$name notAfter")
-            assertEquals(jdk.version, (p.tbs.version?.let { p.der[it.start].toInt() } ?: 0) + 1, "$name version")
-            assertContentEquals(
-                jdk.signature,
-                p.signatureValue.bytes(der).copyOfRange(1, p.signatureValue.length),
-                "$name signature",
-            )
+            assertEquals(jdk.version, (p.tbs.version?.let { p.tbsBytes[it.start].toInt() } ?: 0) + 1, "$name version")
+            assertContentEquals(jdk.signature, p.envelope.signature, "$name Cert.sig")
             val oids = jdk.criticalExtensionOIDs.orEmpty() + jdk.nonCriticalExtensionOIDs.orEmpty()
             assertEquals(
                 oids,
@@ -90,7 +86,7 @@ class CertificateParserJdkTest {
                 val wrapped = jdk.getExtensionValue(e.oidDotted)
                 assertContentEquals(
                     wrapped.copyOfRange(wrapped.size - e.value.length, wrapped.size),
-                    e.value.bytes(der),
+                    e.value.bytes(p.tbsBytes),
                     "$name ${e.oidDotted}",
                 )
             }
@@ -145,7 +141,7 @@ class CertificateParserJdkTest {
             assertEquals(
                 ids.first,
                 p.fields.ski!!
-                    .bytes(der)
+                    .bytes(p.tbsBytes)
                     .toByteString()
                     .hex(),
                 "$name SKI",
@@ -153,7 +149,7 @@ class CertificateParserJdkTest {
             assertEquals(
                 ids.second,
                 p.fields.akiKeyId!!
-                    .bytes(der)
+                    .bytes(p.tbsBytes)
                     .toByteString()
                     .hex(),
                 "$name AKI",

@@ -24,9 +24,10 @@ internal class Validity(
 )
 
 /**
- * The fields of `tbsCertificate` the engine reads (spec §5.5, §9.2 "Parser contract"). Spans index the input DER:
- * [serial] is the INTEGER content as encoded (sign and leading zeros preserved, the producer's `RawValue.Bytes`);
- * [signature], [issuer], [subject] and [spki] are complete TLVs. [version] is null when the `[0]` element is absent.
+ * The fields of `tbsCertificate` the engine reads (spec §5.5, §9.2 "Parser contract"). Spans index
+ * [ParsedCertificate.tbsBytes], the re-encoded TBS: [serial] is the INTEGER content as encoded (sign and leading zeros
+ * preserved, the producer's `RawValue.Bytes`); [signature], [issuer], [subject] and [spki] are complete TLVs. [version]
+ * is null when the `[0]` element is absent.
  */
 internal class Tbs(
     val tlv: Span,
@@ -50,24 +51,42 @@ internal class ExtensionFields(
     val akiKeyId: Span?,
 )
 
-/** A parsed `Certificate`. [der] is the caller's array, not a copy; every span indexes it. */
-internal class ParsedCertificate(
-    val der: ByteArray,
-    val tbs: Tbs,
+/**
+ * The envelope around `Cert.tbs` (spec §9.2 "The unsigned headers"). [presentedTbs], [signatureAlgorithm] and
+ * [signatureValue] (the BIT STRING content) index the input; [signature] is `Cert.sig`; [algorithmIdMismatch] is
+ * spec §5.1's `AlgorithmIdMismatch`.
+ */
+internal class EnvelopeFields(
+    val presentedTbs: Tlv,
+    val tbsIndefinite: Boolean,
     val signatureAlgorithm: Span,
     val signatureValue: Span,
+    val signature: ByteArray,
+    val algorithmIdMismatch: Boolean,
+)
+
+/**
+ * A parsed `Certificate`. [der] is the caller's array, not a copy. [tbsBytes] is `Cert.tbs` (spec §9.2): the TBS
+ * re-encoded by the unsigned-header rule under a minimal header, the message the signature covers; [tbs] and every
+ * [IgnoredElement] index it.
+ */
+internal class ParsedCertificate(
+    val der: ByteArray,
+    val tbsBytes: ByteArray,
+    val tbs: Tbs,
+    val envelope: EnvelopeFields,
     val nonMinimalHeaders: List<NonMinimalHeader>,
     val ignoredElements: List<IgnoredElement>,
     val fields: ExtensionFields,
     val steps: Long,
 ) {
-    fun rawSerial(): ByteArray = tbs.serial.bytes(der)
+    fun rawSerial(): ByteArray = tbs.serial.bytes(tbsBytes)
 
-    fun rawSpki(): ByteArray = tbs.spki.bytes(der)
+    fun rawSpki(): ByteArray = tbs.spki.bytes(tbsBytes)
 
-    fun rawSubject(): ByteArray = tbs.subject.bytes(der)
+    fun rawSubject(): ByteArray = tbs.subject.bytes(tbsBytes)
 
-    fun rawIssuer(): ByteArray = tbs.issuer.bytes(der)
+    fun rawIssuer(): ByteArray = tbs.issuer.bytes(tbsBytes)
 
     /** Extensions with [oid], in certificate order; duplicates are reported, never rejected (spec §9.2). */
     fun extensions(oid: String): List<Extension> = tbs.extensions.filter { it.oidDotted == oid }
@@ -94,7 +113,8 @@ internal sealed class CertificateParse {
 }
 
 /**
- * The one minimal parse of `Certificate` → `tbsCertificate` (spec §5.5, §9.2). Structurally strict except where the
+ * The one minimal parse of `Certificate` → `tbsCertificate` (spec §5.5, §9.2). The unsigned envelope headers are read
+ * as the JDK reads them ([Envelope]) and every TBS field is read from `Cert.tbs`. Structurally strict except where the
  * JDK's `X509CertInfo` tolerates trailing elements (after `subjectPublicKeyInfo`, inside `[3]`, after `extnValue`;
  * each recorded as an [IgnoredElement]; `[0]` stays strict because the producer flattens it): definite lengths, single-byte tags in their places, the RFC 5280
  * elements in order, nothing after `Certificate`. Semantically lenient: names, keys, algorithm parameters and extension values are not
@@ -136,23 +156,67 @@ internal object CertificateParser {
         val top = DerReader(der, 0, der.size, ctx)
         val certificate = top.read(SEQUENCE, HeaderSite.CERTIFICATE)
         top.requireEnd("Certificate")
-        val fields = top.child(certificate)
-        val tbsTlv = fields.read(SEQUENCE, HeaderSite.TBS)
-        val algorithm = fields.read(SEQUENCE, HeaderSite.SIGNATURE_ALGORITHM)
-        val signature = fields.read(BIT_STRING, HeaderSite.SIGNATURE_VALUE)
-        fields.requireEnd("signatureValue")
-        val tbs = parseTbs(der, fields.child(tbsTlv), tbsTlv, ctx)
-        val extensionFields = extensionFields(der, tbs.extensions, ctx)
+        val end = certificate.content.end
+        val tbsElement = Envelope.read(der, certificate.content.start, end, SEQUENCE, HeaderSite.TBS, ctx)
+        val algorithm =
+            Envelope.read(
+                der,
+                tbsElement.presented.tlv.end,
+                end,
+                SEQUENCE,
+                HeaderSite.SIGNATURE_ALGORITHM,
+                ctx,
+            )
+        val signature =
+            Envelope.read(
+                der,
+                algorithm.presented.tlv.end,
+                end,
+                BIT_STRING,
+                HeaderSite.SIGNATURE_VALUE,
+                ctx,
+            )
+        if (signature.presented.tlv.end !=
+            end
+        ) {
+            fail("${end - signature.presented.tlv.end} trailing bytes after signatureValue")
+        }
+        val tbsBytes = tbsElement.reencoded()
+        val tbsReader = DerReader(tbsBytes, 0, tbsBytes.size, ctx)
+        val tbsTlv = tbsReader.read(SEQUENCE, HeaderSite.TBS)
+        val tbs = parseTbs(tbsBytes, tbsReader.child(tbsTlv), tbsTlv, ctx)
+        val extensionFields = extensionFields(tbsBytes, tbs.extensions, ctx)
         return ParsedCertificate(
             der,
+            tbsBytes,
             tbs,
-            algorithm.tlv,
-            signature.content,
+            EnvelopeFields(
+                tbsElement.presented,
+                tbsElement.indefinite,
+                algorithm.presented.tlv,
+                signature.presented.content,
+                signatureBits(signature.content),
+                AlgorithmIdentifiers.mismatch(der, algorithm, tbs.signature.bytes(tbsBytes)),
+            ),
             ctx.nonMinimal.toList(),
             ctx.ignored.toList(),
             extensionFields,
             ctx.steps,
         )
+    }
+
+    /**
+     * `Cert.sig` (spec §9.2): the BIT STRING content, re-encoded when indefinite (JDK 11 verifies that form), after its
+     * unused-bits octet u, with the last octet's u low bits
+     * cleared as `DerValue.getBitString` returns it. The forms the JDK rejects (no octet, u > 7, u > 0 with no further
+     * octet) give the octets left with their padding cleared and are harmless: the platform rejects such input first.
+     */
+    private fun signatureBits(content: ByteArray): ByteArray {
+        if (content.size < 2) return ByteArray(0)
+        val bits = content.copyOfRange(1, content.size)
+        val unused = minOf(content[0].toInt() and 0xff, 8)
+        bits[bits.lastIndex] = (bits[bits.lastIndex].toInt() and (0xff shl unused)).toByte()
+        return bits
     }
 
     private fun parseTbs(

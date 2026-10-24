@@ -31,13 +31,16 @@ internal class DerException(
     message: String,
 ) : Exception(message)
 
-/** A header whose definite length is not minimal, at [offset]; the producer-keyability table reads these (spec §9.2). */
+/**
+ * A header whose definite length is not minimal, at [offset]: in the input for the envelope sites ([HeaderSite.CERTIFICATE],
+ * [HeaderSite.TBS], [HeaderSite.SIGNATURE_ALGORITHM], [HeaderSite.SIGNATURE_VALUE]), in `Cert.tbs` for every other site.
+ */
 internal class NonMinimalHeader(
     val offset: Int,
     val site: HeaderSite,
 )
 
-/** Bytes the parse skipped where the JDK's `X509CertInfo` tolerates them (spec §9.2), for the producer-keyability table. */
+/** Bytes of `Cert.tbs` the parse skipped where the JDK's `X509CertInfo` tolerates them (spec §9.2); each puts the leaf outside the keyability profile (K2). */
 internal class IgnoredElement(
     val span: Span,
     val site: IgnoredSite,

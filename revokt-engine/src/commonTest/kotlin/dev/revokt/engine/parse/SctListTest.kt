@@ -225,13 +225,13 @@ class SctListTest {
         assertEquals(
             listOf<Byte>(1, 2, 3),
             p.fields.ski!!
-                .bytes(p.der)
+                .bytes(p.tbsBytes)
                 .toList(),
         )
         assertEquals(
             listOf<Byte>(7, 8),
             p.fields.akiKeyId!!
-                .bytes(p.der)
+                .bytes(p.tbsBytes)
                 .toList(),
         )
         val malformed =
@@ -261,7 +261,7 @@ class SctListTest {
         assertEquals(
             listOf<Byte>(1, 2),
             nm.fields.ski!!
-                .bytes(nm.der)
+                .bytes(nm.tbsBytes)
                 .toList(),
         )
         assertEquals(listOf(HeaderSite.SKI), nm.nonMinimalHeaders.map { it.site })
@@ -275,7 +275,7 @@ class SctListTest {
         assertEquals(
             listOf<Byte>(2),
             k.fields.ski!!
-                .bytes(k.der)
+                .bytes(k.tbsBytes)
                 .toList(),
         )
     }
