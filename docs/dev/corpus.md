@@ -16,7 +16,8 @@ Two kinds (CONTRIBUTING §3):
 ## Admission
 
 Every entry gets a record (spec §9.2 "Corpus record schema"): `{sha256, path, revokt: {outcome, rawSerial, spkiSha256,
-scts[]}, oracles: [{id, version, outcome, fields | unavailable}], class, justification, added}`. Goldens for oracles 3a,
+scts[]}, oracles: [{id, version, outcome, fields | unavailable}], class, divergence?, keyability: {parser, clause, zlint}?,
+justification, added}`; the spec's schema is authoritative. Goldens for oracles 3a,
 3b and 4 are computed by the nightly native job at admission so the PR replay needs no Rust or Go.
 
 ## Clubcard corpus (`corpus/clubcard/`)
