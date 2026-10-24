@@ -64,13 +64,7 @@ class CertificateParserJdkTest {
             assertEquals(jdk.notBefore.time, p.tbs.validity.notBeforeMillis, "$name notBefore")
             assertEquals(jdk.notAfter.time, p.tbs.validity.notAfterMillis, "$name notAfter")
             assertEquals(jdk.version, (p.tbs.version?.let { p.tbsBytes[it.start].toInt() } ?: 0) + 1, "$name version")
-            assertContentEquals(
-                jdk.signature,
-                p.envelope.signatureValue
-                    .bytes(der)
-                    .copyOfRange(1, p.envelope.signatureValue.length),
-                "$name signature",
-            )
+            assertContentEquals(jdk.signature, p.envelope.signature, "$name Cert.sig")
             val oids = jdk.criticalExtensionOIDs.orEmpty() + jdk.nonCriticalExtensionOIDs.orEmpty()
             assertEquals(
                 oids,
