@@ -641,6 +641,16 @@ class KeyabilityTest {
                 "CRLDP URI not ASCII" to ext("2.5.29.31", seq(seq(tlv(0xa0, tlv(0xa0, tlv(0x86, bytes(0xc3, 0xa9))))))),
                 "certificatePolicies entry as a SET" to ext("2.5.29.32", seq(tlv(0x31, oid("2.23.140.1.2.1")))),
                 "certificatePolicies entry as [0]" to ext("2.5.29.32", seq(tlv(0xa0, oid("2.23.140.1.2.1")))),
+                "certificatePolicies qualifier holding BOOLEAN FF then 05" to
+                    ext(
+                        "2.5.29.32",
+                        seq(
+                            seq(
+                                oid("2.23.140.1.2.1"),
+                                seq(seq(oid("1.3.6.1.5.5.7.2.1"), tlv(0x01, bytes(0xff)), tlv(0x01, bytes(0x05)))),
+                            ),
+                        ),
+                    ),
                 "certificatePolicies qualifier holding BOOLEAN 05" to
                     ext(
                         "2.5.29.32",
