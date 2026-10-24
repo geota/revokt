@@ -108,6 +108,8 @@ class KeyabilityTest {
                     keyable(extensions = listOf(TestDer.extension("2.2147483567", ByteArray(0)))),
                 "* and & in a PrintableString" to keyable(subject = name(tlv(0x13, ascii("*.a&b.example")))),
                 "UTF8String" to keyable(subject = name(tlv(0x0c, "é€😀".encodeToByteArray()))),
+                "UTF8String U+0800, the smallest three-octet character" to
+                    keyable(subject = name(tlv(0x0c, bytes(0xe0, 0xa0, 0x80)))),
                 "IA5String" to keyable(subject = name(tlv(0x16, ascii("a@b.example")))),
                 "empty subject" to keyable(subject = seq()),
             ),
@@ -399,7 +401,14 @@ class KeyabilityTest {
                 "SPKI with no key octets" to keyable(spki = spki(tlv(0x03, bytes(0x00)))),
                 // The SPKI's own shape and a non-EC key's parameters are K7's to judge, not K2's or K4's.
                 "SPKI with a third element" to
-                    keyable(spki = seq(seq(oid("1.2.840.10045.2.1"), p256), tlv(0x03, bytes(0)), tlv(0x05))),
+                    keyable(
+                        spki =
+                            seq(
+                                seq(oid("1.2.840.10045.2.1"), p256),
+                                tlv(0x03, bytes(0, 0x04), p256X, p256Y),
+                                tlv(0x05),
+                            ),
+                    ),
                 "RSA parameters holding an OID" to
                     keyable(spki = rsaSpki(parameters = tlv(0x06, bytes(0x2a, 0x80, 0x01)))),
             ),
