@@ -82,9 +82,10 @@ Status: **draft spec / project proposal, revision 35** · Target: JVM 11+ and An
   JDK 17 matches JDK 21 on every input, so the blocker entry above, §9.2 and Appendix A cite JDK 17, 21 and 27.
   JDK 27 differs only on an indefinite header under a definite parent: it parses every such case and then fails to
   verify it. JDK 11 verifies a strict subset of JDK 17's inputs, with the same `getTBSCertificate()`, so the §9.2
-  rule holds there too. The bypass remains on JDK 11 through an indefinite `tbsCertificate` header, an indefinite
-  outer AlgorithmIdentifier, the NULL flip and the RSA padding bits. JDK 11, the bytecode target, joins the §9.2
-  version matrix (#20).
+  rule holds there too (on these probe sets; revision 35 found an indefinite `signatureValue` only JDK 11 verifies).
+  The bypass remains on JDK 11 through an indefinite `tbsCertificate` header, an indefinite outer
+  AlgorithmIdentifier, the NULL flip and the RSA padding bits. JDK 11, the bytecode target, joins the §9.2 version
+  matrix (#20).
 - **Considered and not adopted**: deciding keyability at the query, after the walk. §10 item 8 says why, and when the
   decision reopens.
 
