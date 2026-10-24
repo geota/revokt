@@ -347,7 +347,7 @@ The spec's §9 tiers are the CI tiers. **What a PR can break, a PR must test; wh
 the nightly blocks the release.**
 
 **The local gate.** `./gradlew check` is **JDK-only and offline**: unit tests, committed fixtures and the
-corpus replay with recorded oracle goldens (§9.2 D1–D3 offline), Jazzer regression inputs (`JAZZER_FUZZ`
+corpus replay with recorded oracle goldens (§9.2 D1–D3 and D8 offline), Jazzer regression inputs (`JAZZER_FUZZ`
 unset), the `Rule`/precedence/golden-fixture tests, ktlint, detekt (including `detektCommonMain`),
 `apiCheck`, animal-sniffer, `verifyPomLicenses`, `verifyDependencyScopes`, `verifyHeaderLocations`,
 `verifyCorpusManifest` and the Kover per-package floors. It needs no Android SDK, no Rust, no Go, no network.
@@ -391,6 +391,9 @@ every required check in Appendix B passes**.
 - The native job: builds `native/` (Rust cdylib, Go CLI) and `revokt-engine-upki`, runs the §9 oracles, the
   end-to-end CRLite oracle over the pinned corpus, the cross-engine suite (0.2+), and regenerates oracle
   goldens for corpus admission.
+- The producer job (spec §9.2; weekly, on every producer, certificate-transparency-go, zcrypto or Go pin change, and
+  before each release): oracle 4 at the pin and at `mozilla/crlite` `main` over the union corpus, plus at least
+  100 000 fresh CT entries; publishes the D8 gap by clause.
 - Fuzzing: ClusterFuzzLite batch matrix, one job per §9.1 target, `base-builder-jvm` pinned by digest, the
   coverage cron and the corpus storage token configured, corpus merged back weekly; a crash is uploaded as a
   SARIF artifact and a workflow step files the `security` issue (ClusterFuzzLite does not file issues itself).
@@ -466,6 +469,7 @@ approvals per section 5 · threads resolved · squash-merged by auto-merge. Done
 | Independent review in the solo phase | PR-lint requires the `Independent review` comment (ADR-0005) | PR | yes while solo |
 | Fuzzing | Jazzer regression on PRs; ClusterFuzzLite nightly; OSS-Fuzz once admitted | `check`; nightly | nightly blocks release |
 | Oracles, cross-engine suite, emulator matrix, minified build | nightly jobs; `run/android` label | nightly | release |
+| Producer drift and CT sample | the scheduled producer job (spec §9.2) | weekly; pin bumps; release | release |
 | Device benchmarks | the private `revokt-bench` repository's scheduled job on the ephemeral device runner | nightly | release (regression threshold) |
 | Reproducible builds, SBOM (CycloneDX, `jvmRuntimeClasspath` for KMP modules, attested), provenance (`actions/attest-build-provenance`, SLSA Build L2; L3 if the publish step moves to a reusable workflow), PGP signatures, release environment with a second maintainer's approval, tag ruleset | release workflow (section 9) | release | yes |
 | Project health | OpenSSF Scorecard weekly + badge; per-check targets in `docs/dev/scorecard.md` (the maximum the default token allows on a personal account, with the measured score recorded; `Packaging` and `Signed-Releases` need the jars, `.asc`, `.sigstore.json` and `.intoto.jsonl` attached to the GitHub release, since Scorecard reads release assets, not Maven Central) | scheduled | informational |

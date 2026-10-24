@@ -60,7 +60,7 @@
 
 ### 0.1
 
-engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8); JSON tree; clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; the §9.1 chain generator, `SymVerifier` and the reference walker (the walker fuzzer itself is 0.2, with the walker); oracle CI
+engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8 (gated direction; D8 gap reported)); JSON tree; clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; the §9.1 chain generator, `SymVerifier` and the reference walker (the walker fuzzer itself is 0.2, with the walker); oracle CI
 
 ### 0.2
 
