@@ -136,8 +136,27 @@ class ProducerD8Test {
                     .startsWith("reject-")
             assertTrue(o.certificate != null, "${o.input.name} parses")
             assertEquals(reject, o.clause != null, "${o.input.name}: clause ${o.clause}, producer ${o.golden}")
-            // Reject side: the strict ct-go parse does not key it (a `lax` or zcrypto key, or a rejection).
-            if (reject) assertTrue(!o.golden!!.endsWith(" ct"), "${o.input.name}: not keyed through ct (${o.golden})")
+            // Reject side: the producer's exact outcome is pinned (zcrypto-only, lax-only, or a rejection).
+            if (reject) {
+                val name = o.input.name
+                val expected =
+                    when {
+                        "key-usage" in name -> " zc"
+                        "serial-non-minimal" in name || "printable-at" in name -> " lax"
+                        else -> "REJECT"
+                    }
+                val golden = o.golden!!
+                assertTrue(
+                    if (expected ==
+                        "REJECT"
+                    ) {
+                        golden.startsWith(expected)
+                    } else {
+                        golden.endsWith(expected)
+                    },
+                    "$name: expected $expected, producer $golden",
+                )
+            }
         }
     }
 

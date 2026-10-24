@@ -6,7 +6,7 @@ package dev.revokt.engine.parse
 import dev.revokt.KeyabilityClause
 
 /**
- * The conservative keyability profile of spec §9.2 (revision 34), read on `Cert.tbs` alone: true only when every clause
+ * The conservative keyability profile of spec §9.2 (revision 35), read on `Cert.tbs` alone: true only when every clause
  * K1–K8 holds. It is not a model of the producer; a leaf outside it is never queried even when the producer keys it
  * (the D8 gap). Evaluated for the leaf only. The SPKI's own shape is K7's; K2 and K4 read only its algorithm and BIT
  * STRING. K8's grammars are [ExtensionGrammars].

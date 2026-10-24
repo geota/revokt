@@ -22,6 +22,7 @@ internal object ExtensionGrammars {
     private const val KEY_IDENTIFIER = 0x80
     private const val CONTEXT_0 = 0xa0
     private const val MAX_PATH_LEN_OCTETS = 4
+    private const val CONSTRUCTED = 0x20
 
     private val KEY_USAGE = byteArrayOf(0x55, 0x1d, 0x0f)
     private val BASIC_CONSTRAINTS = byteArrayOf(0x55, 0x1d, 0x13)
@@ -60,7 +61,7 @@ internal object ExtensionGrammars {
     ): Boolean {
         val grammar = GRAMMARS.firstOrNull { Oid.matches(b, e.oid, it.first) }?.second ?: return true
         return try {
-            grammar(b, e.value)
+            grammar(b, e.value) && booleans(b, e.value)
         } catch (_: DerException) {
             false
         }
@@ -139,6 +140,25 @@ internal object ExtensionGrammars {
         check: (Tlv) -> Boolean,
     ): Boolean {
         while (r.hasMore()) if (!check(r.readAny(SITE))) return false
+        return true
+    }
+
+    /** Every BOOLEAN anywhere in the value, policy qualifiers included, is `00` or `FF` (K8). */
+    private fun booleans(
+        b: ByteArray,
+        value: Span,
+    ): Boolean {
+        val stack = arrayListOf(reader(b, value))
+        while (stack.isNotEmpty()) {
+            val r = stack.last()
+            if (!r.hasMore()) {
+                stack.removeAt(stack.lastIndex)
+                continue
+            }
+            val t = r.readAny(SITE)
+            if (t.tag == BOOLEAN && !boolean(b, t.content)) return false
+            if (t.tag and CONSTRUCTED != 0) stack.add(reader(b, t.content))
+        }
         return true
     }
 

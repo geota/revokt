@@ -631,6 +631,37 @@ class KeyabilityTest {
                 "nameConstraints" to ext("2.5.29.30", seq()),
                 "subjectInfoAccess" to
                     ext("1.3.6.1.5.5.7.1.11", seq(seq(oid("1.3.6.1.5.5.7.48.5"), tlv(0x86, ascii("a"))))),
+                "CRLDP name with a second element" to
+                    ext("2.5.29.31", seq(seq(tlv(0xa0, tlv(0xa0, uri), tlv(0xa1, tlv(0x86, ascii("a"))))))),
+                "CRLDP name as [1] holding a URI" to
+                    ext("2.5.29.31", seq(seq(tlv(0xa0, tlv(0xa1, tlv(0x86, ascii("a"))))))),
+                "CRLDP reasons in place of the name" to
+                    ext("2.5.29.31", seq(seq(tlv(0x81, tlv(0xa0, tlv(0x86, ascii("a"))))))),
+                "CRLDP point as a SET" to ext("2.5.29.31", seq(tlv(0x31, tlv(0xa0, tlv(0xa0, uri))))),
+                "CRLDP URI not ASCII" to ext("2.5.29.31", seq(seq(tlv(0xa0, tlv(0xa0, tlv(0x86, bytes(0xc3, 0xa9))))))),
+                "certificatePolicies entry as a SET" to ext("2.5.29.32", seq(tlv(0x31, oid("2.23.140.1.2.1")))),
+                "certificatePolicies entry as [0]" to ext("2.5.29.32", seq(tlv(0xa0, oid("2.23.140.1.2.1")))),
+                "certificatePolicies qualifier holding BOOLEAN 05" to
+                    ext(
+                        "2.5.29.32",
+                        seq(seq(oid("2.23.140.1.2.1"), seq(seq(oid("1.3.6.1.5.5.7.2.1"), tlv(0x01, bytes(0x05)))))),
+                    ),
+                "AIA entry as a SET" to
+                    ext("1.3.6.1.5.5.7.1.1", seq(tlv(0x31, oid("1.3.6.1.5.5.7.48.1"), tlv(0x86, ascii("a"))))),
+                "AIA method not an OID" to
+                    ext("1.3.6.1.5.5.7.1.1", seq(seq(tlv(0x04, bytes(0)), tlv(0x86, ascii("a"))))),
+                "AIA URI not ASCII" to
+                    ext("1.3.6.1.5.5.7.1.1", seq(seq(oid("1.3.6.1.5.5.7.48.1"), tlv(0x86, bytes(0xc3, 0xa9))))),
+                "keyUsage as an OCTET STRING of bit-string content" to ext("2.5.29.15", tlv(0x04, bytes(0x00, 0x80))),
+                "basicConstraints as a SET" to ext("2.5.29.19", tlv(0x31)),
+                "SAN as a SET" to ext("2.5.29.17", tlv(0x31, tlv(0x82, ascii("a")))),
+                "AKI as a SET" to ext("2.5.29.35", tlv(0x31, tlv(0x80, bytes(1)))),
+                "EKU as a SET" to ext("2.5.29.37", tlv(0x31, oid("1.3.6.1.5.5.7.3.1"))),
+                "certificatePolicies as a SET" to ext("2.5.29.32", tlv(0x31)),
+                "CRLDP as a SET" to ext("2.5.29.31", tlv(0x31)),
+                "AIA as a SET" to
+                    ext("1.3.6.1.5.5.7.1.1", tlv(0x31, seq(oid("1.3.6.1.5.5.7.48.1"), tlv(0x86, ascii("a"))))),
+                "basicConstraints cA of two octets" to ext("2.5.29.19", seq(tlv(0x01, bytes(0xff, 0xff)))),
                 "critical 01 on an opaque extension" to
                     keyable(extensions = listOf(seq(oid("1.3.6.1.4.1.99999.1"), tlv(0x01, bytes(1)), tlv(0x04)))),
             ),
