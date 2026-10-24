@@ -5,7 +5,7 @@ SPDX-PackageDownloadLocation = "https://github.com/geota/revokt"
 
 # Files that cannot carry a header (lockfiles, dumps, wrappers, data) get their licence here (CONTRIBUTING §3).
 [[annotations]]
-path = ["**/*.lockfile", "**/*.api", "gradle/wrapper/**", "gradlew", "gradlew.bat", "gradle/verification-metadata.xml", "gradle/verification-keyring.keys", "corpus/manifest.sha256", "**/src/*/resources/**/*Inputs/**", "docs/dev/status.md", "docs/dev/rulesets/**", ".github/protected-paths.txt", ".gitignore", ".gitattributes", "CODEOWNERS", "**/META-INF/services/**", "perf/baseline.json", "renovate.json", "osv-scanner.toml", "package.json", "package-lock.json"]
+path = ["**/*.lockfile", "**/*.api", "gradle/wrapper/**", "gradlew", "gradlew.bat", "gradle/verification-metadata.xml", "gradle/verification-keyring.keys", "corpus/manifest.sha256", "**/src/*/resources/**/*Inputs/**", "**/src/*/resources/**/certs/**", "docs/dev/status.md", "docs/dev/rulesets/**", ".github/protected-paths.txt", ".gitignore", ".gitattributes", "CODEOWNERS", "**/META-INF/services/**", "perf/baseline.json", "renovate.json", "osv-scanner.toml", "package.json", "package-lock.json"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 revokt contributors"
 SPDX-License-Identifier = "Apache-2.0"
