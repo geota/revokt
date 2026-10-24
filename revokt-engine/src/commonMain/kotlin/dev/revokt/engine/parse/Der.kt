@@ -82,6 +82,9 @@ internal enum class HeaderSite {
     EXTENSION_VALUE,
     SIGNATURE_ALGORITHM,
     SIGNATURE_VALUE,
+    SKI,
+    AKI,
+    AKI_KEY_ID,
 }
 
 /** Per-parse state shared by every reader: the step counter (spec §9.2 D5) and the non-minimal headers seen. */

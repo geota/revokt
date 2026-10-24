@@ -310,9 +310,9 @@ class CertificateParserTest {
 
     @Test
     fun `parser step count is pinned for the reference certificate`() {
-        // Headers, one per element, OID and time content: a change here is a change to what D5 measures.
+        // Headers, one per element, OID and time content, and the SKI read: a change here is a change to what D5 measures.
         val p = parsed(TestCert())
-        assertEquals(105, p.steps)
+        assertEquals(108, p.steps)
         assertTrue(p.steps <= 8L * p.der.size + 1024)
     }
 
