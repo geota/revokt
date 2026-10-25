@@ -42,6 +42,10 @@ tasks.withType<Test>().configureEach {
     jvmArgumentProviders.add(ZlintGoMod(rootProject.file("native/zlint-oracle/go.mod")))
     // Oracle 2 (Conscrypt) loads its JNI library; JDK 24+ warn and a later release blocks it without this (JDK 17+).
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+    // Oracle 1 is the test JDK, whose patch can change an outcome; Gradle keys a toolchain by its language version only,
+    // so a cached result from another patch would stand in for this one.
+    inputs.property("testJavaRuntimeVersion", javaLauncher.map { it.metadata.javaRuntimeVersion })
+    inputs.property("testJavaVendor", javaLauncher.map { it.metadata.vendor })
     // The large corpus (docs/dev/corpus.md): `-Prevokt.corpus=<checkout>` adds its inputs, goldens and records to the
     // replay. Its tree is an input; its path reaches the tests without entering the cache key.
     corpus?.let {
