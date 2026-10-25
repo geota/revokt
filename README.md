@@ -20,7 +20,8 @@ Certificates) by the milestones in `docs/spec/revokt-spec.md` §11.
 
 ## Building
 
-Gradle runs on JDK 21 (`JAVA_HOME`), the library targets JDK 11 bytecode and Android API 26+.
+Gradle runs on JDK 21 (`JAVA_HOME`), the library targets JDK 17 bytecode and Android API 26+ (Android
+consumers need AGP 8.5.2 or later, as Kotlin 2.4 already requires; its D8 dexes Java 17 bytecode).
 
 ```
 ./gradlew check                 # the full local gate: JDK-only, offline

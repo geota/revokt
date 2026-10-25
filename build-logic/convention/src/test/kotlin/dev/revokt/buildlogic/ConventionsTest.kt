@@ -18,6 +18,6 @@ class ConventionsTest {
     @Test
     fun `jdk facts match CONTRIBUTING`() {
         assertEquals(21, Conventions.JDK_BUILD)
-        assertEquals(11, Conventions.JDK_RELEASE)
+        assertEquals(17, Conventions.JDK_RELEASE)
     }
 }

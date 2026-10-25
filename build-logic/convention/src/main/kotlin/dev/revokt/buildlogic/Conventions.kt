@@ -18,7 +18,7 @@ import org.gradle.kotlin.dsl.withType
 object Conventions {
     const val GROUP = "dev.revokt"
     const val JDK_BUILD = 21
-    const val JDK_RELEASE = 11
+    const val JDK_RELEASE = 17
     const val MARKER_INTERNAL = "dev.revokt.RevoktInternalApi"
     const val MARKER_TESTING = "dev.revokt.RevoktTestingApi"
     const val MARKER_CLUBCARD_INTERNAL = "dev.revokt.clubcard.RevoktInternalApi"
@@ -88,6 +88,9 @@ internal fun declaredDependencies(project: Project, vararg configurationNames: S
  */
 internal fun configureTestJdk(project: Project, test: Test) {
     val requested = project.providers.gradleProperty("revokt.testJdk").map { it.toInt() }.getOrElse(Conventions.JDK_BUILD)
+    require(requested >= Conventions.JDK_RELEASE) {
+        "revokt.testJdk=$requested is below the bytecode target ${Conventions.JDK_RELEASE} (spec revision 38)"
+    }
     val toolchains = project.extensions.getByType<JavaToolchainService>()
     test.javaLauncher.set(toolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(requested)) })
 }

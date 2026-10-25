@@ -1,7 +1,7 @@
 # Local workflow
 
 Gradle runs on **JDK 21** (`JAVA_HOME`); the daemon JVM is 21 because build-logic is compiled for it. The library
-compiles to JDK 11 bytecode (`-Xjdk-release=11`) and Android API 26+ (animal-sniffer, from 0.2's jvm modules).
+compiles to JDK 17 bytecode (`-Xjdk-release=17`) and Android API 26+ (animal-sniffer, from 0.2's jvm modules).
 JDKs are never auto-provisioned: register local installs in `~/.gradle/gradle.properties` with
 `org.gradle.java.installations.paths=…` when they are outside the OS defaults (Homebrew kegs, SDKMAN).
 

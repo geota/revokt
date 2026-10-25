@@ -29,7 +29,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { jdk: "11", label: "11" }
           - { jdk: "17", label: "17" }
           - { jdk: "21", label: "21" }
           - { jdk: "25", label: "lts" }
@@ -55,7 +54,7 @@ jobs:
         run: >
           ./gradlew check
           -Prevokt.testJdk=${{ matrix.jdk }}
-          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_11_X64,JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_25_X64,JAVA_HOME_27_X64
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_25_X64,JAVA_HOME_27_X64
           --no-daemon
       - name: coverage artifact (JDK 21 only)
         if: matrix.jdk == '21'
