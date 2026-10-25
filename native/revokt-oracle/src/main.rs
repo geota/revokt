@@ -18,7 +18,12 @@
 //! `log_id_hex:timestamp` (empty allowed) and `expected` is one of `Good`, `Revoked`, `NotCovered`, `NotEnrolled`.
 
 mod locate;
+mod walk;
 mod x509;
+
+#[cfg(test)]
+#[path = "test/support.rs"]
+mod test_support;
 
 use std::fs;
 use std::path::Path;

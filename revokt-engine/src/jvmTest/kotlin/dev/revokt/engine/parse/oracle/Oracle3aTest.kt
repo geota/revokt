@@ -5,7 +5,6 @@ package dev.revokt.engine.parse.oracle
 
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
-import dev.revokt.engine.parse.IgnoredSite
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import okio.ByteString.Companion.toByteString
@@ -17,8 +16,9 @@ import kotlin.test.fail
 /**
  * Spec §9.2 D2 against oracle 3a on the replay corpus: wherever revokt parses and 3a accepts, the raw serial, SPKI,
  * subject, issuer, extension table, SCT pair set, `Cert.tbs` and `Cert.sig` agree. The SCT pairs follow the per-extension
- * expectation (∅ when the value's first octet is not `0x04`, recorded as `3A_HEADER_LAX` when 3a yields pairs), and a
- * primitive `[3]` that 3a reads as extensions while revokt ignores it is recorded as `3A_TBS_LAX` with the §9.2 read.
+ * expectation (∅ when the value's first octet, as 3b locates it, is not `0x04`, recorded as `3A_HEADER_LAX` when 3a
+ * yields pairs), and an element with tag number 3 other than a constructed context `[3]` that 3a reads as extensions
+ * while 3b's walk and revokt ignore it is recorded as `3A_TBS_LAX` with the §9.2 read (revision 37).
  */
 class Oracle3aTest {
     private val goldens by lazy { Oracle3a.goldens() }
@@ -42,7 +42,10 @@ class Oracle3aTest {
             val a = Oracle3a.accepted(reply)
             if (c != null && a != null) {
                 compared++
-                compare(input.name, c, a, divergences)
+                val b =
+                    Oracle3b.reply(sha)?.let { Oracle3b.located(it) }
+                        ?: fail("${input.name}: revokt parses, 3b does not locate it")
+                compare(input.name, c, a, b, divergences)
             } else if (c != null) {
                 rejectedByThreeA += input.name
             }
@@ -61,7 +64,7 @@ class Oracle3aTest {
         // Inputs revokt parses and 3a rejects (x509-parser refuses indefinite and some JDK-tolerated forms): pinned, so
         // a wrapper regression cannot shrink D2 unnoticed. They are D2-referenced by 3b (#38).
         assertEquals(THREE_A_REJECTS, rejectedByThreeA.toSet(), "inputs revokt parses that 3a rejects")
-        assertEquals<List<String>?>(listOf("d3/primitive-3"), divergences[Divergence.TBS_LAX], "3A_TBS_LAX")
+        assertEquals<List<String>?>(TBS_LAX, divergences[Divergence.TBS_LAX], "3A_TBS_LAX")
         assertTrue(compared > 1000, "only $compared inputs compared")
     }
 
@@ -69,6 +72,7 @@ class Oracle3aTest {
         name: String,
         c: ParsedCertificate,
         a: Oracle3a.Accepted,
+        b: Oracle3b.Located,
         divergences: MutableMap<Divergence, MutableList<String>>,
     ) {
         assertEquals(a.serial, Oracle3a.hex(c.rawSerial()), "$name serial")
@@ -78,7 +82,7 @@ class Oracle3aTest {
         assertEquals(a.canon.tbs, Oracle3a.hex(c.tbsBytes), "$name Cert.tbs")
         assertEquals(a.canon.tbsSignature, Oracle3a.hex(c.tbs.signature.bytes(c.tbsBytes)), "$name TBS signature")
         assertEquals(
-            cleared(a.canon.signature, a.canon.unusedBits),
+            Oracle3a.cleared(a.canon.signature, a.canon.unusedBits),
             Oracle3a.hex(c.envelope.signature),
             "$name Cert.sig",
         )
@@ -88,27 +92,23 @@ class Oracle3aTest {
             }
         val oracleExtensions = a.extensions.map { "${it.oid},${it.critical},${it.value}" }
         if (revoktExtensions != oracleExtensions) {
-            // 3A_TBS_LAX: 3a takes a primitive [3] as extensions; revokt, like the JDK, ignores it (spec §9.2, D3). The
-            // spec says 3b's TBS walk decides the class; until #38 lands that walk, revokt's own stop element stands in.
-            val primitive3 =
-                c.ignoredElements.any {
-                    it.site == IgnoredSite.TBS_AFTER_STOP &&
-                        c.tbsBytes[it.span.start].toInt() and 0xff == 0x83
-                }
+            // 3A_TBS_LAX: 3a takes an element with tag number 3 that is not a constructed context [3] as extensions;
+            // revokt, like the JDK, ignores it. 3b's TBS walk decides the class (spec §9.2 D2, revision 37).
             assertTrue(
-                primitive3 && revoktExtensions.isEmpty(),
-                "$name extensions: revokt $revoktExtensions, 3a $oracleExtensions",
+                b.tagThreeIgnored && revoktExtensions.isEmpty(),
+                "$name extensions: revokt $revoktExtensions, 3a $oracleExtensions, 3b stop ${b.stop}",
             )
             divergences.getOrPut(Divergence.TBS_LAX) { ArrayList() }.add(name)
-            assertEquals(emptySet(), c.fields.scts, "$name: the §9.2 read of a primitive [3] has no SCTs")
+            assertEquals(emptySet(), c.fields.scts, "$name: the §9.2 read of an ignored tag-3 element has no SCTs")
             return
         }
+        assertEquals(oracleExtensions, b.extensions.map { "${it.oid},${it.critical},${it.value}" }, "$name 3b table")
         val expected = HashSet<Pair<String, Long>>()
-        for (e in a.extensions) {
+        for ((index, e) in a.extensions.withIndex()) {
             if (e.sct == null) continue
             val pairs = e.sct
-            // The inner identifier octet is read from 3a's reply, never from revokt (spec §9.2 D2).
-            val innerIsOctetString = e.value.startsWith("04")
+            // The inner identifier octet is read by 3b's locator, never by revokt (spec §9.2 D2).
+            val innerIsOctetString = b.extensions[index].value.startsWith("04")
             if (innerIsOctetString) {
                 expected += pairs
             } else if (pairs.isNotEmpty()) {
@@ -123,22 +123,15 @@ class Oracle3aTest {
         assertEquals(expected, actual, "$name SCT pairs")
     }
 
-    private fun cleared(
-        hex: String,
-        unused: Int,
-    ): String {
-        if (hex.isEmpty()) return hex
-        val b = Oracle3a.bytes(hex)
-        b[b.lastIndex] = (b[b.lastIndex].toInt() and (0xff shl minOf(unused, 8))).toByte()
-        return Oracle3a.hex(b)
-    }
-
     @Test
     fun `the 3a recording hook writes the corpus on request`() {
         Oracle3a.writeInputsIfRequested()
     }
 
     private companion object {
+        val TBS_LAX: List<String> =
+            listOf("d3/primitive-3") + listOf("03", "23", "43", "63", "c3", "e3").map { "d3/tag3-$it" }
+
         val THREE_A_REJECTS: Set<String> =
             setOf(
                 // JDK-tolerated trailing elements and unique-id forms x509-parser refuses.

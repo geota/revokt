@@ -60,34 +60,6 @@ internal object Oracle3a {
     fun accepted(reply: String): Accepted? {
         val f = reply.split('\t')
         if (f[0] != "OK") return null
-        val extensions =
-            if (f[9].isEmpty()) {
-                emptyList()
-            } else {
-                f[9].split(';').map { e ->
-                    val parts = e.split(',')
-                    val (oid, critical, value) = parts
-                    val sct = parts[3]
-                    val pairs =
-                        when (sct) {
-                            "-", "E" -> {
-                                null
-                            }
-
-                            "" -> {
-                                emptyList()
-                            }
-
-                            else -> {
-                                sct.split('+').map {
-                                    it.substringBefore('@') to
-                                        it.substringAfter('@').toULong().toLong()
-                                }
-                            }
-                        }
-                    Extension(oid, critical == "1", value, if (sct == "E") emptyList() else pairs, sct == "E")
-                }
-            }
         return Accepted(
             f[1],
             f[2],
@@ -95,9 +67,53 @@ internal object Oracle3a {
             f[4],
             f[5].toInt(),
             CanonParts(f[6], f[7], f[8], f[10].toInt()),
-            extensions,
+            extensions(f[9]),
             f[11] == "1",
         )
+    }
+
+    /**
+     * An `extensions` field, as 3a and 3b both write it: `;`-joined `oid,critical,value,sct`, `sct` `-` for another
+     * OID, `E` for a list that fails, else `+`-joined `logid@timestamp`.
+     */
+    fun extensions(field: String): List<Extension> =
+        if (field.isEmpty()) {
+            emptyList()
+        } else {
+            field.split(';').map { e ->
+                val parts = e.split(',')
+                val (oid, critical, value) = parts
+                val sct = parts[3]
+                val pairs =
+                    when (sct) {
+                        "-", "E" -> {
+                            null
+                        }
+
+                        "" -> {
+                            emptyList()
+                        }
+
+                        else -> {
+                            sct.split('+').map {
+                                it.substringBefore('@') to
+                                    it.substringAfter('@').toULong().toLong()
+                            }
+                        }
+                    }
+                Extension(oid, critical == "1", value, if (sct == "E") emptyList() else pairs, sct == "E")
+            }
+        }
+
+    /** Signature octets [hex] with the last octet's [unused] low bits cleared, as `Cert.sig` holds them. */
+    fun cleared(
+        hex: String,
+        unused: Int,
+    ): String {
+        if (hex.isEmpty()) return hex
+        val b = bytes(hex)
+        b[b.lastIndex] = (b[b.lastIndex].toInt() and (0xff shl minOf(unused, 8))).toByte()
+        return hex(b)
     }
 
     fun hex(b: ByteArray): String = b.toByteString().hex()

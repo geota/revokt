@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Records the goldens of oracles 3a (x509-parser 0.18.1) and 3b (the independent locator) for every input of the replay
-# corpus (spec §9.2, #35, #36). 3b supplies canon(encoded), so run this before native/producer-oracle/record-goldens.sh.
+# corpus (spec §9.2, #35, #36, #38). The D8 replay reads both (canon from 3a, else 3b), so run this before
+# native/producer-oracle/record-goldens.sh.
 # Needs Rust and JDK 21; the PR tier replays the committed goldens and needs neither. Run from the repository root:
 #   sh native/revokt-oracle/record-goldens.sh
 set -eu

@@ -91,7 +91,7 @@ class ProducerD8Test {
         val failing = outcomes.filter { it.certificate == null }.map { it.input.name }.toSet()
         val expected =
             STRICT_VARIANTS.map { "variants/$it" }.toSet() + MALFORMED_FUZZ_SEEDS.map { "fuzz/$it" } +
-                ProducerCorpus.envelopeRejects()
+                ProducerCorpus.envelopeRejects() + BoundaryCorpus.DIVERGENCE_REJECTS.map { "d3/$it" }
         assertEquals(expected, failing)
     }
 

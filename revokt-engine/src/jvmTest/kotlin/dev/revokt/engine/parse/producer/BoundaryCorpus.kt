@@ -4,6 +4,7 @@
 package dev.revokt.engine.parse.producer
 
 import dev.revokt.engine.parse.TestCert
+import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.parse.TestDer.ascii
 import dev.revokt.engine.parse.TestDer.bytes
 import dev.revokt.engine.parse.TestDer.extension
@@ -235,12 +236,32 @@ internal object BoundaryCorpus {
                 base(
                     extensions = listOf(extension(sct, tlv(0x04, bytes(0, 0))), extension(sct, tlv(0x04, sctList(9)))),
                 ),
-            "primitive-3" to
-                TestCert(
-                    spki = ec(points[0].first, points[0].second, points[0].third),
-                    extensions = emptyList(),
-                    tbsTrailing = tlv(0x83, seq(extension(sct, tlv(0x04, sctList(3))))),
-                ).der,
-        )
+            "primitive-3" to tagThree(bytes(0x83), sct),
+        ) +
+            // Tag number 3 in the other classes and forms, which x509-parser also reads as extensions (revision 37),
+            // and in multi-octet form, which revokt and 3b reject (DIVERGENCE_REJECTS).
+            listOf(0x03, 0x23, 0x43, 0x63, 0xc3, 0xe3).map { tag ->
+                "tag3-%02x".format(tag) to tagThree(bytes(tag), sct)
+            } +
+            listOf("9f03" to bytes(0x9f, 0x03), "bf03" to bytes(0xbf, 0x03)).map { (n, id) ->
+                "tag3-$n" to
+                    tagThree(id, sct)
+            }
+    }
+
+    /** The [divergences] revokt rejects: a multi-octet identifier is `STRUCTURE` wherever the parse reads one. */
+    val DIVERGENCE_REJECTS = listOf("tag3-9f03", "tag3-bf03")
+
+    /** A TBS whose element after the SPKI has [identifier] and holds an Extensions SEQUENCE with an SCT list. */
+    private fun tagThree(
+        identifier: ByteArray,
+        sct: String,
+    ): ByteArray {
+        val content = seq(extension(sct, tlv(0x04, sctList(3))))
+        return TestCert(
+            spki = ec(points[0].first, points[0].second, points[0].third),
+            extensions = emptyList(),
+            tbsTrailing = identifier + TestDer.length(content.size) + content,
+        ).der
     }
 }

@@ -1,24 +1,33 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
-//! Oracle 3b of spec §9.2, a minimal TLV locator written independently of revokt; this step builds `canon`. It
-//! delimits `tbsCertificate`, the outer `signatureAlgorithm` and `signatureValue`, and re-encodes the indefinite ones as
-//! the JDK's `DerIndefLenConverter` does (the §9.2 unsigned-header rule). Same pipe protocol as `x509`:
+//! Oracle 3b of spec §9.2, a minimal TLV locator written independently of revokt. It delimits `tbsCertificate`, the
+//! outer `signatureAlgorithm` and `signatureValue`, re-encodes the indefinite ones as the JDK's `DerIndefLenConverter`
+//! does (the §9.2 unsigned-header rule), then walks the re-encoded TBS ([`crate::walk`]). Same pipe protocol as `x509`:
 //!
 //! ```text
-//! CANON <tbs> <tbs-signature> <signature>
+//! LOCATED <serial> <spki> <subject> <issuer> <tbs> <tbs-signature> <signature> <unused> <extensions> <stop>
+//! CANON <tbs> <tbs-signature> <signature> <reason>
 //! NOT_LOCATED <reason>
 //! PANIC <reason>
 //! ```
 //!
-//! Fields are lower-case hex: the re-encoded TBS under a minimal header, its signature AlgorithmIdentifier (after the
-//! optional `[0]` and the serial), and the `signatureValue` content after its unused-bits octet, re-encoded when
-//! indefinite (padding not cleared): the parts of `canon(encoded)`.
+//! `CANON` is the answer when the envelope is delimited but the TBS walk fails (`reason`). Byte fields are lower-case
+//! hex. `tbs` is the re-encoded TBS under a minimal header, `tbs-signature` its signature AlgorithmIdentifier (after the
+//! optional `[0]` and the serial) and `signature` the `signatureValue` content after its unused-bits octet, re-encoded
+//! when indefinite (padding not cleared): the parts of `canon(encoded)`. `unused` is that unused-bits octet in decimal
+//! (`-` when the content is empty). `serial` is the INTEGER content, `spki`, `subject` and `issuer` the TLVs.
+//! `extensions` is `;`-joined `oid,critical,value,sct`: the OID content, `1` when the flag octet is non-zero, the
+//! `extnValue` content, and `sct` `-` except for the SCT-list extension, where it is `E` when the §9.2 SCT-list rule
+//! fails the list, else the kept items' `logid@timestamp`, `+`-joined. `stop` is the identifier octet of the element that
+//! ended the TBS tail read (§9.2 trailing-element rule), or `-`.
 
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+
+use crate::walk;
 
 type Located<T> = Result<T, String>;
 
@@ -196,12 +205,53 @@ fn describe(der: &[u8]) -> Located<String> {
     let header = [vec![0x30], minimal_length(tbs.len())].concat();
     let reencoded = [header.as_slice(), &tbs].concat();
     let algorithm = tbs_signature(&reencoded, header.len(), reencoded.len())?;
-    Ok(format!(
-        "CANON\t{}\t{}\t{}",
+    let canon = [
         hex(&reencoded),
         hex(algorithm),
-        hex(signature.get(1..).unwrap_or(&[]))
-    ))
+        hex(signature.get(1..).unwrap_or(&[])),
+    ]
+    .join("\t");
+    let fields = match walk::walk(&reencoded) {
+        Ok(fields) => fields,
+        Err(reason) => return Ok(format!("CANON\t{canon}\t{reason}")),
+    };
+    let unused = signature.first().map_or("-".to_string(), u8::to_string);
+    let extensions: Vec<String> = fields
+        .extensions
+        .iter()
+        .map(|e| {
+            let sct = if !walk::is_sct_list(e.oid) {
+                "-".to_string()
+            } else {
+                walk::sct_pairs(e.value).map_or("E".to_string(), |pairs| {
+                    let items: Vec<String> = pairs
+                        .iter()
+                        .map(|(id, ts)| format!("{}@{ts}", hex(id)))
+                        .collect();
+                    items.join("+")
+                })
+            };
+            format!(
+                "{},{},{},{sct}",
+                hex(e.oid),
+                u8::from(e.critical),
+                hex(e.value)
+            )
+        })
+        .collect();
+    let stop = fields.stop.map_or("-".to_string(), |t| format!("{t:02x}"));
+    Ok([
+        "LOCATED".to_string(),
+        hex(fields.serial),
+        hex(fields.spki),
+        hex(fields.subject),
+        hex(fields.issuer),
+        canon,
+        unused,
+        extensions.join(";"),
+        stop,
+    ]
+    .join("\t"))
 }
 
 fn verdict(der: &[u8]) -> String {
