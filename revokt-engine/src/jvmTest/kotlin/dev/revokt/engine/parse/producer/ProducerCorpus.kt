@@ -6,6 +6,7 @@ package dev.revokt.engine.parse.producer
 import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.EnvelopeVariants
 import dev.revokt.engine.parse.LengthForm
+import dev.revokt.engine.parse.oracle.Oracle1
 import dev.revokt.engine.parse.oracle.Oracle3a
 import dev.revokt.engine.parse.oracle.Oracle3b
 import okio.ByteString.Companion.toByteString
@@ -82,24 +83,34 @@ internal object ProducerCorpus {
                 "tbs-signature-long5",
             ).map { "envelope/letsencrypt.org-1/$it" }
 
-    /** One replay input; [base] names the certificate a mutant came from and [path] the mutated header. */
+    /**
+     * One replay input; [base] names the certificate a mutant came from and [path] the mutated header. A platform canon
+     * (spec §9.2 revision 39, the read fallback) carries the [parts] it was built from: it is its own `canon(encoded)`.
+     */
     class Input(
         val name: String,
         val der: ByteArray,
         val base: String? = null,
         val path: String? = null,
+        private val parts: Oracle3b.Parts? = null,
     ) {
         /**
          * `canon(encoded)` (spec §9.2), its parts located by the reference view: 3a where it accepts, else 3b; null when
          * neither locates the input. A missing golden fails, so a stale recording never passes as not located.
          */
-        val canon: ByteArray? by lazy {
+        val canon: ByteArray? by lazy { canonParts?.canon() }
+
+        /** The parts [canon] is built from: its TBS, TBS signature AlgorithmIdentifier and signature octets. */
+        val canonParts: Oracle3b.Parts? by lazy { parts ?: referenceParts }
+
+        /** The parts as the reference view locates them (3a, else 3b), whatever [parts] says. */
+        val referenceParts: Oracle3b.Parts? by lazy {
             val sha = der.toByteString().sha256().hex()
             val missing = "$name: no %s golden; run native/revokt-oracle/record-goldens.sh"
             val a = checkNotNull(Oracle3a.reply(sha)) { missing.format("3a") }
             val b = checkNotNull(Oracle3b.reply(sha)) { missing.format("3b") }
             val parts = Oracle3a.accepted(a)?.canon?.let { Oracle3b.Parts(it.tbs, it.tbsSignature, it.signature) }
-            (parts ?: Oracle3b.parts(b))?.canon()
+            parts ?: Oracle3b.parts(b)
         }
         val canonSha256: String? by lazy { canon?.toByteString()?.sha256()?.hex() }
     }
@@ -177,11 +188,17 @@ internal object ProducerCorpus {
             .filter { it.isNotBlank() && !it.startsWith("#") }
             .associate { line -> line.substringBefore('\t') to line.substringAfter('\t') }
 
+    /** The bytes revokt reads for each input oracle 1 (the test JDK) accepts: `getEncoded()` or the platform canon. */
+    fun readInputs(): List<Input> =
+        inputs.mapNotNull { input ->
+            (Oracle1.run(input.der) as? Oracle1.Outcome.Accept)?.let { Oracle1.read(input.name, it.certificate) }
+        }
+
     /** Writes each distinct canon once when `revokt.writeProducerInputs` names a file; returns whether it did. */
     fun writeInputsIfRequested(): Boolean {
         val path = System.getProperty("revokt.writeProducerInputs") ?: return false
         File(path).printWriter().use { w ->
-            for (i in inputs.filter { it.canon != null }.distinctBy { it.canonSha256 }) {
+            for (i in (inputs + readInputs()).filter { it.canon != null }.distinctBy { it.canonSha256 }) {
                 w.println("${i.canonSha256}\t${Base64.getEncoder().encodeToString(i.canon)}")
             }
         }

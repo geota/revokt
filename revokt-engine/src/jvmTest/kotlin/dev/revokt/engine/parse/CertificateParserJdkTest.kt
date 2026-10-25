@@ -19,8 +19,8 @@ import kotlin.test.fail
 
 /**
  * Cross-check against the JDK's `SUN` X.509 parser over real certificates (four public web PKI chains with SCTs and
- * Mozilla's content-signing chain). Not the §9.2 oracle-1 replay (#12): a smoke check that the fields revokt slices
- * are the ones the platform reads.
+ * Mozilla's content-signing chain). Not the §9.2 oracle-1 replay (`oracle/ParserReplayTest`): a smoke check that the
+ * fields revokt slices are the ones the platform reads.
  */
 class CertificateParserJdkTest {
     private val fixtures: List<Pair<String, ByteArray>> =

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+import kotlinx.kover.gradle.plugin.dsl.CoverageUnit
+
 plugins {
     id("revokt.kmp-library")
 }
@@ -31,3 +33,19 @@ tasks.withType<Test>().configureEach {
         providers.systemProperty(name).orNull?.let { systemProperty(name, it) }
     }
 }
+
+// Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of the parser package of at least 90 % over
+// the committed replay (jvmTest), part of `check`. The floor may only be raised.
+kover {
+    currentProject {
+        createVariant("parser") { add("jvm") }
+    }
+    reports {
+        variant("parser") {
+            filters { includes { packages("dev.revokt.engine.parse") } }
+            verify { rule("parser package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
+        }
+    }
+}
+
+tasks.named("check") { dependsOn("koverVerifyParser") }
