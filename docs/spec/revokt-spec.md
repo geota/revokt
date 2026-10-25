@@ -1,10 +1,36 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 41** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
+Status: **draft spec / project proposal, revision 42** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 42 (the producer SPKI check without an enrolment flag, 2026-10-25)
+- **Changed** (found while implementing #15): the producer SPKI check named "every intermediate the collection marks
+  CRLite-enrolled", but no record of Mozilla's `intermediates` collection marks it true: on 2026-10-25, the 1 020
+  records modified from 2019-06-07 to 2024-10-21 carry `crlite_enrolled: false`, and the 883 since 2024-11-09 omit the
+  field. The old check selected nothing and held vacuously. The pinned producer does not read the `intermediates`
+  collection. Its **program set** comes from the CCADB `MozillaAllUnexpiredPEMs` report: the intermediates zcrypto
+  parses, not revoked, that zcrypto verifies to a Mozilla root for serverAuth, each re-parsed by
+  certificate-transparency-go's `ParseCertificate` and dropped on any error, non-fatal included, and keyed by
+  `SHA-256(RawSubjectPublicKeyInfo)`, the SPKI TLV as presented (Appendix A). A generation's index (its full filter's
+  and each delta's) is a subset of the program set; "enrolled" means in an index, as `NOT_ENROLLED` does (§6.2, §8).
+  The check now has two parts, neither needing a flag: **SPKI agreement**, `SHA-256(rawSpki)` equal to oracle 4's SPKI
+  hash for every issuer-corpus certificate oracle 4 parses through `ct`, a superset of the program set, and a revokt
+  parse failure counting as a difference where oracle 4's hash is an index key; and **index coverage**, every key of
+  each index of the fixture generation equal to oracle 4's `ct` SPKI hash of an issuer-corpus certificate, and so, by
+  agreement, to revokt's. Together they assert what the old check meant, that revokt keys every enrolled issuer as the
+  producer does (a divergence makes revokt miss the issuer and skip its leaves, fail-open), over every enrolled
+  issuer. The old check would also have failed on a flagged issuer the producer left out; that was never a property of
+  revokt, and an issuer outside the index is not enrolled (`NOT_ENROLLED`, §6.2, §8).
+- **Added**: the issuer corpus includes the `MozillaAllUnexpiredPEMs` report. For an index key no snapshot covers (for
+  example, its certificate left the report after the generation), every CA certificate CT holds for that SPKI hash is
+  admitted, fetched from crt.sh by `spkisha256` with its id and retrieval time recorded in revokt-corpus. Each
+  snapshot is recorded in revokt-corpus with its URL, its retrieval time and the SHA-256 of the raw download.
+- **Clarified**: ct-go's strict parse, oracle 4's `ct` path, is `ParseCertificate` without a `lax` retry returning a
+  certificate, its non-fatal x509 errors included; the producer's program set takes only those it returns with no
+  error. D8 and the audit argument keep the term with that meaning.
 
 ### Changes in revision 41 (two recorded platform cases in D2, 2026-10-25)
 - **Added** (found while implementing #14, the `x509-limbo` replay; #59): a second rule in D2's SPKI re-encoding
@@ -2955,7 +2981,7 @@ reported, never rejected as `ParseFailed`; whether such a leaf is queried is the
 | 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error; the TBS TLV re-headed to minimal, its signature AlgorithmIdentifier and the `signatureValue` octets, for `canon` | `Ok` | `Err` | caught panic |
 | 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate`, the outer `signatureAlgorithm` and the `signatureValue` (an indefinite `signatureValue` is not located) and re-encode the TBS under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the content of a definite `signatureValue` after its unused-bits octet, for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
-| 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key `canon(encoded)` (above), with which bytes and through which path (`ct` for certificate-transparency-go's strict parse, `lax` for ct-go only through a `lax` retry, `zc` for the zcrypto fallback) | both calls return | a `ParseCertificate` error, or a panic anywhere in the producer (the shim recovers around the whole call) | unrecovered; counts as `Reject` under D8 |
+| 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key `canon(encoded)` (above), with which bytes and through which path (`ct` for certificate-transparency-go's strict parse, that is `ParseCertificate` without a `lax` retry returning a certificate, its non-fatal x509 errors included, `lax` for ct-go only through a `lax` retry, `zc` for the zcrypto fallback) | both calls return | a `ParseCertificate` error, or a panic anywhere in the producer (the shim recovers around the whole call) | unrecovered; counts as `Reject` under D8 |
 
 3b's `CANON` reply (its `canon` parts located, its walk failed) is not located for D2's reference and still supplies
 `canon`. A getter that throws on an accepted object (Conscrypt `getPublicKey()` on a damaged modulus is
@@ -3124,11 +3150,25 @@ and, on a matrix run, revokt's equals oracle 1's: Conscrypt drops the differenti
   outside the profile).
 
 **Issuer corpus (zero tolerance).** Every certificate in Mozilla's `intermediates` Remote Settings
-collection, the CCADB all-certificate-records export, the JDK `cacerts` store, and Android's system
+collection, the CCADB all-certificate-records export, the CCADB `MozillaAllUnexpiredPEMs` report (the source of
+the producer's program set), the JDK `cacerts` store, and Android's system
 store (for 0.1 taken from the AOSP `ca-certificates` sources of the pinned images; the 0.3 instrumented tier replaces it with the device read-back through the platform `X509Certificate.getEncoded()`),
-under D1 and D2 with no tolerated violation. **Producer SPKI check**: for every intermediate the
-collection marks CRLite-enrolled, `SHA-256(rawSpki)` must be a key of the live filter's index map
-(§6.3) for the fixture generation; a miss is a producer/revokt SPKI-byte divergence and fails.
+under D1 and D2 with no tolerated violation; each snapshot is recorded in revokt-corpus with its URL, its retrieval
+time and the SHA-256 of the raw download. The **producer SPKI check** (revision 42) runs against the committed fixture
+generation (`corpus/clubcard`: its full filter and each delta, each with its own index map, §6.2, §6.3). The
+producer's program set is the report's intermediates that zcrypto parses, that are not revoked, that zcrypto verifies
+to a Mozilla root for serverAuth, and that certificate-transparency-go's `ParseCertificate` returns with no error,
+non-fatal included, each keyed by `SHA-256(RawSubjectPublicKeyInfo)`; every index is a subset of the program set the
+producer computed for that generation. Oracle 4 runs on each certificate's DER as the producer would read it (the PEM-
+or store-decoded DER, not `canon`; the two are equal on every `ct`-path input, whose headers ct-go's parse requires to
+be minimal), and revokt's `rawSpki` is taken from the same bytes (and from each platform's `encoded` under D2). (1) **SPKI agreement**: for every issuer-corpus certificate oracle 4 parses through
+`ct` (a superset of the program set: it also holds ct-go's non-fatal x509 errors), `SHA-256(rawSpki)` equals oracle
+4's SPKI hash; a difference is a producer/revokt SPKI-byte divergence and fails, and a certificate revokt does not
+parse counts as one where oracle 4's hash is an index key (elsewhere D1 and D1-dom decide). (2) **Index coverage**:
+every key of each index equals oracle 4's `ct` SPKI hash of an issuer-corpus certificate, and so, by (1), revokt's;
+for a key no snapshot covers (for example, its certificate left the report after the generation), every CA
+certificate CT holds for that SPKI hash is fetched (crt.sh, by `spkisha256`, its id and retrieval time recorded in
+revokt-corpus) and admitted, and a key still uncovered fails.
 
 **Corpus record schema (one for all four kinds; committed).**
 `{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome, read?, holds?,
@@ -3629,6 +3669,22 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   - Conscrypt uber 2.7.0 and 2.8.0 read `UTCTime` `261022134530+0100` and `261022134530-0130` both as
     2026-10-22T13:45:30Z, where the JDK reads 12:45:30Z and 15:15:30Z; both reject a `GeneralizedTime` with `+0100`,
     and both they and the JDK reject a differential of `+2400` or `+0099`.
+- Revision 42 probe, run 2026-10-25: the pinned producer (`mozilla/crlite` go `0082998`, `rootprogram/issuers.go`)
+  loads `https://ccadb.my.salesforce-sites.com/ccadb/Report?Name=MozillaAllUnexpiredPEMs`; it requires
+  `zcx509.ParseCertificate` to succeed, skips revoked rows (a `Revocation_Status__c` other than empty or "Not
+  Revoked"), uses roots only as verification anchors (never enrols them), keeps the intermediates zcrypto verifies to a
+  Mozilla root with serverAuth at the run's time, re-parses each with `ctx509.ParseCertificate`, dropping it on any
+  error, non-fatal included, and keys it by `types.NewIssuer`'s `SHA-256(RawSubjectPublicKeyInfo)`
+  (`LoadEnrolledIssuers` re-parses with `ctx509.ParseCertificate` and fails the whole load on any error). Run over that
+  day's report (2 662 rows, 2 544 intermediates), it admits 1 852 issuer keys: exactly the distinct SPKIs of the
+  `intermediates` collection's 1 903 certificates. The live full filter that day was the `20261017-1` compat generation
+  (the committed fixture): its index has 1 033 keys, all 32 octets, and the committed `20261021-1` delta's has 1 030, 2
+  of them not in the full filter's (both in that day's report). 1 017 of the full filter's keys are in the program set;
+  the other 16 are in neither the report nor the collection, under any parse path, and crt.sh finds an unexpired CA
+  certificate for each by `spkisha256` (intermediates under UniTrust, NAVER and emSign roots; one checked was issued by
+  "emSign Root TLS CA - G3", itself absent from that day's report), consistent with their leaving the report after the
+  generation. Of the `intermediates` records, 1 020 (modified 2019-06-07 to 2024-10-21) carry `crlite_enrolled: false`
+  and the 883 since 2024-11-09 omit it; none marks it true.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android toolchain fact, verified 2026-10-24: a library built with Kotlin 2.4 needs AGP 8.5.2 or later
   (developer.android.com, "AGP, D8, and R8 versions required for Kotlin versions"), and D8 from AGP 8.8.1 is tested

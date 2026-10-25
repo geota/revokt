@@ -11,8 +11,8 @@
 // A line "##" ends a batch: it is echoed and stdout is flushed (spec §9.1). The serial is the producer's
 // NewSerialFromCertificate bytes; the SPKI is the certificate's own RawSubjectPublicKeyInfo as the producer
 // records it (the key's SPKI when the certificate is an issuer); the last field says which parser accepted
-// (ct = certificate-transparency-go's strict parse, lax = ct-go only through one of its "lax" retries, zc = the
-// zcrypto fallback). A panic anywhere in the producer is a REJECT, as it
+// (ct = certificate-transparency-go's strict parse: ParseCertificate without a lax retry, non-fatal x509
+// errors allowed; lax = ct-go only through one of its "lax" retries; zc = the zcrypto fallback). A panic anywhere in the producer is a REJECT, as it
 // would stop ct-fetch from keying the certificate (spec §9.2 D8: a crash counts as a rejection).
 // It is a test oracle: never linked, bundled or published (CONTRIBUTING §3).
 package main
