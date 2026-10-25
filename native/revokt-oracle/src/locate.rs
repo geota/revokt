@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 //! Oracle 3b of spec §9.2, a minimal TLV locator written independently of revokt. It delimits `tbsCertificate`, the
-//! outer `signatureAlgorithm` and `signatureValue`, re-encodes the indefinite ones as the JDK's `DerIndefLenConverter`
+//! outer `signatureAlgorithm` and `signatureValue` (definite only, revision 38), re-encodes the indefinite TBS and
+//! algorithm as the JDK's `DerIndefLenConverter`
 //! does (the §9.2 unsigned-header rule), then walks the re-encoded TBS ([`crate::walk`]). Same pipe protocol as `x509`:
 //!
 //! ```text
@@ -13,8 +14,8 @@
 //!
 //! `CANON` is the answer when the envelope is delimited but the TBS walk fails (`reason`). Byte fields are lower-case
 //! hex. `tbs` is the re-encoded TBS under a minimal header, `tbs-signature` its signature AlgorithmIdentifier (after the
-//! optional `[0]` and the serial) and `signature` the `signatureValue` content after its unused-bits octet, re-encoded
-//! when indefinite (padding not cleared): the parts of `canon(encoded)`. `unused` is that unused-bits octet in decimal
+//! optional `[0]` and the serial) and `signature` the `signatureValue` content after its unused-bits octet (padding not
+//! cleared): the parts of `canon(encoded)`. `unused` is that unused-bits octet in decimal
 //! (`-` when the content is empty). `serial` is the INTEGER content, `spki`, `subject` and `issuer` the TLVs.
 //! `extensions` is `;`-joined `oid,critical,value,sct`: the OID content, `1` when the flag octet is non-zero, the
 //! `extnValue` content, and `sct` `-` except for the SCT-list extension, where it is `E` when the §9.2 SCT-list rule
@@ -163,6 +164,10 @@ fn unsigned(b: &[u8], p: usize, limit: usize, tag: u8) -> Located<(usize, Vec<u8
         return Err(format!("expected tag {tag:02x}"));
     }
     if b[p + 1] == 0x80 {
+        // Spec §9.2 revision 38: an indefinite signatureValue is not located (JDK 17 and later reject it).
+        if tag == 0x03 {
+            return Err("indefinite signatureValue".into());
+        }
         let (end, tokens) = read_indefinite(b, p + 2, limit)?;
         return Ok((end, reencode(b, &tokens)));
     }

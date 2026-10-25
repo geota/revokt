@@ -9,8 +9,8 @@ import java.io.ByteArrayOutputStream
  * `canon(encoded)` of spec §9.2, written a third time, independently of revokt's parser and of oracle 3b, as the
  * cross-check of 3b's re-encoding (`Oracle3bTest`):
  * `SEQUENCE { the TBS re-encoded by the unsigned-header rule, the signature AlgorithmIdentifier taken from that TBS, a
- * BIT STRING with zero unused bits holding the signatureValue content after its unused-bits octet }`. The TBS and
- * the signatureValue are re-encoded as the JDK's `DerIndefLenConverter` does, here by straightforward recursion, which
+ * BIT STRING with zero unused bits holding the signatureValue content after its unused-bits octet }`. The TBS is
+ * re-encoded as the JDK's `DerIndefLenConverter` does, here by straightforward recursion, which
  * is fine for test inputs. Null when the envelope cannot be located.
  */
 internal object Canon {
@@ -27,6 +27,8 @@ internal object Canon {
             val start = der.size - certificate.content.size
             val tbs = element(der, start, der.size)
             val algorithm = element(der, tbs.end, der.size)
+            // Spec §9.2 revision 38: a definite signatureValue only.
+            require(algorithm.end + 1 < der.size && der[algorithm.end + 1].toInt() and 0xff != 0x80)
             val signature = element(der, algorithm.end, der.size)
             require(tbs.tag == 0x30 && algorithm.tag == 0x30 && signature.tag == 0x03 && signature.end == der.size)
             val tbsTlv = tlv(0x30, tbs.content)

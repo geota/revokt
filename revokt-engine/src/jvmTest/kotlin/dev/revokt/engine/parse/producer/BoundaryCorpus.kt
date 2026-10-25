@@ -165,8 +165,6 @@ internal object BoundaryCorpus {
             base(subject = seq(tlv(0x31, seq(oid("2.5.4.3"), tlv(0x13, ascii("*.a&b.example"))))))
         out +=
             "ed25519" to base(spki = seq(seq(oid("1.3.101.112")), tlv(0x03, bytes(0), ByteArray(32) { it.toByte() })))
-        // u = 00 read as a tag, then length 02 and two octets: JDK 11 reads this indefinite signatureValue (revision 35).
-        out += "indefinite-signature-value" to base(signature = bytes(0x03, 0x80, 0x00, 0x02, 0x01, 0x05, 0x00, 0x00))
         for ((i, p) in points.withIndex()) {
             val (curve, x, y) = p
             if (i > 0) out += "ec-point-$i" to base(spki = ec(curve, x, y)) // point 0 is the base's own key

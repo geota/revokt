@@ -52,10 +52,8 @@ class CertificateParserEnvelopeJdkTest {
             assertEquals(false, base.envelope.algorithmIdMismatch, "${chain.name} base")
             for (v in EnvelopeVariants.of(chain.rsa)) if (check(chain, base, v)) verifiedCount++
         }
-        assertTrue(verifiedCount >= if (modern) 30 else 8, "only $verifiedCount variants verified")
+        assertTrue(verifiedCount >= 30, "only $verifiedCount variants verified")
     }
-
-    private val modern = Runtime.version().feature() >= 17
 
     /** Checks one variant of [chain]'s leaf; returns whether the JDK verified it. */
     private fun check(
@@ -76,7 +74,7 @@ class CertificateParserEnvelopeJdkTest {
         }
         when (v.expected) {
             EnvelopeVariants.Expected.SAME_AS_BASE -> {
-                if (modern) assertTrue(verified, "$label: the JDK verifies it")
+                assertTrue(verified, "$label: the JDK verifies it")
                 val p = (parse as? CertificateParse.Parsed)?.certificate ?: fail("$label: ${parse.describe()}")
                 assertSameAsBase(label, base, p, v.algorithmIdMismatch)
                 assertTrue(p.steps <= 8L * der.size + 1024, "$label steps")
@@ -112,13 +110,12 @@ class CertificateParserEnvelopeJdkTest {
     }
 
     /**
-     * Spec §9.2 revision 35: JDK 11 verifies an indefinite `signatureValue` whose content reads as a chain of minimal
-     * TLVs (about 0.45 % of ECDSA signatures); JDK 17 and later reject it. A fresh P-256 key re-signs a real TBS until
-     * revokt accepts the indefinite form a few times; wherever the JDK verifies one, revokt must parse it to the JDK's
-     * message and signature.
+     * Spec §9.2 revision 38: an indefinite `signatureValue` is `STRUCTURE`, and the JDK (17 and later) rejects it. Fresh
+     * P-256 signatures over a real TBS include the forms whose content reads as a chain of minimal TLVs (about 0.45 %),
+     * which JDK 11 alone verified; neither revokt nor the JDK accepts any of them.
      */
     @Test
-    fun `an indefinite signatureValue that JDK 11 verifies parses to the JDK's message and signature`() {
+    fun `an indefinite signatureValue is rejected by revokt and the JDK alike`() {
         val leaf = DerNode.parse(chains.first().leaf)
         val tbs = leaf.child(0).encode()
         val keys =
@@ -127,36 +124,17 @@ class CertificateParserEnvelopeJdkTest {
                 .apply { initialize(256) }
                 .generateKeyPair()
         val signer = java.security.Signature.getInstance("SHA384withECDSA")
-        var parsedCount = 0
-        var verifiedCount = 0
-        var tries = 0
-        while (parsedCount < 3 && tries++ < 20_000) {
+        repeat(2_000) {
             signer.initSign(keys.private)
             signer.update(tbs)
-            val sig = signer.sign()
             val der =
                 TestDer.seq(
                     tbs,
                     leaf.child(1).encode(),
-                    TestDer.bytes(0x03, 0x80, 0x00) + sig + TestDer.bytes(0, 0),
+                    TestDer.bytes(0x03, 0x80, 0x00) + signer.sign() + TestDer.bytes(0, 0),
                 )
-            val parse = CertificateParser.parse(der)
-            val jdkCert = jdk(der)
-            val verified = jdkCert != null && runCatching { jdkCert.verify(keys.public) }.isSuccess
-            if (verified) {
-                verifiedCount++
-                val p =
-                    (parse as? CertificateParse.Parsed)?.certificate ?: fail("JDK verifies, revokt ${parse.describe()}")
-                assertContentEquals(jdkCert.tbsCertificate, p.tbsBytes)
-                assertContentEquals(sig, p.envelope.signature)
-            }
-            if (parse is CertificateParse.Parsed) parsedCount++
-        }
-        assertEquals(3, parsedCount, "revokt accepted the indefinite form $parsedCount times in $tries signatures")
-        if (Runtime.version().feature() == 11) {
-            assertEquals(parsedCount, verifiedCount, "JDK 11 verifies every form revokt accepts here")
-        } else {
-            assertEquals(0, verifiedCount, "JDK 17 and later reject an indefinite signatureValue")
+            assertEquals(ParseReason.STRUCTURE, (CertificateParser.parse(der) as? CertificateParse.Failed)?.reason)
+            assertEquals(null, jdk(der), "the JDK accepts an indefinite signatureValue")
         }
     }
 

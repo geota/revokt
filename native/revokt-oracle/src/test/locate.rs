@@ -135,14 +135,15 @@ fn the_tbs_signature_is_sliced_through_any_length_form() {
 }
 
 #[test]
-fn an_indefinite_signature_value_is_converted() {
-    let reply = describe(&certificate(
-        TBS,
-        "30 03 06 01 2a",
+fn an_indefinite_signature_value_is_not_located() {
+    // Spec §9.2 revision 38: JDK 17 and later reject it, even when its content reads as a chain of minimal TLVs.
+    for signature in [
         "03 80 00 80 04 01 aa 00 00 00 00",
-    ))
-    .unwrap();
-    assert_eq!(reply.split('\t').nth(3), Some("030401aa"));
+        "03 80 00 02 01 05 00 00",
+    ] {
+        let found = describe(&certificate(TBS, "30 03 06 01 2a", signature)).expect_err(signature);
+        assert_eq!(found, "indefinite signatureValue");
+    }
 }
 
 #[test]

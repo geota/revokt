@@ -75,6 +75,7 @@ internal object ProducerCorpus {
             }.toSet() +
             listOf(
                 "tbs-indefinite-serial-85",
+                "sig-indefinite-nested",
                 "certificate-long5",
                 "certificate-long8",
                 "version-long5",

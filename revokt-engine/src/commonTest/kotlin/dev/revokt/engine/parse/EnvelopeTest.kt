@@ -115,18 +115,16 @@ class EnvelopeTest {
     }
 
     @Test
-    fun `an indefinite signatureValue is delimited by the converter, as JDK 11 reads it`() {
-        // Spec §9.2 revision 35: the content from the unused-bits octet on must read as a chain of minimal TLVs.
+    fun `an indefinite signatureValue is a structure error`() {
+        // Spec §9.2 revision 38: JDK 17 and later reject it, even when its content reads as a chain of minimal TLVs.
         val content = bytes(0x00, 0x02, 0x01, 0x05) // u = 00 read as a tag, then length 02 and two octets
-        val p = parsed(TestCert(signature = bytes(0x03, 0x80) + content + bytes(0, 0)).der)
-        assertContentEquals(bytes(0x02, 0x01, 0x05), p.envelope.signature)
-        assertContentEquals(parsed(TestCert(signature = tlv(0x03, content)).der).tbsBytes, p.tbsBytes)
-        val nonMinimal = bytes(0x03, 0x80, 0x00, 0x81, 0x02, 0x01, 0x05, 0x00, 0x00)
-        assertContains(
-            failed(TestCert(signature = nonMinimal).der).detail,
-            "non-minimal length in indefinite SIGNATURE_VALUE",
+        val failure = failed(TestCert(signature = bytes(0x03, 0x80) + content + bytes(0, 0)).der)
+        assertEquals(ParseReason.STRUCTURE, failure.reason)
+        assertContains(failure.detail, "indefinite SIGNATURE_VALUE")
+        assertContentEquals(
+            bytes(0x02, 0x01, 0x05),
+            parsed(TestCert(signature = tlv(0x03, content)).der).envelope.signature,
         )
-        assertContains(failed(TestCert(signature = bytes(0x03, 0x80, 0x00, 0x05)).der).detail, "SIGNATURE_VALUE")
     }
 
     @Test
