@@ -10,19 +10,20 @@ Status: **draft spec / project proposal, revision 39** · Target: JVM 17+ and An
 - **Added** (found while implementing #12, oracle 1; #49): on the JDK, a certificate whose `getEncoded()` is
   `ParseFailed(STRUCTURE)` is read once more through the bytes the JDK verified the signature over,
   `getTBSCertificate()` and `getSignature()`, assembled as `canon` is but with the padding bits cleared (the platform
-  canon, §9.2). A valid signature makes those bytes what the CA signed, however the presented encoding was altered,
-  so a certificate the platform or the walker verified is read as the CA issued it. Oracle 1's `encoded` is the
-  bytes so read, and D1, its domain, D2 and D6 follow unchanged. The JVM binding applies the fallback where the
-  engine parses a certificate; the bytes read are its DER for parsing and the engine's hashes, while the identity
-  keys stay over `getEncoded()` (§5.3, 0.2). Conscrypt needs none, since it parses strict DER. A certificate so read carries no `AlgorithmIdMismatch` finding unless its
-  TBS AlgorithmIdentifier is not minimal DER.
+  canon, §9.2). A valid signature makes those bytes what the CA signed, however the presented encoding was altered, so
+  a certificate the platform or the walker verified is read as the CA issued it. Oracle 1's `encoded` is the bytes so
+  read, and D1, its domain, D2 and D6 follow unchanged. The JVM binding applies the fallback where the engine parses a
+  certificate; the bytes read are its DER for parsing and the engine's hashes, while the identity keys stay over
+  `getEncoded()` (§5.3, 0.2). Conscrypt needs none, since it parses strict DER. A certificate so read carries no
+  `AlgorithmIdMismatch` finding unless its TBS AlgorithmIdentifier is not minimal DER.
 - **Why**: the committed D7 corpus holds platform-accepted inputs that neither 3a nor 3b locates (an indefinite TBS
   holding a non-minimal definite child, on JDK 17, 21 and 27; a definite TBS holding an indefinite Validity, on JDK 25
   and 27; Appendix A), which broke D2's raw-byte-reference metric. A rule-based exclusion was drafted, but its
   argument misread what the JDK verifies (the independent review of #48). With the fallback, revokt's safety does not
   depend on that question, which #49 keeps open. The replay (#12) reads the nine indefinite-TBS inputs through their
   platform canon: each parses, has a raw-byte reference and passes D1 and D2 on all four matrix JDKs, and oracle 4
-  rejects the platform canon of JDK 25 and 27's three, which are D1-dom. D7 records the nine's outcome accordingly.
+  rejects the platform canon of the three that JDK 25 and 27 accept, which are D1-dom. D7 records the nine's outcome
+  accordingly.
 - **Changed**: a JDK-accepted input for which no platform canon can be built is D1-dom by rule, since the producer
   cannot key a TBS in which the locator finds no signature AlgorithmIdentifier. D2's metric gains an exclusion: inputs
   revokt does not parse on whose `canon(encoded)` oracle 4 rejects, or for which no platform canon can be built; the
@@ -1343,7 +1344,7 @@ fun interface Exemption { fun isExempt(context: ExemptionContext): Boolean   // 
         @JvmStatic fun platformOnly(): Exemption } }                         // context.path.noIssuerReason == PLATFORM_ONLY; a null host or anchorSha256 never matches hostIn/anchorIn
 // Exemptions.kt, @file:JvmName("Exemptions"): infix fun Exemption.and(other: Exemption): Exemption; infix fun Exemption.or(other: Exemption): Exemption   // Java: Exemptions.and(a, b); a throw in either operand is the EXEMPTION engine error
 class ExemptionContext private constructor(…) { val rule: Rule; val chain: PresentedChain? /* null for a non-X.509 credential (M5) */; val credentialType: CredentialType; val path: Finding.Path; val host: String? /* normalised */; val nowMillis: Long; val dataStates: Map<Dataset, Finding.DataState> }   // growable: new evidence (M3 SCTs, M4 distrust record) lands as new nullable properties; builder @RevoktTestingApi on the type
-class AnchorSnapshot private constructor(…) { val id: Long /* process-local counter, like generationEpoch; not stable across processes */; val sha256: ByteArray /* of the sorted anchor DERs only (the bytes read, §5.3); stable */; val anchors: List<ByteArray>; val createdMillis: Long; val preloadGenerationId: String? /* null in M1; M2: the INTERMEDIATES generation the index holds; an INTERMEDIATES install rebuilds every live index and advances id, so both caches miss */ }
+class AnchorSnapshot private constructor(…) { val id: Long /* process-local counter, like generationEpoch; not stable across processes */; val sha256: ByteArray /* of the sorted anchor DERs only (the bytes read, §5.3); stable */; val anchors: List<ByteArray> /* each anchor's bytes read (§5.3); the snapshot also keeps the platform's anchor objects, whose getEncoded() the PKIX fallback is given */; val createdMillis: Long; val preloadGenerationId: String? /* null in M1; M2: the INTERMEDIATES generation the index holds; an INTERMEDIATES install rebuilds every live index and advances id, so both caches miss */ }
 class SyncResult private constructor(…) { val outcome: SyncOutcome; val atMillis: Long; val installed: Map<Dataset, String>; val sourceId: String? /* the source the outcome is about */; val stage: SyncStage? /* where a FAILED/STORE_FAILED/CLOCK_SKEW sync stopped */; val httpStatus: Int? /* the last response status when a fetch was involved */; @Transient val cause: Throwable? /* the fetcher's or loader's throwable; null after deserialisation */; val blockedSource: String? /* BLOCKED_BY_SELF: which source */; val blockedChainSha256: ByteArray?; val blockedLeafSerial: ByteArray? /* BLOCKED_BY_SELF only */; val warnings: List<PolicyDiagnostic> }
 class RevoktEvent private constructor(…) { val sequence: Long; val atMillis: Long; val policyEpoch: Long; val credentialType: CredentialType; val host: String?; val chainSha256: ByteArray; val leafSerial: ByteArray? /* rawSerial */; val verdict: Verdict; val shadowVerdict: Verdict? /* null when no shadowPolicy is set, and when the enforced evaluate threw before the shadow ran */; val enforcement: Enforcement; val enforced: Boolean /* = verdict is Rejected && enforcement == ENFORCE */ }
 interface RevoktListener { fun onVerdict(event: RevoktEvent); fun onStateChanged(state: RevoktState) {} }   // second method has a default body; Java alternative to the state flow
@@ -2081,10 +2082,11 @@ sequence jump.
   which is what SunJSSE's `X500Name.equals` compares. Every M1 chain is `RECONSTRUCTED`.
 - Certificates are read through the §9.2 read fallback where the engine parses them: `getEncoded()`, or the platform
   canon where revokt's parse of that is `ParseFailed(STRUCTURE)`. Presented and platform-built certificates are read
-  inside `decide`, after the `MAX_PRESENTED` and `MAX_PRESENTED_BYTES` checks; anchors when the `AnchorSnapshot` is
-  built (`start()`, `refreshAnchors()`). The identity keys stay over `getEncoded()`: `chainHash` and with it the
-  verdict-cache, path-cache and acceptance-memo keys, which on a fixed JDK determine the bytes read. The bytes read
-  are the certificate's DER only where the engine needs it: `Cert.der` and `bytesHash`, the anchor-by-bytes check,
+  inside `decide`: the leaf at decision step 2 (one certificate, whose parse step 3 reuses), the others after step 3's
+  `MAX_PRESENTED` and `MAX_PRESENTED_BYTES` checks; anchors when the `AnchorSnapshot` is built (`start()`,
+  `refreshAnchors()`). The identity keys stay over `getEncoded()`: `chainHash` and with it the verdict-cache,
+  path-cache and acceptance-memo keys, which on a fixed JDK determine the bytes read. The bytes read are the
+  certificate's DER only where the engine needs it: `Cert.der` and `bytesHash`, the anchor-by-bytes check,
   `reportedPathSha256s`, `anchorSha256`, `AnchorSnapshot.sha256`, `PresentedChain.der` and `MAX_CERT_BYTES`. The PKIX
   fallback is given the platform's own anchor objects' `getEncoded()`.
 
@@ -2688,19 +2690,19 @@ Conscrypt returns `i2d_X509` of the parsed object). **The read fallback**: on th
 `getEncoded()` is `ParseFailed(STRUCTURE)` is read once more through the **platform canon**, `SEQUENCE {
 getTBSCertificate(), the signature AlgorithmIdentifier TLV located in it, BIT STRING { 00, getSignature() } }` with
 minimal new headers and the padding bits cleared, as `getSignature()` returns them. The locator reads one-octet
-identifiers and definite lengths of at most four octets: after the TBS header it skips a first element with identifier
-`A0`, then one element, and takes the next if its identifier is `30`. The producer's parse needs at least that much
-there (an optional `[0]`, an INTEGER, a SEQUENCE; ct-go, its `lax` retry and zcrypto reject indefinite lengths and
-lengths of 2^31 or more, Appendix A). The platform canon is the bytes the JDK verifies the signature over, so a valid
-signature makes it what the CA signed, however the presented encoding was altered (#49). That covers the path the
-platform verified and, since the walker verifies over the same `Cert.tbs` and `Cert.sig`, every certificate on a link
-the walker verified; an anchor is read as the JDK's own view of it. Where the AlgorithmIdentifier cannot be located,
-`encoded` stays `getEncoded()`: a leaf is `PARSE_FAILED(STRUCTURE)` and a candidate is dropped, and a getter that
-throws has the same outcome and is counted `unavailable` (below). The platform canon is defined as its own
-`canon(encoded)`, and the replay asserts that the reference view, where it locates it, yields the same. A certificate
-so read carries no `AlgorithmIdMismatch` finding unless its TBS AlgorithmIdentifier is not minimal DER. Where the bytes
-read stand for the certificate, and where `getEncoded()` still does, is §5.3's. Conscrypt needs no fallback: it parses
-strict DER.
+identifiers and definite lengths of at most four octets: after the TBS header it skips a first element with
+identifier `A0`, then one element, and takes the next if its identifier is `30`. The producer's parse needs at least
+that much there (an optional `[0]`, an INTEGER, a SEQUENCE; ct-go, its `lax` retry and zcrypto reject indefinite
+lengths and lengths of 2^31 or more, Appendix A). The platform canon is the bytes the JDK verifies the signature
+over, so a valid signature makes it what the CA signed, however the presented encoding was altered (#49). That covers
+the path the platform verified and, since the walker verifies over the same `Cert.tbs` and `Cert.sig`, every
+certificate on a link the walker verified; an anchor is read as the JDK's own view of it. Where the
+AlgorithmIdentifier cannot be located, `encoded` stays `getEncoded()`: a leaf is `PARSE_FAILED(STRUCTURE)` and a
+candidate is dropped, and a getter that throws has the same outcome and is counted `unavailable` (below). The
+platform canon is defined as its own `canon(encoded)`, and the replay asserts that the reference view, where it
+locates it, yields the same. A certificate so read carries no `AlgorithmIdMismatch` finding unless its TBS
+AlgorithmIdentifier is not minimal DER. Where the bytes read stand for the certificate, and where `getEncoded()`
+still does, is §5.3's. Conscrypt needs no fallback: it parses strict DER.
 `PARSE_FAILED` on the leaf allows in `DEFAULT` and an unparseable candidate is dropped (decision, §10 item 8). Two
 failure classes matter: (i) a certificate the platform accepts and revokt rejects is unchecked (a leaf) or invisible
 as an issuer (a dropped candidate ends the walk `NO_ISSUER`, which allows in `DEFAULT` for every leaf under that CA),
@@ -3545,11 +3547,12 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     `02 84 00 00 00`) or SPKI header (`30 83 00 …`), on each of the three leaves the D7 envelope cases use. `verify`
     fails ("Signature does not match"), and neither 3a nor 3b locates them: 3b fails with "non-minimal length under an
     indefinite element".
-  - JDK 27 (and, in the replay, JDK 25) also accepts a definite TBS holding an indefinite Validity, on the same three
-    leaves. `verify` fails, 3a rejects it, and 3b's walk does not locate it. Oracle 4 rejects its `canon` ("Validity:
-    indefinite length found (not DER)").
+  - JDK 27 also accepts a definite TBS holding an indefinite Validity, on the same three leaves. `verify` fails, 3a
+    rejects it, and 3b's walk does not locate it. Oracle 4 rejects its `canon` ("Validity: indefinite length found
+    (not DER)").
   - Read through the platform canon (§9.2 revision 39), each of the nine parses, has a raw-byte reference and passes
-    D1 and D2 on JDK 17, 21, 25 and 27; oracle 4 rejects the platform canon of JDK 25 and 27's three, which are
+    D1 and D2 on JDK 17, 21, 25 and 27 (the replay; JDK 25's `verify` was not probed, and it accepts the same three
+    inputs as JDK 27); oracle 4 rejects the platform canon of the three that JDK 25 and 27 accept, which are
     D1-dom.
   - No other platform-accepted input lacks a raw-byte reference. `getEncoded()` differs from the input on 18 inputs: a
     non-minimal outer `Certificate` header, re-encoded minimally, and trailing bytes, dropped.
