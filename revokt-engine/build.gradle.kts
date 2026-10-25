@@ -32,10 +32,9 @@ tasks.withType<Test>().configureEach {
     for (name in listOf("revokt.writeProducerInputs", "revokt.writeRecords", "revokt.writeOracleInputs")) {
         providers.systemProperty(name).orNull?.let { systemProperty(name, it) }
     }
-    // The zlint pin test reads the pin, so a bump that touches only go.mod still re-runs it (no build-cache hit).
-    val zlintGoMod = rootProject.file("native/zlint-oracle/go.mod")
-    inputs.file(zlintGoMod).withPathSensitivity(PathSensitivity.RELATIVE)
-    systemProperty("revokt.zlintGoMod", zlintGoMod.absolutePath)
+    // The zlint pin test reads the pin: go.mod is an input, so a bump that touches only go.mod re-runs it, and its
+    // path reaches the test without entering the cache key.
+    jvmArgumentProviders.add(ZlintGoMod(rootProject.file("native/zlint-oracle/go.mod")))
 }
 
 // Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of the parser package of at least 90 % over
@@ -53,3 +52,9 @@ kover {
 }
 
 tasks.named("check") { dependsOn("koverVerifyParser") }
+
+class ZlintGoMod(
+    @get:InputFile @get:PathSensitive(PathSensitivity.RELATIVE) val file: File,
+) : CommandLineArgumentProvider {
+    override fun asArguments(): List<String> = listOf("-Drevokt.zlintGoMod=${file.absolutePath}")
+}
