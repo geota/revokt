@@ -1,10 +1,19 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 36** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-24
+Status: **draft spec / project proposal, revision 37** · Target: JVM 11+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-24
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 37 (`3A_TBS_LAX` covers every tag-number-3 element, 2026-10-24)
+- **Corrected** (found by the independent review of #37, oracle 3a): `x509-parser` 0.18.1's `parse_extensions` checks
+  only the tag number of the element after the SPKI, so 3a takes as extensions not only a primitive `[3]` but any
+  element with tag number 3 that is not a constructed context-specific `[3]`: all seven forms `03`, `23`, `43`, `63`,
+  `83`, `C3` and `E3` (probed, Appendix A). revokt and the JDK read such an element as the trailing-element rule's
+  stop element (JDK 11 and 21 probed: no extensions). D7 and Appendix A record the cases. `3A_TBS_LAX` now names that
+  whole class in D2 and D3, so such an input is a recorded divergence with the §9.2 read (∅), not an unexplained D2
+  failure.
 
 ### Changes in revision 36 (oracle 4's reply carries its parse path, 2026-10-24)
 - **Corrected** (found by the independent review of #30): §9.1's pipe protocol gave oracle 4's reply as
@@ -144,9 +153,9 @@ Status: **draft spec / project proposal, revision 36** · Target: JVM 11+ and An
   differs, so the case is excluded conservatively, D1-dom by rule. The cost is `PARSE_FAILED` for such a leaf and a
   dropped candidate for such an intermediate, both allowing in `DEFAULT`. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
   `producerKeyable`. The table models ct-go's struct walk. 3a's primitive-`[3]` reading is the declared class
-  `3A_TBS_LAX`, stated in D2, D3 and the record schema. The end-to-end oracle excludes chains `x509-parser`
-  rejects. D1's domain is defined against the reference view, with `[0]`-trailing input D1-dom outright. D2's
-  oracle-4 clause applies where `producerKeyable`.
+  `3A_TBS_LAX` (widened in revision 37), stated in D2, D3 and the record schema. The end-to-end oracle excludes
+  chains `x509-parser` rejects. D1's domain is defined against the reference view, with `[0]`-trailing input D1-dom
+  outright. D2's oracle-4 clause applies where `producerKeyable`.
 - §5.1 `Cert.notBefore`/`notAfter` are `Long?`: the parse yields null for a time that does not decode, which only
   platform-rejected input reaches.
 - Appendix A records `x509-parser` 0.18.1, asn1-rs 0.7.2 and nom 7.1.3 by sha256. They are pinned exactly in
@@ -2918,8 +2927,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   where 3a accepts, else 3b's. The expected SCT pair set is the union over SCT extensions of a per-extension
   expectation: the reference's pairs for that extension, or ∅ when the extension value's first octet is not `0x04`.
   That octet is read by 3b's locator, never by revokt. An extension whose expectation is ∅ while 3a yields pairs is
-  recorded as `3A_HEADER_LAX`, so the comparison substitutes ∅ rather than skipping. Where 3a takes a primitive `[3]`
-  as extensions (decided by 3b's TBS walk), the reference extension table and SCT pairs are the §9.2 read (∅),
+  recorded as `3A_HEADER_LAX`, so the comparison substitutes ∅ rather than skipping. Where 3a takes as extensions an
+  element with tag number 3 that is not a constructed context-specific `[3]` (a primitive `[3]`, or tag number 3 in
+  another class; decided by 3b's TBS walk), the reference extension table and SCT pairs are the §9.2 read (∅),
   recorded as `3A_TBS_LAX`; the normalised Java fields equal oracle *i,v*'s. A violation is a P0.
   The count of platform-accepted inputs with no raw-byte reference (3a and 3b both fail) is a gate
   metric and must be zero on the committed corpora.
@@ -2932,9 +2942,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   decoder is not an oracle and is not run in CI; its stricter behaviour is argued here, and its divergences are hand-recorded
   `D3_DIVERGENCE` entries (record schema) in the D7 corpus. A 3c error where revokt yields pairs is recorded, never a gate failure. A 3c pair that
   revokt does not yield blocks the release until a spec revision resolves it; revokt follows §9.2, never 3c. A
-  further class, also against 3a only, is `3A_TBS_LAX`: 3a takes a primitive `[3]` as extensions, which the JDK and
-  revokt do not, so D2's reference for that certificate's extension table and SCT pairs is the §9.2 read (∅),
-  asserted, not skipped. A
+  further class, also against 3a only, is `3A_TBS_LAX`: 3a takes as extensions an element with tag number 3 that is not
+  a constructed context-specific `[3]` (`x509-parser` checks the tag number only), which the JDK and revokt do not, so
+  D2's reference for that certificate's extension table and SCT pairs is the §9.2 read (∅), asserted, not skipped. A
   separate class, against 3a only, is `3A_HEADER_LAX`: 3a yields pairs under an inner identifier other than
   `0x04`; Firefox, webpki and revokt do not; that is equivalent to issuing without SCTs. For a key outside the filter's universe
   a query answers arbitrarily. That is the M1 unverified-SCT residual (§10 item 7), unchanged by revision 33,
@@ -2959,30 +2969,32 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   an inner identifier that is not tag number 4, such as `0x30` (the list fails in revokt and 3a alike, not `3A_HEADER_LAX`),
   the trailing-element cases of the §9.2 rule (bytes after `[3]`; an element between `subjectPublicKeyInfo` and `[3]`,
   dropping the extensions; `[2]` before `[1]` and `[1]` twice, dropping them; constructed `[1]`/`[2]`; a primitive
-  `[3]`, ignored; two `[3]`, the second ignored; bytes after the Extensions SEQUENCE inside `[3]` and after `extnValue`,
-  ignored; anything after the INTEGER inside `[0]`, `STRUCTURE`, with the flattening case whose producer SPKI
-  differs; a zero-length primitive `[3]` (`83 00`), `Parsed` and outside the profile; a constructed `[1]` then `[3]`
-  carrying a non-minimal length, `Parsed` and outside the profile (K2), a D8-gap entry because ct-go never visits `[3]` there and keys it), the more-lenient-than-JDK cases (a v1 or v2 certificate carrying
-  elements its version does not allow; unique-id content that is not BIT STRING content), times with an offset, without
-  seconds and with a day past the month's end (2026-02-31, rolling over to 2026-03-03), a 64 KB extension, BER indefinite lengths,
-  non-minimal definite lengths, and a `Certificate` with trailing bytes; the envelope re-encodings (a non-minimal
-  length on the outer `signatureAlgorithm` or `signatureValue` header, the outer NULL parameters flipped, a non-zero
-  unused-bits octet on an RSA `signatureValue`, an indefinite outer `signatureAlgorithm`, an OID header `06 81 08` or a
-  NULL as `05 81 00` inside it, a `tbsCertificate` header with a long-form length carrying leading zero octets or an
-  indefinite length, an indefinite TBS with an indefinite Validity, subject RDN chain, `[0]`, or `[3]` down to an
-  `extnValue` as `04 80 … 00 00`, an outer AlgorithmIdentifier `30 80 <OID> 05 80 00 00 00 00`, an RSA `signatureValue`
-  with unused-bits octet `01` and the padding bit set, an EC `signatureValue` `03 80 <content> 00 00` whose content
-  reads as a chain of minimal TLVs (JDK 11 verifies it, JDK 17, 21 and 27 reject it); required outcome for each:
-  `Parsed`, with the `producerKeyable` and key bytes of the unmodified certificate and a `VERIFIED` link, since the
-  profile reads `Cert.tbs`; and on the reject side an indefinite TBS holding a non-minimal definite child (`02 81 …`,
-  an SPKI `30 82 00 …`), which the JDK accepts and fails to verify, an indefinite outer AlgorithmIdentifier holding a
+  `[3]`, ignored; an element with tag number 3 in another class or form holding an Extensions SEQUENCE (`03`, `23`,
+  `43`, `63`, `C3`, `E3`), ignored, `Parsed` and outside the profile (K2), `3A_TBS_LAX`; two `[3]`, the second ignored;
+  bytes after the Extensions SEQUENCE inside `[3]` and after `extnValue`, ignored; anything after the INTEGER
+  inside `[0]`, `STRUCTURE`, with the flattening case whose producer SPKI differs; a zero-length primitive `[3]`
+  (`83 00`), `Parsed` and outside the profile; a constructed `[1]` then `[3]` carrying a non-minimal length, `Parsed`
+  and outside the profile (K2), a D8-gap entry because ct-go never visits `[3]` there and keys it), the
+  more-lenient-than-JDK cases (a v1 or v2 certificate carrying elements its version does not allow; unique-id content
+  that is not BIT STRING content), times with an offset, without seconds and with a day past the month's end
+  (2026-02-31, rolling over to 2026-03-03), a 64 KB extension, BER indefinite lengths, non-minimal definite lengths, and
+  a `Certificate` with trailing bytes; the envelope re-encodings (a non-minimal length on the outer `signatureAlgorithm`
+  or `signatureValue` header, the outer NULL parameters flipped, a non-zero unused-bits octet on an RSA
+  `signatureValue`, an indefinite outer `signatureAlgorithm`, an OID header `06 81 08` or a NULL as `05 81 00` inside
+  it, a `tbsCertificate` header with a long-form length carrying leading zero octets or an indefinite length, an
+  indefinite TBS with an indefinite Validity, subject RDN chain, `[0]`, or `[3]` down to an `extnValue` as
+  `04 80 … 00 00`, an outer AlgorithmIdentifier `30 80 <OID> 05 80 00 00 00 00`, an RSA `signatureValue` with
+  unused-bits octet `01` and the padding bit set, an EC `signatureValue` `03 80 <content> 00 00` whose content reads as
+  a chain of minimal TLVs (JDK 11 verifies it, JDK 17, 21 and 27 reject it); required outcome for each: `Parsed`, with
+  the `producerKeyable` and key bytes of the unmodified certificate and a `VERIFIED` link, since the profile reads
+  `Cert.tbs`; and on the reject side an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI
+  `30 82 00 …`), which the JDK accepts and fails to verify, an indefinite outer AlgorithmIdentifier holding a
   non-minimal OID header (`30 80 06 81 08 … 00 00`), which the JDK rejects, and that indefinite `signatureValue` with
-  its chain's first header non-minimal (`03 80 00 81 30 … 00 00`), which JDK 11 does not verify; each `STRUCTURE`);
-  and a CA-signed TBS whose extensions are followed by a trailing element with a multi-octet tag (`9f 01 02 05 00`),
-  presented with a definite and with an indefinite TBS header (`Parsed`, outside the profile under K2, the same
-  outcome for both); and the D8-gap examples (a serial with non-minimal
-  INTEGER content, a keyUsage or basicConstraints value only zcrypto accepts, a `UTCTime` without seconds; each
-  `Parsed` and outside the profile).
+  its chain's first header non-minimal (`03 80 00 81 30 … 00 00`), which JDK 11 does not verify; each `STRUCTURE`); and
+  a CA-signed TBS whose extensions are followed by a trailing element with a multi-octet tag (`9f 01 02 05 00`),
+  presented with a definite and with an indefinite TBS header (`Parsed`, outside the profile under K2, the same outcome
+  for both); and the D8-gap examples (a serial with non-minimal INTEGER content, a keyUsage or basicConstraints value
+  only zcrypto accepts, a `UTCTime` without seconds; each `Parsed` and outside the profile).
 
 **Issuer corpus (zero tolerance).** Every certificate in Mozilla's `intermediates` Remote Settings
 collection, the CCADB all-certificate-records export, the JDK `cacerts` store, and Android's system
@@ -3291,12 +3303,16 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   | asn1-rs | 0.7.2 | `b7f43a50ac4fdca5df8e885c21b835997f0a1cdee65494a6847694a98652d9d8` |
   | nom | 7.1.3 | `d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a` |
 
-  The SCT-list behaviour §9.2 states was probed on 2026-10-22, and each part comes from one place in the code:
+  The `x509-parser` behaviour §9.2 relies on was probed (the SCT list on 2026-10-22, the TBS tail on 2026-10-24),
+  and each part comes from one place in the code:
   - `parse_extension0` discards each extension parser's rest;
   - `map_parser(take(len), …)` discards the rest of the declared region, and `map_parser(length_data(be_u16), …)` the rest of each item;
   - `many1(complete(item))` keeps the items before the first failure;
   - asn1-rs `Header::from_der` takes any long-form length;
-  - asn1-rs `TryFrom<Any> for &[u8]` checks the tag number only.
+  - asn1-rs `TryFrom<Any> for &[u8]` checks the tag number only;
+  - `parse_extensions` checks only the tag number of the element after the SPKI: the real extensions of
+    `letsencrypt.org-1` under each of `03`, `23`, `43`, `63`, `83`, `C3` and `E3` give 3a its 10 extensions, while
+    JDK 11 and 21 parse each and read none (probed 2026-10-24, the review of #37).
 
   That behaviour becomes a committed `revokt-oracle` test with one case per §9.2 sentence and per D7 SCT entry, landing
   with oracle 3a. The same cases, with §9.2's expected outcomes (∅ on the `3A_HEADER_LAX` and `3A_TBS_LAX` rows), run against
