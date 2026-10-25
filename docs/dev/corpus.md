@@ -23,7 +23,7 @@ Two kinds (CONTRIBUTING §3):
 ### The large corpus in the replay
 
 With `-Prevokt.corpus=<checkout>` the build passes the checkout to the tests (`ExternalCorpus` in `revokt-engine`'s
-jvmTest; the tree but its `.git` is a test input, and the test heap is 4 GB). The replay then covers its inputs too:
+jvmTest; the tree but its `.git` is a test input, and the test heap is 6 GB). The replay then covers its inputs too:
 
 - **Inputs**: each distinct certificate of `x509-limbo/limbo.json`'s testcases (trusted, intermediates and peer), named
   `x509-limbo/<sha256>`; one the committed corpus already holds keeps its committed name and goldens.
@@ -31,7 +31,8 @@ jvmTest; the tree but its `.git` is a test input, and the test heap is 4 GB). Th
   `issuer/<sha256>` (one the replay already holds keeps that name): CCADB's `MozillaAllUnexpiredPEMs` report (the
   producer's source), CCADB's PEM export by `NotBeforeYear` beside its all-records export, Mozilla's `intermediates`
   attachments bundle, the matrix JDKs' `cacerts` and AOSP's `ca-certificates`. `issuer/PROVENANCE` gives each file's URL,
-  retrieval time and SHA-256. Each has an `ISSUER_CORPUS` record naming its snapshots, and it is never a D8-gap entry
+  retrieval time and SHA-256. Each the large corpus holds has an `ISSUER_CORPUS` record naming its snapshots (the committed chain fixtures
+  CCADB also lists have none, since a committed record cannot need the large corpus), and it is never a D8-gap entry
   (a v1 root has no basicConstraints). `ProducerSpkiCheckTest` is the producer SPKI check: SPKI agreement with oracle
   4's `ct` path over the issuer corpus, and coverage of each index of the fixture generation (`corpus/clubcard`). An
   index key no snapshot covers needs its certificates fetched from CT by SPKI hash and admitted (none so far).

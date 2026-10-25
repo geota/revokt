@@ -10,8 +10,17 @@ Status: **draft spec / project proposal, revision 43** · Target: JVM 17+ and An
 - **Corrected** (found while implementing #15): revision 42 said oracle 4 runs on the DER, not `canon`, and that the
   two are equal on every `ct`-path input. They are not: 5 issuer-corpus certificates (Appendix A) carry an outer
   `signatureAlgorithm` (sha1WithRSAEncryption) other than their TBS's (ecdsa-with-SHA384, sha384WithRSAEncryption),
-  which `canon` replaces with the TBS's. Oracle 4 runs on `canon`, as everywhere, and what the check needs holds: on
-  every `ct`-path input the TBS, and so the SPKI hashed, is the DER's, which the replay asserts.
+  which `canon` replaces with the TBS's. Oracle 4 runs on `canon`, as everywhere, and what agreement needs holds: on
+  every `ct`-path input the TBS, and so the SPKI hashed, is the DER's, which the replay asserts. certificate-transparency-go
+  rejects those 5 on the DER ("mismatching signature algorithm identifiers"), so `canon`'s `ct` set is a superset of
+  the DER's (canon only removes ct-go errors) and index coverage counts only a certificate whose `canon` is its DER.
+- **Stated**: the issuer corpus's CCADB certificates come from the `AllCertificatePEMsCSVFormat` export by
+  `NotBeforeYear`, since the all-certificate-records export carries no PEM; the records export's certificates that
+  export lacks (15 on 2026-10-25, all revoked) are fetched from crt.sh by fingerprint. Until the 0.3 images are pinned,
+  AOSP `ca-certificates` `main` stands in for "the sources of the pinned images".
+- **Recorded**: the CT seed corpus starts as a pilot of 22 559 leaves from 80 of the 81 CRLite-enrolled logs (one did
+  not answer), with no D8-gap entry among its 19 846 unexpired leaves the JDK accepts (Appendix A). At that size
+  10^-4 is about 2 entries, so the re-decision is evaluated when #15 pins the full corpus (at least 100 000 leaves).
 
 ### Changes in revision 42 (the producer SPKI check without an enrolment flag, 2026-10-25)
 - **Changed** (found while implementing #15): the producer SPKI check named "every intermediate the collection marks
@@ -3157,7 +3166,8 @@ and, on a matrix run, revokt's equals oracle 1's: Conscrypt drops the differenti
   outside the profile).
 
 **Issuer corpus (zero tolerance).** Every certificate in Mozilla's `intermediates` Remote Settings
-collection, the CCADB all-certificate-records export, the CCADB `MozillaAllUnexpiredPEMs` report (the source of
+collection, the CCADB all-certificate-records export (its PEMs from `AllCertificatePEMsCSVFormat` by `NotBeforeYear`,
+and from crt.sh by fingerprint where that export lacks one), the CCADB `MozillaAllUnexpiredPEMs` report (the source of
 the producer's program set), the JDK `cacerts` store, and Android's system
 store (for 0.1 taken from the AOSP `ca-certificates` sources of the pinned images; the 0.3 instrumented tier replaces it with the device read-back through the platform `X509Certificate.getEncoded()`),
 under D1 and D2 with no tolerated violation; each snapshot is recorded in revokt-corpus with its URL, its retrieval
@@ -3169,12 +3179,14 @@ non-fatal included, each keyed by `SHA-256(RawSubjectPublicKeyInfo)`; every inde
 producer computed for that generation. Oracle 4 runs on `canon` of each certificate, as everywhere (revision 43):
 on every `ct`-path input its TBS, and so the SPKI it hashes, is the TBS of the DER the producer would read (the PEM-
 or store-decoded DER), since `canon` keeps the TBS content and ct-go's parse requires minimal headers; the envelope
-can differ (an outer `signatureAlgorithm` other than the TBS's, which `canon` replaces), which leaves the SPKI
-unchanged. revokt's `rawSpki` is taken from the DER (and from each platform's `encoded` under D2). (1) **SPKI agreement**: for every issuer-corpus certificate oracle 4 parses through
+can differ (an outer `signatureAlgorithm` other than the TBS's, which `canon` replaces and ct-go rejects on the DER),
+which leaves the SPKI unchanged. revokt's `rawSpki` is taken from the DER (and from each platform's `encoded` under
+D2). (1) **SPKI agreement**: for every issuer-corpus certificate oracle 4 parses through
 `ct` (a superset of the program set: it also holds ct-go's non-fatal x509 errors), `SHA-256(rawSpki)` equals oracle
 4's SPKI hash; a difference is a producer/revokt SPKI-byte divergence and fails, and a certificate revokt does not
 parse counts as one where oracle 4's hash is an index key (elsewhere D1 and D1-dom decide). (2) **Index coverage**:
-every key of each index equals oracle 4's `ct` SPKI hash of an issuer-corpus certificate, and so, by (1), revokt's;
+every key of each index equals oracle 4's `ct` SPKI hash of an issuer-corpus certificate whose `canon` is its DER (one
+the producer could read), and so, by (1), revokt's;
 for a key no snapshot covers (for example, its certificate left the report after the generation), every CA
 certificate CT holds for that SPKI hash is fetched (crt.sh, by `spkisha256`, its id and retrieval time recorded in
 revokt-corpus) and admitted, and a key still uncovered fails.
@@ -3699,7 +3711,12 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   `ca-certificates`): every key of the fixture generation's two indexes (1 035) is `SHA-256(rawSpki)` of one of them,
   so no certificate was fetched from CT; 10 328 parse through oracle 4's `ct` path and all agree with revokt. On 5 of
   those, `canon` differs from the DER only in the outer `signatureAlgorithm` (sha1WithRSAEncryption where the TBS
-  names ecdsa-with-SHA384 or sha384WithRSAEncryption); their TBS is the DER's.
+  names ecdsa-with-SHA384 or sha384WithRSAEncryption); their TBS is the DER's, and ct-go rejects their DER
+  ("mismatching signature algorithm identifiers", `x509/x509.go`). None of their SPKIs is an index key. The records
+  export lists 15 certificates the PEM export lacks (10 "Bayerische SSL-CA-20xx", 4 "Dell Inc. Enterprise CA", "DPDHL
+  TLS CA I3", all revoked and not trusted), fetched from crt.sh. The CT seed pilot (22 559 leaves, 80 of the 81
+  CRLite-enrolled logs; Let's Encrypt Oak2026h2 did not answer `get-sth`) has 19 846 unexpired leaves JDK 21 accepts,
+  all in the D1 domain, and no D8-gap entry among them.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android toolchain fact, verified 2026-10-24: a library built with Kotlin 2.4 needs AGP 8.5.2 or later
   (developer.android.com, "AGP, D8, and R8 versions required for Kotlin versions"), and D8 from AGP 8.8.1 is tested

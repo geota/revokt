@@ -577,8 +577,11 @@ class RecordsTest {
 
     /**
      * The D8 gap over the CT seed corpus's unexpired leaves (spec §9.2: reported per release; above 10^-4 of them, exact
-     * keyability is reconsidered before 0.1), by clause, on the test JDK. Unexpired as of the collection
-     * (`ct-seed/PROVENANCE`); entries the platform rejects or outside the D1 domain are not counted.
+     * keyability is reconsidered before 0.1), by clause, on the test JDK. Unexpired as of the collection (the ct-logs
+     * snapshot's retrieval, `ct-seed/PROVENANCE`). The denominator is the unexpired entries the test JDK accepts; one it
+     * rejects has no read, so it can be neither a gap entry nor D1-dom, and counting it would only lower the rate. A CA
+     * certificate logged in CT is in the denominator and never the numerator (the gap counts end entities). It reports
+     * and never fails: the re-decision is evaluated on the full seed corpus (spec §9.2, revision 43).
      */
     @Test
     fun `the D8 gap over the CT seed corpus's unexpired leaves is reported`() {
@@ -682,8 +685,8 @@ class RecordsTest {
         const val CT_SEED_AS_OF = 1_792_952_731_000L
 
         const val ISSUER_RULE =
-            "An issuer-corpus certificate (§9.2, revision 42: D1 and D2 at zero tolerance, and the producer SPKI " +
-                "check where oracle 4 keys it through ct), in the snapshots"
+            "An issuer-corpus certificate (§9.2, revisions 42 and 43: D1 and D2 at zero tolerance, and the producer " +
+                "SPKI check where oracle 4 keys it through ct), in the snapshots"
 
         val ORACLE_DEPENDENT = setOf(RecordClass.D1_DOM, RecordClass.D2_REENCODE_ALLOW, RecordClass.KEYABILITY_GAP)
 

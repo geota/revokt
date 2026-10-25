@@ -61,19 +61,23 @@ internal object ExternalCorpus {
             ders.getOrPut(name) { der }
             sources.getOrPut(name) { sortedSetOf() } += source
         }
-        for (f in listOf("ccadb-mozilla-unexpired/MozillaAllUnexpiredPEMs.csv")) {
-            pemBlocks(File(root, f).readText()).forEach { add("ccadb-mozilla-unexpired", it) }
+        pemBlocks(File(root, "ccadb-mozilla-unexpired/MozillaAllUnexpiredPEMs.csv").readText()).forEach {
+            add("ccadb-mozilla-unexpired", it)
         }
         File(root, "ccadb-all/pems").listFiles { f -> f.name.endsWith(".csv") }!!.sorted().forEach { f ->
             pemBlocks(f.readText()).forEach { add("ccadb-all", it) }
+        }
+        // The records export's certificates the PEM export lacks, fetched from crt.sh by fingerprint (PROVENANCE).
+        File(root, "ccadb-all/crtsh").listFiles { f -> f.name.endsWith(".pem") }.orEmpty().sorted().forEach { f ->
+            pemBlocks(f.readText()).forEach { add("ccadb-all (crt.sh)", it) }
         }
         ZipInputStream(File(root, "mozilla-intermediates/security-state--intermediates.zip").inputStream()).use { z ->
             generateSequence { z.nextEntry }.forEach { _ ->
                 pemBlocks(String(z.readBytes(), Charsets.ISO_8859_1)).forEach { add("mozilla-intermediates", it) }
             }
         }
-        File(root, "jdk-cacerts").listFiles { f -> f.name.endsWith(".pem") }!!.sorted().forEach { f ->
-            pemBlocks(f.readText()).forEach { add("jdk-cacerts/" + f.name.removeSuffix(".pem"), it) }
+        File(root, "jdk-cacerts").listFiles { f -> f.name.endsWith(".txt") }!!.sorted().forEach { f ->
+            pemBlocks(f.readText()).forEach { add("jdk-cacerts/" + f.name.removeSuffix(".txt"), it) }
         }
         File(root, "aosp/files").listFiles()!!.sorted().forEach { f ->
             pemBlocks(String(f.readBytes(), Charsets.ISO_8859_1)).forEach { add("aosp", it) }

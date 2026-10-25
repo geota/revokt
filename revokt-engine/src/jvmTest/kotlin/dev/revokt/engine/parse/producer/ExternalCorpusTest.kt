@@ -48,6 +48,32 @@ class ExternalCorpusTest {
         assertEquals(false, ExternalCorpus.owns("certs/letsencrypt.org-1"))
     }
 
+    /** The issuer corpus's snapshots as `issuer/PROVENANCE` describes them, on a run with the large corpus. */
+    @Test
+    fun `the issuer corpus reads every certificate of each snapshot`() {
+        val sources = ExternalCorpus.issuer.sources
+        if (sources.isEmpty()) return println("issuer corpus: none on this run (-Prevokt.corpus)")
+        val counts =
+            sources.values
+                .flatten()
+                .groupingBy { it }
+                .eachCount()
+        assertEquals(
+            mapOf(
+                "aosp" to 149,
+                "ccadb-all" to 10_332,
+                "ccadb-all (crt.sh)" to CRTSH,
+                "ccadb-mozilla-unexpired" to 2_660, // 2 662 rows, two of them a repeated certificate
+                "jdk-cacerts/temurin-17.0.21+9" to 118,
+                "jdk-cacerts/temurin-21.0.13+9.0.LTS" to 118,
+                "jdk-cacerts/temurin-25.0.5+8.0.LTS" to 118,
+                "jdk-cacerts/temurin-27.0.0+35" to 120,
+                "mozilla-intermediates" to 1_903,
+            ),
+            counts.toSortedMap(),
+        )
+    }
+
     @Test
     fun `a PEM block other than one certificate fails`() {
         assertFailsWith<IllegalStateException> {
@@ -65,5 +91,10 @@ class ExternalCorpusTest {
             assertFailsWith<IllegalStateException>(bad) { Json.parse("""{"a": $bad}""") }
         }
         assertFailsWith<IllegalStateException> { o.write() }
+    }
+
+    private companion object {
+        /** The records export's certificates fetched from crt.sh (`issuer/PROVENANCE`). */
+        const val CRTSH = 15
     }
 }

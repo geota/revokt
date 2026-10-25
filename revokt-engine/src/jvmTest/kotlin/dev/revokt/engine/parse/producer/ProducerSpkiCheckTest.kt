@@ -45,6 +45,8 @@ class ProducerSpkiCheckTest {
         if (issuers.isEmpty()) return println("producer SPKI check: no issuer corpus on this run (-Prevokt.corpus)")
         val differences = ArrayList<String>()
         var agreed = 0
+        val missing = issuers.filter { it.canon != null && ProducerCorpus.goldens()[it.canonSha256] == null }
+        assertEquals(emptyList(), missing.map { it.name }, "issuer-corpus certificates with no oracle-4 golden")
         for (input in issuers) {
             val key = producerKey(input) ?: continue
             // Oracle 4 read canon; its TBS, and so the SPKI hashed, is the DER's on a ct-path input (spec §9.2, revision 43).
@@ -84,7 +86,9 @@ class ProducerSpkiCheckTest {
     @Test
     fun `every key of each index of the fixture generation is an issuer-corpus certificate's`() {
         if (issuers.isEmpty()) return println("producer SPKI check: no issuer corpus on this run (-Prevokt.corpus)")
-        val covered = issuers.mapNotNull(::producerKey).toSet()
+        // Only a certificate the producer could read counts: ct-go rejects the DER where canon replaced an outer
+        // signatureAlgorithm the TBS does not name (spec §9.2, revision 43), so canon must be the DER.
+        val covered = issuers.filter { it.canon?.contentEquals(it.der) == true }.mapNotNull(::producerKey).toSet()
         val uncovered = indexKeys - covered
         println("producer SPKI check: ${indexKeys.size} index keys, ${uncovered.size} uncovered")
         assertEquals(emptySet(), uncovered, "index keys no issuer-corpus certificate covers (spec §9.2: fetch from CT)")
