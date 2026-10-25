@@ -205,4 +205,28 @@ internal object BoundaryCorpus {
             "policy-with-qualifier" to with("2.5.29.32", seq(seq(oid("2.23.140.1.2.1"), seq(qualifier)))),
         )
     }
+
+    /** One SCT list item: version 0, a 32-octet log id, the timestamp, no extensions, a hash and signature pair, an empty signature. */
+    private fun sctList(timestamp: Long): ByteArray {
+        val item =
+            bytes(0) + ByteArray(32) { 0x11 } + ByteArray(8) { (timestamp ushr (56 - 8 * it)).toByte() } +
+                bytes(0, 0, 4, 3, 0, 0)
+        val items = bytes(item.size shr 8, item.size and 0xff) + item
+        return bytes(items.size shr 8, items.size and 0xff) + items
+    }
+
+    /** The D3 divergence classes against oracle 3a (spec §9.2): `3A_HEADER_LAX` and `3A_TBS_LAX`. */
+    fun divergences(): List<Pair<String, ByteArray>> {
+        val sct = "1.3.6.1.4.1.11129.2.4.2"
+        return listOf(
+            "sct-inner-04" to base(extensions = listOf(extension(sct, tlv(0x04, sctList(1))))),
+            "sct-inner-44" to base(extensions = listOf(extension(sct, tlv(0x44, sctList(2))))),
+            "primitive-3" to
+                TestCert(
+                    spki = ec(points[0].first, points[0].second, points[0].third),
+                    extensions = emptyList(),
+                    tbsTrailing = tlv(0x83, seq(extension(sct, tlv(0x04, sctList(3))))),
+                ).der,
+        )
+    }
 }

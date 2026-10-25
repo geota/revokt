@@ -112,6 +112,7 @@ internal object ProducerCorpus {
         }
         for ((name, der) in BoundaryCorpus.inputs(rsaModulus())) out += Input("boundary/$name", der)
         for (f in fuzzInputs) out += Input("fuzz/$f", resource("CertificateParserFuzzTestInputs/$f"))
+        for ((name, der) in BoundaryCorpus.divergences()) out += Input("d3/$name", der)
         val mutated =
             fixtures.map { "certs/$it" to resource("certs/$it.der") } + ("boundary/base" to BoundaryCorpus.base())
         for ((name, der) in mutated) {
