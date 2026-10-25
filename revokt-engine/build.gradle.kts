@@ -30,6 +30,8 @@ kotlin {
     }
 }
 
+val corpus: File? = providers.gradleProperty("revokt.corpus").orNull?.let { rootProject.file(it) }
+
 // The replay's recording hooks (native/*/record-goldens.sh) pass their output paths through.
 tasks.withType<Test>().configureEach {
     for (name in listOf("revokt.writeProducerInputs", "revokt.writeRecords", "revokt.writeOracleInputs")) {
@@ -40,6 +42,13 @@ tasks.withType<Test>().configureEach {
     jvmArgumentProviders.add(ZlintGoMod(rootProject.file("native/zlint-oracle/go.mod")))
     // Oracle 2 (Conscrypt) loads its JNI library; JDK 24+ warn and a later release blocks it without this (JDK 17+).
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+    // The large corpus (docs/dev/corpus.md): `-Prevokt.corpus=<checkout>` adds its inputs, goldens and records to the
+    // replay. Its tree is an input; its path reaches the tests without entering the cache key.
+    corpus?.let {
+        jvmArgumentProviders.add(CorpusDir(it, fileTree(it) { exclude(".git", ".git/**") }))
+        // About 30 000 more inputs, with their 3a/3b goldens held in memory.
+        maxHeapSize = "4g"
+    }
 }
 
 // Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of the parser package of at least 90 % over
@@ -57,6 +66,13 @@ kover {
 }
 
 tasks.named("check") { dependsOn("koverVerifyParser") }
+
+class CorpusDir(
+    @get:Internal val dir: File,
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE) val files: FileTree,
+) : CommandLineArgumentProvider {
+    override fun asArguments(): List<String> = listOf("-Drevokt.corpus=${dir.absolutePath}")
+}
 
 class ZlintGoMod(
     @get:InputFile @get:PathSensitive(PathSensitivity.RELATIVE) val file: File,

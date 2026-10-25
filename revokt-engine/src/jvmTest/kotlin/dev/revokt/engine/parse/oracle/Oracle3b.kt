@@ -44,12 +44,7 @@ internal object Oracle3b {
         val tagThreeIgnored: Boolean get() = stop != null && stop and 0x1f == 3
     }
 
-    private val goldens: Map<String, String> by lazy {
-        String(ProducerCorpus.resource("oracle/3b.tsv"))
-            .lineSequence()
-            .filter { it.isNotBlank() && !it.startsWith("#") }
-            .associate { line -> line.substringBefore('\t') to line.substringAfter('\t') }
-    }
+    private val goldens: Map<String, String> by lazy { ProducerCorpus.goldens("oracle/3b.tsv", "3b") }
 
     /** sha256 of the input → 3b's reply, or null when no golden is recorded. */
     fun reply(sha256: String): String? = goldens[sha256]

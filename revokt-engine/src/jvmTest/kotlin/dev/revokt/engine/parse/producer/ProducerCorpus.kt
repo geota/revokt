@@ -183,14 +183,26 @@ internal object ProducerCorpus {
         for ((name, der) in mutated) {
             for (m in LengthMutants.of(der)) out += Input("mutant/$name${m.path}", m.der, name, m.path)
         }
+        // The large corpus last, so an input both corpora hold keeps its committed name (and its goldens here).
+        out += ExternalCorpus.inputs()
         return out.distinctBy { it.der.toByteString() }
     }
 
+    private val producerGoldens by lazy { goldens("producer/goldens.tsv", "producer") }
+
+    private val zlintResults by lazy { goldens("producer/zlint.tsv", "zlint") }
+
     /** canon SHA-256 → the oracle's line (`OK <serial> <spki-sha256> <ct|lax|zc>` or `REJECT <error>`). */
-    fun goldens(): Map<String, String> = tsv("producer/goldens.tsv")
+    fun goldens(): Map<String, String> = producerGoldens
 
     /** canon SHA-256 → zlint's line (`LINT <errors|-> <warnings|->`, `UNPARSEABLE <error>` or `PANIC <error>`). */
-    fun zlint(): Map<String, String> = tsv("producer/zlint.tsv")
+    fun zlint(): Map<String, String> = zlintResults
+
+    /** The committed goldens at [path] and the large corpus's `replay/<external>.tsv.gz` (ExternalCorpus), merged. */
+    fun goldens(
+        path: String,
+        external: String,
+    ): Map<String, String> = tsv(path) + ExternalCorpus.tsv(external)
 
     private fun tsv(path: String): Map<String, String> =
         String(resource(path))
@@ -213,14 +225,26 @@ internal object ProducerCorpus {
             }
         }
 
-    /** Writes each distinct canon once when `revokt.writeProducerInputs` names a file; returns whether it did. */
+    /**
+     * Writes each distinct canon once, with its [origin], when `revokt.writeProducerInputs` names a file; returns whether
+     * it did.
+     */
     fun writeInputsIfRequested(): Boolean {
         val path = System.getProperty("revokt.writeProducerInputs") ?: return false
         File(path).printWriter().use { w ->
-            for (i in (inputs + readInputs()).filter { it.canon != null }.distinctBy { it.canonSha256 }) {
-                w.println("${i.canonSha256}\t${Base64.getEncoder().encodeToString(i.canon)}")
+            for (i in byOrigin((inputs + readInputs()).filter { it.canon != null }) { it.canonSha256 }) {
+                w.println("${i.canonSha256}\t${Base64.getEncoder().encodeToString(i.canon)}\t${origin(i)}")
             }
         }
         return true
     }
+
+    /** The corpus whose goldens hold [input]'s: `c`, the committed one, or `x`, the large one (ExternalCorpus). */
+    fun origin(input: Input): String = if (ExternalCorpus.owns(input.name)) "x" else "c"
+
+    /** [inputs], one per [key], a committed one where both corpora have it, so that its golden stays committed. */
+    fun <K> byOrigin(
+        inputs: List<Input>,
+        key: (Input) -> K,
+    ): List<Input> = inputs.sortedBy { origin(it) }.distinctBy(key)
 }

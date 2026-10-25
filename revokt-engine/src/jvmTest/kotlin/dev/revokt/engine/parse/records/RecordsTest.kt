@@ -14,6 +14,7 @@ import dev.revokt.engine.parse.oracle.Oracle3a
 import dev.revokt.engine.parse.oracle.Oracle3b
 import dev.revokt.engine.parse.oracle.PlatformReplay
 import dev.revokt.engine.parse.oracle.ReferenceView
+import dev.revokt.engine.parse.producer.ExternalCorpus
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import dev.revokt.engine.parse.records.CorpusRecord.RecordClass
 import java.io.File
@@ -133,14 +134,12 @@ class RecordsTest {
     @Test
     fun `the records writer merges this run's view when requested`() {
         val path = System.getProperty("revokt.writeRecords") ?: return
-        val file = File(path)
-        val existing =
-            if (file.exists()) {
-                file.readLines().filter { it.isNotBlank() }.map { CorpusRecord.fromJson(Json.parse(it) as Json.Obj) }
-            } else {
-                emptyList()
-            }
-        CorpusRecord.write(file, merge(existing, computed()))
+        // The committed records go to [path], the large corpus's to its replay/records.jsonl on a run with its checkout.
+        val files = listOfNotNull(File(path), CorpusRecord.external)
+        val existing = files.filter { it.exists() }.flatMap { CorpusRecord.parse(it.readText()) }
+        val (external, committed) = merge(existing, computed()).partition { ExternalCorpus.owns(it.path) }
+        CorpusRecord.write(files[0], committed)
+        CorpusRecord.external?.let { CorpusRecord.write(it.apply { parentFile.mkdirs() }, external) }
     }
 
     /** Whether [r]'s class (or divergence) depends on the platform oracles, so that it holds per oracle version. */

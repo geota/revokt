@@ -44,17 +44,13 @@ internal object Oracle3a {
         val duplicateSct: Boolean,
     )
 
-    private val cached: Map<String, String> by lazy { goldens() }
+    private val cached: Map<String, String> by lazy { ProducerCorpus.goldens("oracle/3a.tsv", "3a") }
 
     /** sha256 of the input → 3a's reply, or null when no golden is recorded. */
     fun reply(sha256: String): String? = cached[sha256]
 
-    /** sha256 of the input → 3a's reply line. */
-    fun goldens(): Map<String, String> =
-        String(ProducerCorpus.resource("oracle/3a.tsv"))
-            .lineSequence()
-            .filter { it.isNotBlank() && !it.startsWith("#") }
-            .associate { line -> line.substringBefore('\t') to line.substringAfter('\t') }
+    /** sha256 of the input → 3a's reply line, the large corpus's included. */
+    fun goldens(): Map<String, String> = cached
 
     /** The reply parsed, or null for `ERR` and `PANIC`. */
     fun accepted(reply: String): Accepted? {
@@ -121,15 +117,23 @@ internal object Oracle3a {
     fun bytes(hex: String): ByteArray = hex.decodeHex().toByteArray()
 
     /**
-     * Writes every corpus input, and the bytes revokt reads for each oracle 1 accepts (the replay reads `encoded` through
-     * the reference view, spec §9.2 D1 and D2), when `revokt.writeOracleInputs` names a file; returns whether it did.
+     * Writes every corpus input, and the bytes revokt reads for each one a platform oracle accepts (the replay reads
+     * `encoded` through the reference view, spec §9.2 D1 and D2), when `revokt.writeOracleInputs` names a file; returns
+     * whether it did. Each line ends in [ProducerCorpus.origin]'s column, so the recorder files its golden in the corpus
+     * that holds the input.
      */
     fun writeInputsIfRequested(): Boolean {
         val path = System.getProperty("revokt.writeOracleInputs") ?: return false
-        val encoded = ProducerCorpus.readInputs().map { it.der }
         File(path).printWriter().use { w ->
-            for (der in (ProducerCorpus.inputs.map { it.der } + encoded).distinctBy { it.toByteString() }) {
-                w.println("${der.toByteString().sha256().hex()}\t${Base64.getEncoder().encodeToString(der)}")
+            for (i in ProducerCorpus.byOrigin(
+                ProducerCorpus.inputs + ProducerCorpus.readInputs(),
+            ) { it.der.toByteString() }) {
+                val der = i.der
+                w.println(
+                    "${der.toByteString().sha256().hex()}\t${Base64.getEncoder().encodeToString(
+                        der,
+                    )}\t${ProducerCorpus.origin(i)}",
+                )
             }
         }
         return true
