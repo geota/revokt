@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.parse.producer
 
+import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -11,8 +12,20 @@ import kotlin.test.assertTrue
 class ProducerGoldensWriterTest {
     @Test
     fun `the replay corpus is deterministic and the recording hook writes it on request`() {
-        val first = ProducerCorpus.build().map { it.canonSha256 }
-        val again = ProducerCorpus.build().map { it.canonSha256 }
+        val first =
+            ProducerCorpus.build().map {
+                it.der
+                    .toByteString()
+                    .sha256()
+                    .hex()
+            }
+        val again =
+            ProducerCorpus.build().map {
+                it.der
+                    .toByteString()
+                    .sha256()
+                    .hex()
+            }
         assertEquals(first, again, "corpus generation is deterministic")
         assertTrue(first.size > 1000, "the mutation set is exercised (${first.size} inputs)")
         ProducerCorpus.writeInputsIfRequested()

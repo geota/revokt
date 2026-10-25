@@ -4,7 +4,9 @@
 package dev.revokt.engine.parse.producer
 
 import dev.revokt.engine.parse.DerNode
+import dev.revokt.engine.parse.EnvelopeVariants
 import dev.revokt.engine.parse.LengthForm
+import dev.revokt.engine.parse.oracle.Oracle3a
 import dev.revokt.engine.parse.oracle.Oracle3b
 import okio.ByteString.Companion.toByteString
 import java.io.File
@@ -60,6 +62,25 @@ internal object ProducerCorpus {
             "version-wrapper-trailing",
         )
 
+    /** The leaves the `envelope/` inputs are built from, and whether each is RSA-signed. */
+    val envelopeLeaves = listOf("letsencrypt.org-1" to false, "www.google.com-1" to false, "www.mozilla.org-1" to true)
+
+    /** The `envelope/` inputs revokt rejects: the `STRUCTURE` forms on every leaf, and the converter forms it rejects. */
+    fun envelopeRejects(): Set<String> =
+        envelopeLeaves
+            .flatMap { (leaf, rsa) ->
+                EnvelopeVariants.of(rsa).filter { it.expected == EnvelopeVariants.Expected.STRUCTURE }.map {
+                    "envelope/$leaf/${it.name}"
+                }
+            }.toSet() +
+            listOf(
+                "tbs-indefinite-serial-85",
+                "certificate-long5",
+                "certificate-long8",
+                "version-long5",
+                "tbs-signature-long5",
+            ).map { "envelope/letsencrypt.org-1/$it" }
+
     /** One replay input; [base] names the certificate a mutant came from and [path] the mutated header. */
     class Input(
         val name: String,
@@ -67,9 +88,17 @@ internal object ProducerCorpus {
         val base: String? = null,
         val path: String? = null,
     ) {
-        /** `canon(encoded)` from oracle 3b's recorded parts (spec §9.2); null when 3b does not locate the input. */
+        /**
+         * `canon(encoded)` (spec §9.2), its parts located by the reference view: 3a where it accepts, else 3b; null when
+         * neither locates the input. A missing golden fails, so a stale recording never passes as not located.
+         */
         val canon: ByteArray? by lazy {
-            Oracle3b.reply(der.toByteString().sha256().hex())?.let { Oracle3b.parts(it)?.canon() }
+            val sha = der.toByteString().sha256().hex()
+            val missing = "$name: no %s golden; run native/revokt-oracle/record-goldens.sh"
+            val a = checkNotNull(Oracle3a.reply(sha)) { missing.format("3a") }
+            val b = checkNotNull(Oracle3b.reply(sha)) { missing.format("3b") }
+            val parts = Oracle3a.accepted(a)?.canon?.let { Oracle3b.Parts(it.tbs, it.tbsSignature, it.signature) }
+            (parts ?: Oracle3b.parts(b))?.canon()
         }
         val canonSha256: String? by lazy { canon?.toByteString()?.sha256()?.hex() }
     }
@@ -116,6 +145,14 @@ internal object ProducerCorpus {
                 tree.child(0).form = form
                 out += Input("unsigned/$leaf/$name", tree.encode())
             }
+        }
+        for ((leaf, rsa) in envelopeLeaves) {
+            val der = resource("certs/$leaf.der")
+            for (v in EnvelopeVariants.of(rsa)) out += Input("envelope/$leaf/${v.name}", v.build(DerNode.parse(der)))
+        }
+        val converterBase = resource("certs/letsencrypt.org-1.der")
+        for ((name, build) in EnvelopeVariants.converterForms()) {
+            out += Input("envelope/letsencrypt.org-1/$name", build(DerNode.parse(converterBase)))
         }
         for ((name, der) in BoundaryCorpus.inputs(rsaModulus())) out += Input("boundary/$name", der)
         for (f in fuzzInputs) out += Input("fuzz/$f", resource("CertificateParserFuzzTestInputs/$f"))

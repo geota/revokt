@@ -44,6 +44,11 @@ internal object Oracle3a {
         val duplicateSct: Boolean,
     )
 
+    private val cached: Map<String, String> by lazy { goldens() }
+
+    /** sha256 of the input → 3a's reply, or null when no golden is recorded. */
+    fun reply(sha256: String): String? = cached[sha256]
+
     /** sha256 of the input → 3a's reply line. */
     fun goldens(): Map<String, String> =
         String(ProducerCorpus.resource("oracle/3a.tsv"))
