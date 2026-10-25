@@ -1,10 +1,43 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 40** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
+Status: **draft spec / project proposal, revision 41** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 41 (two recorded platform cases in D2, 2026-10-25)
+- **Added** (found while implementing #14, the `x509-limbo` replay; #59): a second rule in D2's SPKI re-encoding
+  allow-list. A JDK without a KeyFactory for an algorithm returns a generic key whose `getEncoded()` re-encodes the
+  AlgorithmIdentifier with NULL parameters where the certificate has none; JDK 17.0.20.1 does so for ML-DSA keys,
+  17.0.21 knows ML-DSA and keeps the bytes. The rule, on the bytes alone, admits exactly that case: `rawSpki` with every
+  header minimal and NULL parameters added to an AlgorithmIdentifier that has none, nothing else differing. revokt is right there, since `rawSpki` is the
+  certificate's bytes, equals the raw-byte reference and is what the producer keys. CI runs each matrix JDK at its
+  latest patch (CONTRIBUTING §6), so the rule names a case a lagging patch, or any JDK meeting an algorithm it does
+  not know yet, would otherwise report as a violation.
+- **Added** (found while building the D7 corpus, #14): `CONSCRYPT_TIME_OFFSET`, a `D3_DIVERGENCE` record (a D2 field
+  difference) of oracle 2.
+  Conscrypt 2.7.0 and 2.8.0 accept a `UTCTime` with a `±hhmm` differential and drop the differential, reading the
+  local time as UTC (probed 2026-10-25: `261022134530+0100` is 13:45:30Z, where the JDK reads 12:45:30Z, and
+  `-0130` is also 13:45:30Z); they reject a `GeneralizedTime` with one. revokt decodes as the JDK does (§9.2
+  "Times"). A `getNotBefore()`/`getNotAfter()` difference from oracle 2 is recorded under this class, per Conscrypt
+  version, only where the time is a `UTCTime` with a differential (read from the input bytes by the replay, never by
+  revokt's parse) and oracle 2's value is revokt's plus the signed differential, revokt's being the local time minus
+  it; on a matrix run revokt's value must also equal oracle 1's. Any other time difference stays a violation. RFC 5280
+  requires `Z`, so only non-conforming certificates carry such a time, and K6 puts such a leaf outside the keyability
+  profile, so CRLite never queries it. M4's distrust-after reads revokt's `notBefore`, with the JDK's meaning, on both
+  platforms; a decision made from Android's `getNotBefore()` can differ from it by the differential, less than a day,
+  since the JDK and Conscrypt 2.7.0 and 2.8.0 reject an hour of 24 or more and a minute of 60 or more.
+- **Stated**: every SPKI hash revokt computes (`Cert.spkiHash`: the candidate index, `leafKeys`, the verifier caches)
+  is `SHA-256(rawSpki)`, over the encoded certificate's bytes, never over a platform's `getPublicKey().getEncoded()`
+  (§9.2 D2's normalisation is the only use of that getter in revokt's code). A binding that hashed it would usually
+  miss an enrolled issuer (fail open); where the re-encoding is another enrolled encoding of the same key, it would
+  query outside the universe (§10, "Two SPKI encodings").
+- **Clarified**: the matrix runs each JDK at its latest patch at run time ("Tiers and matrix"); "strict DER" for
+  Conscrypt means its TLV parse (no indefinite or non-minimal lengths), since it accepts a `UTCTime` differential; the
+  record schema's platform oracle entries carry `holds` on an oracle-dependent record, as the corpus already does, and
+  each entry's `version` is defined (a JDK patch or an APEX update that changes an outcome fails the run until the
+  records are regenerated).
 
 ### Changes in revision 40 (the matrix file and the nightly's Conscrypt release, 2026-10-25)
 - **Clarified** (found while implementing #13): the version matrix runs one job per JDK with every Conscrypt version
@@ -2716,7 +2749,7 @@ candidate is dropped, and a getter that throws has the same outcome and is count
 platform canon is defined as its own `canon(encoded)`, and the replay asserts that the reference view, where it
 locates it, yields the same. A certificate so read carries no `AlgorithmIdMismatch` finding unless its TBS
 AlgorithmIdentifier is not minimal DER. Where the bytes read stand for the certificate, and where `getEncoded()`
-still does, is §5.3's. Conscrypt needs no fallback: it parses strict DER.
+still does, is §5.3's. Conscrypt needs no fallback: its TLV parse is strict DER (no indefinite or non-minimal lengths).
 `PARSE_FAILED` on the leaf allows in `DEFAULT` and an unparseable candidate is dropped (decision, §10 item 8). Two
 failure classes matter: (i) a certificate the platform accepts and revokt rejects is unchecked (a leaf) or invisible
 as an issuer (a dropped candidate ends the walk `NO_ISSUER`, which allows in `DEFAULT` for every leaf under that CA),
@@ -2766,6 +2799,8 @@ Ignored bytes contribute no field. Their offsets are recorded, and any ignored e
 - `Z` or `±hhmm` in both `UTCTime` and `GeneralizedTime`;
 - `GeneralizedTime` fractions after `.` or `,` of any length, truncated to milliseconds;
 - a day of 1 to 31 in any month, a day past the month's end rolling into the next month as the JDK's lenient calendar does (2026-02-31 is 2026-03-03, 2026-04-31 is 2026-05-01).
+
+Conscrypt 2.7.0 and 2.8.0 drop a `UTCTime` differential and reject a `GeneralizedTime` one (`CONSCRYPT_TIME_OFFSET`, D2).
 
 revokt also accepts optional minutes, second 60 (the first second of the next minute) and an absent zone, which it takes as UTC. A time outside these forms is null; only platform-rejected input reaches that. A rule that needs a null time fails closed: M4's distrust-after treats a null `notBefore` as after any distrust date.
 
@@ -2930,10 +2965,16 @@ the secondary corpus fails the job as infrastructure. A Rust or Go abort that ki
 attributed by re-running the input through the out-of-process CLI before it is filed against revokt.
 Java field normalisation: `getSerialNumber()` by value (`BigInteger` drops padding and sign-extends);
 `getPublicKey().getEncoded()` by SHA-256 against `rawSpki` with a recorded allow-list of
-re-encoding cases (Java re-encodes RSA parameters); `getIssuerX500Principal()` and
+re-encoding cases, two rules on the bytes alone: `rawSpki` with every header minimal (Java re-encodes RSA parameters),
+and `rawSpki` with every header minimal and NULL parameters added to an AlgorithmIdentifier that has none, nothing
+else differing (a generic key of an algorithm the platform does not know, revision 41); the getter is never hashed for
+a lookup, since every SPKI hash revokt computes is `SHA-256(rawSpki)`; `getIssuerX500Principal()` and
 `getSubjectX500Principal()` as `X500Principal(raw).getName(CANONICAL)`; `getExtensionValue(oid)`
 unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epoch milliseconds against
-`notBefore`/`notAfter`. Raw-byte equality is asserted against 3a, else 3b.
+`notBefore`/`notAfter`, where oracle 2's difference on a `UTCTime` with a `±hhmm` differential (read from the input
+bytes) is recorded as `CONSCRYPT_TIME_OFFSET` (a `D3_DIVERGENCE` record per Conscrypt version, revision 41) when oracle
+2's value is revokt's plus the signed differential, revokt's being the local time minus the differential ("Times"),
+and, on a matrix run, revokt's equals oracle 1's: Conscrypt drops the differential. Raw-byte equality is asserted against 3a, else 3b.
 
 **Properties.** For each platform oracle *i* ∈ {1, 2} and each version *v* in the matrix:
 - **D1 leniency (security)**: `Accept_i,v(b)` ⇒ `parse(encoded_i,v)` is `Parsed`, for every input in
@@ -3009,7 +3050,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   recorded as `3A_HEADER_LAX`, so the comparison substitutes ∅ rather than skipping. Where 3a takes as extensions an
   element with tag number 3 that is not a constructed context-specific `[3]` (a primitive `[3]`, or tag number 3 in
   another class; decided by 3b's TBS walk), the reference extension table and SCT pairs are the §9.2 read (∅),
-  recorded as `3A_TBS_LAX`; the normalised Java fields equal oracle *i,v*'s. A violation is a P0.
+  recorded as `3A_TBS_LAX`; the normalised Java fields equal oracle *i,v*'s, except that a `notBefore`/`notAfter`
+  difference from oracle 2 meeting the `CONSCRYPT_TIME_OFFSET` condition (Java field normalisation, above) is recorded,
+  not a violation. A violation is a P0.
   The count of platform-accepted inputs whose `encoded` has no raw-byte reference (3a rejects, and 3b does not locate
   it: its re-encoding or its walk fails), other than inputs revokt does not parse on whose `canon(encoded)` oracle 4
   rejects or for which no platform canon can be built, is a gate metric and must be zero on the committed corpora.
@@ -3058,7 +3101,8 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   (`83 00`), `Parsed` and outside the profile; a constructed `[1]` then `[3]` carrying a non-minimal length, `Parsed`
   and outside the profile (K2), a D8-gap entry because ct-go never visits `[3]` there and keys it), the
   more-lenient-than-JDK cases (a v1 or v2 certificate carrying elements its version does not allow; unique-id content
-  that is not BIT STRING content), times with an offset, without seconds and with a day past the month's end
+  that is not BIT STRING content), times with an offset (on a `UTCTime`, a `CONSCRYPT_TIME_OFFSET` record against oracle
+  2; on a `GeneralizedTime`, oracle 2 rejects), without seconds and with a day past the month's end
   (2026-02-31, rolling over to 2026-03-03), a 64 KB extension, BER indefinite lengths, non-minimal definite lengths, and
   a `Certificate` with trailing bytes; the envelope re-encodings (a non-minimal length on the outer `signatureAlgorithm`
   or `signatureValue` header, the outer NULL parameters flipped, a non-zero unused-bits octet on an RSA
@@ -3087,11 +3131,15 @@ collection marks CRLite-enrolled, `SHA-256(rawSpki)` must be a key of the live f
 (§6.3) for the fixture generation; a miss is a producer/revokt SPKI-byte divergence and fails.
 
 **Corpus record schema (one for all four kinds; committed).**
-`{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome, read?,
+`{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome, read?, holds?,
 fields | unavailable}], class ∈ {D7_LENIENCY, D2_REENCODE_ALLOW, D3_DIVERGENCE, D1_DOM,
-KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, `CONSCRYPT_TBS` (D2: `Cert.tbs` differs from oracle 2's `getTBSCertificate()`), the
+KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, `CONSCRYPT_TBS` (D2: `Cert.tbs` differs from oracle 2's `getTBSCertificate()`), `CONSCRYPT_TIME_OFFSET` (D2: oracle 2 drops a `UTCTime` differential, revision 41), the
 duplicate-extension class, or a named 3c/Firefox class), keyability: {parser, clause, zlint}? (required on every D8-gap entry whatever its class, and on every `KEYABILITY_GAP` record: `parser ∈ {ct, lax, zc}` from oracle 4, `clause` a `KeyabilityClause`, `zlint` the pinned zlint result), justification, added}`. Goldens for 3a/3b/4 are computed at admission
-so the PR replay evaluates D1–D3 and D8 offline, JDK-only. Oracle 1's `read` is the SHA-256 of the bytes revokt reads
+so the PR replay evaluates D1–D3 and D8 offline, JDK-only. A platform oracle's entry carries `holds` on an oracle-dependent record (`D1_DOM`, `D2_REENCODE_ALLOW`,
+`KEYABILITY_GAP`, the `CONSCRYPT_*` divergences): whether the class holds on that version. Its `version` is the
+matrix's name for it: the JDK feature release, the Conscrypt uber release, or on the platform tier the system-image
+revision, with the Conscrypt APEX version recorded beside it; a JDK patch or an APEX update that changes an outcome
+fails the run until the records are regenerated. Oracle 1's `read` is the SHA-256 of the bytes revokt reads
 for that version where they differ from the input (the read fallback), recorded with their goldens; a matrix job that
 meets a read without goldens fails as infrastructure until they are recorded, never as a violation. The release review
 mechanically lists entries whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves across all
@@ -3111,7 +3159,7 @@ artifact and 3a/3b/3c in-process, oracle 4 out of process; one ClusterFuzzLite j
 matrix** is a replay of the union corpus (committed, secondary, divergence): one job per JDK, each running every
 Conscrypt version of the matrix, with 3a/3b/4 goldens read from the records so no matrix job needs a native oracle.
 Versions are named in a committed matrix file, `gradle/oracle-matrix.properties` (JDK: 17, 21, the current LTS, the
-current feature release; the nightly's JDK EA release, rolled by hand; Conscrypt uber: current and previous minor,
+current feature release, each at its latest patch at run time; the nightly's JDK EA release, rolled by hand; Conscrypt uber: current and previous minor,
 named by their catalog keys; Android system images by revision (from 0.3), with the Conscrypt APEX version logged per
 run since it is updated out of band) with the roll rule "add the new version, keep the old until its support ends",
 except that the bytecode target (JDK 17) stays while it is the target. A nightly job replays the committed corpus
@@ -3470,7 +3518,7 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   SunJSSE's `AlgorithmId` normalises NULL parameters; SunEC pure Java since JDK 16, no brainpool since 15.
 - Crypto: ECDSA public-key recovery (SEC 1 §4.1.6); RSA duplicate-signature key selection
   (Blake–Smart; SunRsaSign accepts any exponent for moduli ≤ 3072); ML-DSA in X.509 is RFC 9881;
-  JDK 24 ships ML-DSA; Conscrypt does not; composite signatures are not one JCA operation.
+  JDK 24 ships ML-DSA (backported in 17.0.21 and 21.0.13); Conscrypt does not; composite signatures are not one JCA operation.
 - Kotlin: `kotlin.time.Clock` stable since 2.3; `kotlin.concurrent.atomics` still experimental;
   kotlinx-serialization-json cannot reject duplicate keys.
 - Fuzzing: ClusterFuzzLite and OSS-Fuzz need a static entry point; OSS-Fuzz admission requires usage.
@@ -3502,7 +3550,8 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     The re-encoding rule of §9.2 reproduces `getTBSCertificate()` on every input the JDK verifies. Every probed JDK
     rejects a constructed `signatureValue`, and JDK 17, 21 and 27 an indefinite one; the JDK rejects a fourth
     `Certificate` element and a high-tag signature OID, and normalises the outer `Certificate` header and trailing
-    bytes away in `getEncoded()`. Conscrypt was not probed; BoringSSL parses strict DER.
+    bytes away in `getEncoded()`. Conscrypt was not probed; BoringSSL parses strict DER lengths and tags (it accepts a
+    `UTCTime` differential, revision 41).
 
     Oracle 4 rejects the two header cases ("non-minimal length", "superfluous leading zeros"). The NULL flip is keyed
     through zcrypto only, because ct-go rejects "mismatching signature algorithm identifiers". The JDK re-encodes the
@@ -3572,6 +3621,14 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     D1-dom.
   - No other platform-accepted input lacks a raw-byte reference. `getEncoded()` differs from the input on 18 inputs: a
     non-minimal outer `Certificate` header, re-encoded minimally, and trailing bytes, dropped.
+- Revision 41 probes, run 2026-10-25:
+  - JDK 17.0.20.1+1 and 17.0.20+8 have no ML-DSA `KeyFactory`; `getPublicKey()` on an ML-DSA leaf is a generic
+    `X509Key` whose `getEncoded()` is `30 82 05 34 30 0d 06 09 60 86 48 01 65 03 04 03 11 05 00 …` where the
+    certificate's SPKI is `30 82 05 32 30 0b 06 09 … 03 82 05 21 …`; 17.0.21+9 and 21.0.13 return a named ML-DSA key
+    with the presented bytes.
+  - Conscrypt uber 2.7.0 and 2.8.0 read `UTCTime` `261022134530+0100` and `261022134530-0130` both as
+    2026-10-22T13:45:30Z, where the JDK reads 12:45:30Z and 15:15:30Z; both reject a `GeneralizedTime` with `+0100`,
+    and both they and the JDK reject a differential of `+2400` or `+0099`.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android toolchain fact, verified 2026-10-24: a library built with Kotlin 2.4 needs AGP 8.5.2 or later
   (developer.android.com, "AGP, D8, and R8 versions required for Kotlin versions"), and D8 from AGP 8.8.1 is tested
