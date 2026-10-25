@@ -1,10 +1,17 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 42** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
+Status: **draft spec / project proposal, revision 43** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 43 (oracle 4's input in the producer SPKI check, 2026-10-25)
+- **Corrected** (found while implementing #15): revision 42 said oracle 4 runs on the DER, not `canon`, and that the
+  two are equal on every `ct`-path input. They are not: 5 issuer-corpus certificates (Appendix A) carry an outer
+  `signatureAlgorithm` (sha1WithRSAEncryption) other than their TBS's (ecdsa-with-SHA384, sha384WithRSAEncryption),
+  which `canon` replaces with the TBS's. Oracle 4 runs on `canon`, as everywhere, and what the check needs holds: on
+  every `ct`-path input the TBS, and so the SPKI hashed, is the DER's, which the replay asserts.
 
 ### Changes in revision 42 (the producer SPKI check without an enrolment flag, 2026-10-25)
 - **Changed** (found while implementing #15): the producer SPKI check named "every intermediate the collection marks
@@ -3159,9 +3166,11 @@ generation (`corpus/clubcard`: its full filter and each delta, each with its own
 producer's program set is the report's intermediates that zcrypto parses, that are not revoked, that zcrypto verifies
 to a Mozilla root for serverAuth, and that certificate-transparency-go's `ParseCertificate` returns with no error,
 non-fatal included, each keyed by `SHA-256(RawSubjectPublicKeyInfo)`; every index is a subset of the program set the
-producer computed for that generation. Oracle 4 runs on each certificate's DER as the producer would read it (the PEM-
-or store-decoded DER, not `canon`; the two are equal on every `ct`-path input, whose headers ct-go's parse requires to
-be minimal), and revokt's `rawSpki` is taken from the same bytes (and from each platform's `encoded` under D2). (1) **SPKI agreement**: for every issuer-corpus certificate oracle 4 parses through
+producer computed for that generation. Oracle 4 runs on `canon` of each certificate, as everywhere (revision 43):
+on every `ct`-path input its TBS, and so the SPKI it hashes, is the TBS of the DER the producer would read (the PEM-
+or store-decoded DER), since `canon` keeps the TBS content and ct-go's parse requires minimal headers; the envelope
+can differ (an outer `signatureAlgorithm` other than the TBS's, which `canon` replaces), which leaves the SPKI
+unchanged. revokt's `rawSpki` is taken from the DER (and from each platform's `encoded` under D2). (1) **SPKI agreement**: for every issuer-corpus certificate oracle 4 parses through
 `ct` (a superset of the program set: it also holds ct-go's non-fatal x509 errors), `SHA-256(rawSpki)` equals oracle
 4's SPKI hash; a difference is a producer/revokt SPKI-byte divergence and fails, and a certificate revokt does not
 parse counts as one where oracle 4's hash is an index key (elsewhere D1 and D1-dom decide). (2) **Index coverage**:
@@ -3685,6 +3694,12 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   "emSign Root TLS CA - G3", itself absent from that day's report), consistent with their leaving the report after the
   generation. Of the `intermediates` records, 1 020 (modified 2019-06-07 to 2024-10-21) carry `crlite_enrolled: false`
   and the 883 since 2024-11-09 omit it; none marks it true.
+- Revision 43 probe, run 2026-10-25 over the issuer corpus (10 332 distinct certificates; the revision 42 snapshots
+  with the CCADB `AllCertificatePEMsCSVFormat` export by `NotBeforeYear`, the matrix JDKs' `cacerts` and AOSP
+  `ca-certificates`): every key of the fixture generation's two indexes (1 035) is `SHA-256(rawSpki)` of one of them,
+  so no certificate was fetched from CT; 10 328 parse through oracle 4's `ct` path and all agree with revokt. On 5 of
+  those, `canon` differs from the DER only in the outer `signatureAlgorithm` (sha1WithRSAEncryption where the TBS
+  names ecdsa-with-SHA384 or sha384WithRSAEncryption); their TBS is the DER's.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android toolchain fact, verified 2026-10-24: a library built with Kotlin 2.4 needs AGP 8.5.2 or later
   (developer.android.com, "AGP, D8, and R8 versions required for Kotlin versions"), and D8 from AGP 8.8.1 is tested
