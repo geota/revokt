@@ -8,12 +8,16 @@ Status: **draft spec / project proposal, revision 40** · Target: JVM 17+ and An
 
 ### Changes in revision 40 (the matrix file and the nightly's Conscrypt release, 2026-10-25)
 - **Clarified** (found while implementing #13): the version matrix runs one job per JDK with every Conscrypt version
-  of the matrix inside it, a test run per version, as CONTRIBUTING §6 already said; the committed matrix file is
-  `gradle/oracle-matrix.properties`, naming the Conscrypt versions by their catalog keys.
+  of the matrix inside it, a test run per version, as CONTRIBUTING §6 already said. The committed matrix file is
+  `gradle/oracle-matrix.properties`; it names the Conscrypt versions by their catalog keys and the nightly's JDK EA
+  release, rolled by hand, and from 0.3 the Android system images.
 - **Changed**: the nightly replays the committed corpus against the newest JDK EA as before, but cannot replay a
-  Conscrypt release newer than the matrix: an unadmitted dependency fails dependency verification (CONTRIBUTING §3),
-  and running an unverified native library in CI is not acceptable. The nightly fails instead until that release is
-  admitted, its checksums and signing key checked, and rolled into the matrix, after which every PR replays it.
+  Conscrypt release newer than the matrix's current one: an unadmitted dependency fails dependency verification
+  (CONTRIBUTING §3), and resolving an unverified Conscrypt artifact in CI is not acceptable. The nightly fails
+  instead, and so blocks a release (CONTRIBUTING §6), until that release is admitted (checksums and signing key
+  checked) and rolled into the matrix, after which every PR replays it. The cost: between a Conscrypt release and its
+  admission nothing replays it, where before the nightly did within a day. A patch of the previous minor waits for the
+  next roll.
 
 ### Changes in revision 39 (the JDK read fallback, 2026-10-25)
 - **Added** (found while implementing #12, oracle 1; #49): on the JDK, a certificate whose `getEncoded()` is
@@ -3107,21 +3111,22 @@ artifact and 3a/3b/3c in-process, oracle 4 out of process; one ClusterFuzzLite j
 matrix** is a replay of the union corpus (committed, secondary, divergence): one job per JDK, each running every
 Conscrypt version of the matrix, with 3a/3b/4 goldens read from the records so no matrix job needs a native oracle.
 Versions are named in a committed matrix file, `gradle/oracle-matrix.properties` (JDK: 17, 21, the current LTS, the
-current feature release; Conscrypt uber: current and previous minor; Android system images by revision, with the
-Conscrypt APEX version logged per run since it is updated out of band) with the roll rule "add the new version, keep
-the old until its support ends", except that the bytecode target (JDK 17) stays while it is the target. A nightly job
-replays the committed corpus against the newest JDK EA and fails on any new D1 violation against the recorded
-baseline. A Conscrypt release newer than the matrix fails the nightly until it is admitted like any dependency
-(checksums and signing key verified) and rolled into the matrix, after which every PR replays it; an unverified native
-library is never run. A scheduled **producer job** (weekly, on every change to the producer,
+current feature release; the nightly's JDK EA release, rolled by hand; Conscrypt uber: current and previous minor,
+named by their catalog keys; Android system images by revision, with the Conscrypt APEX version logged per run since
+it is updated out of band) with the roll rule "add the new version, keep the old until its support ends", except that
+the bytecode target (JDK 17) stays while it is the target. A nightly job replays the committed corpus against the
+newest JDK EA and fails on any new D1 violation against the recorded baseline. A Conscrypt release newer than the
+matrix's current one fails the nightly, and so blocks a release, until it is admitted like any dependency (checksums
+and signing key verified) and rolled into the matrix, after which every PR replays it; no unverified Conscrypt
+artifact is resolved in CI. A scheduled **producer job** (weekly, on every change to the producer,
 certificate-transparency-go, zcrypto or Go pin, and before each release) builds oracle 4 at the pin and at
-`mozilla/crlite` `main`, replays D8's gated direction over the union corpus with both, and runs at least 100 000
-fresh entries from CRLite-enrolled logs, precertificates included, through oracles 1 and 4 and the profile. A violation
-at the pin is a P0; one only at `main` is a P0 for the next release and bumps the pin in a spec revision, since
-live filters come from Mozilla's current producer. The sample's gap by clause is published with each release; a
-new clause, or D8-gap entries above 10^-4 of the sample's unexpired entries (precertificates and certificates
-counted alike), needs a recorded decision before the release. This per-release check on fresh entries is separate
-from the D8 gap's one-time re-decision on the #15 seed corpus, which can reopen the D8 decision itself.
+`mozilla/crlite` `main`, replays D8's gated direction over the union corpus with both, and runs at least 100 000 fresh
+entries from CRLite-enrolled logs, precertificates included, through oracles 1 and 4 and the profile. A violation at
+the pin is a P0; one only at `main` is a P0 for the next release and bumps the pin in a spec revision, since live
+filters come from Mozilla's current producer. The sample's gap by clause is published with each release; a new clause,
+or D8-gap entries above 10^-4 of the sample's unexpired entries (precertificates and certificates counted alike),
+needs a recorded decision before the release. This per-release check on fresh entries is separate from the D8 gap's
+one-time re-decision on the #15 seed corpus, which can reopen the D8 decision itself.
 
 **Scope limits, stated.** The oracle set is a version matrix, not a proof; platform parsers drift
 and the platform Conscrypt differs per device. `Revokt.evaluate` over raw bytes is outside the
