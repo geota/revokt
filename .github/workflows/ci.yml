@@ -40,9 +40,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Each feature release at its latest patch, the one users run and the goldens are recorded on: a runner's cached
+      # patch can lag (17.0.20.1 re-encodes the SPKI of an algorithm it does not know, such as ML-DSA, with NULL
+      # parameters; 17.0.21 knows ML-DSA and keeps the presented bytes).
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
+          check-latest: true
           java-version: |
             ${{ matrix.jdk }}
             21

@@ -364,8 +364,9 @@ bootstrap. If a local tool is missing, say so in the PR and push; **CI is author
 every required check in Appendix B passes**.
 
 **Every PR (required checks, offline except where noted):**
-- `check` on JDK 17, 21, the current LTS and the current feature release (Linux; §9.2 matrix), with the
-  Conscrypt dimension inside each job (`gradle/oracle-matrix.properties` names the JDKs and the Conscrypt uber
+- `check` on JDK 17, 21, the current LTS and the current feature release (Linux; §9.2 matrix), each at its latest
+  patch (`check-latest`, the patch the goldens are recorded on; an older patch can differ, as 17.0.20.1 does on
+  ML-DSA keys), with the Conscrypt dimension inside each job (`gradle/oracle-matrix.properties` names the JDKs and the Conscrypt uber
   versions; `jvmTest` replays on the current Conscrypt and `jvmTestConscryptPrevious` on the previous minor, both in
   `check`; `verifyOracleMatrix` keeps CI and the nightly in step with the file); Kover instrumentation only on the
   JDK 21 job; `check` on JDK 21 on macOS and Windows for `revokt-engine` and `revokt-jsse` only (file
