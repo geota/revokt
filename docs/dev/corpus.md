@@ -20,6 +20,37 @@ scts[]}, oracles: [{id, version, outcome, fields | unavailable}], class, diverge
 justification, added}`; the spec's schema is authoritative. Goldens for oracles 3a,
 3b and 4 are computed by the nightly native job at admission so the PR replay needs no Rust or Go.
 
+## Parser replay records (`revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/records.jsonl`)
+
+The records of the parser replay corpus (`ProducerCorpus`), one JSON object per line, sorted by path and class. An input
+has one record per class it is admitted under. `RecordsTest` recomputes every class from the replay on the test JDK
+and requires the committed records to equal it, field for field:
+
+| Class | Admitted for | Depends on the JDK |
+|---|---|---|
+| `D1_DOM` | a platform-accepted input outside the D1 domain: oracle 4 rejects `canon(encoded)` or keys other bytes, or a rule (`[0]`, no platform canon) | yes |
+| `D2_REENCODE_ALLOW` | a parsed input whose SPKI oracle 1 re-encodes under the allow-list's rule | yes |
+| `D3_DIVERGENCE` | a parsed input in a 3a divergence class (`3A_HEADER_LAX`, `3A_TBS_LAX`, `DUPLICATE_EXTENSION`) | no |
+| `KEYABILITY_GAP` | an end-entity input in the D1 domain whose read parses outside the keyability profile (the D8 gap), when it has no other class | yes |
+
+- **`revokt`** is revokt's parse of the input bytes `b`; where the bytes read differ, the classes are decided on those.
+- **Oracle 1** has one entry per matrix JDK (its feature release), with `read` the SHA-256 of the bytes revokt reads where
+  they differ from the input and, on a JDK-dependent record, `holds`: whether the class holds on that JDK. A record counts
+  on a JDK where its entry holds. Oracles 3a and 3b carry their golden's outcome for the input, and oracle 4 its outcome
+  for `canon` of the input, or of the bytes read (`read: …`) where the input has none. The spec's `fields | unavailable`
+  arrive with oracle 2 (#13), the first oracle whose getters can be unavailable on the PR tier.
+- **`keyability`** (`parser`, `clause`, `zlint` as `<errors> <fatals>` or `unparseable`/`panic`) rides on every record of a
+  D8-gap input, whatever its class.
+- **Justifications**: a rule-based one (the producer's error, the D1-dom rule, the divergence class, the re-encoding rule,
+  the zlint errors) is compared too, so a changed reason fails. A record whose rule yields none (a D8-gap entry with no
+  zlint error, a release blocker under §9.2) carries one written by hand.
+- `D7_LENIENCY`, `FUZZ_FINDING` and `ISSUER_CORPUS` records arrive with their corpora (#14, #15).
+
+Regenerate with `native/producer-oracle/record-goldens.sh` after `native/revokt-oracle/record-goldens.sh`. It runs the
+writer once per JDK in `REVOKT_RECORD_JDKS`, merging that JDK's view: `added` dates and hand-written justifications are
+kept, rule-based justifications are recomputed, and a new D8-gap entry with no zlint error gets none, so the replay
+fails until one is written by hand.
+
 ## Clubcard corpus (`corpus/clubcard/`)
 
 The recorded form of the §9 end-to-end oracle for the clubcard port: `(filter, issuer, serial, scts) → status`

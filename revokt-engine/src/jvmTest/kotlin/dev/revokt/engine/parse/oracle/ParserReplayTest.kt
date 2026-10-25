@@ -5,13 +5,12 @@ package dev.revokt.engine.parse.oracle
 
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
-import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.Span
+import dev.revokt.engine.parse.oracle.OracleReplay.Accepted
 import dev.revokt.engine.parse.producer.ProducerCorpus
-import okio.ByteString.Companion.toByteString
-import java.security.cert.X509Certificate
+import dev.revokt.engine.parse.records.CorpusRecord
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -23,77 +22,7 @@ import kotlin.test.fail
  * and D6. Run it on every matrix JDK with `-Prevokt.testJdk`.
  */
 class ParserReplayTest {
-    /**
-     * One platform-accepted input: [read] is the bytes revokt reads (`getEncoded()`, or the platform canon, spec §9.2
-     * revision 39), null when no platform canon can be built; with its reference view and parse.
-     */
-    private class Accepted(
-        val name: String,
-        val presented: ByteArray,
-        val jdk: X509Certificate,
-        val read: ProducerCorpus.Input?,
-        val reference: ReferenceView?,
-        val parse: CertificateParse,
-    ) {
-        val certificate: ParsedCertificate? get() = (parse as? CertificateParse.Parsed)?.certificate
-
-        val platformCanon: Boolean get() = read?.name?.endsWith(Oracle1.PLATFORM_CANON) == true
-
-        /** The bytes read, which revokt parsed. */
-        val readInput: ProducerCorpus.Input get() = checkNotNull(read) { "$name: no bytes read" }
-    }
-
-    private val producer by lazy { ProducerCorpus.goldens() }
-
-    private val accepted: List<Accepted> by lazy {
-        ProducerCorpus.inputs.mapNotNull { input ->
-            when (val o = Oracle1.run(input.der)) {
-                is Oracle1.Outcome.Accept -> accepted(input, o.certificate)
-
-                is Oracle1.Outcome.Reject -> null
-
-                // Stricter than §9.2, where a crash never fails the gate: the committed corpus must not crash oracle 1.
-                is Oracle1.Outcome.Crash -> fail("${input.name}: oracle 1 crashed on the committed corpus: ${o.error}")
-            }
-        }
-    }
-
-    private fun accepted(
-        input: ProducerCorpus.Input,
-        jdk: X509Certificate,
-    ): Accepted {
-        val name = input.name
-        val read = Oracle1.read(name, jdk)
-        val reference =
-            try {
-                read?.let { ReferenceView.of(sha(it.der)) }
-            } catch (e: IllegalStateException) {
-                fail("$name: ${e.message}; run native/revokt-oracle/record-goldens.sh on JDK ${Oracle1.version}")
-            }
-        return Accepted(name, input.der, jdk, read, reference, CertificateParser.parse(read?.der ?: jdk.encoded))
-    }
-
-    /** Why a platform-accepted input is outside the D1 domain, or null when it is inside. */
-    private fun outsideDomain(a: Accepted): String? {
-        val read = a.read ?: return NO_PLATFORM_CANON
-        // canon exists for every read: a platform canon is its own, and every other read is located by 3a or 3b.
-        val parts = read.canonParts ?: fail("${a.name}: canon cannot be located for the bytes read")
-        return if (versionTrailing(Oracle3a.bytes(parts.tbs))) {
-            VERSION_TRAILING
-        } else {
-            producerOutside(a, producer[read.canonSha256] ?: fail("${a.name}: no oracle-4 golden for canon"))
-        }
-    }
-
-    private fun producerOutside(
-        a: Accepted,
-        golden: String,
-    ): String? {
-        if (!golden.startsWith("OK ")) return PRODUCER_REJECTS
-        val (_, serial, spki) = golden.split(' ')
-        val r = a.reference ?: return null
-        return if (serial == r.serial && spki == sha(Oracle3a.bytes(r.spki))) null else "oracle 4 keys other bytes"
-    }
+    private val accepted get() = OracleReplay.accepted
 
     @Test
     fun `D1 - every platform-accepted input in the producer's domain parses`() {
@@ -101,7 +30,7 @@ class ParserReplayTest {
         val violations = ArrayList<String>()
         var inside = 0
         for (a in accepted) {
-            val reason = outsideDomain(a)
+            val reason = OracleReplay.outsideDomain(a)
             if (reason != null) {
                 dom.getOrPut(reason) { HashSet() } += a.name
             } else {
@@ -114,8 +43,8 @@ class ParserReplayTest {
         assertEquals(emptyList(), violations, "D1 violations")
         assertTrue(inside > 300, "D1 exercised on only $inside inputs")
         // The by-rule classes are pinned, so a locator or `[0]` regression cannot move inputs out of the domain unseen.
-        assertEquals<Set<String>?>(null, dom[NO_PLATFORM_CANON], "inputs with no platform canon")
-        assertEquals<Set<String>?>(setOf("variants/version-wrapper-trailing"), dom[VERSION_TRAILING], "the `[0]` rule")
+        assertEquals<Set<String>?>(null, dom[OracleReplay.NO_PLATFORM_CANON], "inputs with no platform canon")
+        // Every other D1-dom entry is a corpus record (RecordsTest), with its reason.
     }
 
     /**
@@ -148,8 +77,11 @@ class ParserReplayTest {
         val missing =
             accepted
                 .filter { it.reference == null }
-                .filterNot { it.certificate == null && outsideDomain(it) in setOf(PRODUCER_REJECTS, NO_PLATFORM_CANON) }
-                .map { it.name }
+                .filterNot {
+                    it.certificate == null &&
+                        OracleReplay.outsideDomain(it) in
+                        setOf(OracleReplay.PRODUCER_REJECTS, OracleReplay.NO_PLATFORM_CANON)
+                }.map { it.name }
         assertEquals(emptyList(), missing, "platform-accepted inputs with no raw-byte reference")
     }
 
@@ -172,7 +104,7 @@ class ParserReplayTest {
             val (unavailableHere, differing) = Oracle1.compare(a.jdk, c).partition { it.unavailable }
             unavailableHere.forEach { unavailable.merge(it.name, 1, Int::plus) }
             for (f in differing.filter { it.mismatch != null }) {
-                if (f.name == "spki" && reencodesSpki(c.rawSpki(), a.jdk.publicKey.encoded)) {
+                if (f.name == "spki" && OracleReplay.reencodesSpki(c.rawSpki(), a.jdk.publicKey.encoded)) {
                     reencoded += a.name
                 } else {
                     javaFields += "${a.name}: ${f.name}: ${f.mismatch}"
@@ -189,7 +121,14 @@ class ParserReplayTest {
                 .filter { it.certificate != null && SPKI_PATH in it.name && "$SPKI_PATH/1:03~" !in it.name }
                 .map { it.name }
         assertEquals(spkiMutants.toSet(), reencoded, "inputs whose SPKI the JDK re-encodes")
-        assertEquals(DIVERGENCES, divergences, "D3 divergence classes")
+        // The divergence classes among the inputs compared are the committed D3_DIVERGENCE records (spec §9.2 D3).
+        val parsed = accepted.filter { it.certificate != null }.map { it.name }.toSet()
+        val recorded =
+            CorpusRecord
+                .divergences()
+                .mapValues { (_, paths) -> paths.filter { it in parsed }.toSet() }
+                .filterValues { it.isNotEmpty() }
+        assertEquals(recorded, divergences, "D3 divergence classes")
         assertTrue(compared > 1000, "D2 exercised on only $compared inputs")
     }
 
@@ -237,18 +176,12 @@ class ParserReplayTest {
         a: Accepted,
         c: ParsedCertificate,
     ) {
-        val golden = producer[a.readInput.canonSha256] ?: fail("${a.name}: no oracle-4 golden for canon")
+        val golden = OracleReplay.producerGolden(a)
         val (status, serial, spki) = golden.split(' ')
         assertEquals("OK", status, "${a.name}: producerKeyable and oracle 4 answers $golden")
         assertEquals(serial, Oracle3a.hex(c.rawSerial()), "${a.name}: rawSerial against oracle 4")
-        assertEquals(spki, sha(c.rawSpki()), "${a.name}: SHA-256(rawSpki) against oracle 4")
+        assertEquals(spki, OracleReplay.sha(c.rawSpki()), "${a.name}: SHA-256(rawSpki) against oracle 4")
     }
-
-    /** The re-encoding allow-list's rule: oracle 1's `getPublicKey().getEncoded()` is [rawSpki] with every header minimal. */
-    private fun reencodesSpki(
-        rawSpki: ByteArray,
-        platform: ByteArray,
-    ): Boolean = DerNode.parse(rawSpki).encode().contentEquals(platform)
 
     @Test
     fun `the SPKI re-encoding rule allows only a minimal re-encoding of the same key`() {
@@ -262,9 +195,9 @@ class ParserReplayTest {
                     ).certificate
                 c.rawSpki()
             }
-        assertTrue(reencodesSpki(keys[0], keys[0]), "the same minimal SPKI")
-        assertEquals(false, reencodesSpki(keys[0], keys[1]), "another key")
-        assertEquals(false, reencodesSpki(keys[1], keys[0]), "another key, RSA against EC")
+        assertTrue(OracleReplay.reencodesSpki(keys[0], keys[0]), "the same minimal SPKI")
+        assertEquals(false, OracleReplay.reencodesSpki(keys[0], keys[1]), "another key")
+        assertEquals(false, OracleReplay.reencodesSpki(keys[1], keys[0]), "another key, RSA against EC")
     }
 
     @Test
@@ -359,44 +292,13 @@ class ParserReplayTest {
         return (if (presented) fields + offsets else fields).joinToString(" | ")
     }
 
-    /** Whether the TBS's `[0]` holds more than its first element (any definite header form). */
-    private fun versionTrailing(tbs: ByteArray): Boolean {
-        val p = Oracle1.header(tbs, 0)?.size ?: return false
-        if (p >= tbs.size || tbs[p] != 0xa0.toByte()) return false
-        val wrapper = Oracle1.header(tbs, p) ?: return false
-        val inner = Oracle1.header(tbs, p + wrapper.size) ?: return false
-        return inner.end(p + wrapper.size) < wrapper.end(p)
-    }
-
-    private fun sha(b: ByteArray): String = b.toByteString().sha256().hex()
-
     private companion object {
-        const val PRODUCER_REJECTS = "oracle 4 rejects"
-
-        const val VERSION_TRAILING = "rule: content after the INTEGER inside [0]"
-
         /** The inputs read through the platform canon that parse, on every matrix JDK (spec §9.2 revision 39). */
         val FALLBACK_PARSED: Set<String> =
             ProducerCorpus.envelopeLeaves
                 .flatMap { (leaf, _) ->
                     listOf("serial-81", "serial-84", "spki-83").map { "envelope/$leaf/tbs-indefinite-$it" }
                 }.toSet()
-
-        /** D1-dom by rule (spec §9.2 revision 39): the producer cannot key a TBS whose AlgorithmIdentifier is not located. */
-        const val NO_PLATFORM_CANON = "rule: no platform canon"
-
-        /**
-         * The D3 divergence classes among the platform-accepted inputs of the committed corpus (spec §9.2 D2, D3). The
-         * duplicate-extension class is absent: the JDK rejects duplicate extension OIDs (`Oracle3aTest` covers it on b).
-         */
-        val DIVERGENCES: Map<String, Set<String>> =
-            mapOf(
-                "3A_HEADER_LAX" to setOf("d3/sct-inner-44", "d3/sct-inner-1f04"),
-                "3A_TBS_LAX" to
-                    (listOf("primitive-3") + listOf("03", "23", "43", "63", "c3", "e3").map { "tag3-$it" })
-                        .map { "d3/$it" }
-                        .toSet(),
-            )
 
         /** The length-mutant path of a header in the SPKI, its own included (`LengthMutants`). */
         const val SPKI_PATH = "/0:30/0:30/6:30"

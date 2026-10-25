@@ -27,9 +27,9 @@ kotlin {
     }
 }
 
-// The D8 replay's recording hooks (native/producer-oracle/record-goldens.sh) pass their output paths through.
+// The replay's recording hooks (native/*/record-goldens.sh) pass their output paths through.
 tasks.withType<Test>().configureEach {
-    for (name in listOf("revokt.writeProducerInputs", "revokt.writeGapBaseline", "revokt.writeOracleInputs")) {
+    for (name in listOf("revokt.writeProducerInputs", "revokt.writeRecords", "revokt.writeOracleInputs")) {
         providers.systemProperty(name).orNull?.let { systemProperty(name, it) }
     }
     // The zlint pin test reads the pin: go.mod is an input, so a bump that touches only go.mod re-runs it, and its

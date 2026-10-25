@@ -7,6 +7,7 @@ import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.producer.ProducerCorpus
+import dev.revokt.engine.parse.records.CorpusRecord
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -51,20 +52,22 @@ class Oracle3aTest {
             }
         }
         println("D2 against 3a: $compared inputs; divergences ${divergences.mapValues { it.value.size }}")
-        assertEquals(
-            setOf("d3/sct-inner-44", "d3/sct-inner-1f04"),
-            divergences[Divergence.HEADER_LAX]?.toSet(),
-            "3A_HEADER_LAX",
-        )
-        assertEquals<List<String>?>(
-            listOf("d3/sct-two-extensions"),
-            divergences[Divergence.DUPLICATE],
-            "the duplicate-extension class",
-        )
+        // The divergence classes are the committed D3_DIVERGENCE records (spec §9.2 D3, RecordsTest).
+        val recorded = CorpusRecord.divergences()
+        // A floor, so a class gone from both the records and the replay cannot pass as null == null.
+        for (name in listOf("3A_HEADER_LAX", "3A_TBS_LAX", "DUPLICATE_EXTENSION")) {
+            assertTrue(recorded[name].orEmpty().isNotEmpty(), "no $name record")
+        }
+        for ((d, name) in listOf(
+            Divergence.HEADER_LAX to "3A_HEADER_LAX",
+            Divergence.DUPLICATE to "DUPLICATE_EXTENSION",
+        )) {
+            assertEquals(recorded[name], divergences[d]?.toSet(), name)
+        }
         // Inputs revokt parses and 3a rejects (x509-parser refuses indefinite and some JDK-tolerated forms): pinned, so
         // a wrapper regression cannot shrink D2 unnoticed. They are D2-referenced by 3b (#38).
         assertEquals(THREE_A_REJECTS, rejectedByThreeA.toSet(), "inputs revokt parses that 3a rejects")
-        assertEquals<List<String>?>(TBS_LAX, divergences[Divergence.TBS_LAX], "3A_TBS_LAX")
+        assertEquals(recorded["3A_TBS_LAX"], divergences[Divergence.TBS_LAX]?.toSet(), "3A_TBS_LAX")
         assertTrue(compared > 1000, "only $compared inputs compared")
     }
 
@@ -129,9 +132,6 @@ class Oracle3aTest {
     }
 
     private companion object {
-        val TBS_LAX: List<String> =
-            listOf("d3/primitive-3") + listOf("03", "23", "43", "63", "c3", "e3").map { "d3/tag3-$it" }
-
         val THREE_A_REJECTS: Set<String> =
             setOf(
                 // JDK-tolerated trailing elements and unique-id forms x509-parser refuses.

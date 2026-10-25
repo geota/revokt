@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Records the oracle-4 goldens of the D8 replay (spec §9.2, #11): every distinct canon(input) of ProducerCorpus,
-# run through the producer pinned in go.mod and through zlint (native/zlint-oracle, its own pin), then the D8-gap
-# baseline. Needs Go and the matrix JDKs; the PR tier replays the committed goldens and
+# run through the producer pinned in go.mod and through zlint (native/zlint-oracle, its own pin), then the corpus
+# records. Needs Go and the matrix JDKs; the PR tier replays the committed goldens and
 # needs neither. Run from the repository root:  sh native/producer-oracle/record-goldens.sh
 # REVOKT_RECORD_JDKS lists the JDKs to record on, by default the CI matrix of .github/workflows/ci.yml ("17 21 25 27");
 # each must be installed. Any arguments are passed to Gradle, for example
@@ -47,7 +47,10 @@ zlint="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/produce
   cut -f1 "$work/inputs.tsv" | paste - "$work/zlint.txt" | LC_ALL=C sort
 } > "$zlint"
 echo "wrote $(grep -vc '^#' "$zlint") zlint results to $zlint"
-baseline="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/gap-baseline.tsv"
-./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.producer.ProducerD8Test.the D8 gap equals the recorded baseline' \
-  -Drevokt.writeGapBaseline="$baseline" --rerun "$@" </dev/null
-echo "wrote $(grep -vc '^#' "$baseline") gap entries to $baseline"
+# The corpus records (spec §9.2), merged one matrix JDK at a time; written justifications and dates are kept.
+records="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/records.jsonl"
+for jdk in $jdks; do
+  ./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.records.RecordsTest.the records writer*' \
+    -Drevokt.writeRecords="$records" -Prevokt.testJdk="$jdk" --rerun "$@" </dev/null
+done
+echo "wrote $(grep -c . "$records") records to $records"
