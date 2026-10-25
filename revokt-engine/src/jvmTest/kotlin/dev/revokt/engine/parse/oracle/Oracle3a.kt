@@ -120,12 +120,16 @@ internal object Oracle3a {
 
     fun bytes(hex: String): ByteArray = hex.decodeHex().toByteArray()
 
-    /** Writes every corpus input when `revokt.writeOracleInputs` names a file; returns whether it did. */
+    /**
+     * Writes every corpus input, and the bytes revokt reads for each oracle 1 accepts (the replay reads `encoded` through
+     * the reference view, spec §9.2 D1 and D2), when `revokt.writeOracleInputs` names a file; returns whether it did.
+     */
     fun writeInputsIfRequested(): Boolean {
         val path = System.getProperty("revokt.writeOracleInputs") ?: return false
+        val encoded = ProducerCorpus.readInputs().map { it.der }
         File(path).printWriter().use { w ->
-            for (i in ProducerCorpus.inputs) {
-                w.println("${i.der.toByteString().sha256().hex()}\t${Base64.getEncoder().encodeToString(i.der)}")
+            for (der in (ProducerCorpus.inputs.map { it.der } + encoded).distinctBy { it.toByteString() }) {
+                w.println("${der.toByteString().sha256().hex()}\t${Base64.getEncoder().encodeToString(der)}")
             }
         }
         return true

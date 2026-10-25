@@ -7,14 +7,20 @@
 # native/producer-oracle/record-goldens.sh.
 # Needs Rust and JDK 21; the PR tier replays the committed goldens and needs neither. Run from the repository root:
 #   sh native/revokt-oracle/record-goldens.sh
+# REVOKT_RECORD_JDKS (default 21) lists the JDKs to record on, for example "17 21 27"; any arguments are passed to
+# Gradle, for example -Porg.gradle.java.installations.paths=<comma-separated JDK homes>.
 set -eu
 root=$(pwd)
 dir="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/oracle"
 work=$(mktemp -d)
 trap 'rm -rf "${work:?}"' EXIT
 ( cd native && cargo build --locked --release -q )
-./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.oracle.Oracle3aTest.the 3a recording hook*' \
-  -Drevokt.writeOracleInputs="$work/inputs.tsv" --rerun </dev/null
+# One pass per matrix JDK (the bytes revokt reads depend on oracle 1's version), merged.
+for jdk in ${REVOKT_RECORD_JDKS:-21}; do
+  ./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.oracle.Oracle3aTest.the 3a recording hook*' \
+    -Drevokt.writeOracleInputs="$work/inputs-$jdk.tsv" -Prevokt.testJdk="$jdk" --rerun "$@" </dev/null
+done
+LC_ALL=C sort -u "$work"/inputs-*.tsv > "$work/inputs.tsv"
 cut -f2 "$work/inputs.tsv" > "$work/b64.txt"
 echo '##' >> "$work/b64.txt"
 mkdir -p "$dir"

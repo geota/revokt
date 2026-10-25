@@ -5,14 +5,20 @@
 # Records the oracle-4 goldens of the D8 replay (spec §9.2, #11): every distinct canon(input) of ProducerCorpus,
 # run through the producer pinned in go.mod, then the D8-gap baseline. Needs Go and JDK 21; the PR tier replays the committed goldens and
 # needs neither. Run from the repository root:  sh native/producer-oracle/record-goldens.sh
+# REVOKT_RECORD_JDKS (default 21) lists the JDKs to record on, for example "17 21 27"; any arguments are passed to
+# Gradle, for example -Porg.gradle.java.installations.paths=<comma-separated JDK homes>.
 set -eu
 root=$(pwd)
 out="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/goldens.tsv"
 work=$(mktemp -d)
 trap 'rm -rf "${work:?}"' EXIT
 ( cd native/producer-oracle && go build -o "$work/producer-oracle" . )
-./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.producer.ProducerGoldensWriterTest' \
-  -Drevokt.writeProducerInputs="$work/inputs.tsv" --rerun </dev/null
+# One pass per matrix JDK (the bytes revokt reads depend on oracle 1's version), merged.
+for jdk in ${REVOKT_RECORD_JDKS:-21}; do
+  ./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.producer.ProducerGoldensWriterTest' \
+    -Drevokt.writeProducerInputs="$work/inputs-$jdk.tsv" -Prevokt.testJdk="$jdk" --rerun "$@" </dev/null
+done
+LC_ALL=C sort -u "$work"/inputs-*.tsv > "$work/inputs.tsv"
 cut -f2 "$work/inputs.tsv" > "$work/b64.txt"
 echo '##' >> "$work/b64.txt"
 "$work/producer-oracle" < "$work/b64.txt" | grep -v '^##$' > "$work/verdicts.txt"
