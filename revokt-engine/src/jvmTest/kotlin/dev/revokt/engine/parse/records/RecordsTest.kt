@@ -5,7 +5,9 @@ package dev.revokt.engine.parse.records
 
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
+import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.Keyability
+import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.oracle.Oracle1
 import dev.revokt.engine.parse.oracle.Oracle3a
 import dev.revokt.engine.parse.oracle.Oracle3b
@@ -108,7 +110,8 @@ class RecordsTest {
             for (d in ReferenceView.of(OracleReplay.sha(input.der))?.divergences.orEmpty()) {
                 out += record(input, RecordClass.D3_DIVERGENCE, d, null, DIVERGENCE.getValue(d))
             }
-            val clause = Keyability.firstFailing(c) ?: continue
+            // The D8 gap counts end-entity inputs only: `producerKeyable` is a leaf predicate (spec §9.2).
+            val clause = Keyability.firstFailing(c)?.takeUnless { isCa(c) } ?: continue
             val golden = OracleReplay.producer[input.canonSha256] ?: continue
             if (!golden.startsWith("OK ")) continue
             val k = CorpusRecord.Keyability(golden.substringAfterLast(' '), clause.name, zlintErrors(input))
@@ -168,14 +171,38 @@ class RecordsTest {
             else -> fail("${a.name}: unknown D1-dom reason $reason")
         }
 
-    /** The rule-based justification of a D8-gap entry with zlint errors; a lint-clean entry needs one written by hand. */
+    /**
+     * The rule-based justification of a D8-gap entry with zlint errors. An entry with no zlint error, read conservatively
+     * to include one zlint could not lint (`unparseable`, `panic`), is a profile defect that blocks the release: it needs
+     * a justification written by hand (spec §9.2).
+     */
     private fun gapJustification(k: CorpusRecord.Keyability): String =
         when (k.zlint) {
-            "-" -> ""
-            "unparseable" -> "Outside the keyability profile at ${k.clause}, keyed through ${k.parser}; zcrypto cannot parse it for zlint, so it is not CA/B-conformant (§9.2 D8 gap)."
+            "-", "unparseable", "panic" -> ""
             else -> "Outside the keyability profile at ${k.clause}, keyed through ${k.parser}; zlint reports ${k.zlint.split(',').size} errors, so it is not CA/B-conformant (§9.2 D8 gap)."
         }
 
+    @Test
+    fun `the D8 gap's CA test reads the CA fixtures as CAs and the leaves as end entities`() {
+        val read =
+            ProducerCorpus.fixtures.associateWith {
+                isCa((CertificateParser.parse(ProducerCorpus.resource("certs/$it.der")) as CertificateParse.Parsed).certificate)
+            }
+        assertEquals(CA_FIXTURES, read.filterValues { it }.keys, "CA fixtures")
+    }
+
+    /** Whether basicConstraints marks [c] a CA, read from its extension value independently of the keyability profile. */
+    private fun isCa(c: ParsedCertificate): Boolean {
+        val value =
+            c.tbs.extensions
+                .firstOrNull { it.oidDotted == "2.5.29.19" }
+                ?.value
+                ?.bytes(c.tbsBytes)
+        val first = value?.let { runCatching { DerNode.parse(it).children?.firstOrNull() }.getOrNull() }
+        return first != null && first.tag == 0x01 && first.content.any { it != 0.toByte() }
+    }
+
+    /** The pinned zlint result: its error lints, `-` for none, or `unparseable`/`panic` where zlint could not run. */
     private fun zlintErrors(input: ProducerCorpus.Input): String {
         val line = zlint[input.canonSha256] ?: fail("${input.name}: no zlint result; run native/producer-oracle/record-goldens.sh")
         return if (line.startsWith("LINT ")) line.split(' ')[1] else line.substringBefore(' ').lowercase()
@@ -186,6 +213,13 @@ class RecordsTest {
     private val today = LocalDate.now(ZoneOffset.UTC).toString()
 
     private companion object {
+        /** The fixtures that are CA certificates: every chain's issuers, and Mozilla's content-signing root and intermediate. */
+        val CA_FIXTURES: Set<String> =
+            listOf("github.com", "letsencrypt.org", "www.google.com", "www.mozilla.org")
+                .flatMap { host -> (2..4).map { "$host-$it" } }
+                .filter { it in ProducerCorpus.fixtures }
+                .toSet() + setOf("mozilla-content-signing-c1", "mozilla-content-signing-c2")
+
         val JDK_DEPENDENT = setOf(RecordClass.D1_DOM, RecordClass.D2_REENCODE_ALLOW)
 
         val ORACLE_ORDER = listOf("1", "2", "3a", "3b", "3c", "4")

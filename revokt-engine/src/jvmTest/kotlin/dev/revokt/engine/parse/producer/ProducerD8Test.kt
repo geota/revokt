@@ -9,6 +9,7 @@ import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
 import okio.ByteString.Companion.toByteString
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -199,6 +200,14 @@ class ProducerD8Test {
                 .oid
                 .bytes(base.tbsBytes)
         return K8_LISTED.any { it.contentEquals(oid) }
+    }
+
+    @Test
+    fun `the zlint results name the zlint pin`() {
+        val header = String(ProducerCorpus.resource("producer/zlint.tsv")).lineSequence().first()
+        val goMod = File("../native/zlint-oracle/go.mod").readLines()
+        val pin = goMod.single { it.trim().startsWith("github.com/zmap/zlint/v3 ") }.trim().split(' ')[1]
+        assertEquals("# zlint pin: $pin", header.substringBefore(" (native"), "re-record zlint.tsv after a zlint bump")
     }
 
     private companion object {

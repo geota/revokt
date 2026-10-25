@@ -5,13 +5,15 @@
 // over a certificate parsed by zcrypto. It is its own module so that zlint's zcrypto never moves the producer's pin
 // (native/producer-oracle). It reads one base64 DER certificate per line on stdin and writes one line per input:
 //
-//	LINT <errors> <warnings>
+//	LINT <errors> <fatals> <warnings>
 //	UNPARSEABLE <error>
 //	PANIC <error>
 //
-// <errors> are the lints with status error or fatal and <warnings> those with status warn, each comma-joined in
-// name order, or "-" when there are none. A line "##" ends a batch: it is echoed and stdout is flushed (spec §9.1).
-// It is a test oracle: never linked, bundled or published (CONTRIBUTING §3).
+// <errors> are the lints with status error, <fatals> those with status fatal (the lint could not run: it failed to
+// decode what it checks, or panicked) and <warnings> those with status warn, each comma-joined in name order, or "-"
+// when there are none. Warnings may drift across re-records: a few lints consult the current time. A line "##" ends a
+// batch: it is echoed and stdout is flushed (spec §9.1). It is a test oracle: never linked, bundled or published
+// (CONTRIBUTING §3).
 package main
 
 import (
@@ -38,16 +40,18 @@ func result(der []byte) (r string) {
 	if err != nil {
 		return "UNPARSEABLE " + oneLine(err)
 	}
-	var errs, warns []string
+	var errs, fatals, warns []string
 	for name, lr := range zlint.LintCertificate(cert).Results {
 		switch lr.Status {
-		case lint.Error, lint.Fatal:
+		case lint.Error:
 			errs = append(errs, name)
+		case lint.Fatal:
+			fatals = append(fatals, name)
 		case lint.Warn:
 			warns = append(warns, name)
 		}
 	}
-	return fmt.Sprintf("LINT %s %s", joined(errs), joined(warns))
+	return fmt.Sprintf("LINT %s %s %s", joined(errs), joined(fatals), joined(warns))
 }
 
 func joined(names []string) string {
@@ -85,6 +89,7 @@ func main() {
 		}
 	}
 	if err := in.Err(); err != nil {
+		out.Flush()
 		fmt.Fprintln(os.Stderr, "zlint-oracle:", err)
 		os.Exit(1)
 	}

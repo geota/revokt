@@ -105,7 +105,7 @@ revokt/
   revokt-clubcard/ revokt-engine/ revokt-jsse/ revokt-bc/ revokt-okhttp/ revokt-ktor-core/ revokt-ktor-*/
   revokt-android/ revokt-android-work/ revokt-testing/ revokt-bom/
   revokt-engine-upki/          included in settings only under -Prevokt.native (needs JDK 22; CI-only, never published)
-  native/                      Cargo workspace (revokt-upki-shim, revokt-oracle) and the Go producer and zlint CLIs; NOT Gradle modules; built by the native CI job
+  native/                      Cargo workspace (revokt-upki-shim, revokt-oracle) and the Go producer and zlint CLIs; NOT Gradle modules; the Rust crates built by the native CI job, the Go CLIs by their golden recorder
   consumers/                   maven-consumer, java-consumer, kotlin-consumer, android-consumer (the §3.1/§9 consumer builds; run under -Prevokt.ci)
   data/seed/                   the weekly seed job (publishes revokt-seed-<channel>; separate publishing identity, section 9)
   corpus/                      committed fixture corpora (small) with their SHA-256 manifest; the large corpus is the public revokt-corpus repository, pinned by tag + manifest

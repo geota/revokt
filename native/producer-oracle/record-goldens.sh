@@ -28,6 +28,12 @@ cut -f2 "$work/inputs.tsv" > "$work/b64.txt"
 echo '##' >> "$work/b64.txt"
 "$work/producer-oracle" < "$work/b64.txt" | grep -v '^##$' > "$work/verdicts.txt"
 [ "$(wc -l < "$work/inputs.tsv")" -eq "$(wc -l < "$work/verdicts.txt")" ] || { echo "verdict count mismatch" >&2; exit 1; }
+# zlint runs with GODEBUG unset, which changes zcrypto's parsing.
+env -u GODEBUG "$work/zlint-oracle" < "$work/b64.txt" | grep -v '^##$' > "$work/zlint.txt"
+[ "$(wc -l < "$work/inputs.tsv")" -eq "$(wc -l < "$work/zlint.txt")" ] || { echo "zlint reply count mismatch" >&2; exit 1; }
+zlint_pin=$(awk '$1 == "github.com/zmap/zlint/v3" { print $2 }' native/zlint-oracle/go.mod)
+[ -n "$zlint_pin" ] || { echo "no zlint pin in native/zlint-oracle/go.mod" >&2; exit 1; }
+# Both oracles answered every input: write their goldens.
 {
   echo "# Oracle-4 verdicts (mozilla/crlite go/types, pinned in native/producer-oracle/go.mod) for canon(input) of ProducerCorpus."
   echo "# sha256 of canon <TAB> OK <serial-hex> <spki-sha256-hex> <ct|lax|zc> | REJECT <error>. Regenerate, never edit."
@@ -35,11 +41,9 @@ echo '##' >> "$work/b64.txt"
 } > "$out"
 echo "wrote $(grep -vc '^#' "$out") goldens to $out"
 zlint="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/zlint.tsv"
-"$work/zlint-oracle" < "$work/b64.txt" | grep -v '^##$' > "$work/zlint.txt"
-[ "$(wc -l < "$work/inputs.tsv")" -eq "$(wc -l < "$work/zlint.txt")" ] || { echo "zlint reply count mismatch" >&2; exit 1; }
 {
-  echo "# zlint results (native/zlint-oracle, pinned in its go.mod) for canon(input) of ProducerCorpus."
-  echo "# sha256 of canon <TAB> LINT <errors|-> <warnings|-> | UNPARSEABLE <error> | PANIC <error>. Regenerate, never edit."
+  echo "# zlint pin: $zlint_pin (native/zlint-oracle/go.mod); results for canon(input) of ProducerCorpus."
+  echo "# sha256 of canon <TAB> LINT <errors|-> <fatals|-> <warnings|-> | UNPARSEABLE <error> | PANIC <error>. Regenerate, never edit."
   cut -f1 "$work/inputs.tsv" | paste - "$work/zlint.txt" | LC_ALL=C sort
 } > "$zlint"
 echo "wrote $(grep -vc '^#' "$zlint") zlint results to $zlint"

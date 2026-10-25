@@ -8,5 +8,5 @@ Rules that differ from the root `AGENTS.md`:
   `spec` PR when it changes an equivalence class (spec §3.2, §9.2).
 - Every panic is caught at the FFI boundary (`catch_unwind`); a crash in an oracle never fails revokt's gate, it is
   reported upstream (spec §9.2).
-- Go is not installed on the PR tier; the Go oracles (`producer-oracle`, `zlint-oracle`, each its own module and pin)
-  build only in the nightly `native` job.
+- Go is not installed on the PR tier, and no CI job builds the Go oracles yet (`producer-oracle`, `zlint-oracle`, each its
+  own module and pin): `native/producer-oracle/record-goldens.sh` builds them when it records their goldens.
