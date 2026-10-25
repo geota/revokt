@@ -374,7 +374,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         [cmd, filter, queries, out] if cmd == "goldens" => goldens(filter, queries, out),
         [cmd] if cmd == "x509" => x509::run(),
-        _ => Err("usage: revokt-oracle inspect <filter> | transcode <filter> <out.v4> | build-synthetic <outdir> | gen-queries <filter> <count> <seed> <out.tsv> | goldens <filter> <queries.tsv> <out.tsv>".into()),
+        _ => Err("usage: revokt-oracle inspect <filter> | transcode <filter> <out.v4> | build-synthetic <outdir> | gen-queries <filter> <count> <seed> <out.tsv> | goldens <filter> <queries.tsv> <out.tsv> | x509".into()),
     }
 }
 

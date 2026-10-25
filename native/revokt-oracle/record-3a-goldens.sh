@@ -23,4 +23,6 @@ mkdir -p "$(dirname "$out")"
   echo "# sha256 of the input <TAB> OK <fields> | ERR <error> | PANIC <error>. Regenerate, never edit."
   cut -f1 "$work/inputs.tsv" | paste - "$work/replies.txt" | LC_ALL=C sort -u
 } > "$out"
+dups=$(grep -v '^#' "$out" | cut -f1 | uniq -d)
+[ -z "$dups" ] || { echo "inputs with more than one reply: $dups" >&2; exit 1; }
 echo "wrote $(grep -vc '^#' "$out") 3a goldens to $out"

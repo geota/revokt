@@ -342,6 +342,7 @@ dependencies = [
  "base64",
  "clubcard",
  "clubcard-crlite",
+ "nom",
  "x509-parser",
 ]
 

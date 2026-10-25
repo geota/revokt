@@ -5,7 +5,7 @@
 //! flushed; an empty line is answered as an empty input):
 //!
 //! ```text
-//! OK <serial> <spki> <subject> <issuer> <trailing> <tbs> <tbs-signature> <signature> <extensions>
+//! OK <serial> <spki> <subject> <issuer> <trailing> <tbs> <tbs-signature> <signature> <extensions> <unused> <duplicate>
 //! ERR <error>
 //! PANIC <error>
 //! ```
@@ -15,11 +15,14 @@
 //! for the SCT-list extension: `E` when x509-parser reports a parse error for it, else its pairs as `+`-joined
 //! `logid@timestamp`. `tbs` is the TBS TLV re-headed to a minimal length, `tbs-signature` its signature
 //! AlgorithmIdentifier TLV and `signature` the `signatureValue` octets after the unused-bits octet (padding not
-//! cleared), the parts of `canon`. Every value is what x509-parser reports, never revokt.
+//! cleared), the parts of `canon`; `unused` is the `signatureValue`'s unused-bits count, and `duplicate` is `1` when the
+//! SCT-list extension occurs more than once (x509-parser's `DuplicateExtensions` for it). Element boundaries come from
+//! asn1-rs's own headers. Every value is what x509-parser reports, never revokt.
 
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
 
+use asn1_rs::{Any, Class, FromBer, Header, Length, Tag};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use x509_parser::certificate::X509Certificate;
@@ -37,52 +40,51 @@ fn failure(status: &str, error: &str) -> String {
     format!("{status}\t{}", error.replace(['\t', '\r', '\n'], " "))
 }
 
-/// A DER header at `p`: (header length, content length), or None when it does not fit `b`.
-fn header(b: &[u8], p: usize) -> Option<(usize, usize)> {
-    let first = *b.get(p + 1)? as usize;
-    if first < 0x80 {
-        return Some((2, first));
-    }
-    let count = first & 0x7f;
-    if count == 0 || count > 4 {
-        return None;
-    }
-    let mut length = 0usize;
-    for i in 0..count {
-        length = (length << 8) | *b.get(p + 2 + i)? as usize;
-    }
-    Some((2 + count, length))
-}
-
 fn minimal_length(n: usize) -> Vec<u8> {
-    match n {
-        0..=0x7f => vec![n as u8],
-        0x80..=0xff => vec![0x81, n as u8],
-        0x100..=0xffff => vec![0x82, (n >> 8) as u8, n as u8],
-        _ => vec![0x83, (n >> 16) as u8, (n >> 8) as u8, n as u8],
+    if n < 0x80 {
+        return vec![n as u8];
     }
+    let octets: Vec<u8> = n
+        .to_be_bytes()
+        .into_iter()
+        .skip_while(|&b| b == 0)
+        .collect();
+    let mut out = vec![0x80 | octets.len() as u8];
+    out.extend(octets);
+    out
 }
 
-/// The TBS TLV under a minimal header, and the TBS `signature` AlgorithmIdentifier TLV (after `[0]` and the serial).
-fn tbs_parts(tbs: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let (h, length) = header(tbs, 0)?;
-    let content = tbs.get(h..h + length)?;
-    let mut reheaded = vec![tbs[0]];
-    reheaded.extend(minimal_length(content.len()));
-    reheaded.extend_from_slice(content);
-    let mut p = 0;
-    let skip = |p: &mut usize| -> Option<usize> {
-        let (eh, el) = header(content, *p)?;
-        let start = *p;
-        *p += eh + el;
-        Some(start)
-    };
-    if content.first() == Some(&0xa0) {
-        skip(&mut p)?;
+/// The identifier octets at the start of `b` (one, or the high-tag-number form).
+fn identifier_length(b: &[u8]) -> usize {
+    if b.first().is_none_or(|&t| t & 0x1f != 0x1f) {
+        return 1;
     }
-    skip(&mut p)?;
-    let start = skip(&mut p)?;
-    Some((reheaded, content.get(start..p)?.to_vec()))
+    1 + b[1..]
+        .iter()
+        .position(|&o| o & 0x80 == 0)
+        .map_or(b.len() - 1, |i| i + 1)
+}
+
+/// The TBS TLV under a minimal header, and the TBS `signature` AlgorithmIdentifier TLV: the element after an optional
+/// context `[0]` (either form, as x509-parser reads it) and the serial, delimited by asn1-rs headers.
+fn tbs_parts(tbs: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (rest, header) = Header::from_ber(tbs).ok()?;
+    let Length::Definite(n) = header.length() else {
+        return None;
+    };
+    let content = rest.get(..n)?;
+    let mut reheaded = tbs[..identifier_length(tbs)].to_vec();
+    reheaded.extend(minimal_length(n));
+    reheaded.extend_from_slice(content);
+    let mut p = content;
+    let (after, first) = Any::from_ber(p).ok()?;
+    if first.header.class() == Class::ContextSpecific && first.header.tag() == Tag(0) {
+        p = after;
+    }
+    let (after_serial, _) = Any::from_ber(p).ok()?;
+    let (after_algorithm, _) = Any::from_ber(after_serial).ok()?;
+    let algorithm = &after_serial[..after_serial.len() - after_algorithm.len()];
+    Some((reheaded, algorithm.to_vec()))
 }
 
 fn describe(der: &[u8]) -> String {
@@ -130,6 +132,15 @@ fn describe(der: &[u8]) -> String {
         hex(&tbs_signature),
         hex(&cert.signature_value.data),
         extensions.join(";"),
+        cert.signature_value.unused_bits.to_string(),
+        u8::from(
+            tbs.extensions()
+                .iter()
+                .filter(|e| e.oid.as_bytes() == SCT_LIST)
+                .count()
+                > 1,
+        )
+        .to_string(),
     ]
     .join("\t")
 }
@@ -151,10 +162,20 @@ fn verdict(der: &[u8]) -> String {
 
 pub fn run() -> Result<(), String> {
     panic::set_hook(Box::new(|_| {}));
-    let stdin = io::stdin();
+    let mut input = io::stdin().lock();
     let mut out = io::BufWriter::new(io::stdout().lock());
-    for line in stdin.lock().lines() {
-        let line = line.map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        if input
+            .read_until(b'\n', &mut raw)
+            .map_err(|e| e.to_string())?
+            == 0
+        {
+            break;
+        }
+        // Bytes, not UTF-8 lines: an invalid line is answered, never fatal, so replies stay one per input.
+        let line = String::from_utf8_lossy(&raw);
         let line = line.trim();
         let reply = match line {
             "##" => "##".to_string(),
@@ -171,3 +192,7 @@ pub fn run() -> Result<(), String> {
     }
     out.flush().map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+#[path = "test/x509.rs"]
+mod tests;
