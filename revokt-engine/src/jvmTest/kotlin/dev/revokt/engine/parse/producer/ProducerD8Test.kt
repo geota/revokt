@@ -6,6 +6,7 @@ package dev.revokt.engine.parse.producer
 import dev.revokt.KeyabilityClause
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
+import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
 import okio.ByteString.Companion.toByteString
@@ -204,14 +205,16 @@ class ProducerD8Test {
     }
 
     /**
-     * The D8 gap (spec §9.2): each entry carries the producer's path, its first failing clause and the pinned zlint
-     * result (its errors), and the replay fails on any entry, or any change of clause, path or zlint result, not in the
-     * committed baseline (`producer/gap-baseline.tsv`). An entry with no zlint error is a profile defect that blocks the
-     * release until the profile is widened or the entry justified; the test reports them.
+     * The D8 gap (spec §9.2): end-entity inputs only (a CA certificate is never counted, since `producerKeyable` is a leaf
+     * predicate), each carrying the producer's path, its first failing clause and the pinned zlint result (its error
+     * lints, or `unparseable`/`panic` where zlint could not run). The replay fails on any entry, or any change of clause,
+     * path or zlint result, not in the committed baseline (`producer/gap-baseline.tsv`). An entry with no zlint error,
+     * read conservatively to include one zlint could not lint, is a profile defect that blocks the release until the
+     * profile is widened or the entry justified: those entries are pinned.
      */
     @Test
     fun `the D8 gap equals the recorded baseline`() {
-        val gap = parsed.filter { it.clause != null && it.golden!!.startsWith("OK ") }
+        val gap = parsed.filter { it.clause != null && it.golden!!.startsWith("OK ") && !isCa(it.certificate!!) }
         val lines =
             gap
                 .map {
@@ -236,8 +239,18 @@ class ProducerD8Test {
             (lines - baseline.toSet()).toSet(),
             "new or changed gap entries: justify them and re-record",
         )
-        val lintClean = gap.filter { zlintErrors(it) == "-" }.map { it.input.name }
-        println("D8-gap entries with no zlint error (release blockers, spec §9.2): ${lintClean.size} $lintClean")
+        val lintClean = gap.filter { zlintErrors(it) in setOf("-", "unparseable", "panic") }.map { it.input.name }
+        assertEquals(LINT_CLEAN, lintClean.toSet(), "D8-gap entries with no zlint error (release blockers, spec §9.2)")
+        val caFixtures =
+            ProducerCorpus.fixtures.filter {
+                isCa(
+                    outcomes
+                        .single { o ->
+                            o.input.name == "certs/$it"
+                        }.certificate!!,
+                )
+            }
+        assertTrue(caFixtures.size >= 8, "the CA fixtures are read as CAs: $caFixtures")
         println(
             "D8 gap over the replay corpus (clause/path → inputs): ${gap.groupingBy {
                 "${it.clause}/${it.golden!!.substringAfterLast(
@@ -245,6 +258,25 @@ class ProducerD8Test {
                 )}"
             }.eachCount().toSortedMap()}",
         )
+    }
+
+    @Test
+    fun `the zlint results name the zlint pin`() {
+        val header = String(ProducerCorpus.resource("producer/zlint.tsv")).lineSequence().first()
+        val goMod = File("../native/zlint-oracle/go.mod").readLines()
+        val pin = goMod.single { it.trim().startsWith("github.com/zmap/zlint/v3 ") }.trim().split(' ')[1]
+        assertEquals("# zlint pin: $pin", header.substringBefore(" (native"), "re-record zlint.tsv after a zlint bump")
+    }
+
+    /** Whether basicConstraints marks [c] a CA, read from its extension value independently of the keyability profile. */
+    private fun isCa(c: ParsedCertificate): Boolean {
+        val value =
+            c.tbs.extensions
+                .firstOrNull { it.oidDotted == "2.5.29.19" }
+                ?.value
+                ?.bytes(c.tbsBytes)
+        val first = value?.let { runCatching { DerNode.parse(it).children?.firstOrNull() }.getOrNull() }
+        return first != null && first.tag == 0x01 && first.content.any { it != 0.toByte() }
     }
 
     /** The pinned zlint result of a gap entry: its error lints, `-` for none, or `unparseable`/`panic`. */
@@ -256,6 +288,29 @@ class ProducerD8Test {
     }
 
     private companion object {
+        /**
+         * The D8-gap entries with no zlint error, each needing a written justification before a release (the corpus
+         * records carry them): four inner-header mutants of a leaf's `extnValue` content keyed only through zcrypto, and
+         * seven inputs zcrypto cannot parse for zlint.
+         */
+        val LINT_CLEAN: Set<String> =
+            setOf(
+                "boundary/reject-printable-at",
+                "boundary/reject-serial-non-minimal",
+                "envelope/letsencrypt.org-1/tbs-indefinite-serial-eoc-content",
+            ) +
+                listOf(
+                    "github.com-1" to 3,
+                    "letsencrypt.org-1" to 2,
+                    "www.google.com-1" to 2,
+                    "www.mozilla.org-1" to 2,
+                ).map {
+                    "mutant/certs/${it.first}/0:30/0:30/7:a3/0:30/${it.second}:30/2:04~/0:30"
+                } +
+                listOf("", "/0:30", "/0:30/0:06", "/0:30/1:16").map {
+                    "mutant/certs/github.com-1/0:30/0:30/7:a3/0:30/5:30/1:04~/0:30/0:30/1:30$it"
+                }
+
         /** The structural variants revokt rejects as `STRUCTURE` by rule (spec §9.2, the D7 list). */
         val STRICT_VARIANTS =
             listOf(
