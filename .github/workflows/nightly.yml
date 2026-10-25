@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2026 revokt contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Nightly (CONTRIBUTING §6): the native oracle job, fuzzing, the Android matrix and the minified-build tests. Each job
-# is added with its milestone; today only the native build skeleton and the purity compile run. Never a PR gate.
+# Nightly (CONTRIBUTING §6): the native oracle job, the EA replay, fuzzing, the Android matrix and the minified-build
+# tests. Each job is added with its milestone; today the native build skeleton, the purity compile, the EA replay and
+# the Conscrypt-release check run. Never a PR gate.
 name: nightly
 
 on:
@@ -51,6 +52,60 @@ jobs:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
       - run: ./gradlew :revokt-engine:compileKotlinLinuxX64 :revokt-clubcard:compileKotlinLinuxX64 -Prevokt.purityGate --no-daemon
+
+  ea-replay:
+    name: ea replay (D1 on the newest JDK EA)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The matrix's jdk.ea (gradle/oracle-matrix.properties; verifyOracleMatrix keeps this in step), then 21 for Gradle.
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: oracle-openjdk
+          java-version: "28-ea"
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      # Spec §9.2: fails on any new D1 violation (the baseline is zero). A read without goldens fails as infrastructure.
+      - name: D1 on the JDK EA
+        run: >
+          ./gradlew :revokt-engine:jvmTest --tests '*JdkReplayTest.D1*'
+          -Prevokt.testJdk=28 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_28_X64 --no-daemon
+
+  conscrypt-release:
+    name: conscrypt release (the newest is admitted to the matrix)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Spec §9.2 revision 40: a release newer than the matrix's current Conscrypt cannot be replayed until it is
+      # admitted like any dependency (CONTRIBUTING §3), so this fails until it is; alphas and patches of an older minor
+      # do not count.
+      - name: the newest Conscrypt release is not newer than the matrix's current one
+        run: |
+          set -euo pipefail
+          key=$(sed -n 's/^conscrypt[[:space:]]*[=:][[:space:]]*//p' gradle/oracle-matrix.properties | cut -d, -f1 | tr -d ' ')
+          case $key in ''|*[!a-z-]*) echo "::error::no Conscrypt key in gradle/oracle-matrix.properties"; exit 1 ;; esac
+          current=$(sed -n "s/^${key}[[:space:]]*=[[:space:]]*\"\([0-9][0-9.]*\)\"\$/\1/p" gradle/libs.versions.toml)
+          newest=$(curl -fsS --retry 3 --max-time 30 \
+              https://repo1.maven.org/maven2/org/conscrypt/conscrypt-openjdk-uber/maven-metadata.xml \
+            | sed -n 's:.*<version>\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)</version>.*:\1:p' | sort -V | tail -n 1)
+          if [ -z "$current" ] || [ -z "$newest" ]; then echo "::error::cannot read the Conscrypt versions"; exit 1; fi
+          if [ "$(printf '%s\n' "$current" "$newest" | sort -V | tail -n 1)" != "$current" ]; then
+            echo "::error::Conscrypt $newest is released and the matrix's current is $current: admit it (CONTRIBUTING §3) and roll gradle/oracle-matrix.properties"
+            exit 1
+          fi
 
   android:
     name: android (emulator matrix; from 0.3)

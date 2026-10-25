@@ -217,3 +217,80 @@ abstract class ResolveAndLockAllTask : DefaultTask() {
         logger.lifecycle("resolveAndLockAll: ${project.path} resolved $count configurations; run with --write-locks to persist them.")
     }
 }
+
+/**
+ * The §9.2 version matrix is one file (`gradle/oracle-matrix.properties`, CONTRIBUTING §6): the CI `check` matrix runs
+ * exactly its JDKs, the nightly replays its EA JDK, its Conscrypt keys are the catalog versions the build wires, and the
+ * roll rule holds.
+ */
+abstract class VerifyOracleMatrixTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val matrix: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val ci: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val nightly: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val catalog: RegularFileProperty
+
+    @TaskAction
+    fun verify() {
+        val found = problems(matrix.get().asFile.readText(), ci.get().asFile.readText(), nightly.get().asFile.readText(), catalog.get().asFile.readText())
+        if (found.isNotEmpty()) fail("verifyOracleMatrix:\n" + found.joinToString("\n") { "  - $it" })
+    }
+
+    /** Every way the four files disagree, each with what to change. */
+    internal fun problems(
+        matrixText: String,
+        ciText: String,
+        nightlyText: String,
+        catalogText: String,
+    ): List<String> {
+        val props = java.util.Properties().apply { load(matrixText.reader()) }
+        fun list(key: String) = props.getProperty(key)?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+        val out = ArrayList<String>()
+        val jdks = list("jdk")
+        val checkJob = section(ciText, Regex("""^  check:\s*$"""), Regex("""^  [A-Za-z0-9_-]+:\s*$"""))
+        val ciJdks = Regex("""jdk:\s*"(\d+)"""").findAll(checkJob).map { it.groupValues[1] }.toSet()
+        if (ciJdks != jdks.toSet()) out += "ci.yml's check matrix runs JDKs $ciJdks, the matrix names ${jdks.toSet()}: make them equal"
+        if (Conventions.JDK_RELEASE.toString() !in jdks) out += "the matrix drops JDK ${Conventions.JDK_RELEASE}, the bytecode target: keep it (roll rule)"
+        val ea = props.getProperty("jdk.ea")?.trim().orEmpty()
+        val highest = jdks.mapNotNull { it.toIntOrNull() }.maxOrNull() ?: 0
+        if ((ea.toIntOrNull() ?: 0) <= highest) out += "jdk.ea '$ea' is not above the matrix's highest JDK $highest: roll it to the next release"
+        val needles = listOf(Regex("""java-version:\s*"$ea-ea""""), Regex("""-Prevokt\.testJdk=$ea(?!\d)"""), Regex("""JAVA_HOME_${ea}_X64"""))
+        for (needle in needles) {
+            if (!needle.containsMatchIn(nightlyText)) out += "nightly.yml's ea-replay does not use JDK $ea-ea (no `${needle.pattern}`): set its setup-java, -Prevokt.testJdk and JAVA_HOME"
+        }
+        val versions = section(catalogText, Regex("""^\[versions]\s*$"""), Regex("""^\["""))
+        val keys = Regex("""^([A-Za-z0-9-]+)\s*=""", RegexOption.MULTILINE).findAll(versions).map { it.groupValues[1] }.toSet()
+        val conscrypt = list("conscrypt")
+        val missing = conscrypt - keys
+        if (missing.isNotEmpty()) out += "$missing are not gradle/libs.versions.toml versions: add them to the catalog"
+        if (conscrypt != WIRED_CONSCRYPT) out += "the matrix's Conscrypt keys are $conscrypt, the build wires $WIRED_CONSCRYPT (jvmTest, jvmTestConscryptPrevious in revokt-engine/build.gradle.kts): change both together"
+        return out
+    }
+
+    /** The lines after the one matching [start], up to the next one matching [end]; empty when [start] matches none. */
+    private fun section(
+        text: String,
+        start: Regex,
+        end: Regex,
+    ): String {
+        val lines = text.lines()
+        val from = lines.indexOfFirst { start.matches(it) }.takeIf { it >= 0 } ?: return ""
+        val rest = lines.drop(from + 1)
+        return rest.takeWhile { !end.containsMatchIn(it) }.joinToString("\n")
+    }
+
+    private companion object {
+        /** The catalog keys revokt-engine/build.gradle.kts wires (jvmTest, jvmTestConscryptPrevious); change both together. */
+        val WIRED_CONSCRYPT = listOf("conscrypt", "conscrypt-previous")
+    }
+}

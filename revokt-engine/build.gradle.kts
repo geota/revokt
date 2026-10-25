@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import kotlinx.kover.gradle.plugin.dsl.CoverageUnit
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import java.util.Properties
 
 plugins {
     id("revokt.kmp-library")
@@ -60,4 +62,83 @@ class ZlintGoMod(
     @get:InputFile @get:PathSensitive(PathSensitivity.RELATIVE) val file: File,
 ) : CommandLineArgumentProvider {
     override fun asArguments(): List<String> = listOf("-Drevokt.zlintGoMod=${file.absolutePath}")
+}
+
+// The Conscrypt dimension of the §9.2 matrix (gradle/oracle-matrix.properties): jvmTest runs oracle 2 on the catalog's
+// `conscrypt`; this task reruns the Conscrypt-dependent tests (and the recording hooks) on `conscrypt-previous`, with that
+// uber jar in place of the current one. Part of `check`.
+val conscryptPrevious =
+    configurations.register("conscryptPrevious") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+        isTransitive = false
+    }
+dependencies { add("conscryptPrevious", libs.conscrypt.openjdk.uber.previous) }
+
+// verifyOracleMatrix (build-logic VerificationTasks.kt, WIRED_CONSCRYPT) checks the matrix names exactly the two
+// catalog keys this build wires: `conscrypt` (jvmTest) and `conscrypt-previous` (here). Change both together.
+val conscryptPreviousTests = listOf("ConscryptReplayTest", "RecordsTest", "Oracle3aTest", "ProducerGoldensWriterTest")
+
+val jvmTestConscryptPrevious =
+    tasks.register<Test>("jvmTestConscryptPrevious") {
+        description = "The Conscrypt-dependent replay and records on the matrix's previous Conscrypt minor."
+        group = "verification"
+        val compilation = kotlin.jvm().compilations.getByName("test")
+        testClassesDirs = compilation.output.classesDirs
+        val withoutConscrypt =
+            configurations.named("jvmTestRuntimeClasspath").map { runtime ->
+                runtime.incoming
+                    .artifactView {
+                        componentFilter { !(it is ModuleComponentIdentifier && it.group == "org.conscrypt") }
+                    }.files
+            }
+        classpath = compilation.output.allOutputs + files(withoutConscrypt) + files(conscryptPrevious)
+        useJUnitPlatform()
+        filter { for (name in conscryptPreviousTests) includeTestsMatching("*.$name") }
+        val results = reports.junitXml.outputLocation
+        val classes = conscryptPreviousTests
+        val narrowed =
+            gradle.startParameter.taskRequests.any { r -> r.args.any { it == "--tests" || it.startsWith("--tests=") } }
+        doLast {
+            // A renamed class would drop out of the filter silently: each must have run, unless --tests narrowed it.
+            if (!narrowed) {
+                val ran =
+                    results
+                        .get()
+                        .asFile
+                        .listFiles()
+                        .orEmpty()
+                        .map { it.name }
+                val missing = classes.filter { name -> ran.none { it.endsWith(".$name.xml") } }
+                check(missing.isEmpty()) { "jvmTestConscryptPrevious ran no $missing: update its filter" }
+            }
+        }
+    }
+
+tasks.named("check") { dependsOn(jvmTestConscryptPrevious) }
+
+// The matrix's versions, so the records writer prunes oracle entries of versions that have left it.
+val oracleMatrix =
+    Properties().apply { rootProject.file("gradle/oracle-matrix.properties").reader().use { load(it) } }
+val matrixJdks = oracleMatrix.getProperty("jdk").orEmpty()
+val matrixConscrypt =
+    oracleMatrix
+        .getProperty("conscrypt")
+        .orEmpty()
+        .split(',')
+        .map {
+            it.trim()
+        }.filter { it.isNotEmpty() }
+        .joinToString(",") {
+            versionCatalogs
+                .named("libs")
+                .findVersion(it)
+                .orElseThrow {
+                    GradleException("gradle/oracle-matrix.properties names Conscrypt key '$it', not a catalog version")
+                }.requiredVersion
+        }
+tasks.withType<Test>().configureEach {
+    inputs.file(rootProject.file("gradle/oracle-matrix.properties")).withPathSensitivity(PathSensitivity.RELATIVE)
+    systemProperty("revokt.matrixJdks", matrixJdks)
+    systemProperty("revokt.matrixConscrypt", matrixConscrypt)
 }
