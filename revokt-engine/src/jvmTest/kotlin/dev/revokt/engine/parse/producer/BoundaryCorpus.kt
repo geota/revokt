@@ -235,12 +235,20 @@ internal object BoundaryCorpus {
                 base(
                     extensions = listOf(extension(sct, tlv(0x04, bytes(0, 0))), extension(sct, tlv(0x04, sctList(9)))),
                 ),
-            "primitive-3" to
-                TestCert(
-                    spki = ec(points[0].first, points[0].second, points[0].third),
-                    extensions = emptyList(),
-                    tbsTrailing = tlv(0x83, seq(extension(sct, tlv(0x04, sctList(3))))),
-                ).der,
-        )
+            "primitive-3" to tagThree(0x83, sct),
+        ) +
+            // Tag number 3 in the other classes and forms, which x509-parser also reads as extensions (revision 37).
+            listOf(0x03, 0x23, 0x43, 0x63, 0xc3, 0xe3).map { tag -> "tag3-%02x".format(tag) to tagThree(tag, sct) }
     }
+
+    /** A TBS whose element after the SPKI has identifier [tag] and holds an Extensions SEQUENCE with an SCT list. */
+    private fun tagThree(
+        tag: Int,
+        sct: String,
+    ): ByteArray =
+        TestCert(
+            spki = ec(points[0].first, points[0].second, points[0].third),
+            extensions = emptyList(),
+            tbsTrailing = tlv(tag, seq(extension(sct, tlv(0x04, sctList(3))))),
+        ).der
 }
