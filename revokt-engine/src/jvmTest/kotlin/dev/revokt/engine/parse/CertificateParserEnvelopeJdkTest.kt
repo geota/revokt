@@ -111,8 +111,8 @@ class CertificateParserEnvelopeJdkTest {
 
     /**
      * Spec §9.2 revision 38: an indefinite `signatureValue` is `STRUCTURE`, and the JDK (17 and later) rejects it. Fresh
-     * P-256 signatures over a real TBS include the forms whose content reads as a chain of minimal TLVs (about 0.45 %),
-     * which JDK 11 alone verified; neither revokt nor the JDK accepts any of them.
+     * P-256 signatures over a real TBS are drawn until at least three of them are forms whose content reads as a chain of
+     * minimal TLVs (about 0.4 %), which JDK 11 alone verified; neither revokt nor the JDK accepts any of them.
      */
     @Test
     fun `an indefinite signatureValue is rejected by revokt and the JDK alike`() {
@@ -124,18 +124,51 @@ class CertificateParserEnvelopeJdkTest {
                 .apply { initialize(256) }
                 .generateKeyPair()
         val signer = java.security.Signature.getInstance("SHA384withECDSA")
-        repeat(2_000) {
+        var signed = 0
+        var chainForms = 0
+        while ((signed < 2_000 || chainForms < 3) && signed < 20_000) {
             signer.initSign(keys.private)
             signer.update(tbs)
+            val content = TestDer.bytes(0x00) + signer.sign()
+            if (readsAsMinimalTlvChain(content)) chainForms++
+            signed++
             val der =
                 TestDer.seq(
                     tbs,
                     leaf.child(1).encode(),
-                    TestDer.bytes(0x03, 0x80, 0x00) + signer.sign() + TestDer.bytes(0, 0),
+                    TestDer.bytes(0x03, 0x80) + content + TestDer.bytes(0, 0),
                 )
             assertEquals(ParseReason.STRUCTURE, (CertificateParser.parse(der) as? CertificateParse.Failed)?.reason)
             assertEquals(null, jdk(der), "the JDK accepts an indefinite signatureValue")
         }
+        assertTrue(chainForms >= 3, "only $chainForms chain forms in $signed signatures")
+    }
+
+    /**
+     * Whether [content], read from its first octet, is a chain of TLVs with one-octet tags and minimal definite lengths
+     * (short, or `81`–`84`) ending exactly at its end: the form JDK 11's converter delimited (spec revision 35).
+     */
+    private fun readsAsMinimalTlvChain(content: ByteArray): Boolean {
+        var p = 0
+        while (p < content.size) p = minimalTlvEnd(content, p) ?: return false
+        return true
+    }
+
+    /** The end of the TLV at [p] when its tag is one octet and its definite length minimal and inside [content]. */
+    private fun minimalTlvEnd(
+        content: ByteArray,
+        p: Int,
+    ): Int? {
+        if (content.size - p < 2 || (content[p].toInt() == 0 && content[p + 1].toInt() == 0)) return null
+        val first = content[p + 1].toInt() and 0xff
+        val count = if (first < 0x80) 0 else first - 0x80
+        if (first == 0x80 || count > 4 || p + 2 + count > content.size) return null
+        val length =
+            (0 until count).fold(if (count == 0) first.toLong() else 0L) { n, k ->
+                (n shl 8) or (content[p + 2 + k].toLong() and 0xff)
+            }
+        val minimal = count == 0 || (content[p + 2].toInt() != 0 && (count > 1 || length >= 0x80))
+        return if (minimal && length <= content.size - p - 2 - count) p + 2 + count + length.toInt() else null
     }
 
     private fun CertificateParse.describe(): String =

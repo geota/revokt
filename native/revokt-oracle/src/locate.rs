@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 //! Oracle 3b of spec §9.2, a minimal TLV locator written independently of revokt. It delimits `tbsCertificate`, the
-//! outer `signatureAlgorithm` and `signatureValue` (definite only, revision 38), re-encodes the indefinite TBS and
-//! algorithm as the JDK's `DerIndefLenConverter`
-//! does (the §9.2 unsigned-header rule), then walks the re-encoded TBS ([`crate::walk`]). Same pipe protocol as `x509`:
+//! outer `signatureAlgorithm` and `signatureValue` (definite only, revision 38), re-encodes an indefinite TBS or
+//! algorithm as the JDK's `DerIndefLenConverter` does (the §9.2 unsigned-header rule), then walks the re-encoded TBS
+//! ([`crate::walk`]). Same pipe protocol as `x509`:
 //!
 //! ```text
 //! LOCATED <serial> <spki> <subject> <issuer> <tbs> <tbs-signature> <signature> <unused> <extensions> <stop>
@@ -157,8 +157,9 @@ fn reencode(b: &[u8], tokens: &[Token]) -> Vec<u8> {
     reversed
 }
 
-/// An unsigned envelope element at `p` with `tag`: definite in any form, or indefinite and re-encoded. Returns (end,
-/// content as the JDK verifies it).
+/// An unsigned envelope element at `p` with `tag`: definite in any form, or indefinite and re-encoded (the TBS and the
+/// algorithm only; tag `03` is the `signatureValue`, which is not located indefinite). Returns (end, content as the
+/// JDK verifies it).
 fn unsigned(b: &[u8], p: usize, limit: usize, tag: u8) -> Located<(usize, Vec<u8>)> {
     if p + 1 >= limit || b[p] != tag {
         return Err(format!("expected tag {tag:02x}"));

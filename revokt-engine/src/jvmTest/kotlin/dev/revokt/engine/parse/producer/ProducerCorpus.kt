@@ -126,7 +126,8 @@ internal object ProducerCorpus {
             "indefinite",
             "indefinite-tbs",
             "leaf-with-scts",
-            // A name value whose tag x509-parser stops inside, so its raw name was short (#43); JDK 11 accepts both.
+            // A name value whose tag x509-parser stops inside, so its raw name was short (#43). JDK 11, now below
+            // the floor, accepted both.
             "name-value-tag-1f",
             "name-value-tag-9f",
             "root-2200",
