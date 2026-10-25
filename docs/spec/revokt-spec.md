@@ -7,23 +7,27 @@ Status: **draft spec / project proposal, revision 39** · Target: JVM 17+ and An
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
 
 ### Changes in revision 39 (the JDK read fallback, 2026-10-25)
-- **Added** (found while implementing #12, oracle 1; #49): on the JDK, a certificate whose `getEncoded()` revokt cannot
-  parse is re-read once through the bytes the JDK verified the signature over, `getTBSCertificate()` and
-  `getSignature()`, assembled as `canon` is (the platform canon, §9.2). A valid signature makes those bytes what the
-  CA signed, however the presented encoding was altered, so a certificate the platform verified is read as the CA
-  issued it. Oracle 1's `encoded` is the bytes so read, and D1, its domain, D2 and D6 follow unchanged. The JVM bindings
-  implement the fallback; Conscrypt needs none, since it parses strict DER.
+- **Added** (found while implementing #12, oracle 1; #49): on the JDK, a certificate whose `getEncoded()` is
+  `ParseFailed(STRUCTURE)` is read once more through the bytes the JDK verified the signature over,
+  `getTBSCertificate()` and `getSignature()`, assembled as `canon` is but with the padding bits cleared (the platform
+  canon, §9.2). A valid signature makes those bytes what the CA signed, however the presented encoding was altered,
+  so a certificate the platform or the walker verified is read as the CA issued it. Oracle 1's `encoded` is the
+  bytes so read, and D1, its domain, D2 and D6 follow unchanged. The JVM binding applies the fallback before it
+  builds the request, and the bytes read are the certificate's DER throughout the engine (§5.3, 0.2). Conscrypt
+  needs none, since it parses strict DER. A certificate so read carries no `AlgorithmIdMismatch` finding unless its
+  TBS AlgorithmIdentifier is not minimal DER.
 - **Why**: the committed D7 corpus holds platform-accepted inputs that neither 3a nor 3b locates (an indefinite TBS
   holding a non-minimal definite child, on JDK 17, 21 and 27; a definite TBS holding an indefinite Validity, on JDK
   27; Appendix A), which broke D2's raw-byte-reference metric. A rule-based exclusion was drafted, but its argument
   misread what the JDK verifies (the independent review of #48). With the fallback, revokt's safety does not depend
   on that question, which #49 keeps open. The replay (#12) reads the nine indefinite-TBS inputs through their platform
   canon: each parses, has a raw-byte reference and passes D1 and D2 on all three JDKs, and oracle 4 rejects the
-  platform canon of JDK 27's three, which are D1-dom.
+  platform canon of JDK 27's three, which are D1-dom. D7 records the nine's outcome accordingly.
 - **Changed**: a JDK-accepted input for which no platform canon can be built is D1-dom by rule, since the producer
-  cannot key a TBS whose signature AlgorithmIdentifier cannot be located. D2's metric excludes only the inputs revokt
-  does not read on whose `canon(encoded)` oracle 4 rejects or for which no platform canon can be built. The 3b row
-  names its `canon`-only outcome, and D7's SPKI form reads `30 83 00 …`, as the corpus builds it.
+  cannot key a TBS in which the locator finds no signature AlgorithmIdentifier. D2's metric gains an exclusion: inputs
+  revokt does not parse on whose `canon(encoded)` oracle 4 rejects, or for which no platform canon can be built; the
+  Acceptance criterion follows. The record schema carries oracle 1's read per JDK version. The 3b table notes its
+  `CANON` reply, and D7's SPKI form reads `30 83 00 …`, as the corpus builds it.
 
 ### Changes in revision 38 (the JVM floor is 17; an indefinite `signatureValue` is `STRUCTURE` again, 2026-10-24)
 - **Changed** (the maintainer's decision, 2026-10-24, on #42): the JVM floor and bytecode target move from 11 to 17.
@@ -1225,7 +1229,7 @@ class EvaluationRequest private constructor(…) { class Builder {
     fun host(host: String?): Builder; fun nowMillis(nowMillis: Long): Builder; fun build(): EvaluationRequest } }   // at least one of presented/verifiedPaths; chainSource is derived. M5 adds credentialType(CredentialType) (growable, default X509), routed before decision step 3 with PathStatus.NOT_APPLICABLE; JSSE never delivers an MTC credential to an X509TrustManager, so M5 is Evaluator.evaluate-only
 sealed interface Evaluator { fun evaluate(request: EvaluationRequest): Verdict }   // sealed, never consumer-implemented, so members can be added; formerly `Engine`, renamed so it cannot collide with RevocationEngine
 @Throws(CertificateException::class) @JvmOverloads fun Revokt.evaluate(chain: List<X509Certificate>, host: String? = null, delegate: X509TrustManager? = null): Verdict   // never waits; always runs step 1 (a null delegate resolves to platformTrust.defaultDelegate()) as `delegate.checkServerTrusted(chain.toTypedArray(), "UNKNOWN")`, the 2-arg call with SunJSSE's own TLS 1.3 authType (a signature-capable key-usage check, no endpoint identification since there is no peer; Conscrypt only requires a non-empty authType), host being used for host' only; a step-1 reject propagates the delegate's CertificateException unchanged, no Verdict (the annotation is what lets a Java caller catch it); with a delegate it uses (and if needed creates, counting toward MAX_TRUST_MANAGERS) the registry instance for that delegate and shares its caches; Evaluator.evaluate shares no trust-manager path or verdict cache
-// Raw DER in EvaluationRequest is presumed to come from a platform-accepted chain; PARSE_FAILED on caller-fabricated bytes is the caller's to police (§9.2)
+// Raw DER in EvaluationRequest is presumed to come from a platform-accepted chain; PARSE_FAILED on caller-fabricated bytes is the caller's to police (§9.2). The JVM binding applies the §9.2 read fallback before it builds the request; raw bytes passed here get none
 ```
 
 **Status, event and rule model, defined once.** `Verdict` is the policy result independent of
@@ -1504,7 +1508,7 @@ remaining a subsequence.
 | `ANCHOR_REFRESH_MIN_INTERVAL` | 60 s | |
 | `EVENT_RING_CAPACITY` / `REJECTED_QUEUE_CAPACITY` | 64 / 4,096 | |
 | `MAX_TRUST_MANAGERS` | 16 | live instances per `Revokt`, builder-overridable in both directions, ≥ 1 (`limits { maxTrustManagers }`); live referents are counted through `WeakReference`, and before the cap throws every entry whose referent has cleared is evicted regardless of `ReferenceQueue` delivery, so a rebuilt client's dropped instance never counts |
-| `MAX_CERT_BYTES` | 262144 | per-certificate DER size (measured max over the seed corpus with margin); a larger certificate is a dropped candidate (`candidatesDropped`; leaf: `PARSE_FAILED(OVERSIZE)`, checked before the parse); §9.2 fuzzes to the cap + 1 and asserts the over-cap behaviour |
+| `MAX_CERT_BYTES` | 262144 | per-certificate DER size, of the bytes read (§9.2; measured max over the seed corpus with margin); a larger certificate is a dropped candidate (`candidatesDropped`; leaf: `PARSE_FAILED(OVERSIZE)`, checked before the parse); §9.2 fuzzes to the cap + 1 and asserts the over-cap behaviour |
 | `MAX_FILTER_BYTES`, `MAX_JSON_BYTES`, `MAX_X5U_BYTES` | 16 MiB, 4 MiB, 64 KiB | caps for **unsigned** bodies (mirror and system-cache files, the changeset JSON itself, x5u); for a `SIGNED` attachment the cap is `min(attachment.size, MAX_FILTER_BYTES)` (hash and size both verified; a signed record declaring more is `SyncOutcome.FAILED` with `CAP_NEAR_LIMIT` (stage `ATTACHMENT`) and advances nothing: a 16 MiB freeze is recoverable by raising the cap, a crash loop from one bad signed record is not); enforced while inflating; bodies are fetched, verified and written **one at a time**, so heap peak is one body plus its decode |
 | `MAX_MANIFEST_ENTRIES`, `MAX_CHANGESET_RECORDS`, `MAX_SYNC_BYTES` | 32, 256, 128 MiB | manifest cap over C2SP attachments to fetch; record cap per changeset after channel filtering; per-sync total bounds bandwidth and disk; a manifest or changeset over its cap is rejected before any body fetch |
 | `READONLY_POLL_INTERVAL` | 60 s | a read-only instance's pointer re-read and lock retry |
@@ -1885,7 +1889,8 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   and ends in `Budget`, never an allow. Per-candidate sub-budgets treated as dead ends must not be
   introduced: they would let a stuffed subtree starve the honest key out of a `Found`.
 - **Findings** produced during the walk (`AlgorithmIdMismatch` once per presented certificate,
-  computed at parse time after NULL/absent normalisation; `VerifierError`) ride on the `Walk`.
+  computed at parse time after NULL/absent normalisation, none for a certificate read through the §9.2 platform canon
+  whose TBS AlgorithmIdentifier is minimal DER; `VerifierError`) ride on the `Walk`.
   `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` is emitted once per OID in `Walk.unsupportedOids`
   on **every** outcome, with `outcomeDepended = (status == ISSUER_UNVERIFIED)`; fixture (n) asserts the
   `false` case on a `Found`.
@@ -2074,6 +2079,11 @@ sequence jump.
   for every JVM binding (SunJSSE's `AbstractTrustManagerWrapper.checkAdditionalTrust` applies algorithm constraints on both the socket and the engine path and endpoint identification on the engine path; fronting a plain delegate removes them).
 - `pathBuilder` is `CertPathBuilder("PKIX")`; `PlatformTrust.canonicalSubject` defaults to `X500Principal.getName(CANONICAL)`,
   which is what SunJSSE's `X500Name.equals` compares. Every M1 chain is `RECONSTRUCTED`.
+- Every certificate (presented, platform-built, anchor) is read through the §9.2 read fallback before the request is
+  built: `getEncoded()`, or the platform canon where revokt's parse of that is `ParseFailed(STRUCTURE)`. The bytes
+  read are the certificate's DER everywhere after: `chainHash`, `bytesHash`, the anchor-by-bytes check,
+  `reportedPathSha256s`, `anchorSha256` (so `exemptAnchors` hashes are taken over them), `PresentedChain.der` and
+  `MAX_CERT_BYTES`.
 
 ### 5.4 Ktor engine caveats (verified against Ktor 3.6.0 source)
 - **CIO**: a JVM artifact that also runs on Android, TLS 1.2 only, 2-arg `checkServerTrusted`, never runs CT; **refused on Android by revokt** (`RootTrustManager`'s 2-arg overload throws with any `<domain-config>`).
@@ -2673,20 +2683,28 @@ the platform: presented chain, platform-built chain, anchors and preloads all ar
 `X509Certificate`s and are re-read through `getEncoded()` (SunJSSE returns the stored bytes;
 Conscrypt returns `i2d_X509` of the parsed object). **The read fallback**: on the JDK, a certificate whose
 `getEncoded()` is `ParseFailed(STRUCTURE)` is read once more through the **platform canon**, `SEQUENCE {
-getTBSCertificate(), the signature AlgorithmIdentifier TLV located in it (its third element, or its second without
-`[0]`), BIT STRING { 00, getSignature() } }` with minimal new headers. Those are the bytes the JDK verifies the
-signature over, so a valid signature makes them what the CA signed, however the presented encoding was altered (#49).
-Where the AlgorithmIdentifier cannot be located, or a getter throws, the certificate stays `PARSE_FAILED`. The
-platform canon is its own `canon(encoded)`. A certificate so read carries no `AlgorithmIdMismatch` finding, since the
-platform canon repeats the TBS's AlgorithmIdentifier. Conscrypt needs no fallback: it parses strict DER.
-`PARSE_FAILED` on the leaf allows in `DEFAULT`
-and an unparseable candidate is dropped (decision, §10 item 8). Two failure classes matter: (i) a
-certificate the platform accepts and revokt rejects is unchecked (a leaf) or invisible as an issuer
-(a dropped candidate ends the walk `NO_ISSUER`, which allows in `DEFAULT` for every leaf under that
-CA), and a leaf revokt parses but cannot show producer-keyable is a sub-case, unchecked but never mis-answered (the D8 gap); (ii) a certificate from which revokt extracts **different bytes** than Mozilla's producer used
-to form the key (`SHA-256(SHA-256(issuer SPKI TLV) ‖ serial content bytes)`) or different SCT
-timestamps queries the wrong key or the wrong coverage, which can hide a revocation or, for a key
-outside the filter's universe, return an arbitrary answer. The oracle bounds both.
+getTBSCertificate(), the signature AlgorithmIdentifier TLV located in it, BIT STRING { 00, getSignature() } }` with
+minimal new headers and the padding bits cleared, as `getSignature()` returns them. The locator reads one-octet
+identifiers and definite lengths of at most four octets: after the TBS header it skips a first element with identifier
+`A0`, then one element, and takes the next if its identifier is `30`. The producer's parse needs at least that much
+there (an optional `[0]`, an INTEGER, a SEQUENCE; ct-go, its `lax` retry and zcrypto reject indefinite lengths and
+lengths of 2^31 or more, Appendix A). The platform canon is the bytes the JDK verifies the signature over, so a valid
+signature makes it what the CA signed, however the presented encoding was altered (#49). That covers the path the
+platform verified and, since the walker verifies over the same `Cert.tbs` and `Cert.sig`, every certificate on a path
+revokt reports; an anchor is read as the JDK's own view of it. Where the AlgorithmIdentifier cannot be located,
+`encoded` stays `getEncoded()`: a leaf is `PARSE_FAILED(STRUCTURE)` and a candidate is dropped, and a getter that
+throws has the same outcome and is counted `unavailable` (below). The platform canon is defined as its own
+`canon(encoded)`, and the replay asserts that the reference view, where it locates it, yields the same. A certificate
+so read carries no `AlgorithmIdMismatch` finding unless its TBS AlgorithmIdentifier is not minimal DER. The bytes read
+are its DER throughout the engine (§5.3). Conscrypt needs no fallback: it parses strict DER.
+`PARSE_FAILED` on the leaf allows in `DEFAULT` and an unparseable candidate is dropped (decision, §10 item 8). Two
+failure classes matter: (i) a certificate the platform accepts and revokt rejects is unchecked (a leaf) or invisible
+as an issuer (a dropped candidate ends the walk `NO_ISSUER`, which allows in `DEFAULT` for every leaf under that CA),
+and a leaf revokt parses but cannot show producer-keyable is a sub-case, unchecked but never mis-answered (the D8
+gap); (ii) a certificate from which revokt extracts **different bytes** than Mozilla's producer used to form the key
+(`SHA-256(SHA-256(issuer SPKI TLV) ‖ serial content bytes)`) or different SCT timestamps queries the wrong key or the
+wrong coverage, which can hide a revocation or, for a key outside the filter's universe, return an arbitrary answer.
+The oracle bounds both.
 
 **Parser contract under test.** One minimal parse of `Certificate` → `tbsCertificate` producing
 `rawSerial` (INTEGER content bytes as encoded, sign and leading zeros preserved), `rawSpki` (complete
@@ -2877,14 +2895,15 @@ reported, never rejected as `ParseFailed`; whether such a leaf is queried is the
 
 | # | Oracle | What it answers | Accept | Reject | Crash |
 |---|---|---|---|---|---|
-| 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()`, or the platform canon where revokt does not parse that (the read fallback above) | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
+| 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()`, or the platform canon where revokt's parse of that is `ParseFailed(STRUCTURE)` (the read fallback above) | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
 | 2 | Conscrypt `CertificateFactory` (BoringSSL): `conscrypt-openjdk-uber` versions in the matrix; the **platform** Conscrypt on the instrumented tier | platform acceptance on Android; `encoded = getEncoded()` (`i2d_X509`) | as above | as above | as above |
 | 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error; the TBS TLV re-headed to minimal, its signature AlgorithmIdentifier and the `signatureValue` octets, for `canon` | `Ok` | `Err` | caught panic |
-| 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate`, the outer `signatureAlgorithm` and the `signatureValue` (an indefinite `signatureValue` is not located) and re-encode the TBS under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the content of a definite `signatureValue` after its unused-bits octet, for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located (or its `canon` parts only, when the walk fails) | not located | caught panic |
+| 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate`, the outer `signatureAlgorithm` and the `signatureValue` (an indefinite `signatureValue` is not located) and re-encode the TBS under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the content of a definite `signatureValue` after its unused-bits octet, for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
 | 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key `canon(encoded)` (above), with which bytes and through which path (`ct` for certificate-transparency-go's strict parse, `lax` for ct-go only through a `lax` retry, `zc` for the zcrypto fallback) | both calls return | a `ParseCertificate` error, or a panic anywhere in the producer (the shim recovers around the whole call) | unrecovered; counts as `Reject` under D8 |
 
-A getter that throws on an accepted object (Conscrypt `getPublicKey()` on a damaged modulus is
+3b's `CANON` reply (its `canon` parts located, its walk failed) is not located for D2's reference and still supplies
+`canon`. A getter that throws on an accepted object (Conscrypt `getPublicKey()` on a damaged modulus is
 common) marks that field `unavailable`: the comparison is skipped and counted. Oracle `Crash`
 never fails revokt's gate, except oracle 4's under D8, where it counts as `Reject`; it is reported upstream. A `Crash` or `unavailable` rate above 0.1 % on
 the secondary corpus fails the job as infrastructure. A Rust or Go abort that kills the JVM is
@@ -2909,8 +2928,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   flattening above). That case is excluded conservatively, not because its key is outside the universe. It costs
   `PARSE_FAILED` for such a leaf and a dropped candidate for such an intermediate, both allowing in `DEFAULT`; such
   certificates are not CA/B-conformant. Also by rule, a JDK-accepted input for which no platform canon can be built
-  (the read fallback above) is D1-dom: the producer decodes the TBS's fields in order through its signature
-  AlgorithmIdentifier, so it cannot key a verified TBS in which that element cannot be located. For the other D1-dom
+  (the read fallback above) is D1-dom: the producer's parse needs at least the forms the locator reads up to the
+  signature AlgorithmIdentifier, so it cannot key a TBS in which the locator finds none. A getter that throws there
+  is counted `unavailable`, not D1-dom. For the other D1-dom
   inputs, no filter can contain such a certificate and its key is outside the filter's universe, so it must never be
   queried (a query would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and with high probability under an
   inverted issuer block); D8's gated direction enforces that; each entry is kept with the producer's error (a by-rule
@@ -2959,7 +2979,7 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
 - **D2 extraction agreement (security)**: on `parse(encoded_i,v)`: `Cert.tbs` equals `canon(encoded)`'s first element
   and oracle 1's `getTBSCertificate()`, while a difference from oracle 2's is recorded as a divergence, not a violation
   (Conscrypt verifies over the presented TBS TLV, so a difference marks an input it cannot verify); `Cert.sig` equals
-  `canon(encoded)`'s signature octets with the last octet's u low bits cleared, u being the presented unused-bits
+  `canon(encoded)`'s signature octets with the last octet's u low bits cleared, u being `encoded`'s unused-bits
   octet as located by 3a, else 3b;
   `rawSerial` equals oracle 4's serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where `producerKeyable` (implied by D8's gated direction, restated so that a mismatch names the field);
   `rawSerial`, `rawSpki`, `rawSubject`, `rawIssuer`, extension values and the SCT pair set equal 3a's
@@ -3028,8 +3048,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   `04 80 … 00 00`, an outer AlgorithmIdentifier `30 80 <OID> 05 80 00 00 00 00`, an RSA `signatureValue` with
   unused-bits octet `01` and the padding bit set; required outcome for each: `Parsed`, with
   the `producerKeyable` and key bytes of the unmodified certificate and a `VERIFIED` link, since the profile reads
-  `Cert.tbs`; and on the reject side an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI
-  `30 83 00 …`), which the JDK accepts and fails to verify, an indefinite outer AlgorithmIdentifier holding a
+  `Cert.tbs`; an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI `30 83 00 …`), which the
+  JDK accepts and fails to verify (`parse(b)` is `STRUCTURE`; oracle 1's read is `Parsed` through the platform
+  canon); and on the reject side an indefinite outer AlgorithmIdentifier holding a
   non-minimal OID header (`30 80 06 81 08 … 00 00`), which the JDK rejects, and an indefinite `signatureValue`
   (`03 80 <content> 00 00`, whether or not its content reads as a chain of minimal TLVs), which JDK 17 and later
   reject; each `STRUCTURE`); and a CA-signed TBS whose extensions are followed by a trailing element with a
@@ -3046,14 +3067,16 @@ collection marks CRLite-enrolled, `SHA-256(rawSpki)` must be a key of the live f
 (§6.3) for the fixture generation; a miss is a producer/revokt SPKI-byte divergence and fails.
 
 **Corpus record schema (one for all four kinds; committed).**
-`{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome,
+`{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome, read?,
 fields | unavailable}], class ∈ {D7_LENIENCY, D2_REENCODE_ALLOW, D3_DIVERGENCE, D1_DOM,
 KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, `CONSCRYPT_TBS` (D2: `Cert.tbs` differs from oracle 2's `getTBSCertificate()`), the
 duplicate-extension class, or a named 3c/Firefox class), keyability: {parser, clause, zlint}? (required on every D8-gap entry whatever its class, and on every `KEYABILITY_GAP` record: `parser ∈ {ct, lax, zc}` from oracle 4, `clause` a `KeyabilityClause`, `zlint` the pinned zlint result), justification, added}`. Goldens for 3a/3b/4 are computed at admission
-so the PR replay evaluates D1–D3 and D8 offline, JDK-only. The release review mechanically lists entries
-whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves across all enrolled
-CAs, the `x509-limbo` vectors, the D7 corpus, the issuer corpus) is pinned by a committed SHA-256
-manifest and a corpus-repository tag.
+so the PR replay evaluates D1–D3 and D8 offline, JDK-only. Oracle 1's `read` is the SHA-256 of the bytes revokt reads
+for that version where they differ from the input (the read fallback), recorded with their goldens; a matrix job that
+meets a read without goldens fails as infrastructure until they are recorded, never as a violation. The release review
+mechanically lists entries whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves across all
+enrolled CAs, the `x509-limbo` vectors, the D7 corpus, the issuer corpus) is pinned by a committed SHA-256 manifest
+and a corpus-repository tag.
 
 **Generators.** (1) Mutational, Jazzer byte-level, seeded from the pinned seed corpus. (2)
 Structure-aware: a DER grammar generator for `Certificate` mutating at TLV level (length forms, tag
@@ -3087,14 +3110,14 @@ from the D8 gap's one-time re-decision on the #15 seed corpus, which can reopen 
 and the platform Conscrypt differs per device. `Revokt.evaluate` over raw bytes is outside the
 platform-accepted premise and is documented as such (§4).
 
-**Acceptance.** 0.1 gate: zero D1, D2, D3 and D8 violations on the pinned seed corpus, `x509-limbo`,
-the D7 corpus and the issuer corpus against oracles 1 (every JDK in the matrix), 2 (uber versions
-in the matrix), 3a/3b and 4; the producer SPKI check green; the D8-gap baseline recorded, and zero on the real end-entity fixtures; zero platform-accepted inputs without a
-raw-byte reference, outside the unparsed inputs D2's metric excludes; Kover branch coverage of the parser
-package ≥ 90 % measured over the committed
-replay (fuzz-run coverage is reported only). 0.3 gate: the same replay on the platform Conscrypt
-tier (API 26, 31, 34, 36) at zero tolerance. Continuous: no open D1, D2 or D8 finding at any release; the
-divergence, D1-dom and D8-gap records reviewed at each release with every entry justified in writing.
+**Acceptance.** 0.1 gate: zero D1, D2, D3 and D8 violations on the pinned seed corpus, `x509-limbo`, the D7 corpus and
+the issuer corpus against oracles 1 (every JDK in the matrix), 2 (uber versions in the matrix), 3a/3b and 4; the
+producer SPKI check green; the D8-gap baseline recorded, and zero on the real end-entity fixtures; zero
+platform-accepted inputs without a raw-byte reference, outside the unparsed inputs D2's metric excludes; Kover branch
+coverage of the parser package ≥ 90 % measured over the committed replay (fuzz-run coverage is reported only). 0.3
+gate: the same replay on the platform Conscrypt tier (API 26, 31, 34, 36) at zero tolerance. Continuous: no open D1,
+D2 or D8 finding at any release; the divergence, D1-dom and D8-gap records reviewed at each release with every entry
+justified in writing.
 
 ## 10. Security considerations
 
@@ -3150,7 +3173,7 @@ divergence, D1-dom and D8-gap records reviewed at each release with every entry 
   8. **Decided (revision 11): kept; revision 34 widens `PRODUCER_UNKEYABLE`.** `PARSE_FAILED` on the leaf allows in
      `DEFAULT`, so a leaf encoding the platform accepts and the Kotlin parser rejects is unchecked. The subscriber
      controls leaf content only at issuance, under CA linting, and the §9.2 differential parser oracle (D1, a 0.1
-     gate) is the mitigation.
+     gate) and, on the JDK, the §9.2 read fallback are the mitigation.
 
      A leaf outside the §9.2 keyability profile is `PARSE_FAILED(PRODUCER_UNKEYABLE)` and is never queried (D8). That
      covers two kinds of leaf:
@@ -3252,7 +3275,7 @@ APIs outside the promise, the growability contract in §4.
 | Release | Scope | Estimate |
 |---|---|---|
 | 0.1 | engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8 (gated direction; D8 gap reported)); JSON tree; clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; the §9.1 chain generator, `SymVerifier` and the reference walker (the walker fuzzer itself is 0.2, with the walker); oracle CI | 5 weeks |
-| 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists); candidate index and walker per §5.1, PKIX fallback on both platforms, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3); **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation; CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
+| 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists); candidate index and walker per §5.1, PKIX fallback on both platforms, the §9.2 read fallback in the JVM binding, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3); **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation; CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
 | 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2; caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `status()` and `state`; Android instrumented suite including the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (revision 38's Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
 
 About 14 weeks. **M2** (0.4, then 1.0): preloading as a second candidate set, exhaustive re-walk on L1/L2
