@@ -50,9 +50,30 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
           validate-wrappers: true
+      # The large corpus (docs/dev/corpus.md): the revokt-corpus tag gradle/corpus-pin.properties pins, cached by tag;
+      # verifyCorpusManifest checks it against the pinned manifest hash.
+      - name: the revokt-corpus pin
+        id: corpus
+        run: |
+          tag=$(sed -n 's/^tag=//p' gradle/corpus-pin.properties)
+          case $tag in ''|*[!A-Za-z0-9._-]*) echo "::error::bad tag in gradle/corpus-pin.properties"; exit 1 ;; esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: corpus-cache
+        with:
+          path: build/corpus
+          key: revokt-corpus-${{ steps.corpus.outputs.tag }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.corpus-cache.outputs.cache-hit != 'true'
+        with:
+          repository: geota/revokt-corpus
+          ref: ${{ steps.corpus.outputs.tag }}
+          path: build/corpus
+          persist-credentials: false
       - name: check
         run: >
           ./gradlew check
+          -Prevokt.corpus=build/corpus
           -Prevokt.testJdk=${{ matrix.jdk }}
           -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_25_X64,JAVA_HOME_27_X64
           --no-daemon

@@ -148,6 +148,11 @@ abstract class VerifyCorpusManifestTask : DefaultTask() {
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val externalCorpus: DirectoryProperty
 
+    /** `gradle/corpus-pin.properties`: the revokt-corpus tag and the SHA-256 of its manifest. */
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val corpusPin: RegularFileProperty
+
     @get:Internal
     abstract val rootDir: DirectoryProperty
 
@@ -158,6 +163,14 @@ abstract class VerifyCorpusManifestTask : DefaultTask() {
             val ext = externalCorpus.get().asFile
             val extManifest = File(ext, "manifest.sha256")
             if (!extManifest.isFile) fail("verifyCorpusManifest: ${ext.path} has no manifest.sha256; the corpus checkout is incomplete (docs/dev/corpus.md).")
+            val pin = java.util.Properties().apply { corpusPin.get().asFile.reader().use(::load) }
+            val pinned = pin.getProperty("manifest.sha256")?.trim()
+            if (sha256(extManifest) != pinned) {
+                fail(
+                    "verifyCorpusManifest: ${ext.path}/manifest.sha256 is not the one gradle/corpus-pin.properties pins " +
+                        "(tag ${pin.getProperty("tag")}): check out that tag, or admit the new one in a PR that updates the pin.",
+                )
+            }
             verifyDir(ext, extManifest)
         }
     }
@@ -165,7 +178,8 @@ abstract class VerifyCorpusManifestTask : DefaultTask() {
     private fun verifyDir(dir: File, manifestFile: File) {
         val expected = manifestFile.readLines().filter { it.isNotBlank() && !it.startsWith("#") }
             .associate { line -> line.substringAfter("  ").trim() to line.substringBefore("  ").trim() }
-        val actual = dir.walkTopDown().filter { it.isFile && it.name != "manifest.sha256" && it.name != "README.md" }
+        // A checkout's .git is not corpus data.
+        val actual = dir.walkTopDown().onEnter { it.name != ".git" }.filter { it.isFile && it.name != "manifest.sha256" && it.name != "README.md" }
             .associate { it.relativeTo(dir).path.replace(File.separatorChar, '/') to sha256(it) }
         val missing = expected.keys - actual.keys
         val unlisted = actual.keys - expected.keys

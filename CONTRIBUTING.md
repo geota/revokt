@@ -215,9 +215,11 @@ Jazzer regression inputs (`src/test/resources/<pkg>/<Class>Inputs/`, the only lo
 `docs/dev/rulesets/*.json`. Everything else the build can produce is not committed (Scorecard
 `Binary-Artifacts`): no jars, no `.so`, no generated sources, no reports. Corpora are data: small ones under
 `corpus/` with their SHA-256 manifest (capped at a few MB); the large corpus is the **public** `revokt-corpus`
-repository, checked out by CI at the manifest's pinned tag into `build/corpus`, cached by tag, and read by
+repository, checked out by CI at the tag `gradle/corpus-pin.properties` pins (with its manifest's SHA-256) into
+`build/corpus`, cached by tag, and read by
 the replay task from a Gradle property so a local run can skip it; `verifyCorpusManifest` always checks
-`corpus/` against its manifest and checks `build/corpus` when the property is set.
+`corpus/` against its manifest and, when the property is set, checks `build/corpus` against the pinned manifest hash
+and its manifest.
 
 **Oracles are tools, never shipped** (FilmCraft's rule for FFmpeg, stated for ours): `revokt-oracle`, the
 Go producer CLI, `rust-query-crlite`, `clubcard-crlite` and the upki engine are test oracles and fixture

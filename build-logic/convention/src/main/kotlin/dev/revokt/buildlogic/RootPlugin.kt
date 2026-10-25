@@ -71,6 +71,7 @@ class RootPlugin : Plugin<Project> {
             corpusDir.set(layout.projectDirectory.dir("corpus"))
             manifest.set(layout.projectDirectory.file("corpus/manifest.sha256"))
             externalCorpus.set(providers.gradleProperty("revokt.corpus").map { layout.projectDirectory.dir(it) })
+            corpusPin.set(layout.projectDirectory.file("gradle/corpus-pin.properties"))
             rootDir.set(layout.projectDirectory)
         }
         val verifyMatrix = tasks.register<VerifyOracleMatrixTask>("verifyOracleMatrix") {
