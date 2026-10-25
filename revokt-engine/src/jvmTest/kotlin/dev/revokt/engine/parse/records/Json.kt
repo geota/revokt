@@ -19,9 +19,9 @@ internal sealed class Json {
 
         fun array(key: String): List<Json> = (fields[key] as? Arr)?.items ?: error("missing array $key")
 
-        fun obj(key: String): Obj = fields[key] as? Obj ?: error("missing object $key")
+        fun child(key: String): Obj = fields[key] as? Obj ?: error("missing object $key")
 
-        fun objOrNull(key: String): Obj? = fields[key] as? Obj
+        fun childOrNull(key: String): Obj? = fields[key] as? Obj
     }
 
     class Arr(
@@ -62,20 +62,40 @@ internal sealed class Json {
                 out.append(']')
             }
 
-            is Str -> quote(value, out)
-            is Bool -> out.append(value)
-            Null -> out.append("null")
+            is Str -> {
+                quote(value, out)
+            }
+
+            is Bool -> {
+                out.append(value)
+            }
+
+            Null -> {
+                out.append("null")
+            }
         }
     }
 
     companion object {
-        fun obj(vararg fields: Pair<String, Json?>): Obj = Obj(fields.filter { it.second != null }.associate { it.first to it.second!! })
+        fun obj(vararg fields: Pair<String, Json?>): Obj =
+            Obj(
+                fields.filter { it.second != null }.associate {
+                    it.first to
+                        it.second!!
+                },
+            )
 
         fun str(value: String?): Str? = value?.let(::Str)
 
         fun strings(values: List<String>): Arr = Arr(values.map(::Str))
 
-        fun parse(text: String): Json = Parser(text).run { value().also { skipSpace(); check(pos == text.length) { "trailing text at $pos" } } }
+        fun parse(text: String): Json =
+            Parser(text).run {
+                value().also {
+                    skipSpace()
+                    check(pos == text.length) { "trailing text at $pos" }
+                }
+            }
 
         private fun quote(
             s: String,

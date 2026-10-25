@@ -91,7 +91,8 @@ internal object OracleReplay {
     }
 
     /** Oracle 4's golden for canon of the bytes read. */
-    fun producerGolden(a: Accepted): String = producer[a.readInput.canonSha256] ?: fail("${a.name}: no oracle-4 golden for canon")
+    fun producerGolden(a: Accepted): String =
+        producer[a.readInput.canonSha256] ?: fail("${a.name}: no oracle-4 golden for canon")
 
     private fun producerOutside(
         a: Accepted,
@@ -112,13 +113,15 @@ internal object OracleReplay {
     /** The parsed inputs whose SPKI oracle 1 reports re-encoded, under the allow-list's rule (spec §9.2). */
     val spkiReencoded: Set<String> by lazy {
         accepted
-            .filter { a ->
-                val c = a.certificate ?: return@filter false
-                val platform = a.jdk.publicKey.encoded
-                !platform.contentEquals(c.rawSpki()) && reencodesSpki(c.rawSpki(), platform)
-            }.map { it.name }
-            .toSet()
+            .mapNotNull { a ->
+                a.certificate?.let { c -> a.name.takeIf { reencoded(c.rawSpki(), a.jdk.publicKey.encoded) } }
+            }.toSet()
     }
+
+    private fun reencoded(
+        rawSpki: ByteArray,
+        platform: ByteArray,
+    ): Boolean = !platform.contentEquals(rawSpki) && reencodesSpki(rawSpki, platform)
 
     /** Whether the TBS's `[0]` holds more than its first element (any definite header form). */
     private fun versionTrailing(tbs: ByteArray): Boolean {

@@ -48,13 +48,25 @@ internal class CorpusRecord(
         val zlint: String,
     )
 
-    enum class RecordClass { D7_LENIENCY, D2_REENCODE_ALLOW, D3_DIVERGENCE, D1_DOM, KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS }
+    enum class RecordClass {
+        D7_LENIENCY,
+        D2_REENCODE_ALLOW,
+        D3_DIVERGENCE,
+        D1_DOM,
+        KEYABILITY_GAP,
+        FUZZ_FINDING,
+        ISSUER_CORPUS,
+    }
 
     /** The record's identity: an input has at most one record per class. */
     val key: Pair<String, RecordClass> get() = sha256 to recordClass
 
     /** Whether oracle 1 of [version] accepts the input. */
-    fun acceptedOn(version: String): Boolean = oracles.any { it.id == "1" && it.version == version && it.outcome == "Accept" }
+    fun acceptedOn(version: String): Boolean =
+        oracles.any {
+            it.id == "1" && it.version == version &&
+                it.outcome == "Accept"
+        }
 
     fun toJson(): Json.Obj =
         Json.obj(
@@ -82,7 +94,11 @@ internal class CorpusRecord(
             "divergence" to Json.str(divergence),
             "keyability" to
                 keyability?.let {
-                    Json.obj("parser" to Json.Str(it.parser), "clause" to Json.Str(it.clause), "zlint" to Json.Str(it.zlint))
+                    Json.obj(
+                        "parser" to Json.Str(it.parser),
+                        "clause" to Json.Str(it.clause),
+                        "zlint" to Json.Str(it.zlint),
+                    )
                 },
             "justification" to Json.Str(justification),
             "added" to Json.Str(added),
@@ -92,7 +108,7 @@ internal class CorpusRecord(
         private const val RESOURCE = "records.jsonl"
 
         fun fromJson(j: Json.Obj): CorpusRecord {
-            val r = j.obj("revokt")
+            val r = j.child("revokt")
             val recordClass = RecordClass.valueOf(j.string("class"))
             val record =
                 CorpusRecord(
@@ -110,12 +126,19 @@ internal class CorpusRecord(
                     },
                     recordClass,
                     j.stringOrNull("divergence"),
-                    j.objOrNull("keyability")?.let { Keyability(it.string("parser"), it.string("clause"), it.string("zlint")) },
+                    j
+                        .childOrNull(
+                            "keyability",
+                        )?.let { Keyability(it.string("parser"), it.string("clause"), it.string("zlint")) },
                     j.string("justification"),
                     j.string("added"),
                 )
-            check(recordClass != RecordClass.D3_DIVERGENCE || record.divergence != null) { "${record.path}: no divergence" }
-            check(recordClass != RecordClass.KEYABILITY_GAP || record.keyability != null) { "${record.path}: no keyability" }
+            check(
+                recordClass != RecordClass.D3_DIVERGENCE || record.divergence != null,
+            ) { "${record.path}: no divergence" }
+            check(
+                recordClass != RecordClass.KEYABILITY_GAP || record.keyability != null,
+            ) { "${record.path}: no keyability" }
             return record
         }
 
@@ -126,6 +149,13 @@ internal class CorpusRecord(
                 .filter { it.isNotBlank() }
                 .map { fromJson(Json.parse(it) as Json.Obj) }
                 .toList()
+
+        /** The committed D3_DIVERGENCE records: divergence class → input paths. */
+        fun divergences(): Map<String, Set<String>> =
+            committed()
+                .filter { it.recordClass == RecordClass.D3_DIVERGENCE }
+                .groupBy({ it.divergence!! }, { it.path })
+                .mapValues { it.value.toSet() }
 
         /** Writes [records] sorted by path and class, one per line. */
         fun write(

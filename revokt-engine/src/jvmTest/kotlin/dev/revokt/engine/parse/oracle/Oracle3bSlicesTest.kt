@@ -7,6 +7,7 @@ import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.producer.ProducerCorpus
+import dev.revokt.engine.parse.records.CorpusRecord
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -91,7 +92,9 @@ class Oracle3bSlicesTest {
         for ((name, a, b) in located) compareSlices(name, a, b, divergences)
         val walkFailed = accepted.filter { (row, _) -> Oracle3b.located(row.reply) == null }.map { it.first.name }
         assertEquals(WALK_FAILS_WHERE_3A_ACCEPTS, walkFailed.toSet(), "inputs 3a accepts and 3b's walk does not")
-        assertEquals(mapOf("3A_HEADER_LAX" to HEADER_LAX, "3A_TBS_LAX" to TBS_LAX), divergences, "divergence classes")
+        // The divergence classes are the committed D3_DIVERGENCE records (spec §9.2 D3, RecordsTest); 3b decides two.
+        val recorded = CorpusRecord.divergences().filterKeys { it in setOf("3A_HEADER_LAX", "3A_TBS_LAX") }
+        assertEquals(recorded, divergences.mapValues { it.value.toSet() }, "divergence classes")
         assertTrue(located.size > 1000, "only ${located.size} inputs compared")
     }
 
@@ -125,9 +128,6 @@ class Oracle3bSlicesTest {
     private fun sct(e: Oracle3a.Extension) = if (e.sctError) "E" else e.sct?.joinToString("+") ?: "-"
 
     private companion object {
-        val HEADER_LAX = listOf("d3/sct-inner-44", "d3/sct-inner-1f04")
-        val TBS_LAX = listOf("d3/primitive-3") + listOf("03", "23", "43", "63", "c3", "e3").map { "d3/tag3-$it" }
-
         /** 3b locates and revokt rejects: a Certificate header of five or more length octets (the JDK rejects it too). */
         val LOCATED_NOT_PARSED: Set<String> =
             setOf("envelope/letsencrypt.org-1/certificate-long5", "envelope/letsencrypt.org-1/certificate-long8")

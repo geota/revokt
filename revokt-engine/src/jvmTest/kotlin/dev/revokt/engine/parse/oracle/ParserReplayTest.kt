@@ -77,8 +77,11 @@ class ParserReplayTest {
         val missing =
             accepted
                 .filter { it.reference == null }
-                .filterNot { it.certificate == null && OracleReplay.outsideDomain(it) in setOf(OracleReplay.PRODUCER_REJECTS, OracleReplay.NO_PLATFORM_CANON) }
-                .map { it.name }
+                .filterNot {
+                    it.certificate == null &&
+                        OracleReplay.outsideDomain(it) in
+                        setOf(OracleReplay.PRODUCER_REJECTS, OracleReplay.NO_PLATFORM_CANON)
+                }.map { it.name }
         assertEquals(emptyList(), missing, "platform-accepted inputs with no raw-byte reference")
     }
 
@@ -122,10 +125,9 @@ class ParserReplayTest {
         val parsed = accepted.filter { it.certificate != null }.map { it.name }.toSet()
         val recorded =
             CorpusRecord
-                .committed()
-                .filter { it.recordClass == CorpusRecord.RecordClass.D3_DIVERGENCE && it.path in parsed }
-                .groupBy({ it.divergence!! }, { it.path })
-                .mapValues { it.value.toSet() }
+                .divergences()
+                .mapValues { (_, paths) -> paths.filter { it in parsed }.toSet() }
+                .filterValues { it.isNotEmpty() }
         assertEquals(recorded, divergences, "D3 divergence classes")
         assertTrue(compared > 1000, "D2 exercised on only $compared inputs")
     }

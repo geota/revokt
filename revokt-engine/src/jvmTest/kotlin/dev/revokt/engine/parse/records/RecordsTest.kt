@@ -52,7 +52,16 @@ class RecordsTest {
     fun `the records writer merges this JDK's view when requested`() {
         val path = System.getProperty("revokt.writeRecords") ?: return
         val file = File(path)
-        val existing = if (file.exists()) file.readLines().filter { it.isNotBlank() }.map { CorpusRecord.fromJson(Json.parse(it) as Json.Obj) } else emptyList()
+        val existing =
+            if (file.exists()) {
+                file
+                    .readLines()
+                    .filter {
+                        it.isNotBlank()
+                    }.map { CorpusRecord.fromJson(Json.parse(it) as Json.Obj) }
+            } else {
+                emptyList()
+            }
         CorpusRecord.write(file, merge(existing, computed()))
     }
 
@@ -62,7 +71,17 @@ class RecordsTest {
     /** The record's fields that the replay decides: everything but the justification, the date and other JDKs' entries. */
     private fun fields(r: CorpusRecord): String {
         val own = r.oracles.filter { it.id != "1" || it.version == version }
-        return CorpusRecord(r.sha256, r.path, r.revokt, own, r.recordClass, r.divergence, r.keyability, "", "").toJson().write()
+        return CorpusRecord(
+            r.sha256,
+            r.path,
+            r.revokt,
+            own,
+            r.recordClass,
+            r.divergence,
+            r.keyability,
+            "",
+            "",
+        ).toJson().write()
     }
 
     /**
@@ -79,11 +98,27 @@ class RecordsTest {
             val c = byKey[e.key]
             val others = e.oracles.filter { it.id == "1" && it.version != version }
             if (c == null) {
-                if (e.recordClass in JDK_DEPENDENT && others.any { it.outcome == "Accept" }) out[e.key] = with(e, others + e.oracles.filter { it.id != "1" })
+                if (e.recordClass in JDK_DEPENDENT &&
+                    others.any { it.outcome == "Accept" }
+                ) {
+                    out[e.key] =
+                        with(e, others + e.oracles.filter { it.id != "1" })
+                }
                 continue
             }
             val justification = e.justification.ifBlank { c.justification }
-            out[e.key] = CorpusRecord(c.sha256, c.path, c.revokt, sortOracles(others + c.oracles), c.recordClass, c.divergence, c.keyability, justification, e.added)
+            out[e.key] =
+                CorpusRecord(
+                    c.sha256,
+                    c.path,
+                    c.revokt,
+                    sortOracles(others + c.oracles),
+                    c.recordClass,
+                    c.divergence,
+                    c.keyability,
+                    justification,
+                    e.added,
+                )
         }
         for (c in computed) if (c.key !in out) out[c.key] = c
         return out.values.toList()
@@ -92,9 +127,24 @@ class RecordsTest {
     private fun with(
         e: CorpusRecord,
         oracles: List<CorpusRecord.Oracle>,
-    ) = CorpusRecord(e.sha256, e.path, e.revokt, sortOracles(oracles), e.recordClass, e.divergence, e.keyability, e.justification, e.added)
+    ) = CorpusRecord(
+        e.sha256,
+        e.path,
+        e.revokt,
+        sortOracles(oracles),
+        e.recordClass,
+        e.divergence,
+        e.keyability,
+        e.justification,
+        e.added,
+    )
 
-    private fun sortOracles(oracles: List<CorpusRecord.Oracle>) = oracles.sortedWith(compareBy({ ORACLE_ORDER.indexOf(it.id) }, { it.version.padStart(3, '0') }))
+    private fun sortOracles(oracles: List<CorpusRecord.Oracle>) =
+        oracles.sortedWith(
+            compareBy({
+                ORACLE_ORDER.indexOf(it.id)
+            }, { it.version.padStart(3, '0') }),
+        )
 
     /** The records the replay classes on this JDK, with rule-based justifications where the rule is the justification. */
     private fun computed(): List<CorpusRecord> {
@@ -104,20 +154,37 @@ class RecordsTest {
             val reason = OracleReplay.outsideDomain(a) ?: continue
             out += record(inputs.getValue(a.name), RecordClass.D1_DOM, null, null, d1Justification(a, reason))
         }
-        for (name in OracleReplay.spkiReencoded) out += record(inputs.getValue(name), RecordClass.D2_REENCODE_ALLOW, null, null, REENCODE)
+        for (name in OracleReplay.spkiReencoded) {
+            out +=
+                record(inputs.getValue(name), RecordClass.D2_REENCODE_ALLOW, null, null, REENCODE)
+        }
         for (input in ProducerCorpus.inputs) {
             val c = (CertificateParser.parse(input.der) as? CertificateParse.Parsed)?.certificate ?: continue
             for (d in ReferenceView.of(OracleReplay.sha(input.der))?.divergences.orEmpty()) {
                 out += record(input, RecordClass.D3_DIVERGENCE, d, null, DIVERGENCE.getValue(d))
             }
-            // The D8 gap counts end-entity inputs only: `producerKeyable` is a leaf predicate (spec §9.2).
-            val clause = Keyability.firstFailing(c)?.takeUnless { isCa(c) } ?: continue
-            val golden = OracleReplay.producer[input.canonSha256] ?: continue
-            if (!golden.startsWith("OK ")) continue
-            val k = CorpusRecord.Keyability(golden.substringAfterLast(' '), clause.name, zlintErrors(input))
-            out += record(input, RecordClass.KEYABILITY_GAP, null, k, gapJustification(k))
+            gap(input, c)?.let { out += record(input, RecordClass.KEYABILITY_GAP, null, it, gapJustification(it)) }
         }
         return out
+    }
+
+    /**
+     * The D8-gap fields of a parsed input outside the profile that the producer keys: end-entity inputs only, since
+     * `producerKeyable` is a leaf predicate (spec §9.2); null otherwise.
+     */
+    private fun gap(
+        input: ProducerCorpus.Input,
+        c: ParsedCertificate,
+    ): CorpusRecord.Keyability? {
+        val clause = Keyability.firstFailing(c)?.takeUnless { isCa(c) }
+        val golden = OracleReplay.producer[input.canonSha256]?.takeIf { it.startsWith("OK ") }
+        return if (clause == null ||
+            golden == null
+        ) {
+            null
+        } else {
+            CorpusRecord.Keyability(golden.substringAfterLast(' '), clause.name, zlintErrors(input))
+        }
     }
 
     private fun record(
@@ -130,16 +197,22 @@ class RecordsTest {
         val sha = OracleReplay.sha(input.der)
         val revokt =
             when (val p = CertificateParser.parse(input.der)) {
-                is CertificateParse.Failed -> CorpusRecord.Revokt(p.reason.name, null, null, emptyList())
-                is CertificateParse.Parsed ->
+                is CertificateParse.Failed -> {
+                    CorpusRecord.Revokt(p.reason.name, null, null, emptyList())
+                }
+
+                is CertificateParse.Parsed -> {
                     p.certificate.let { c ->
                         CorpusRecord.Revokt(
                             "Parsed",
                             Oracle3a.hex(c.rawSerial()),
                             OracleReplay.sha(c.rawSpki()),
-                            c.fields.scts.map { "${Oracle3a.hex(it.logId.toByteArray())}@${it.timestamp}" }.sorted(),
+                            c.fields.scts
+                                .map { "${Oracle3a.hex(it.logId.toByteArray())}@${it.timestamp}" }
+                                .sorted(),
                         )
                     }
+                }
             }
         val a = OracleReplay.accepted.firstOrNull { it.name == input.name }
         val one =
@@ -147,7 +220,11 @@ class RecordsTest {
                 "1",
                 version,
                 if (a != null) "Accept" else "Reject",
-                a?.read?.der?.let(OracleReplay::sha)?.takeIf { it != sha },
+                a
+                    ?.read
+                    ?.der
+                    ?.let(OracleReplay::sha)
+                    ?.takeIf { it != sha },
             )
         val oracles =
             listOf(
@@ -164,11 +241,28 @@ class RecordsTest {
         reason: String,
     ): String =
         when (reason) {
-            OracleReplay.PRODUCER_REJECTS -> "Oracle 4 rejects canon of the bytes read (${OracleReplay.producerGolden(a).removePrefix("REJECT ")}): no filter can contain it, so it is never queried (§9.2 D1-dom)."
-            OracleReplay.PRODUCER_KEYS_OTHER_BYTES -> "Oracle 4 keys bytes other than the reference view's: no filter holds this certificate's key (§9.2 D1-dom)."
-            OracleReplay.VERSION_TRAILING -> "Content after the INTEGER inside [0]: D1-dom by rule, the [0] flattening of §9.2."
-            OracleReplay.NO_PLATFORM_CANON -> "No platform canon can be built: D1-dom by rule (§9.2, revision 39)."
-            else -> fail("${a.name}: unknown D1-dom reason $reason")
+            OracleReplay.PRODUCER_REJECTS -> {
+                val error = OracleReplay.producerGolden(a).removePrefix("REJECT ")
+                "Oracle 4 rejects canon of the bytes read ($error): no filter can contain it, so it is never queried " +
+                    "(§9.2 D1-dom)."
+            }
+
+            OracleReplay.PRODUCER_KEYS_OTHER_BYTES -> {
+                "Oracle 4 keys bytes other than the reference view's: no filter holds this certificate's key " +
+                    "(§9.2 D1-dom)."
+            }
+
+            OracleReplay.VERSION_TRAILING -> {
+                "Content after the INTEGER inside [0]: D1-dom by rule, the [0] flattening of §9.2."
+            }
+
+            OracleReplay.NO_PLATFORM_CANON -> {
+                "No platform canon can be built: D1-dom by rule (§9.2, revision 39)."
+            }
+
+            else -> {
+                fail("${a.name}: unknown D1-dom reason $reason")
+            }
         }
 
     /**
@@ -176,17 +270,24 @@ class RecordsTest {
      * to include one zlint could not lint (`unparseable`, `panic`), is a profile defect that blocks the release: it needs
      * a justification written by hand (spec §9.2).
      */
-    private fun gapJustification(k: CorpusRecord.Keyability): String =
-        when (k.zlint) {
-            "-", "unparseable", "panic" -> ""
-            else -> "Outside the keyability profile at ${k.clause}, keyed through ${k.parser}; zlint reports ${k.zlint.split(',').size} errors, so it is not CA/B-conformant (§9.2 D8 gap)."
-        }
+    private fun gapJustification(k: CorpusRecord.Keyability): String {
+        if (k.zlint in setOf("-", "unparseable", "panic")) return ""
+        val errors = k.zlint.split(',').size
+        return "Outside the keyability profile at ${k.clause}, keyed through ${k.parser}; zlint reports $errors " +
+            "errors, so it is not CA/B-conformant (§9.2 D8 gap)."
+    }
 
     @Test
     fun `the D8 gap's CA test reads the CA fixtures as CAs and the leaves as end entities`() {
         val read =
             ProducerCorpus.fixtures.associateWith {
-                isCa((CertificateParser.parse(ProducerCorpus.resource("certs/$it.der")) as CertificateParse.Parsed).certificate)
+                isCa(
+                    (
+                        CertificateParser.parse(
+                            ProducerCorpus.resource("certs/$it.der"),
+                        ) as CertificateParse.Parsed
+                    ).certificate,
+                )
             }
         assertEquals(CA_FIXTURES, read.filterValues { it }.keys, "CA fixtures")
     }
@@ -204,7 +305,9 @@ class RecordsTest {
 
     /** The pinned zlint result: its error lints, `-` for none, or `unparseable`/`panic` where zlint could not run. */
     private fun zlintErrors(input: ProducerCorpus.Input): String {
-        val line = zlint[input.canonSha256] ?: fail("${input.name}: no zlint result; run native/producer-oracle/record-goldens.sh")
+        val line =
+            zlint[input.canonSha256]
+                ?: fail("${input.name}: no zlint result; run native/producer-oracle/record-goldens.sh")
         return if (line.startsWith("LINT ")) line.split(' ')[1] else line.substringBefore(' ').lowercase()
     }
 
@@ -231,13 +334,23 @@ class RecordsTest {
 
         const val PRODUCER = "mozilla/crlite go 008299826177"
 
-        const val REENCODE = "The JDK re-encodes this SPKI's non-minimal headers in getPublicKey().getEncoded(), and keeps the key; allowed by the §9.2 re-encoding rule."
+        const val REENCODE =
+            "The JDK re-encodes this SPKI's non-minimal headers in " +
+                "getPublicKey().getEncoded(), and keeps the key; allowed by the §9.2 re-encoding " +
+                "rule."
 
         val DIVERGENCE =
             mapOf(
-                "3A_HEADER_LAX" to "x509-parser yields pairs under an inner identifier other than 0x04 (tag number 4 in another class or form); §9.2 fails the list, as Firefox and webpki do (3A_HEADER_LAX).",
-                "3A_TBS_LAX" to "x509-parser takes an element with tag number 3 that is not a constructed context-specific [3] as extensions; the JDK and revokt ignore it (3A_TBS_LAX).",
-                "DUPLICATE_EXTENSION" to "x509-parser reports a duplicate SCT-list extension as an error; revokt takes the union of the extensions' pairs (§9.2 D3).",
+                "3A_HEADER_LAX" to
+                    "x509-parser yields pairs under an inner identifier other than 0x04 (tag number 4 " +
+                    "in another class or form); §9.2 fails the list, as Firefox and webpki do " +
+                    "(3A_HEADER_LAX).",
+                "3A_TBS_LAX" to
+                    "x509-parser takes an element with tag number 3 that is not a constructed " +
+                    "context-specific [3] as extensions; the JDK and revokt ignore it (3A_TBS_LAX).",
+                "DUPLICATE_EXTENSION" to
+                    "x509-parser reports a duplicate SCT-list extension as an error; revokt takes the " +
+                    "union of the extensions' pairs (§9.2 D3).",
             )
     }
 }
