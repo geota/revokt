@@ -16,7 +16,7 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 import org.jlleitschuh.gradle.ktlint.KtlintExtension
 
 /**
- * A published JVM-only library (revokt-jsse and the bindings, from 0.2): explicit API, JDK 11 bytecode on 21,
+ * A published JVM-only library (revokt-jsse and the bindings, from 0.2): explicit API, JDK 17 bytecode on 21,
  * animal-sniffer against the API-26 signature (CONTRIBUTING §3), ktlint, detekt, Kover, API dumps, POM and scope
  * assertions, dependency locking.
  */
@@ -36,7 +36,7 @@ class JvmLibraryPlugin : Plugin<Project> {
             explicitApi()
             jvmToolchain(Conventions.JDK_BUILD)
             compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_17)
+                jvmTarget.set(JvmTarget.fromTarget(Conventions.JDK_RELEASE.toString()))
                 freeCompilerArgs.add("-Xjdk-release=${Conventions.JDK_RELEASE}")
                 allWarningsAsErrors.set(true)
             }

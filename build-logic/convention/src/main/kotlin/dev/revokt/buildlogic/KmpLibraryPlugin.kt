@@ -36,7 +36,7 @@ class KmpLibraryPlugin : Plugin<Project> {
             jvmToolchain(Conventions.JDK_BUILD)
             jvm {
                 compilerOptions {
-                    jvmTarget.set(JvmTarget.JVM_17)
+                    jvmTarget.set(JvmTarget.fromTarget(Conventions.JDK_RELEASE.toString()))
                     freeCompilerArgs.add("-Xjdk-release=${Conventions.JDK_RELEASE}")
                 }
                 testRuns.configureEach {
