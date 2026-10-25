@@ -18,7 +18,7 @@ import org.jlleitschuh.gradle.ktlint.KtlintExtension
 
 /**
  * A published Kotlin multiplatform library: jvm always, linuxX64 under `-Prevokt.purityGate` (compile only),
- * explicit API, JDK 11 bytecode built on 21, ktlint, detekt (with the repository rules and the commonMain
+ * explicit API, JDK 17 bytecode built on 21, ktlint, detekt (with the repository rules and the commonMain
  * purity check), Kover, API dumps, the POM licence and dependency-scope assertions, dependency locking.
  */
 class KmpLibraryPlugin : Plugin<Project> {
@@ -36,7 +36,7 @@ class KmpLibraryPlugin : Plugin<Project> {
             jvmToolchain(Conventions.JDK_BUILD)
             jvm {
                 compilerOptions {
-                    jvmTarget.set(JvmTarget.JVM_11)
+                    jvmTarget.set(JvmTarget.JVM_17)
                     freeCompilerArgs.add("-Xjdk-release=${Conventions.JDK_RELEASE}")
                 }
                 testRuns.configureEach {

@@ -29,7 +29,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { jdk: "11", label: "11" }
           - { jdk: "17", label: "17" }
           - { jdk: "21", label: "21" }
           - { jdk: "25", label: "lts" }

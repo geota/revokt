@@ -126,7 +126,8 @@ commands or boundaries differ (`revokt-clubcard/AGENTS.md` for the MPL port rule
 **Toolchain (pinned; the scaffold facts).** Gradle 9.7 wrapper with `distributionSha256Sum` (the newest fully supported by the Kotlin Gradle plugin); Kotlin 2.4.21;
 AGP 8.13.2 (Kotlin 2.4 supports up to AGP 9.3; the Android modules arrive in 0.3); JDKs from `actions/setup-java`, never
 auto-provisioned (`org.gradle.java.installations.auto-download=false`, no foojay resolver); `jvmToolchain(21)`
-to build, `-Xjdk-release=11` and `jvmTarget = 11` on every jvm module, `jvmToolchain(22)` only inside
+to build, `-Xjdk-release=17` and `jvmTarget = 17` on every jvm module (spec revision 38; Android consumers dex it with
+D8 from AGP 8.0), `jvmToolchain(22)` only inside
 `revokt-engine-upki`; `org.gradle.configuration-cache=true`, `org.gradle.caching=true` (local cache only;
 no remote cache, section 7); `gradle/actions/setup-gradle`
 with `cache-read-only` on every branch but `main`; Kotlin/Native's compiler distribution (downloaded by KGP
@@ -360,7 +361,7 @@ bootstrap. If a local tool is missing, say so in the PR and push; **CI is author
 every required check in Appendix B passes**.
 
 **Every PR (required checks, offline except where noted):**
-- `check` on JDK 11, 17, 21, the current LTS and the current feature release (Linux; §9.2 matrix), with the
+- `check` on JDK 17, 21, the current LTS and the current feature release (Linux; §9.2 matrix), with the
   Conscrypt dimension inside each job (the replay test task runs once per Conscrypt uber version listed in
   the committed matrix file, selected by `-Prevokt.conscrypt=<version>`); Kover instrumentation only on the
   JDK 21 job; `check` on JDK 21 on macOS and Windows for `revokt-engine` and `revokt-jsse` only (file
@@ -593,7 +594,7 @@ over the PR body), not commitlint's, because they depend on the type and on the 
 recent reviewable push; require review from code owners (in the solo-maintainer phase, ADR-0005: 0 approvals, and the
 last-push-approval, code-owner-review and unattributed-changes rules off, since each needs an approver other than the
 single owner);
-required status checks `check (11)`, `check (17)`, `check (21)`, `check (lts)`, `check (feature)`, `check (macos)`,
+required status checks `check (17)`, `check (21)`, `check (lts)`, `check (feature)`, `check (macos)`,
 `check (windows)`, `ci-extras`, `static`, `commitlint`, `pr-lint` (includes `trailers` and, in the solo
 phase, the `Independent review` comment), `protected-paths`, `DCO` (the app's exact check name; added once the app is installed), `codeql`, `osv`, `dependency-review`,
 `coverage`, `cooling` (reports success at once unless the PR touches `data/seed/**`, the release workflows or

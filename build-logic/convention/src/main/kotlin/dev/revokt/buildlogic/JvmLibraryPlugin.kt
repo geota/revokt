@@ -36,7 +36,7 @@ class JvmLibraryPlugin : Plugin<Project> {
             explicitApi()
             jvmToolchain(Conventions.JDK_BUILD)
             compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_11)
+                jvmTarget.set(JvmTarget.JVM_17)
                 freeCompilerArgs.add("-Xjdk-release=${Conventions.JDK_RELEASE}")
                 allWarningsAsErrors.set(true)
             }

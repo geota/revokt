@@ -18,7 +18,7 @@ import org.gradle.kotlin.dsl.withType
 object Conventions {
     const val GROUP = "dev.revokt"
     const val JDK_BUILD = 21
-    const val JDK_RELEASE = 11
+    const val JDK_RELEASE = 17
     const val MARKER_INTERNAL = "dev.revokt.RevoktInternalApi"
     const val MARKER_TESTING = "dev.revokt.RevoktTestingApi"
     const val MARKER_CLUBCARD_INTERNAL = "dev.revokt.clubcard.RevoktInternalApi"
