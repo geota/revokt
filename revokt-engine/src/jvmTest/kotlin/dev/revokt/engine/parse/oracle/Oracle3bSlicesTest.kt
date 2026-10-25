@@ -47,6 +47,11 @@ class Oracle3bSlicesTest {
             assertRevoktFields(row.name, c, b)
         }
         assertTrue(parsed.size > 1000, "only ${parsed.size} inputs compared")
+        // The other direction: 3b locates only what revokt parses, but for a Certificate header of five or more
+        // length octets, which 3b's envelope reads (the reference view) and revokt and the JDK reject.
+        val parsedNames = parsed.map { it.first.name }.toSet()
+        val locatedOnly = rows.filter { Oracle3b.located(it.reply) != null && it.name !in parsedNames }.map { it.name }
+        assertEquals(LOCATED_NOT_PARSED, locatedOnly.toSet(), "inputs 3b locates and revokt rejects")
     }
 
     private fun assertRevoktFields(
@@ -124,6 +129,9 @@ class Oracle3bSlicesTest {
         val TBS_LAX = listOf("d3/primitive-3") + listOf("03", "23", "43", "63", "c3", "e3").map { "d3/tag3-$it" }
 
         /** Where §9.2 is stricter than x509-parser; revokt rejects each of these too. */
+        val LOCATED_NOT_PARSED: Set<String> =
+            setOf("envelope/letsencrypt.org-1/certificate-long5", "envelope/letsencrypt.org-1/certificate-long8")
+
         val WALK_FAILS_WHERE_3A_ACCEPTS: Set<String> =
             setOf(
                 // Bytes after signatureValue and after Certificate: 3b's envelope does not locate them.
@@ -132,6 +140,9 @@ class Oracle3bSlicesTest {
                 // Validity and [0] hold exactly their elements.
                 "variants/validity-null-after-times",
                 "variants/version-wrapper-trailing",
+                // A multi-octet identifier where the tail read meets it.
+                "d3/tag3-9f03",
+                "d3/tag3-bf03",
                 // A length of five octets inside the TBS.
                 "envelope/letsencrypt.org-1/version-long5",
                 "envelope/letsencrypt.org-1/tbs-signature-long5",

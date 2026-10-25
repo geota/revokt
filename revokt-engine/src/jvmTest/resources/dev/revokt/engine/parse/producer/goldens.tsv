@@ -1107,6 +1107,7 @@ ad5946e18d883823df08745aa1a6a2694a67ba3d8737a9c21c66b888c752bfbe	REJECT asn1: st
 adc2216e0d561fdf43d078ad9695633d2e735751e4c29ba820e0fdc5b533b593	REJECT asn1: structure error: Method: superfluous leading zeros in length
 ade8cd3a1a9629dd6b1e11cb0137eb8164d2d081d054a02354ecaaecea54acd7	REJECT asn1: structure error: Id: superfluous leading zeros in length
 adfd949b3b374919abb63d27fb32e462874a17b5019578cfbf443cc298920139	REJECT x509: failed to unmarshal elliptic curve point
+ae525cf803847de7e365f211a21192285d0e681d7ca8966a4babb859bb0fcdc5	REJECT asn1: syntax error: UniqueId: non-minimal tag
 ae74a7a2c4be828241a982d2e555276dc08f2438081a835d76b5d82538badae7	OK 0102030405060708090a0b0c0d0e0f101112131415 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
 ae88aa9825cfbd628f45b7b2c527c58d6c963f0edf10d379ff4aafd8bb9d9026	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 af3fe07f8f203b6af73179ced1433eee2c4bba75fa7f8f9e6ef56f8746528b82	REJECT asn1: structure error: Policy: superfluous leading zeros in length
@@ -1353,6 +1354,7 @@ d5a9e47c500cbd2d2fb58db03e0f55a695097f70e8d34c7c8e800d6fa678aac0	OK 0543933be386
 d610029dbd771385a778b391d1aefbc362000e1530fd958ead3748e5453f6b22	OK 008f1234 5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3 ct
 d6349474083f6eeb6a96a5f2b4d8785d54009f3b568418b4da6ffb6658d40de6	REJECT asn1: structure error: Id: superfluous leading zeros in length
 d63a5bdca9b292bde7394afceb2c41127ce4aebc724ed3edcc41a6218c4c84be	REJECT asn1: structure error: Validity: superfluous leading zeros in length
+d63ccab67e3a3a1495f45b7475bea280d49b03caa3dda5069837c9910442808d	REJECT asn1: syntax error: UniqueId: non-minimal tag
 d6441850afa592258649729e81e77a373ca6402d922fe32dd25d31c443c096f3	REJECT asn1: structure error: superfluous leading zeros in length
 d64c971d0b1a09808bbe1ad503f02bd3d6933e19ccef57cc4e989bf7d9eda117	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 d6793daebf1326d00a66e5f26b12f9f3f1e76b290ded70574c54d08f29480af6	REJECT asn1: syntax error: indefinite length found (not DER)

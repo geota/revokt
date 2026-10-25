@@ -41,7 +41,7 @@ internal object Oracle3b {
          * Whether the walk ignored an element with tag number 3 that is not a constructed context-specific `[3]`, which
          * 3a takes as extensions (`3A_TBS_LAX`, spec §9.2 revision 37).
          */
-        val tagThreeIgnored: Boolean get() = stop != null && stop and 0x1f == 3 && stop != 0xa3
+        val tagThreeIgnored: Boolean get() = stop != null && stop and 0x1f == 3
     }
 
     private val goldens: Map<String, String> by lazy {

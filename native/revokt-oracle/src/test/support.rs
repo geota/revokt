@@ -33,6 +33,19 @@ pub fn item(version: u8, timestamp: u64, extra: &[u8]) -> Vec<u8> {
     [u16be(body.len()), body].concat()
 }
 
+/// An SCT item with the given extensions and signature, each behind a declared `u16` length that may overrun.
+pub fn raw_item(extensions: (usize, &[u8]), signature: (usize, &[u8])) -> Vec<u8> {
+    let mut body = vec![0];
+    body.extend([0x11; 32]);
+    body.extend(1u64.to_be_bytes());
+    body.extend(u16be(extensions.0));
+    body.extend_from_slice(extensions.1);
+    body.extend([4, 3]);
+    body.extend(u16be(signature.0));
+    body.extend_from_slice(signature.1);
+    [u16be(body.len()), body].concat()
+}
+
 pub fn list(items: &[Vec<u8>]) -> Vec<u8> {
     let all = items.concat();
     [u16be(all.len()), all].concat()
@@ -42,7 +55,16 @@ pub const SCT_LIST_OID: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0xd6, 0x79, 0x02
 
 /// A v3 certificate whose TBS ends, after the SPKI, with `tail`.
 pub fn certificate_with_tail(tail: &[u8]) -> Vec<u8> {
-    let ecdsa = tlv(0x06, &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]);
+    let mut elements = tbs_elements();
+    elements.push(tail.to_vec());
+    certificate_from(&elements)
+}
+
+const ECDSA_WITH_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+
+/// The TBS elements up to the SPKI: version, serial, signature, issuer, validity, subject, SPKI.
+pub fn tbs_elements() -> Vec<Vec<u8>> {
+    let ecdsa = tlv(0x06, ECDSA_WITH_SHA256);
     let name = seq(&[tlv(
         0x31,
         &seq(&[tlv(0x06, &[0x55, 0x04, 0x03]), tlv(0x0c, b"a")]),
@@ -55,7 +77,7 @@ pub fn certificate_with_tail(tail: &[u8]) -> Vec<u8> {
         ]),
         tlv(0x03, &point),
     ]);
-    let tbs = seq(&[
+    vec![
         tlv(0xa0, &tlv(0x02, &[2])),
         tlv(0x02, &[0x01, 0x23]),
         seq(std::slice::from_ref(&ecdsa)),
@@ -63,9 +85,13 @@ pub fn certificate_with_tail(tail: &[u8]) -> Vec<u8> {
         seq(&[tlv(0x17, b"260101000000Z"), tlv(0x17, b"270101000000Z")]),
         name,
         spki,
-        tail.to_vec(),
-    ]);
-    seq(&[tbs, seq(&[ecdsa]), tlv(0x03, &[0, 1, 2])])
+    ]
+}
+
+/// A certificate whose TBS holds exactly `elements`.
+pub fn certificate_from(elements: &[Vec<u8>]) -> Vec<u8> {
+    let algorithm = seq(&[tlv(0x06, ECDSA_WITH_SHA256)]);
+    seq(&[seq(elements), algorithm, tlv(0x03, &[0, 1, 2])])
 }
 
 /// A v3 certificate carrying `extensions` in a `[3]`.
@@ -198,6 +224,52 @@ pub fn sct_cases() -> Vec<SctCase> {
             &p1,
         ),
     ];
+    let long = |prefix: &[u8]| {
+        [
+            vec![0x04],
+            prefix.to_vec(),
+            vec![one.len() as u8],
+            one.clone(),
+        ]
+        .concat()
+    };
+    let mut nine = vec![0x89, 0x01];
+    nine.extend([0; 7]);
+    cases.extend([
+        case("85 00 00 00 00 nn", long(&[0x85, 0, 0, 0, 0]), &p1),
+        case(
+            "89 with eight zero octets",
+            long(&[0x89, 0, 0, 0, 0, 0, 0, 0, 0]),
+            &p1,
+        ),
+        case("an inner length of 2^64 or more", long(&nine), "E"),
+        case(
+            "non-empty extensions and signature",
+            tlv(
+                0x04,
+                &list(&[raw_item((2, &[0xee, 0xee]), (3, &[0xaa; 3]))]),
+            ),
+            &p1,
+        ),
+        case(
+            "a signature past the item",
+            tlv(0x04, &list(&[raw_item((0, &[]), (4, &[0xaa; 3]))])),
+            "E",
+        ),
+        case(
+            "extensions past the item",
+            tlv(0x04, &list(&[raw_item((40, &[0xee; 2]), (0, &[]))])),
+            "E",
+        ),
+        case(
+            "a later item whose signature overruns",
+            tlv(
+                0x04,
+                &list(&[item(0, 1, &[]), raw_item((0, &[]), (9, &[0xaa]))]),
+            ),
+            &p1,
+        ),
+    ]);
     for (name, value) in [
         ("inner 0x44", tlv(0x44, &one)),
         (

@@ -102,6 +102,7 @@ class Oracle3aTest {
             assertEquals(emptySet(), c.fields.scts, "$name: the §9.2 read of an ignored tag-3 element has no SCTs")
             return
         }
+        assertEquals(oracleExtensions, b.extensions.map { "${it.oid},${it.critical},${it.value}" }, "$name 3b table")
         val expected = HashSet<Pair<String, Long>>()
         for ((index, e) in a.extensions.withIndex()) {
             if (e.sct == null) continue

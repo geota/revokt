@@ -356,3 +356,94 @@ fn a_walk_that_fails_answers_canon_with_its_reason() {
         );
     }
 }
+
+#[test]
+fn the_walk_is_structurally_strict() {
+    let time = support::tlv(0x17, b"260101000000Z");
+    let validity = |times: &[Vec<u8>]| support::seq(times);
+    let extension = |oid_tag: u8, value_tag: u8| {
+        let value = support::tlv(
+            value_tag,
+            &support::tlv(0x04, &support::list(&[support::item(0, 1, &[])])),
+        );
+        support::tlv(
+            0xa3,
+            &support::seq(&[support::seq(&[
+                support::tlv(oid_tag, support::SCT_LIST_OID),
+                value,
+            ])]),
+        )
+    };
+    let cases: [(&str, usize, Vec<u8>, &str); 11] = [
+        ("an empty [0]", 0, vec![0xa0, 0x00], "version INTEGER"),
+        (
+            "bytes after the version INTEGER",
+            0,
+            support::tlv(0xa0, &[support::tlv(0x02, &[2]), vec![0x05, 0x00]].concat()),
+            "after the version",
+        ),
+        (
+            "an 85 length inside the TBS",
+            1,
+            vec![0x02, 0x85, 0, 0, 0, 0, 0x02, 0x01, 0x23],
+            "length octet 85",
+        ),
+        (
+            "a 0c in Validity",
+            4,
+            validity(&[support::tlv(0x0c, b"x"), time.clone()]),
+            "two times",
+        ),
+        (
+            "a 37 in Validity",
+            4,
+            validity(&[time.clone(), support::tlv(0x37, &[])]),
+            "two times",
+        ),
+        (
+            "a third time",
+            4,
+            validity(&[time.clone(), time.clone(), time.clone()]),
+            "after the validity",
+        ),
+        (
+            "a SET in [3]",
+            7,
+            support::tlv(0xa3, &support::tlv(0x31, &[])),
+            "Extensions",
+        ),
+        ("extnValue 24", 7, extension(0x06, 0x24), "extnValue"),
+        ("extnValue 44", 7, extension(0x06, 0x44), "extnValue"),
+        ("extnID 26", 7, extension(0x26, 0x04), "extnID"),
+        ("extnID 05", 7, extension(0x05, 0x04), "extnID"),
+    ];
+    for (name, index, element, reason) in cases {
+        let mut elements = support::tbs_elements();
+        if index == elements.len() {
+            elements.push(element);
+        } else {
+            elements[index] = element;
+        }
+        let reply = describe(&support::certificate_from(&elements)).unwrap();
+        assert!(
+            reply.starts_with("CANON\t") && reply.contains(reason),
+            "{name}: {reply}"
+        );
+    }
+}
+
+#[test]
+fn any_non_zero_critical_octet_is_true() {
+    for (octet, expected) in [(0x00u8, ",0,"), (0x05, ",1,"), (0xff, ",1,")] {
+        let critical = support::seq(&[
+            support::tlv(0x06, support::SCT_LIST_OID),
+            vec![0x01, 0x01, octet],
+            support::tlv(
+                0x04,
+                &support::tlv(0x04, &support::list(&[support::item(0, 1, &[])])),
+            ),
+        ]);
+        let f = located(&support::certificate(&[critical]));
+        assert!(f[9].contains(expected), "{octet:02x}: {}", f[9]);
+    }
+}
