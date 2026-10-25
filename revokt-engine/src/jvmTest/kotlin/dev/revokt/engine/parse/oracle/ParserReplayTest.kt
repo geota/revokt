@@ -109,11 +109,8 @@ class ParserReplayTest {
                 if (a.certificate == null) violations += "${a.name}: ${(a.parse as CertificateParse.Failed).detail}"
             }
         }
-        println(
-            "D1 on JDK ${Oracle1.version}: ${accepted.size} platform-accepted, $inside in the domain; D1-dom ${dom.mapValues {
-                it.value.size
-            }}",
-        )
+        val counts = dom.mapValues { it.value.size }
+        println("D1 on JDK ${Oracle1.version}: ${accepted.size} accepted, $inside in the domain; D1-dom $counts")
         assertEquals(emptyList(), violations, "D1 violations")
         assertTrue(inside > 300, "D1 exercised on only $inside inputs")
         // The by-rule classes are pinned, so a locator or `[0]` regression cannot move inputs out of the domain unseen.
