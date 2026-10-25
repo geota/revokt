@@ -11,6 +11,8 @@ a published module** (CONTRIBUTING §3 "Oracles are tools, never shipped"); `ver
   `revokt_upki_check` (spec §3.2).
 - `producer-oracle`: a Go CLI over Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`), run
   out of process over a pipe (spec §9.1).
+- `zlint-oracle`: a Go CLI over zlint, recording the pinned zlint result of every D8-gap entry (spec §9.2). It is its
+  own module so that zlint's zcrypto never moves the producer's pin.
 
 Built by the nightly `native` job, never by `./gradlew check`. `revokt-upki-shim` is a skeleton until the 0.1 oracle
 issue.

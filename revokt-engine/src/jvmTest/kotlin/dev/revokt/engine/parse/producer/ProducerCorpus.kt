@@ -182,8 +182,13 @@ internal object ProducerCorpus {
     }
 
     /** canon SHA-256 → the oracle's line (`OK <serial> <spki-sha256> <ct|lax|zc>` or `REJECT <error>`). */
-    fun goldens(): Map<String, String> =
-        String(resource("producer/goldens.tsv"))
+    fun goldens(): Map<String, String> = tsv("producer/goldens.tsv")
+
+    /** canon SHA-256 → zlint's line (`LINT <errors|-> <warnings|->`, `UNPARSEABLE <error>` or `PANIC <error>`). */
+    fun zlint(): Map<String, String> = tsv("producer/zlint.tsv")
+
+    private fun tsv(path: String): Map<String, String> =
+        String(resource(path))
             .lineSequence()
             .filter { it.isNotBlank() && !it.startsWith("#") }
             .associate { line -> line.substringBefore('\t') to line.substringAfter('\t') }

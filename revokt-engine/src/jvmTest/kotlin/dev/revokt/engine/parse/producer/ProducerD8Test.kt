@@ -24,6 +24,8 @@ import kotlin.test.fail
 class ProducerD8Test {
     private val goldens = ProducerCorpus.goldens()
 
+    private val zlint = ProducerCorpus.zlint()
+
     /** One input's outcome; [certificate], [clause] and [golden] are null when the input does not parse. */
     private class Outcome(
         val input: ProducerCorpus.Input,
@@ -202,13 +204,19 @@ class ProducerD8Test {
     }
 
     /**
-     * The D8 gap (spec §9.2): each entry carries the producer's path and its first failing clause, and the replay fails
-     * on any entry, or any change of clause or path, not in the committed baseline (`producer/gap-baseline.tsv`).
+     * The D8 gap (spec §9.2): each entry carries the producer's path, its first failing clause and the pinned zlint
+     * result (its errors), and the replay fails on any entry, or any change of clause, path or zlint result, not in the
+     * committed baseline (`producer/gap-baseline.tsv`). An entry with no zlint error is a profile defect that blocks the
+     * release until the profile is widened or the entry justified; the test reports them.
      */
     @Test
     fun `the D8 gap equals the recorded baseline`() {
         val gap = parsed.filter { it.clause != null && it.golden!!.startsWith("OK ") }
-        val lines = gap.map { "${it.input.name}\t${it.clause}\t${it.golden!!.substringAfterLast(' ')}" }.sorted()
+        val lines =
+            gap
+                .map {
+                    "${it.input.name}\t${it.clause}\t${it.golden!!.substringAfterLast(' ')}\t${zlintErrors(it)}"
+                }.sorted()
         System.getProperty("revokt.writeGapBaseline")?.let { path ->
             File(path).writeText(BASELINE_HEADER + lines.joinToString("\n", postfix = "\n"))
             return
@@ -228,6 +236,8 @@ class ProducerD8Test {
             (lines - baseline.toSet()).toSet(),
             "new or changed gap entries: justify them and re-record",
         )
+        val lintClean = gap.filter { zlintErrors(it) == "-" }.map { it.input.name }
+        println("D8-gap entries with no zlint error (release blockers, spec §9.2): ${lintClean.size} $lintClean")
         println(
             "D8 gap over the replay corpus (clause/path → inputs): ${gap.groupingBy {
                 "${it.clause}/${it.golden!!.substringAfterLast(
@@ -235,6 +245,14 @@ class ProducerD8Test {
                 )}"
             }.eachCount().toSortedMap()}",
         )
+    }
+
+    /** The pinned zlint result of a gap entry: its error lints, `-` for none, or `unparseable`/`panic`. */
+    private fun zlintErrors(o: Outcome): String {
+        val line =
+            zlint[o.input.canonSha256]
+                ?: fail("${o.input.name}: no zlint result; run native/producer-oracle/record-goldens.sh")
+        return if (line.startsWith("LINT ")) line.split(' ')[1] else line.substringBefore(' ').lowercase()
     }
 
     private companion object {
@@ -253,7 +271,8 @@ class ProducerD8Test {
         val MALFORMED_FUZZ_SEEDS = listOf("empty", "huge-length", "indefinite", "trailing-byte", "truncated-leaf")
 
         const val BASELINE_HEADER =
-            "# The D8 gap of the replay corpus (spec §9.2): input <TAB> first failing clause <TAB> oracle-4 path.\n" +
+            "# The D8 gap of the replay corpus (spec §9.2): input <TAB> first failing clause <TAB> oracle-4 path\n" +
+                "# <TAB> zlint errors (- for none).\n" +
                 "# Regenerate with native/producer-oracle/record-goldens.sh; a new entry needs a justification in its PR.\n"
 
         /** K8's list as spec §9.2 names it, written independently of `Keyability` (canonical OID content). */

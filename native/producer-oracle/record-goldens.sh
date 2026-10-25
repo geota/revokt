@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Records the oracle-4 goldens of the D8 replay (spec §9.2, #11): every distinct canon(input) of ProducerCorpus,
-# run through the producer pinned in go.mod, then the D8-gap baseline. Needs Go and the matrix JDKs; the PR tier replays the committed goldens and
+# run through the producer pinned in go.mod and through zlint (native/zlint-oracle, its own pin), then the D8-gap
+# baseline. Needs Go and the matrix JDKs; the PR tier replays the committed goldens and
 # needs neither. Run from the repository root:  sh native/producer-oracle/record-goldens.sh
 # REVOKT_RECORD_JDKS lists the JDKs to record on, by default the CI matrix of .github/workflows/ci.yml ("17 21 25 27");
 # each must be installed. Any arguments are passed to Gradle, for example
@@ -14,6 +15,7 @@ out="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/
 work=$(mktemp -d)
 trap 'rm -rf "${work:?}"' EXIT
 ( cd native/producer-oracle && go build -o "$work/producer-oracle" . )
+( cd native/zlint-oracle && go build -o "$work/zlint-oracle" . )
 # One pass per matrix JDK (the bytes revokt reads depend on oracle 1's version), merged.
 jdks=${REVOKT_RECORD_JDKS:-17 21 25 27}
 case $jdks in *[!0-9\ ]*) echo "REVOKT_RECORD_JDKS must list JDK feature versions: $jdks" >&2; exit 1 ;; esac
@@ -32,6 +34,15 @@ echo '##' >> "$work/b64.txt"
   cut -f1 "$work/inputs.tsv" | paste - "$work/verdicts.txt" | LC_ALL=C sort
 } > "$out"
 echo "wrote $(grep -vc '^#' "$out") goldens to $out"
+zlint="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/zlint.tsv"
+"$work/zlint-oracle" < "$work/b64.txt" | grep -v '^##$' > "$work/zlint.txt"
+[ "$(wc -l < "$work/inputs.tsv")" -eq "$(wc -l < "$work/zlint.txt")" ] || { echo "zlint reply count mismatch" >&2; exit 1; }
+{
+  echo "# zlint results (native/zlint-oracle, pinned in its go.mod) for canon(input) of ProducerCorpus."
+  echo "# sha256 of canon <TAB> LINT <errors|-> <warnings|-> | UNPARSEABLE <error> | PANIC <error>. Regenerate, never edit."
+  cut -f1 "$work/inputs.tsv" | paste - "$work/zlint.txt" | LC_ALL=C sort
+} > "$zlint"
+echo "wrote $(grep -vc '^#' "$zlint") zlint results to $zlint"
 baseline="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/gap-baseline.tsv"
 ./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.producer.ProducerD8Test.the D8 gap equals the recorded baseline' \
   -Drevokt.writeGapBaseline="$baseline" --rerun "$@" </dev/null
