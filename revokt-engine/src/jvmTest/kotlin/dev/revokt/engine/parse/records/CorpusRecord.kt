@@ -185,7 +185,7 @@ internal data class CorpusRecord(
                 }.groupBy({ it.divergence!! }, { it.path })
                 .mapValues { it.value.toSet() }
 
-        /** Writes [records] sorted by path and class, one per line. */
+        /** Writes [records] sorted by path, class and divergence, one per line. */
         fun write(
             file: File,
             records: List<CorpusRecord>,
