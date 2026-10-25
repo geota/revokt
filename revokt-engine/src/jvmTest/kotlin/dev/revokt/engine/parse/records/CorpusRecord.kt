@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.parse.records
 
+import dev.revokt.engine.parse.oracle.PlatformOracle
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import java.io.File
 
@@ -165,11 +166,23 @@ internal data class CorpusRecord(
                 .map { fromJson(Json.parse(it) as Json.Obj) }
                 .toList()
 
-        /** The committed D3_DIVERGENCE records: divergence class → input paths. */
-        fun divergences(): Map<String, Set<String>> =
-            committed()
+        /** D3 divergence classes that depend on a platform oracle's version (holding per oracle entry, like D1_DOM). */
+        val ORACLE_DIVERGENCES = setOf("CONSCRYPT_TBS")
+
+        /**
+         * The D3_DIVERGENCE records of [records] (the committed ones by default): divergence class → input paths. A class in
+         * [ORACLE_DIVERGENCES] counts only where it holds on [on] (its id and version); with [on] null, it is left out.
+         */
+        fun divergences(
+            records: List<CorpusRecord> = committed(),
+            on: PlatformOracle? = null,
+        ): Map<String, Set<String>> =
+            records
                 .filter { it.recordClass == RecordClass.D3_DIVERGENCE }
-                .groupBy({ it.divergence!! }, { it.path })
+                .filter { r ->
+                    r.divergence !in ORACLE_DIVERGENCES ||
+                        r.oracles.any { on != null && it.id == on.id && it.version == on.version && it.holds == true }
+                }.groupBy({ it.divergence!! }, { it.path })
                 .mapValues { it.value.toSet() }
 
         /** Writes [records] sorted by path and class, one per line. */
@@ -179,7 +192,7 @@ internal data class CorpusRecord(
         ) {
             file.writeText(
                 records
-                    .sortedWith(compareBy({ it.path }, { it.recordClass }))
+                    .sortedWith(compareBy({ it.path }, { it.recordClass }, { it.divergence }))
                     .joinToString("") { it.toJson().write() + "\n" },
             )
         }

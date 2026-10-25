@@ -8,6 +8,8 @@ import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
+import dev.revokt.engine.parse.oracle.Oracle1
+import dev.revokt.engine.parse.oracle.Oracle2
 import dev.revokt.engine.parse.oracle.Oracle3a
 import dev.revokt.engine.parse.oracle.Oracle3b
 import dev.revokt.engine.parse.oracle.PlatformReplay
@@ -124,7 +126,7 @@ class RecordsTest {
 
     /** Whether [r]'s class (or divergence) depends on the platform oracles, so that it holds per oracle version. */
     private fun dependent(r: CorpusRecord): Boolean =
-        r.recordClass in ORACLE_DEPENDENT || r.divergence in ORACLE_DIVERGENCES
+        r.recordClass in ORACLE_DEPENDENT || r.divergence in CorpusRecord.ORACLE_DIVERGENCES
 
     /** Whether [r] counts on this run: an oracle-dependent class only where a platform entry of this run holds. */
     private fun counts(r: CorpusRecord): Boolean = !dependent(r) || r.oracles.any { isCurrent(it) && it.holds == true }
@@ -314,6 +316,26 @@ class RecordsTest {
     }
 
     /**
+     * The replay reads an oracle-dependent divergence only on the oracle versions it holds on: a `CONSCRYPT_TBS` record
+     * holding on Conscrypt counts there and nowhere else.
+     */
+    @Test
+    fun `an oracle-dependent divergence counts only on the oracle versions it holds on`() {
+        val base = CorpusRecord.committed().first { it.recordClass == RecordClass.D3_DIVERGENCE }
+        val oracles = listOf(CorpusRecord.Oracle(Oracle2.id, Oracle2.version, "Accept", holds = true))
+        val tbs = base.copy(divergence = "CONSCRYPT_TBS", oracles = oracles)
+        assertEquals(setOf(base.path), CorpusRecord.divergences(listOf(tbs), Oracle2)["CONSCRYPT_TBS"])
+        assertEquals(null, CorpusRecord.divergences(listOf(tbs), Oracle1)["CONSCRYPT_TBS"])
+        val older = tbs.copy(oracles = oracles.map { it.copy(version = "0.0.1") })
+        assertEquals(
+            null,
+            CorpusRecord.divergences(listOf(older), Oracle2)["CONSCRYPT_TBS"],
+            "another Conscrypt version",
+        )
+        assertEquals(setOf(base.path), CorpusRecord.divergences(listOf(base), Oracle1)[base.divergence], "independent")
+    }
+
+    /**
      * A platform oracle whose `getTBSCertificate()` never matches `Cert.tbs` lands every input it parses in its divergence
      * class (`CONSCRYPT_TBS` for Conscrypt), holding on that oracle only (spec §9.2 D2: recorded, not a violation).
      */
@@ -381,7 +403,7 @@ class RecordsTest {
                     )
                 }
             }
-        val dependent = recordClass in ORACLE_DEPENDENT || divergence in ORACLE_DIVERGENCES
+        val dependent = recordClass in ORACLE_DEPENDENT || divergence in CorpusRecord.ORACLE_DIVERGENCES
         val missing = "no golden for ${input.name}; run native/revokt-oracle/record-goldens.sh"
         val oracles =
             platforms.map { entry(it, input.name, sha, if (dependent) it.oracle.id in holdsOn else null) } +
@@ -523,9 +545,6 @@ class RecordsTest {
         const val D1_BY_RULE = "D1-dom by rule"
 
         val ORACLE_DEPENDENT = setOf(RecordClass.D1_DOM, RecordClass.D2_REENCODE_ALLOW, RecordClass.KEYABILITY_GAP)
-
-        /** D3 divergence classes that depend on a platform oracle's version, as the classes above do. */
-        val ORACLE_DIVERGENCES = setOf("CONSCRYPT_TBS")
 
         val ORACLE_ORDER = listOf("1", "2", "3a", "3b", "3c", "4")
 

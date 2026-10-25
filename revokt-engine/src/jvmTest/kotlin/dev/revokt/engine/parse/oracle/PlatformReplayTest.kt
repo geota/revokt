@@ -104,7 +104,7 @@ abstract class PlatformReplayTest internal constructor(
         val parsed = accepted.filter { it.certificate != null }.map { it.name }.toSet()
         val recorded =
             CorpusRecord
-                .divergences()
+                .divergences(on = replay.oracle)
                 .mapValues { (_, paths) -> paths.filter { it in parsed }.toSet() }
                 .filterValues { it.isNotEmpty() }
         assertEquals(recorded, divergences, "D3 divergence classes")
