@@ -1,10 +1,19 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 38** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-24
+Status: **draft spec / project proposal, revision 39** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 39 (the raw-byte-reference metric and D1-dom, 2026-10-25)
+- **Corrected** (found while implementing #12, oracle 1): D2's gate metric, the count of platform-accepted inputs with
+  no raw-byte reference, had to be zero on the committed corpora, but the D7 corpus's own reject side breaks it. The
+  JDK parses an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI `30 82 00 …`) and fails to
+  verify it, and 3a and 3b locate neither. JDK 27 also parses a definite TBS with an indefinite Validity (probed,
+  Appendix A). Such an input is now D1-dom by rule: no `canon` exists for oracle 4 to read, and every producer path
+  rejects a non-minimal length (Appendix A). The JDK-27 case already was D1-dom, since oracle 4 rejects its `canon`.
+  The metric now excludes D1-dom inputs revokt does not parse; any parsed input without a reference still counts.
 
 ### Changes in revision 38 (the JVM floor is 17; an indefinite `signatureValue` is `STRUCTURE` again, 2026-10-24)
 - **Changed** (the maintainer's decision, 2026-10-24, on #42): the JVM floor and bytecode target move from 11 to 17.
@@ -2881,8 +2890,10 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   reference view's, and any input with content after the INTEGER inside `[0]`, excluded by rule (the `[0]`
   flattening above). That case is excluded conservatively, not because its key is outside the universe. It costs
   `PARSE_FAILED` for such a leaf and a dropped candidate for such an intermediate, both allowing in `DEFAULT`; such
-  certificates are not CA/B-conformant. For the other D1-dom inputs, no filter can contain such a
-  certificate and its key is outside the filter's universe, so it must never be queried (a query
+  certificates are not CA/B-conformant. Also D1-dom by rule is any input whose TBS the unsigned-header rule makes
+  `STRUCTURE` for a non-minimal definite length on the indefinite chain: it has no `canon` for oracle 4 to read, and
+  every producer path rejects a non-minimal length (Appendix A). For it and the other D1-dom inputs, no filter can
+  contain such a certificate and its key is outside the filter's universe, so it must never be queried (a query
   would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and with high probability under
   an inverted issuer block); D8's gated direction enforces that; each entry is kept with the producer's error so a
   producer change can be re-evaluated.
@@ -2941,8 +2952,8 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   element with tag number 3 that is not a constructed context-specific `[3]` (a primitive `[3]`, or tag number 3 in
   another class; decided by 3b's TBS walk), the reference extension table and SCT pairs are the §9.2 read (∅),
   recorded as `3A_TBS_LAX`; the normalised Java fields equal oracle *i,v*'s. A violation is a P0.
-  The count of platform-accepted inputs with no raw-byte reference (3a and 3b both fail) is a gate
-  metric and must be zero on the committed corpora.
+  The count of platform-accepted inputs with no raw-byte reference (3a rejects, and 3b's walk does not locate the
+  input), other than D1-dom inputs revokt does not parse, is a gate metric and must be zero on the committed corpora.
 - **D3 SCT classification**: mapping from 3a: no extension → `NO_SCTS`; `ParseError` → `NO_SCTS`
   (an empty list is a `ParseError`; `x509-parser` 0.18.1 never returns `Ok([])`); `Ok(list)` → pair-set equality (D2), with the per-extension ∅ expectation for an inner identifier other than `0x04` (`3A_HEADER_LAX`); 3a's duplicate-extension error →
   the union rule, recorded as a divergence class. Firefox's decoder (fails the whole list on
@@ -3060,7 +3071,8 @@ platform-accepted premise and is documented as such (§4).
 **Acceptance.** 0.1 gate: zero D1, D2, D3 and D8 violations on the pinned seed corpus, `x509-limbo`,
 the D7 corpus and the issuer corpus against oracles 1 (every JDK in the matrix), 2 (uber versions
 in the matrix), 3a/3b and 4; the producer SPKI check green; the D8-gap baseline recorded, and zero on the real end-entity fixtures; zero platform-accepted inputs without a
-raw-byte reference; Kover branch coverage of the parser package ≥ 90 % measured over the committed
+raw-byte reference, outside the D1-dom inputs revokt does not parse; Kover branch coverage of the parser
+package ≥ 90 % measured over the committed
 replay (fuzz-run coverage is reported only). 0.3 gate: the same replay on the platform Conscrypt
 tier (API 26, 31, 34, 36) at zero tolerance. Continuous: no open D1, D2 or D8 finding at any release; the
 divergence, D1-dom and D8-gap records reviewed at each release with every entry justified in writing.
@@ -3481,6 +3493,17 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   - Writing that chain's first header non-minimally (`00 81 30` for `00 30`) does not verify (3 of 3).
   - A constructed `signatureValue`, definite or indefinite, is rejected by `generateCertificate` on JDK 11 and 17
     ("not a bit string").
+- Revision 39 probe, run 2026-10-25 over the committed replay corpus (1 803 inputs) on JDK 17, 21 and 27 `SUN`, each
+  input's `verify` run against its issuer from the fixture chain:
+  - On all three JDKs, `generateCertificate` accepts an indefinite TBS holding a non-minimal serial header (`02 81`,
+    `02 84 00 00 00`) or SPKI header (`30 83 00 …`), on each of the three leaves the D7 envelope cases use. `verify`
+    fails ("Signature does not match"), and neither 3a nor 3b locates them: 3b fails with "non-minimal length under an
+    indefinite element".
+  - JDK 27 alone also accepts a definite TBS holding an indefinite Validity, on the same three leaves. `verify` fails,
+    3a rejects it, and 3b's walk does not locate it. Oracle 4 rejects its `canon` ("Validity: indefinite length found
+    (not DER)").
+  - No other platform-accepted input lacks a raw-byte reference. `getEncoded()` differs from the input on 18 inputs: a
+    non-minimal outer `Certificate` header, re-encoded minimally, and trailing bytes, dropped.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android toolchain fact, verified 2026-10-24: a library built with Kotlin 2.4 needs AGP 8.5.2 or later
   (developer.android.com, "AGP, D8, and R8 versions required for Kotlin versions"), and D8 from AGP 8.8.1 is tested
