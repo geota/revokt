@@ -128,10 +128,11 @@ class Oracle3bSlicesTest {
         val HEADER_LAX = listOf("d3/sct-inner-44", "d3/sct-inner-1f04")
         val TBS_LAX = listOf("d3/primitive-3") + listOf("03", "23", "43", "63", "c3", "e3").map { "d3/tag3-$it" }
 
-        /** Where §9.2 is stricter than x509-parser; revokt rejects each of these too. */
+        /** 3b locates and revokt rejects: a Certificate header of five or more length octets (the JDK rejects it too). */
         val LOCATED_NOT_PARSED: Set<String> =
             setOf("envelope/letsencrypt.org-1/certificate-long5", "envelope/letsencrypt.org-1/certificate-long8")
 
+        /** Where §9.2 is stricter than x509-parser; revokt rejects each of these too. */
         val WALK_FAILS_WHERE_3A_ACCEPTS: Set<String> =
             setOf(
                 // Bytes after signatureValue and after Certificate: 3b's envelope does not locate them.
