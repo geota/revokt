@@ -142,9 +142,12 @@ class Oracle3bSlicesTest {
                 // Validity and [0] hold exactly their elements.
                 "variants/validity-null-after-times",
                 "variants/version-wrapper-trailing",
+                "d7/version-trailing-null",
                 // A multi-octet identifier where the tail read meets it.
                 "d3/tag3-9f03",
                 "d3/tag3-bf03",
+                "d7/stop-9f01",
+                "d7/stop-bf02",
                 // A length of five octets inside the TBS.
                 "envelope/letsencrypt.org-1/version-long5",
                 "envelope/letsencrypt.org-1/tbs-signature-long5",

@@ -153,6 +153,13 @@ class Oracle3aTest {
                 // Signature padding bits set, which x509-parser's DER BIT STRING refuses.
                 "boundary/signature-padding-bits",
                 "envelope/www.mozilla.org-1/sig-unused-bits-1-padding-set",
+                // D7 cases (D7Corpus) x509-parser refuses: a zero-length primitive [3], an SCT extension after the
+                // Extensions SEQUENCE inside [3], a day past the month's end, a multi-octet trailing tag after [3].
+                "d7/ext3-83-00",
+                "d7/sct-in-ignored-bytes",
+                "d7/time-feb-31",
+                "d7/trailing-9f01-definite",
+                "d7/trailing-9f01-indefinite",
             ) +
                 ProducerCorpus.envelopeLeaves.flatMap { (leaf, _) ->
                     listOf(
