@@ -17,7 +17,8 @@
 //! AlgorithmIdentifier TLV and `signature` the `signatureValue` octets after the unused-bits octet (padding not
 //! cleared), the parts of `canon`; `unused` is the `signatureValue`'s unused-bits count, and `duplicate` is `1` when the
 //! SCT-list extension occurs more than once (x509-parser's `DuplicateExtensions` for it). Element boundaries come from
-//! asn1-rs's own headers. Every value is what x509-parser reports, never revokt.
+//! asn1-rs's own headers: `spki`, `subject` and `issuer` are the whole TLVs so delimited in the TBS, since x509-parser's
+//! own raw slices stop where it stops parsing. Every value comes from x509-parser and asn1-rs, never revokt.
 
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
@@ -65,9 +66,18 @@ fn identifier_length(b: &[u8]) -> usize {
         .map_or(b.len() - 1, |i| i + 1)
 }
 
-/// The TBS TLV under a minimal header, and the TBS `signature` AlgorithmIdentifier TLV: the element after an optional
-/// context `[0]` (either form, as x509-parser reads it) and the serial, delimited by asn1-rs headers.
-fn tbs_parts(tbs: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+/// The TBS slices 3a reports, each delimited by asn1-rs headers in the TBS bytes rather than taken from what
+/// x509-parser consumed (which stops early inside malformed content): the TBS under a minimal header, the `signature`
+/// AlgorithmIdentifier (after an optional context `[0]`, either form, and the serial), issuer, subject and SPKI TLVs.
+struct TbsSlices {
+    reheaded: Vec<u8>,
+    algorithm: Vec<u8>,
+    issuer: Vec<u8>,
+    subject: Vec<u8>,
+    spki: Vec<u8>,
+}
+
+fn tbs_parts(tbs: &[u8]) -> Option<TbsSlices> {
     let (rest, header) = Header::from_ber(tbs).ok()?;
     let Length::Definite(n) = header.length() else {
         return None;
@@ -81,10 +91,26 @@ fn tbs_parts(tbs: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     if first.header.class() == Class::ContextSpecific && first.header.tag() == Tag(0) {
         p = after;
     }
-    let (after_serial, _) = Any::from_ber(p).ok()?;
-    let (after_algorithm, _) = Any::from_ber(after_serial).ok()?;
-    let algorithm = &after_serial[..after_serial.len() - after_algorithm.len()];
-    Some((reheaded, algorithm.to_vec()))
+    // Each call returns the next element's whole TLV and advances past it.
+    let mut next = || -> Option<Vec<u8>> {
+        let (after, _) = Any::from_ber(p).ok()?;
+        let element = p[..p.len() - after.len()].to_vec();
+        p = after;
+        Some(element)
+    };
+    next()?;
+    let algorithm = next()?;
+    let issuer = next()?;
+    next()?;
+    let subject = next()?;
+    let spki = next()?;
+    Some(TbsSlices {
+        reheaded,
+        algorithm,
+        issuer,
+        subject,
+        spki,
+    })
 }
 
 fn describe(der: &[u8]) -> String {
@@ -93,7 +119,7 @@ fn describe(der: &[u8]) -> String {
         Err(e) => return failure("ERR", &format!("{e:?}")),
     };
     let tbs = &cert.tbs_certificate;
-    let Some((reheaded, tbs_signature)) = tbs_parts(tbs.as_ref()) else {
+    let Some(slices) = tbs_parts(tbs.as_ref()) else {
         return failure("ERR", "TBS could not be sliced");
     };
     let extensions: Vec<String> = tbs
@@ -124,12 +150,12 @@ fn describe(der: &[u8]) -> String {
     [
         "OK".to_string(),
         hex(tbs.raw_serial()),
-        hex(tbs.subject_pki.raw),
-        hex(tbs.subject().as_raw()),
-        hex(tbs.issuer().as_raw()),
+        hex(&slices.spki),
+        hex(&slices.subject),
+        hex(&slices.issuer),
         rest.len().to_string(),
-        hex(&reheaded),
-        hex(&tbs_signature),
+        hex(&slices.reheaded),
+        hex(&slices.algorithm),
         hex(&cert.signature_value.data),
         extensions.join(";"),
         cert.signature_value.unused_bits.to_string(),
