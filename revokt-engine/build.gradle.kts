@@ -130,8 +130,9 @@ val matrixConscrypt =
             versionCatalogs
                 .named("libs")
                 .findVersion(it)
-                .get()
-                .requiredVersion
+                .orElseThrow {
+                    GradleException("gradle/oracle-matrix.properties names Conscrypt key '$it', not a catalog version")
+                }.requiredVersion
         }
 tasks.withType<Test>().configureEach {
     inputs.file(rootProject.file("gradle/oracle-matrix.properties")).withPathSensitivity(PathSensitivity.RELATIVE)
