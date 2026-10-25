@@ -4,13 +4,15 @@
 package dev.revokt.engine.parse.records
 
 import dev.revokt.engine.parse.oracle.PlatformOracle
+import dev.revokt.engine.parse.producer.ExternalCorpus
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import java.io.File
 
 /**
  * One corpus record of spec §9.2 ("Corpus record schema"): `{sha256, path, revokt, oracles, class, divergence?,
  * keyability?, justification, added}`. An input has one record per class it is admitted under. Committed one per line
- * in `parse/records.jsonl`, written by `RecordsTest`'s hook and checked by it against the replay. The oracle entries
+ * in `parse/records.jsonl`, and the large corpus's in its `replay/records.jsonl` (ExternalCorpus), written by
+ * `RecordsTest`'s hook and checked by it against the replay. The oracle entries
  * carry outcomes only: the replay fails on any platform getter that throws on the committed corpus, so the spec's
  * `fields | unavailable` arrive with the secondary corpus (#15).
  */
@@ -158,9 +160,35 @@ internal data class CorpusRecord(
             )
         }
 
-        /** The committed records. */
-        fun committed(): List<CorpusRecord> =
-            String(ProducerCorpus.resource(RESOURCE))
+        /** The large corpus's records file, or null without a checkout. */
+        val external: File? get() = ExternalCorpus.replay("records.jsonl")
+
+        private val cached: List<CorpusRecord> by lazy {
+            val committed = parse(String(ProducerCorpus.resource(RESOURCE)))
+            val large =
+                external
+                    ?.takeIf { it.isFile }
+                    ?.readText()
+                    ?.let(::parse)
+                    .orEmpty()
+            // The writer files each record in the corpus that holds its input; a misfiled one is a stale recording.
+            committed
+                .firstOrNull {
+                    ExternalCorpus.owns(it.path)
+                }?.let { error("$RESOURCE holds ${it.path}, a large-corpus input") }
+            large
+                .firstOrNull {
+                    !ExternalCorpus.owns(it.path)
+                }?.let { error("replay/records.jsonl holds ${it.path}, a committed input") }
+            committed + large
+        }
+
+        /** The committed records, and the large corpus's on a run with its checkout. */
+        fun committed(): List<CorpusRecord> = cached
+
+        /** Records one per line. */
+        fun parse(text: String): List<CorpusRecord> =
+            text
                 .lineSequence()
                 .filter { it.isNotBlank() }
                 .map { fromJson(Json.parse(it) as Json.Obj) }

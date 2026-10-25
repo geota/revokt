@@ -4,8 +4,9 @@
 package dev.revokt.engine.parse.records
 
 /**
- * The JSON subset the corpus records use (spec §9.2 "Corpus record schema"): objects, arrays, strings, booleans and
- * null, no numbers. Written with keys in insertion order, one record per line, so a regenerated file diffs cleanly.
+ * The JSON the corpus records use (spec §9.2 "Corpus record schema"): objects, arrays, strings, booleans and null, no
+ * numbers. Written with keys in insertion order, one record per line, so a regenerated file diffs cleanly. The parser
+ * also reads numbers, as their text, for the inputs of other corpora (`x509-limbo`'s `limbo.json`).
  */
 internal sealed class Json {
     class Obj(
@@ -55,6 +56,11 @@ internal sealed class Json {
 
     object Null : Json()
 
+    /** A number as its JSON text; read only, never written in a record. */
+    class Num(
+        val text: String,
+    ) : Json()
+
     fun write(): String = StringBuilder().also { write(it) }.toString()
 
     private fun write(out: StringBuilder) {
@@ -89,6 +95,10 @@ internal sealed class Json {
 
             Null -> {
                 out.append("null")
+            }
+
+            is Num -> {
+                error("a record holds no numbers")
             }
         }
     }
@@ -148,6 +158,7 @@ internal sealed class Json {
                 '{' -> obj()
                 '[' -> arr()
                 '"' -> Str(string())
+                '-', in '0'..'9' -> number()
                 else -> literal()
             }
         }
@@ -217,6 +228,32 @@ internal sealed class Json {
             pos += 4
             return digits.toInt(16).toChar()
         }
+
+        /** RFC 8259's `number`: `-`? (`0` | `[1-9][0-9]*`) (`.` digits)? ([eE] [+-]? digits)?. */
+        private fun number(): Num {
+            val start = pos
+            if (s[pos] == '-') pos++
+            check(pos < s.length && s[pos].isAsciiDigit()) { "bad number at $start" }
+            if (s[pos] == '0') pos++ else digits()
+            if (pos < s.length && s[pos] == '.') {
+                pos++
+                check(digits() > 0) { "bad fraction at $start" }
+            }
+            if (pos < s.length && (s[pos] == 'e' || s[pos] == 'E')) {
+                pos++
+                if (pos < s.length && (s[pos] == '+' || s[pos] == '-')) pos++
+                check(digits() > 0) { "bad exponent at $start" }
+            }
+            return Num(s.substring(start, pos))
+        }
+
+        private fun digits(): Int {
+            val start = pos
+            while (pos < s.length && s[pos].isAsciiDigit()) pos++
+            return pos - start
+        }
+
+        private fun Char.isAsciiDigit() = this in '0'..'9'
 
         private fun literal(): Json =
             when {

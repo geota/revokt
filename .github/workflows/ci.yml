@@ -40,9 +40,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Each feature release at its latest patch, the one users run: a runner's cached patch can lag (17.0.20.1
+      # re-encodes the SPKI of an algorithm it does not know, such as ML-DSA, with NULL parameters; 17.0.21 knows
+      # ML-DSA). This resolves through api.adoptium.net and downloads from github.com, which the harden-runner policy
+      # must allow once it blocks egress.
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
+          check-latest: true
           java-version: |
             ${{ matrix.jdk }}
             21
@@ -79,6 +84,16 @@ jobs:
           -Prevokt.testJdk=${{ matrix.jdk }}
           -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_25_X64,JAVA_HOME_27_X64
           --no-daemon
+      - name: test results on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-${{ matrix.label }}-${{ github.run_attempt }}
+          path: |
+            */build/test-results/**/*.xml
+            build-logic/*/build/test-results/**/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
       - name: coverage artifact (JDK 21 only)
         if: matrix.jdk == '21'
         run: ./gradlew koverXmlReport --no-daemon

@@ -9,9 +9,23 @@
 # REVOKT_RECORD_JDKS lists the JDKs to record on, by default the matrix of gradle/oracle-matrix.properties; each must
 # be installed. The matrix's previous Conscrypt gets one more pass (jvmTestConscryptPrevious). Any arguments are passed
 # to Gradle, for example
-# -Porg.gradle.java.installations.paths=<comma-separated JDK homes>.
+# -Porg.gradle.java.installations.paths=<comma-separated JDK homes>. REVOKT_CORPUS (below) adds the large corpus; set it
+# as for native/revokt-oracle/record-goldens.sh.
 set -eu
 root=$(pwd)
+tab=$(printf '\t')
+# REVOKT_CORPUS names a revokt-corpus working tree (docs/dev/corpus.md): its inputs join the replay corpus, and their
+# goldens (and records) are written to its replay/, gzipped, for a new corpus tag; the committed corpus's stay here.
+corpus=${REVOKT_CORPUS:-}
+for arg in "$@"; do
+  case $arg in -Prevokt.corpus=*) echo "set REVOKT_CORPUS, not -Prevokt.corpus: the large corpus's goldens go to it" >&2; exit 1 ;; esac
+done
+if [ -n "$corpus" ]; then
+  [ -f "$corpus/x509-limbo/limbo.json" ] || { echo "REVOKT_CORPUS=$corpus is not a revokt-corpus working tree" >&2; exit 1; }
+  corpus=$(CDPATH='' cd -- "$corpus" && pwd)
+  mkdir -p "$corpus/replay"
+  set -- "-Prevokt.corpus=$corpus" "$@"
+fi
 out="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/goldens.tsv"
 work=$(mktemp -d)
 trap 'rm -rf "${work:?}"' EXIT
@@ -27,7 +41,8 @@ for jdk in $jdks; do
 done
 ./gradlew -q :revokt-engine:jvmTestConscryptPrevious --tests 'dev.revokt.engine.parse.producer.ProducerGoldensWriterTest' \
   -Drevokt.writeProducerInputs="$work/inputs-conscrypt-previous.tsv" --rerun "$@" </dev/null
-LC_ALL=C sort -u "$work"/inputs-*.tsv > "$work/inputs.tsv"
+# Each input once, filed under the committed corpus (c) where both corpora have it.
+LC_ALL=C sort -t "$tab" -k1,1 -k3,3 "$work"/inputs-*.tsv | awk -F "$tab" '$1 != prev { print; prev = $1 }' > "$work/inputs.tsv"
 cut -f2 "$work/inputs.tsv" > "$work/b64.txt"
 echo '##' >> "$work/b64.txt"
 # Both oracles run with GODEBUG unset: a GODEBUG setting would change zcrypto's parsing (the producer's zc path, zlint).
@@ -37,20 +52,35 @@ env -u GODEBUG "$work/zlint-oracle" < "$work/b64.txt" | grep -v '^##$' > "$work/
 [ "$(wc -l < "$work/inputs.tsv")" -eq "$(wc -l < "$work/zlint.txt")" ] || { echo "zlint reply count mismatch" >&2; exit 1; }
 zlint_pin=$(awk '$1 == "github.com/zmap/zlint/v3" { print $2 }' native/zlint-oracle/go.mod)
 [ -n "$zlint_pin" ] || { echo "no zlint pin in native/zlint-oracle/go.mod" >&2; exit 1; }
+# write_goldens <replies> <committed tsv> <external name> <header lines>: each input's reply, filed by its origin.
+write_goldens() {
+  cut -f1,3 "$work/inputs.tsv" | paste - "$1" > "$work/keyed.tsv"
+  { printf '%s\n' "$4"; awk -F "$tab" '$2 == "c"' "$work/keyed.tsv" | cut -f1,3- | LC_ALL=C sort -u; } > "$2"
+  dups=$(grep -v '^#' "$2" | cut -f1 | uniq -d)
+  [ -z "$dups" ] || { echo "$2: inputs with more than one reply: $dups" >&2; exit 1; }
+  echo "wrote $(grep -vc '^#' "$2") goldens to $2"
+  if [ -z "$corpus" ]; then
+    [ "$(grep -vc '^#' "$2")" -eq "$(wc -l < "$work/inputs.tsv")" ] || { echo "$2: a reply was lost" >&2; exit 1; }
+    return 0
+  fi
+  ext="$corpus/replay/$3.tsv.gz"
+  { printf '%s\n' "$4" "# The large corpus's inputs (revokt-engine ExternalCorpus); the committed corpus's are in revokt."
+    awk -F "$tab" '$2 == "x"' "$work/keyed.tsv" | cut -f1,3- | LC_ALL=C sort -u; } | gzip -9n > "$ext"
+  dups=$(gzip -dc "$ext" | grep -v '^#' | cut -f1 | uniq -d)
+  [ -z "$dups" ] || { echo "$ext: inputs with more than one reply: $dups" >&2; exit 1; }
+  echo "wrote $(gzip -dc "$ext" | grep -vc '^#') goldens to $ext"
+  # Without pipefail a failed stage would leave a short file: every input's reply is in one of the two.
+  [ $(( $(grep -vc '^#' "$2") + $(gzip -dc "$ext" | grep -vc '^#') )) -eq "$(wc -l < "$work/inputs.tsv")" ] ||
+    { echo "$2, $ext: a reply was lost" >&2; exit 1; }
+}
 # Both oracles answered every input: write their goldens.
-{
-  echo "# Oracle-4 verdicts (mozilla/crlite go/types, pinned in native/producer-oracle/go.mod) for canon(input) of ProducerCorpus."
-  echo "# sha256 of canon <TAB> OK <serial-hex> <spki-sha256-hex> <ct|lax|zc> | REJECT <error>. Regenerate, never edit."
-  cut -f1 "$work/inputs.tsv" | paste - "$work/verdicts.txt" | LC_ALL=C sort
-} > "$out"
-echo "wrote $(grep -vc '^#' "$out") goldens to $out"
+write_goldens "$work/verdicts.txt" "$out" producer \
+  "# Oracle-4 verdicts (mozilla/crlite go/types, pinned in native/producer-oracle/go.mod) for canon(input) of ProducerCorpus.
+# sha256 of canon <TAB> OK <serial-hex> <spki-sha256-hex> <ct|lax|zc> | REJECT <error>. Regenerate, never edit."
 zlint="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/zlint.tsv"
-{
-  echo "# zlint pin: $zlint_pin (native/zlint-oracle/go.mod); results for canon(input) of ProducerCorpus."
-  echo "# sha256 of canon <TAB> LINT <errors|-> <fatals|-> <warnings|-> | UNPARSEABLE <error> | PANIC <error>. Regenerate, never edit."
-  cut -f1 "$work/inputs.tsv" | paste - "$work/zlint.txt" | LC_ALL=C sort
-} > "$zlint"
-echo "wrote $(grep -vc '^#' "$zlint") zlint results to $zlint"
+write_goldens "$work/zlint.txt" "$zlint" zlint \
+  "# zlint pin: $zlint_pin (native/zlint-oracle/go.mod); results for canon(input) of ProducerCorpus.
+# sha256 of canon <TAB> LINT <errors|-> <fatals|-> <warnings|-> | UNPARSEABLE <error> | PANIC <error>. Regenerate, never edit."
 # The corpus records (spec §9.2), merged one matrix JDK at a time; written justifications and dates are kept.
 records="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/records.jsonl"
 for jdk in $jdks; do
@@ -60,3 +90,4 @@ done
 ./gradlew -q :revokt-engine:jvmTestConscryptPrevious --tests 'dev.revokt.engine.parse.records.RecordsTest.the records writer*' \
   -Drevokt.writeRecords="$records" --rerun "$@" </dev/null
 echo "wrote $(grep -c . "$records") records to $records"
+[ -z "$corpus" ] || echo "wrote $(grep -c . "$corpus/replay/records.jsonl") records to $corpus/replay/records.jsonl"
