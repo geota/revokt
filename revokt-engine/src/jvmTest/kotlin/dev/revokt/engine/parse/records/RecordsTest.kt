@@ -18,6 +18,7 @@ import dev.revokt.engine.parse.producer.D7Corpus
 import dev.revokt.engine.parse.producer.ExternalCorpus
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import dev.revokt.engine.parse.records.CorpusRecord.RecordClass
+import okio.ByteString.Companion.toByteString
 import java.io.File
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -322,6 +323,19 @@ class RecordsTest {
             classedOn(p) { name, recordClass, divergence, reason -> add(name, recordClass, divergence, reason, p) }
         }
         val out = classed.values.toMutableList()
+        // The issuer corpus (spec §9.2, revision 42): every certificate has its record, naming the snapshots it is in.
+        // A certificate the replay already holds under another name (an x509-limbo input) keeps that name.
+        val byDer = inputs.values.associateBy { it.der.toByteString() }
+        for (input in ExternalCorpus.issuer.inputs) {
+            val sources =
+                ExternalCorpus.issuer.sources
+                    .getValue(input.name)
+                    .joinToString(", ")
+            val held = byDer.getValue(input.der.toByteString())
+            // A committed fixture's record would need the large corpus to compute; ProducerSpkiCheckTest covers it.
+            if (!ExternalCorpus.owns(held.name)) continue
+            out += Classed(held, RecordClass.ISSUER_CORPUS, null, "$ISSUER_RULE $sources.", false)
+        }
         for ((name, cases) in D7Corpus.byInput) {
             out += Classed(inputs.getValue(name), RecordClass.D7_LENIENCY, null, d7Justification(cases), false)
         }
@@ -435,6 +449,13 @@ class RecordsTest {
         )
     }
 
+    /** The issuer corpus's certificates, by bytes, wherever the replay holds them. */
+    private val issuerDers by lazy {
+        ExternalCorpus.issuer.inputs
+            .map { it.der.toByteString() }
+            .toSet()
+    }
+
     /**
      * The D8-gap fields of a platform-accepted input in the D1 domain whose read parses outside the profile: end-entity
      * inputs only, since `producerKeyable` is a leaf predicate (spec §9.2); null otherwise.
@@ -444,6 +465,8 @@ class RecordsTest {
         a: PlatformReplay.Accepted,
     ): CorpusRecord.Keyability? {
         val c = a.certificate ?: return null
+        // The issuer corpus is never counted (§9.2 D8 gap), whatever its basicConstraints say: a v1 root has none.
+        if (a.presented.toByteString() in issuerDers) return null
         val clause = Keyability.firstFailing(c)?.takeUnless { isCa(c) || p.outsideDomain(a) != null }
         return clause?.let {
             val golden = PlatformReplay.producerGolden(a)
@@ -552,6 +575,40 @@ class RecordsTest {
             "${errors.split(',').size} $GAP_RULE"
     }
 
+    /**
+     * The D8 gap over the CT seed corpus's unexpired leaves (spec §9.2: reported per release; above 10^-4 of them, exact
+     * keyability is reconsidered before 0.1), by clause, on the test JDK. Unexpired as of the collection (the ct-logs
+     * snapshot's retrieval, `ct-seed/PROVENANCE`). The denominator is the unexpired entries the test JDK accepts; one it
+     * rejects has no read, so it can be neither a gap entry nor D1-dom, and counting it would only lower the rate. A CA
+     * certificate logged in CT is in the denominator and never the numerator (the gap counts end entities). It reports
+     * and never fails: the re-decision is evaluated on the full seed corpus (spec §9.2, revision 43).
+     */
+    @Test
+    fun `the D8 gap over the CT seed corpus's unexpired leaves is reported`() {
+        val p = PlatformReplay.jdk
+        val seed = p.accepted.filter { it.name.startsWith(ExternalCorpus.CT_SEED) }
+        if (seed.isEmpty()) return println("CT seed D8 gap: no CT seed corpus on this run (-Prevokt.corpus)")
+        val unexpired =
+            seed.filter { a ->
+                (
+                    a.certificate
+                        ?.tbs
+                        ?.validity
+                        ?.notAfterMillis ?: Long.MAX_VALUE
+                ) > CT_SEED_AS_OF
+            }
+        val inDomain = unexpired.filter { p.outsideDomain(it) == null }
+        val gap = inDomain.mapNotNull { gap(p, it) }
+        val rate = if (unexpired.isEmpty()) 0.0 else gap.size.toDouble() / unexpired.size
+        println(
+            "CT seed D8 gap on ${p.oracle.label}: ${gap.size} of ${unexpired.size} unexpired accepted leaves " +
+                "(${inDomain.size} in the D1 domain), rate %.2e against 1e-4; by clause %s".format(
+                    rate,
+                    gap.groupingBy { it.clause }.eachCount().toSortedMap(),
+                ),
+        )
+    }
+
     @Test
     fun `the D8 gap's CA test reads the CA fixtures as CAs and the leaves as end entities`() {
         val read =
@@ -624,6 +681,13 @@ class RecordsTest {
 
         const val D7_RULE = "A §9.2 D7 leniency case:"
 
+        /** The CT seed corpus's collection time (`ct-seed/PROVENANCE`, the ct-logs snapshot): 2026-10-25T18:25:31Z. */
+        const val CT_SEED_AS_OF = 1_792_952_731_000L
+
+        const val ISSUER_RULE =
+            "An issuer-corpus certificate (§9.2, revisions 42 and 43: D1 and D2 at zero tolerance, and the producer " +
+                "SPKI check where oracle 4 keys it through ct), in the snapshots"
+
         val ORACLE_DEPENDENT = setOf(RecordClass.D1_DOM, RecordClass.D2_REENCODE_ALLOW, RecordClass.KEYABILITY_GAP)
 
         val ORACLE_ORDER = listOf("1", "2", "3a", "3b", "3c", "4")
@@ -669,6 +733,6 @@ class RecordsTest {
 
         /** Every rule's text: where a rule yields no justification, a hand-written one must contain none of them. */
         val RULE_TEXTS: List<String> =
-            listOf(GAP_RULE, D1_RULE, D1_BY_RULE, D7_RULE, REENCODE, REENCODE_NULL) + DIVERGENCE.values
+            listOf(GAP_RULE, D1_RULE, D1_BY_RULE, D7_RULE, ISSUER_RULE, REENCODE, REENCODE_NULL) + DIVERGENCE.values
     }
 }

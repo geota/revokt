@@ -18,15 +18,27 @@ Two kinds (CONTRIBUTING §3):
 
 | Pin | Value |
 |---|---|
-| `revokt-corpus` tag | `v2` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`, and `replay/` (its goldens and records) |
+| `revokt-corpus` tag | `v3` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`; `issuer/`, the issuer corpus's snapshots of 2026-10-25; `ct-seed/`, the CT seed pilot; and `replay/` (their goldens and records) |
 
 ### The large corpus in the replay
 
 With `-Prevokt.corpus=<checkout>` the build passes the checkout to the tests (`ExternalCorpus` in `revokt-engine`'s
-jvmTest; the tree but its `.git` is a test input, and the test heap is 4 GB). The replay then covers its inputs too:
+jvmTest; the tree but its `.git` is a test input, and the test heap is 6 GB). The replay then covers its inputs too:
 
 - **Inputs**: each distinct certificate of `x509-limbo/limbo.json`'s testcases (trusted, intermediates and peer), named
   `x509-limbo/<sha256>`; one the committed corpus already holds keeps its committed name and goldens.
+- **Issuer corpus** (`issuer/`, spec §9.2 revision 42): every distinct certificate of each snapshot, named
+  `issuer/<sha256>` (one the replay already holds keeps that name): CCADB's `MozillaAllUnexpiredPEMs` report (the
+  producer's source), CCADB's PEM export by `NotBeforeYear` beside its all-records export, Mozilla's `intermediates`
+  attachments bundle, the matrix JDKs' `cacerts` and AOSP's `ca-certificates`. `issuer/PROVENANCE` gives each file's URL,
+  retrieval time and SHA-256. Each the large corpus holds has an `ISSUER_CORPUS` record naming its snapshots (the committed chain fixtures
+  CCADB also lists have none, since a committed record cannot need the large corpus), and it is never a D8-gap entry
+  (a v1 root has no basicConstraints). `ProducerSpkiCheckTest` is the producer SPKI check: SPKI agreement with oracle
+  4's `ct` path over the issuer corpus, and coverage of each index of the fixture generation (`corpus/clubcard`). An
+  index key no snapshot covers needs its certificates fetched from CT by SPKI hash and admitted (none so far).
+- **CT seed** (`ct-seed/`): the pilot of the seed corpus's CT leaves, from `tools/ct-seed/collect.py` (its
+  `PROVENANCE` and `sample.json` record the logs, tree sizes and indices), named `ct-seed/<sha256>`. RecordsTest prints
+  the D8 gap over its unexpired leaves by clause against the 10^-4 re-decision threshold.
 - **Goldens and records** for those inputs, and for the bytes an oracle reads for them, are in `replay/` of the corpus:
   `3a.tsv.gz`, `3b.tsv.gz`, `producer.tsv.gz`, `zlint.tsv.gz` (the committed files' formats, gzipped) and
   `records.jsonl`. The readers merge them with the committed ones, so D1–D3, D6, D8 and the records run over both.
@@ -75,7 +87,8 @@ and requires the committed records to equal it, field for field:
 - **Justifications**: a rule-based one (the producer's error, the D1-dom rule, the divergence class, the re-encoding rule,
   the zlint errors) is compared too, so a changed reason fails. A record whose rule yields none (a D8-gap entry with no
   zlint error, a release blocker under §9.2) carries one written by hand.
-- `FUZZ_FINDING` and `ISSUER_CORPUS` records arrive with their corpora (#15).
+- `ISSUER_CORPUS`: every issuer-corpus certificate, its justification naming its snapshots. `FUZZ_FINDING` records
+  arrive with the secondary corpus.
 - **D7**: the cases already held for another reason (boundary, variants, envelope, `d3/`, `unsigned/`, `fuzz/`) are named,
   the rest are built on a valid key as `d7/<name>`. A D7 input in the D8 gap keeps its keyability and the gap's rule:
   where that yields none (no zlint error), the record needs a justification written by hand, as any gap entry does.

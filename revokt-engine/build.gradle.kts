@@ -48,10 +48,12 @@ tasks.withType<Test>().configureEach {
     inputs.property("testJavaVendor", javaLauncher.map { it.metadata.vendor })
     // The large corpus (docs/dev/corpus.md): `-Prevokt.corpus=<checkout>` adds its inputs, goldens and records to the
     // replay. Its tree is an input; its path reaches the tests without entering the cache key.
+    // The committed fixture generation, whose filters' index maps the producer SPKI check covers (spec §9.2).
+    jvmArgumentProviders.add(ClubcardCorpus(rootProject.file("corpus/clubcard")))
     corpus?.let {
         jvmArgumentProviders.add(CorpusDir(it, fileTree(it) { exclude(".git", ".git/**") }))
-        // About 30 000 more inputs, with their 3a/3b goldens held in memory.
-        maxHeapSize = "4g"
+        // About 63 000 more inputs (x509-limbo, the issuer corpus, the CT seed), their 3a/3b goldens held in memory.
+        maxHeapSize = "6g"
     }
 }
 
@@ -70,6 +72,12 @@ kover {
 }
 
 tasks.named("check") { dependsOn("koverVerifyParser") }
+
+class ClubcardCorpus(
+    @get:InputDirectory @get:PathSensitive(PathSensitivity.RELATIVE) val dir: File,
+) : CommandLineArgumentProvider {
+    override fun asArguments(): List<String> = listOf("-Drevokt.clubcardCorpus=${dir.absolutePath}")
+}
 
 class CorpusDir(
     @get:Internal val dir: File,
