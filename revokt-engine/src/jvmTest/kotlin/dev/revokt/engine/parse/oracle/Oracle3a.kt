@@ -12,7 +12,7 @@ import java.util.Base64
 /**
  * Oracle 3a of spec §9.2 (`x509-parser` 0.18.1, `native/revokt-oracle x509`), read from its recorded goldens
  * (`oracle/3a.tsv`, keyed by the SHA-256 of the input) so the PR tier needs no Rust. Regenerate with
- * `native/revokt-oracle/record-3a-goldens.sh` when the corpus changes.
+ * `native/revokt-oracle/record-goldens.sh` when the corpus changes.
  */
 internal object Oracle3a {
     /** One extension as 3a reports it; [sct] is null for another OID, empty for a parse error, else its pairs. */

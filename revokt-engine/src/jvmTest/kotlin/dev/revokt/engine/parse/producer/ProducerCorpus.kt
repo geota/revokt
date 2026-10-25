@@ -5,13 +5,15 @@ package dev.revokt.engine.parse.producer
 
 import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.LengthForm
+import dev.revokt.engine.parse.oracle.Oracle3b
 import okio.ByteString.Companion.toByteString
 import java.io.File
 import java.util.Base64
 
 /**
  * The inputs of the D8 replay (spec §9.2, #11) and their oracle-4 goldens in `producer/goldens.tsv`, keyed by the
- * SHA-256 of `canon(input)` (oracle 4 reads `canon`, never the presented bytes). Recording: the writer test, given
+ * SHA-256 of `canon(input)` (oracle 4 reads `canon`, never the presented bytes). `canon` comes from oracle 3b's goldens
+ * (`native/revokt-oracle/record-goldens.sh`, run first). Recording: the writer test, given
  * `-Drevokt.writeProducerInputs=<file>`, writes each distinct `canon` once; `native/producer-oracle/record-goldens.sh`
  * runs them through the producer.
  */
@@ -65,7 +67,10 @@ internal object ProducerCorpus {
         val base: String? = null,
         val path: String? = null,
     ) {
-        val canon: ByteArray? by lazy { Canon.of(der) }
+        /** `canon(encoded)` from oracle 3b's recorded parts (spec §9.2); null when 3b does not locate the input. */
+        val canon: ByteArray? by lazy {
+            Oracle3b.reply(der.toByteString().sha256().hex())?.let { Oracle3b.parts(it)?.canon() }
+        }
         val canonSha256: String? by lazy { canon?.toByteString()?.sha256()?.hex() }
     }
 

@@ -36,7 +36,7 @@ class Oracle3aTest {
                     .sha256()
                     .hex()
             val reply =
-                goldens[sha] ?: fail("${input.name}: no 3a golden; run native/revokt-oracle/record-3a-goldens.sh")
+                goldens[sha] ?: fail("${input.name}: no 3a golden; run native/revokt-oracle/record-goldens.sh")
             val c = (CertificateParser.parse(input.der) as? CertificateParse.Parsed)?.certificate
             val a = Oracle3a.accepted(reply)
             if (c != null && a != null) {
