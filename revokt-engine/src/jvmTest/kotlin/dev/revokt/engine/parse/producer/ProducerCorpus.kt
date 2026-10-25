@@ -101,8 +101,10 @@ internal object ProducerCorpus {
         val canon: ByteArray? by lazy { canonParts?.canon() }
 
         /** The parts [canon] is built from: its TBS, TBS signature AlgorithmIdentifier and signature octets. */
-        val canonParts: Oracle3b.Parts? by lazy {
-            if (parts != null) return@lazy parts
+        val canonParts: Oracle3b.Parts? by lazy { parts ?: referenceParts }
+
+        /** The parts as the reference view locates them (3a, else 3b), whatever [parts] says. */
+        val referenceParts: Oracle3b.Parts? by lazy {
             val sha = der.toByteString().sha256().hex()
             val missing = "$name: no %s golden; run native/revokt-oracle/record-goldens.sh"
             val a = checkNotNull(Oracle3a.reply(sha)) { missing.format("3a") }

@@ -6,6 +6,7 @@ package dev.revokt.engine.parse.oracle
 import dev.revokt.ParseReason
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
+import dev.revokt.engine.parse.Extension
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import okio.ByteString.Companion.toByteString
@@ -18,7 +19,8 @@ import javax.security.auth.x500.X500Principal
 
 /**
  * Oracle 1 of spec §9.2: the JDK's `SUN` `CertificateFactory`, run live on the test JDK (`-Prevokt.testJdk`), with the
- * §9.2 Java field normalisation. A getter that throws on an accepted certificate marks its field `unavailable`.
+ * §9.2 Java field normalisation and the read fallback of revision 39. A platform getter that throws on an accepted
+ * certificate marks its field `unavailable`.
  */
 internal object Oracle1 {
     sealed class Outcome {
@@ -28,28 +30,41 @@ internal object Oracle1 {
 
         object Reject : Outcome()
 
+        /** Any other exception; an `Error` is fatal to the JVM run and propagates. */
         class Crash(
-            val error: Throwable,
+            val error: Exception,
         ) : Outcome()
     }
+
+    /** A definite TLV header: its length in octets and its content length. */
+    class Header(
+        val size: Int,
+        val length: Long,
+    ) {
+        fun end(p: Int): Long = p + size + length
+    }
+
+    /** The suffix naming a platform-canon read. */
+    const val PLATFORM_CANON = "(platform canon)"
 
     private val factory = CertificateFactory.getInstance("X.509", "SUN")
 
     val version: String = System.getProperty("java.runtime.version")
 
+    @Suppress("TooGenericExceptionCaught") // §9.2: every exception other than CertificateException is a Crash
     fun run(b: ByteArray): Outcome =
         try {
             Outcome.Accept(factory.generateCertificate(ByteArrayInputStream(b)) as X509Certificate)
         } catch (_: CertificateException) {
             Outcome.Reject
-        } catch (e: RuntimeException) {
+        } catch (e: Exception) {
             Outcome.Crash(e)
         }
 
     /**
      * The bytes revokt reads for an accepted certificate (spec §9.2 revision 39) as a replay input: `getEncoded()`, or
      * the platform canon where revokt's parse of that is `ParseFailed(STRUCTURE)`; null when no platform canon can be
-     * built.
+     * built. A getter that throws is `unavailable`, which the committed corpus must not contain, so it propagates.
      */
     fun read(
         name: String,
@@ -60,40 +75,39 @@ internal object Oracle1 {
         if (parse !is CertificateParse.Failed || parse.reason != ParseReason.STRUCTURE) {
             return ProducerCorpus.Input("$name (encoded)", encoded)
         }
-        val parts = platformCanon(jdk) ?: return null
-        return ProducerCorpus.Input("$name (platform canon)", parts.canon(), parts = parts)
+        val parts = platformCanon(jdk.tbsCertificate, jdk.signature) ?: return null
+        return ProducerCorpus.Input("$name $PLATFORM_CANON", parts.canon(), parts = parts)
     }
 
     /**
-     * The parts of `SEQUENCE { getTBSCertificate(), the signature AlgorithmIdentifier TLV located in it, BIT STRING { 00,
-     * getSignature() } }`, the bytes the JDK verifies over; null when a getter throws or the AlgorithmIdentifier cannot be
-     * located (the TBS's third element, or its second without `[0]`).
+     * The parts of `SEQUENCE { tbs, the signature AlgorithmIdentifier TLV located in it, BIT STRING { 00, signature } }`;
+     * null when the locator finds no AlgorithmIdentifier.
      */
-    fun platformCanon(jdk: X509Certificate): Oracle3b.Parts? =
-        try {
-            val tbs = jdk.tbsCertificate
-            algorithm(tbs)?.let { Oracle3b.Parts(Oracle3a.hex(tbs), Oracle3a.hex(it), Oracle3a.hex(jdk.signature)) }
-        } catch (_: RuntimeException) {
-            null
-        } catch (_: CertificateException) {
-            null
+    fun platformCanon(
+        tbs: ByteArray,
+        signature: ByteArray,
+    ): Oracle3b.Parts? =
+        algorithm(tbs)?.let {
+            Oracle3b.Parts(Oracle3a.hex(tbs), Oracle3a.hex(it), Oracle3a.hex(signature))
         }
 
-    /** The TBS's signature AlgorithmIdentifier TLV, read with definite lengths only. */
+    /**
+     * The locator of §9.2: one-octet identifiers and definite lengths of at most four octets; after the TBS header, skip a
+     * first element `A0`, then one element, and take the next if its identifier is `30`.
+     */
     private fun algorithm(tbs: ByteArray): ByteArray? {
-        var p = element(tbs, 0)?.first ?: return null
-        val end = tbs.size
-        val skip = if (p < end && tbs[p] == 0xa0.toByte()) 2 else 1
-        repeat(skip) { p = element(tbs, p)?.second ?: return null }
-        val (_, next) = element(tbs, p) ?: return null
-        return if (next <= end && tbs[p] == 0x30.toByte()) tbs.copyOfRange(p, next) else null
+        var p = header(tbs, 0)?.size ?: return null
+        val skip = if (p < tbs.size && tbs[p] == 0xa0.toByte()) 2 else 1
+        repeat(skip) { p = header(tbs, p)?.end(p)?.toInt() ?: return null }
+        val end = header(tbs, p)?.end(p)?.toInt() ?: return null
+        return if (tbs[p] == 0x30.toByte()) tbs.copyOfRange(p, end) else null
     }
 
-    /** The TLV at [p]: the offset of its content and of its end, or null for an indefinite or overrunning one. */
-    private fun element(
+    /** The definite header at [p] whose content fits in [b], or null (indefinite, five or more length octets, overrun). */
+    fun header(
         b: ByteArray,
         p: Int,
-    ): Pair<Int, Int>? {
+    ): Header? {
         if (p + 1 >= b.size) return null
         val first = b[p + 1].toInt() and 0xff
         val count = if (first < 0x80) 0 else first and 0x7f
@@ -104,8 +118,7 @@ internal object Oracle1 {
             } else {
                 (0 until count).fold(0L) { n, i -> (n shl 8) or (b[p + 2 + i].toLong() and 0xff) }
             }
-        val content = p + 2 + count
-        return if (length <= b.size - content) content to (content + length.toInt()) else null
+        return Header(2 + count, length).takeIf { it.end(p) <= b.size }
     }
 
     /** One normalised field comparison: [mismatch] is null when the field agrees, [unavailable] when its getter threw. */
@@ -118,71 +131,52 @@ internal object Oracle1 {
     /**
      * The §9.2 normalised fields of [jdk] against revokt's [c]: the serial by value, the SPKI by SHA-256, the names in
      * `CANONICAL` form, every extension value unwrapped, the critical OIDs and the validity in epoch milliseconds.
+     * revokt's side is computed outside the getter's guard, so only a platform getter can make a field `unavailable`.
      */
     fun compare(
         jdk: X509Certificate,
         c: ParsedCertificate,
-    ): List<Field> =
-        listOf(
-            field("serial") { expect(jdk.serialNumber, c.rawSerial().takeIf { it.isNotEmpty() }?.let(::BigInteger)) },
-            field("spki") { expect(sha(jdk.publicKey.encoded), sha(c.rawSpki())) },
-            field("issuer") { expect(canonical(jdk.issuerX500Principal), canonical(X500Principal(c.rawIssuer()))) },
-            field("subject") { expect(canonical(jdk.subjectX500Principal), canonical(X500Principal(c.rawSubject()))) },
-            field("extensions") { extensions(jdk, c) },
-            field("critical") {
-                expect(
-                    jdk.criticalExtensionOIDs.orEmpty(),
-                    c.tbs.extensions
-                        .filter { it.critical }
-                        .oids(),
-                )
+    ): List<Field> {
+        val extensions = c.tbs.extensions
+        return listOf(
+            field("serial", c.rawSerial().takeIf { it.isNotEmpty() }?.let(::BigInteger)) { jdk.serialNumber },
+            field("spki", sha(c.rawSpki())) { sha(jdk.publicKey.encoded) },
+            field("issuer", canonical(X500Principal(c.rawIssuer()))) { canonical(jdk.issuerX500Principal) },
+            field("subject", canonical(X500Principal(c.rawSubject()))) { canonical(jdk.subjectX500Principal) },
+            field("extensions", extensions.associate { name(it) to Oracle3a.hex(it.value.bytes(c.tbsBytes)) }) {
+                (jdk.criticalExtensionOIDs.orEmpty() + jdk.nonCriticalExtensionOIDs.orEmpty()).associateWith {
+                    unwrap(jdk.getExtensionValue(it))
+                }
             },
-            field("notBefore") { expect(jdk.notBefore.time, c.tbs.validity.notBeforeMillis) },
-            field("notAfter") { expect(jdk.notAfter.time, c.tbs.validity.notAfterMillis) },
+            field("critical", extensions.filter { it.critical }.map(::name).toSet()) {
+                jdk.criticalExtensionOIDs.orEmpty()
+            },
+            field("notBefore", c.tbs.validity.notBeforeMillis) { jdk.notBefore.time },
+            field("notAfter", c.tbs.validity.notAfterMillis) { jdk.notAfter.time },
         )
+    }
 
+    @Suppress("TooGenericExceptionCaught") // §9.2: a platform getter that throws marks its field unavailable
     private fun field(
         name: String,
-        check: () -> String?,
+        revokt: Any?,
+        platform: () -> Any?,
     ): Field =
         try {
-            Field(name, check())
+            val value = platform()
+            Field(name, if (value == revokt) null else "JDK $value, revokt $revokt")
         } catch (e: RuntimeException) {
             Field(name, "getter threw $e", unavailable = true)
         }
 
-    private fun expect(
-        jdk: Any?,
-        revokt: Any?,
-    ): String? = if (jdk == revokt) null else "JDK $jdk, revokt $revokt"
-
-    private fun extensions(
-        jdk: X509Certificate,
-        c: ParsedCertificate,
-    ): String? {
-        val oids = jdk.criticalExtensionOIDs.orEmpty() + jdk.nonCriticalExtensionOIDs.orEmpty()
-        expect(oids, c.tbs.extensions.oids())?.let { return "OIDs: $it" }
-        if (c.tbs.extensions.any { it.oidDotted == null }) return "an OID revokt cannot name"
-        for (e in c.tbs.extensions) {
-            val unwrapped = unwrap(jdk.getExtensionValue(e.oidDotted))
-            val value =
-                e.value
-                    .bytes(c.tbsBytes)
-                    .toByteString()
-                    .hex()
-            expect(unwrapped, value)?.let { return "${e.oidDotted}: $it" }
-        }
-        return null
-    }
-
-    private fun List<dev.revokt.engine.parse.Extension>.oids(): Set<String?> = map { it.oidDotted }.toSet()
+    /** The dotted OID, or a placeholder no JDK OID equals where revokt cannot name it. */
+    private fun name(e: Extension): String = e.oidDotted ?: "unnamed@${e.oid.start}"
 
     /** `getExtensionValue`'s DER OCTET STRING, unwrapped to its content (hex). */
     private fun unwrap(wrapped: ByteArray?): String? {
-        if (wrapped == null || wrapped.size < 2 || wrapped[0] != 0x04.toByte()) return null
-        val first = wrapped[1].toInt() and 0xff
-        val header = if (first < 0x80) 2 else 2 + (first and 0x7f)
-        return wrapped.copyOfRange(header, wrapped.size).toByteString().hex()
+        if (wrapped == null || wrapped[0] != 0x04.toByte()) return null
+        val header = header(wrapped, 0) ?: return null
+        return Oracle3a.hex(wrapped.copyOfRange(header.size, wrapped.size))
     }
 
     private fun canonical(p: X500Principal): String = p.getName(X500Principal.CANONICAL)

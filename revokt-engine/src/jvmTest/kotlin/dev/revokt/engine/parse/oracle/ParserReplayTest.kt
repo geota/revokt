@@ -11,6 +11,7 @@ import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.Span
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import okio.ByteString.Companion.toByteString
+import java.security.cert.X509Certificate
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -23,18 +24,23 @@ import kotlin.test.fail
  */
 class ParserReplayTest {
     /**
-     * One platform-accepted input: [encoded] is the bytes revokt reads (`getEncoded()`, or the platform canon, spec §9.2
+     * One platform-accepted input: [read] is the bytes revokt reads (`getEncoded()`, or the platform canon, spec §9.2
      * revision 39), null when no platform canon can be built; with its reference view and parse.
      */
     private class Accepted(
         val name: String,
         val presented: ByteArray,
-        val jdk: java.security.cert.X509Certificate,
-        val encoded: ProducerCorpus.Input?,
+        val jdk: X509Certificate,
+        val read: ProducerCorpus.Input?,
         val reference: ReferenceView?,
         val parse: CertificateParse,
     ) {
         val certificate: ParsedCertificate? get() = (parse as? CertificateParse.Parsed)?.certificate
+
+        val platformCanon: Boolean get() = read?.name?.endsWith(Oracle1.PLATFORM_CANON) == true
+
+        /** The bytes read, which revokt parsed. */
+        val readInput: ProducerCorpus.Input get() = checkNotNull(read) { "$name: no bytes read" }
     }
 
     private val producer by lazy { ProducerCorpus.goldens() }
@@ -43,7 +49,10 @@ class ParserReplayTest {
         ProducerCorpus.inputs.mapNotNull { input ->
             when (val o = Oracle1.run(input.der)) {
                 is Oracle1.Outcome.Accept -> accepted(input, o.certificate)
+
                 is Oracle1.Outcome.Reject -> null
+
+                // Stricter than §9.2, where a crash never fails the gate: the committed corpus must not crash oracle 1.
                 is Oracle1.Outcome.Crash -> fail("${input.name}: oracle 1 crashed on the committed corpus: ${o.error}")
             }
         }
@@ -51,25 +60,26 @@ class ParserReplayTest {
 
     private fun accepted(
         input: ProducerCorpus.Input,
-        jdk: java.security.cert.X509Certificate,
+        jdk: X509Certificate,
     ): Accepted {
         val name = input.name
-        val encoded = Oracle1.read(name, jdk)
+        val read = Oracle1.read(name, jdk)
         val reference =
             try {
-                encoded?.let { ReferenceView.of(sha(it.der)) }
+                read?.let { ReferenceView.of(sha(it.der)) }
             } catch (e: IllegalStateException) {
                 fail("$name: ${e.message}; run native/revokt-oracle/record-goldens.sh on JDK ${Oracle1.version}")
             }
-        return Accepted(name, input.der, jdk, encoded, reference, CertificateParser.parse(encoded?.der ?: jdk.encoded))
+        return Accepted(name, input.der, jdk, read, reference, CertificateParser.parse(read?.der ?: jdk.encoded))
     }
 
     /** Why a platform-accepted input is outside the D1 domain, or null when it is inside. */
     private fun outsideDomain(a: Accepted): String? {
-        val read = a.encoded ?: return NO_PLATFORM_CANON
-        val parts = read.canonParts ?: return null
+        val read = a.read ?: return NO_PLATFORM_CANON
+        // canon exists for every read: a platform canon is its own, and every other read is located by 3a or 3b.
+        val parts = read.canonParts ?: fail("${a.name}: canon cannot be located for the bytes read")
         return if (versionTrailing(Oracle3a.bytes(parts.tbs))) {
-            "rule: content after the INTEGER inside [0]"
+            VERSION_TRAILING
         } else {
             producerOutside(a, producer[read.canonSha256] ?: fail("${a.name}: no oracle-4 golden for canon"))
         }
@@ -87,21 +97,56 @@ class ParserReplayTest {
 
     @Test
     fun `D1 - every platform-accepted input in the producer's domain parses`() {
-        val dom = HashMap<String, Int>()
+        val dom = HashMap<String, MutableSet<String>>()
         val violations = ArrayList<String>()
         var inside = 0
         for (a in accepted) {
             val reason = outsideDomain(a)
             if (reason != null) {
-                dom.merge(reason, 1, Int::plus)
-            } else if (a.encoded?.canonParts != null) {
+                dom.getOrPut(reason) { HashSet() } += a.name
+            } else {
                 inside++
                 if (a.certificate == null) violations += "${a.name}: ${(a.parse as CertificateParse.Failed).detail}"
             }
         }
-        println("D1 on JDK ${Oracle1.version}: ${accepted.size} platform-accepted, $inside in the domain; D1-dom $dom")
+        println(
+            "D1 on JDK ${Oracle1.version}: ${accepted.size} platform-accepted, $inside in the domain; D1-dom ${dom.mapValues {
+                it.value.size
+            }}",
+        )
         assertEquals(emptyList(), violations, "D1 violations")
         assertTrue(inside > 300, "D1 exercised on only $inside inputs")
+        // The by-rule classes are pinned, so a locator or `[0]` regression cannot move inputs out of the domain unseen.
+        assertEquals<Set<String>?>(null, dom[NO_PLATFORM_CANON], "inputs with no platform canon")
+        assertEquals<Set<String>?>(setOf("variants/version-wrapper-trailing"), dom[VERSION_TRAILING], "the `[0]` rule")
+    }
+
+    /**
+     * The read fallback (spec §9.2 revision 39) is pinned: the nine indefinite-TBS inputs on every matrix JDK are read
+     * through the platform canon and parse, each platform canon is its own `canon` as the reference view locates it, and
+     * no platform-canon read reports an `AlgorithmIdMismatch` (their TBS AlgorithmIdentifiers are minimal DER).
+     */
+    @Test
+    fun `the read fallback parses the nine indefinite-TBS inputs through their platform canon`() {
+        val fallback = accepted.filter { it.platformCanon }
+        assertEquals(FALLBACK_PARSED, fallback.filter { it.certificate != null }.map { it.name }.toSet())
+        for (a in fallback) {
+            val read = a.readInput
+            val located = read.referenceParts?.canon()
+            if (located !=
+                null
+            ) {
+                assertEquals(Oracle3a.hex(read.der), Oracle3a.hex(located), "${a.name}: canon of its canon")
+            }
+            a.certificate?.let {
+                assertEquals(
+                    false,
+                    it.envelope.algorithmIdMismatch,
+                    "${a.name}: AlgorithmIdMismatch",
+                )
+            }
+        }
+        assertTrue(fallback.count { it.readInput.referenceParts != null } >= FALLBACK_PARSED.size, "canon checked")
     }
 
     @Test
@@ -124,7 +169,7 @@ class ParserReplayTest {
         for (a in accepted) {
             val c = a.certificate ?: continue
             val r = a.reference ?: fail("${a.name}: revokt parses it and it has no raw-byte reference")
-            val parts = a.encoded!!.canonParts ?: fail("${a.name}: revokt parses it and canon cannot be located")
+            val parts = a.readInput.canonParts ?: fail("${a.name}: revokt parses it and canon cannot be located")
             compared++
             assertEnvelope(a, c, parts, r)
             assertReference(a.name, c, r)
@@ -133,7 +178,7 @@ class ParserReplayTest {
             val (unavailableHere, differing) = Oracle1.compare(a.jdk, c).partition { it.unavailable }
             unavailableHere.forEach { unavailable.merge(it.name, 1, Int::plus) }
             for (f in differing.filter { it.mismatch != null }) {
-                if (f.name == "spki" && reencodesSpki(a, c)) {
+                if (f.name == "spki" && reencodesSpki(c.rawSpki(), a.jdk.publicKey.encoded)) {
                     reencoded += a.name
                 } else {
                     javaFields += "${a.name}: ${f.name}: ${f.mismatch}"
@@ -198,18 +243,35 @@ class ParserReplayTest {
         a: Accepted,
         c: ParsedCertificate,
     ) {
-        val golden = producer[a.encoded!!.canonSha256] ?: fail("${a.name}: no oracle-4 golden for canon")
+        val golden = producer[a.readInput.canonSha256] ?: fail("${a.name}: no oracle-4 golden for canon")
         val (status, serial, spki) = golden.split(' ')
         assertEquals("OK", status, "${a.name}: producerKeyable and oracle 4 answers $golden")
         assertEquals(serial, Oracle3a.hex(c.rawSerial()), "${a.name}: rawSerial against oracle 4")
         assertEquals(spki, sha(c.rawSpki()), "${a.name}: SHA-256(rawSpki) against oracle 4")
     }
 
-    /** Whether oracle 1's `getPublicKey().getEncoded()` is revokt's `rawSpki` with every header minimal. */
+    /** The re-encoding allow-list's rule: oracle 1's `getPublicKey().getEncoded()` is [rawSpki] with every header minimal. */
     private fun reencodesSpki(
-        a: Accepted,
-        c: ParsedCertificate,
-    ): Boolean = DerNode.parse(c.rawSpki()).encode().contentEquals(a.jdk.publicKey.encoded)
+        rawSpki: ByteArray,
+        platform: ByteArray,
+    ): Boolean = DerNode.parse(rawSpki).encode().contentEquals(platform)
+
+    @Test
+    fun `the SPKI re-encoding rule allows only a minimal re-encoding of the same key`() {
+        val keys =
+            listOf("letsencrypt.org-1", "www.mozilla.org-1").map {
+                val c =
+                    (
+                        CertificateParser.parse(
+                            ProducerCorpus.resource("certs/$it.der"),
+                        ) as CertificateParse.Parsed
+                    ).certificate
+                c.rawSpki()
+            }
+        assertTrue(reencodesSpki(keys[0], keys[0]), "the same minimal SPKI")
+        assertEquals(false, reencodesSpki(keys[0], keys[1]), "another key")
+        assertEquals(false, reencodesSpki(keys[1], keys[0]), "another key, RSA against EC")
+    }
 
     @Test
     fun `D6 - parse is deterministic, its offsets re-slice Cert tbs and b, and parse(encoded) equals parse(b)`() {
@@ -244,8 +306,9 @@ class ParserReplayTest {
         val spans = tbsSpans(c)
         for (s in spans) assertTrue(s.start in 0..s.end && s.end <= c.tbsBytes.size, "$name: span $s outside Cert.tbs")
         if (c.envelope.tbsIndefinite) return false
-        val shift = c.envelope.presentedTbs.content.start - headerLength(c.tbsBytes, 0)
-        for (s in spans.filter { it.start >= headerLength(c.tbsBytes, 0) }) {
+        val header = checkNotNull(Oracle1.header(c.tbsBytes, 0)) { "$name: Cert.tbs header" }.size
+        val shift = c.envelope.presentedTbs.content.start - header
+        for (s in spans.filter { it.start >= header }) {
             assertEquals(
                 Oracle3a.hex(s.bytes(c.tbsBytes)),
                 Oracle3a.hex(c.der.copyOfRange(s.start + shift, s.end + shift)),
@@ -302,37 +365,28 @@ class ParserReplayTest {
         return (if (presented) fields + offsets else fields).joinToString(" | ")
     }
 
-    private fun headerLength(
-        b: ByteArray,
-        p: Int,
-    ): Int {
-        val first = b[p + 1].toInt() and 0xff
-        return if (first < 0x80) 2 else 2 + (first and 0x7f)
-    }
-
     /** Whether the TBS's `[0]` holds more than its first element (any definite header form). */
-    private fun versionTrailing(tbs: ByteArray): Boolean =
-        runCatching {
-            val p = headerLength(tbs, 0)
-            if (tbs[p] != 0xa0.toByte()) return false
-            val end = p + headerLength(tbs, p) + length(tbs, p)
-            val q = p + headerLength(tbs, p)
-            q + headerLength(tbs, q) + length(tbs, q) < end
-        }.getOrDefault(false)
-
-    private fun length(
-        b: ByteArray,
-        p: Int,
-    ): Int {
-        val first = b[p + 1].toInt() and 0xff
-        if (first < 0x80) return first
-        return (0 until (first and 0x7f)).fold(0) { n, i -> (n shl 8) or (b[p + 2 + i].toInt() and 0xff) }
+    private fun versionTrailing(tbs: ByteArray): Boolean {
+        val p = Oracle1.header(tbs, 0)?.size ?: return false
+        if (p >= tbs.size || tbs[p] != 0xa0.toByte()) return false
+        val wrapper = Oracle1.header(tbs, p) ?: return false
+        val inner = Oracle1.header(tbs, p + wrapper.size) ?: return false
+        return inner.end(p + wrapper.size) < wrapper.end(p)
     }
 
     private fun sha(b: ByteArray): String = b.toByteString().sha256().hex()
 
     private companion object {
         const val PRODUCER_REJECTS = "oracle 4 rejects"
+
+        const val VERSION_TRAILING = "rule: content after the INTEGER inside [0]"
+
+        /** The inputs read through the platform canon that parse, on every matrix JDK (spec §9.2 revision 39). */
+        val FALLBACK_PARSED: Set<String> =
+            ProducerCorpus.envelopeLeaves
+                .flatMap { (leaf, _) ->
+                    listOf("serial-81", "serial-84", "spki-83").map { "envelope/$leaf/tbs-indefinite-$it" }
+                }.toSet()
 
         /** D1-dom by rule (spec §9.2 revision 39): the producer cannot key a TBS whose AlgorithmIdentifier is not located. */
         const val NO_PLATFORM_CANON = "rule: no platform canon"

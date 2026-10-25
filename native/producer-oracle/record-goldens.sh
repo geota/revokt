@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Records the oracle-4 goldens of the D8 replay (spec §9.2, #11): every distinct canon(input) of ProducerCorpus,
-# run through the producer pinned in go.mod, then the D8-gap baseline. Needs Go and JDK 21; the PR tier replays the committed goldens and
+# run through the producer pinned in go.mod, then the D8-gap baseline. Needs Go and the matrix JDKs; the PR tier replays the committed goldens and
 # needs neither. Run from the repository root:  sh native/producer-oracle/record-goldens.sh
-# REVOKT_RECORD_JDKS (default 21) lists the JDKs to record on, for example "17 21 27"; any arguments are passed to
-# Gradle, for example -Porg.gradle.java.installations.paths=<comma-separated JDK homes>.
+# REVOKT_RECORD_JDKS lists the JDKs to record on, by default the CI matrix of .github/workflows/ci.yml ("17 21 25 27");
+# each must be installed. Any arguments are passed to Gradle, for example
+# -Porg.gradle.java.installations.paths=<comma-separated JDK homes>.
 set -eu
 root=$(pwd)
 out="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/goldens.tsv"
@@ -14,7 +15,9 @@ work=$(mktemp -d)
 trap 'rm -rf "${work:?}"' EXIT
 ( cd native/producer-oracle && go build -o "$work/producer-oracle" . )
 # One pass per matrix JDK (the bytes revokt reads depend on oracle 1's version), merged.
-for jdk in ${REVOKT_RECORD_JDKS:-21}; do
+jdks=${REVOKT_RECORD_JDKS:-17 21 25 27}
+case $jdks in *[!0-9\ ]*) echo "REVOKT_RECORD_JDKS must list JDK feature versions: $jdks" >&2; exit 1 ;; esac
+for jdk in $jdks; do
   ./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.producer.ProducerGoldensWriterTest' \
     -Drevokt.writeProducerInputs="$work/inputs-$jdk.tsv" -Prevokt.testJdk="$jdk" --rerun "$@" </dev/null
 done
@@ -31,5 +34,5 @@ echo '##' >> "$work/b64.txt"
 echo "wrote $(grep -vc '^#' "$out") goldens to $out"
 baseline="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/producer/gap-baseline.tsv"
 ./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.producer.ProducerD8Test.the D8 gap equals the recorded baseline' \
-  -Drevokt.writeGapBaseline="$baseline" --rerun </dev/null
+  -Drevokt.writeGapBaseline="$baseline" --rerun "$@" </dev/null
 echo "wrote $(grep -vc '^#' "$baseline") gap entries to $baseline"

@@ -57,7 +57,9 @@ internal class ReferenceView(
             val scts = HashSet<Pair<String, Long>>()
             for ((index, e) in a.extensions.withIndex().filter { it.value.sct != null }) {
                 // The inner identifier octet is read by 3b's locator (3a's value where 3b's walk fails), never by revokt.
-                val value = b?.extensions?.getOrNull(index)?.value ?: e.value
+                val located = b?.extensions?.getOrNull(index)
+                check(located == null || located.oid == e.oid) { "3b's extension $index is not 3a's" }
+                val value = located?.value ?: e.value
                 if (value.startsWith("04")) {
                     scts += e.sct.orEmpty()
                 } else if (!e.sct.isNullOrEmpty()) {
@@ -86,7 +88,7 @@ internal class ReferenceView(
                 b.issuer,
                 b.extensions.map(::row),
                 b.extensions.flatMap { it.sct.orEmpty() }.toSet(),
-                b.unusedBits ?: 0,
+                checkNotNull(b.unusedBits) { "3b's LOCATED reply has no unused-bits octet" },
                 emptySet(),
             )
 
