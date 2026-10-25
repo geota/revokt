@@ -33,6 +33,13 @@ internal interface PlatformOracle {
     /** How failures name it. */
     val label: String get() = "oracle $id ($version)"
 
+    /**
+     * The D3 divergence class a difference between `Cert.tbs` and this oracle's `getTBSCertificate()` is recorded under,
+     * or null where it is a D2 violation (spec §9.2 D2: oracle 1's message is `Cert.tbs`; Conscrypt verifies over the
+     * presented TBS TLV, so a difference marks an input it cannot verify).
+     */
+    val tbsDivergence: String? get() = null
+
     fun run(b: ByteArray): Outcome
 
     /** The bytes revokt reads for an accepted [certificate] as a replay input, or null when there are none. */
@@ -42,6 +49,7 @@ internal interface PlatformOracle {
     ): ProducerCorpus.Input?
 
     companion object {
-        val all: List<PlatformOracle> = listOf(Oracle1, Oracle2)
+        /** Every platform oracle on this run, oracle 1 first; lazy, so a run that needs only oracle 1 never loads Conscrypt. */
+        val all: List<PlatformOracle> by lazy { listOf(Oracle1, Oracle2) }
     }
 }

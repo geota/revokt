@@ -91,6 +91,15 @@ internal class PlatformReplay(
         }
     }
 
+    /** The parsed inputs whose `Cert.tbs` differs from [oracle]'s `getTBSCertificate()`. */
+    val tbsDiffering: Set<String> by lazy {
+        accepted
+            .filter { a ->
+                a.certificate?.let { !a.x509.tbsCertificate.contentEquals(it.tbsBytes) } == true
+            }.map { it.name }
+            .toSet()
+    }
+
     /** The parsed inputs whose SPKI [oracle] reports re-encoded, under the allow-list's rule (spec §9.2). */
     val spkiReencoded: Set<String> by lazy {
         accepted
@@ -111,10 +120,17 @@ internal class PlatformReplay(
 
         val jdk = PlatformReplay(Oracle1)
 
-        val conscrypt = PlatformReplay(Oracle2)
+        /** Lazy, so a run that needs only oracle 1 never loads Conscrypt's native library. */
+        val conscrypt by lazy { PlatformReplay(Oracle2) }
 
         /** Every platform oracle on this run, oracle 1 first. */
-        val all = listOf(jdk, conscrypt)
+        val all by lazy { listOf(jdk, conscrypt) }
+
+        /**
+         * The platform oracles in the order a record's rule-based fields are taken from when several hold: oracle 2 first,
+         * since its view does not depend on the test JDK, so every JDK's run derives the same fields.
+         */
+        val preferred by lazy { listOf(conscrypt, jdk) }
 
         val producer: Map<String, String> by lazy { ProducerCorpus.goldens() }
 

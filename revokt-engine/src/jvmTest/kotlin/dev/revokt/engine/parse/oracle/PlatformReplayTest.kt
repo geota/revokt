@@ -18,16 +18,19 @@ import kotlin.test.fail
 
 /**
  * The PR-tier replay of spec §9.2 against one platform oracle, live, with the recorded 3a, 3b and oracle-4 goldens: D1
- * and its recorded domain, D2 and D3 on `parse(encoded)`, the "no raw-byte reference" gate metric, and D6. [floor] is the
- * least number of inputs D1's domain and D2 must exercise; [tbsDivergence] names the divergence class a difference from
- * the platform's `getTBSCertificate()` is recorded under, or null where it is a D2 violation (oracle 1).
+ * and its recorded domain, D2 and D3 on `parse(encoded)`, the "no raw-byte reference" gate metric, and D6. The floors
+ * are the least number of inputs D1's domain ([d1Floor]), D2 ([d2Floor]) and D6's round trip ([d6Floor]) must exercise. A
+ * difference from the platform's `getTBSCertificate()` is a D2 violation unless the oracle names a divergence class for it.
  */
 @Suppress("UnnecessaryAbstractClass") // abstract so that JUnit runs only the per-oracle subclasses
 abstract class PlatformReplayTest internal constructor(
     private val replay: PlatformReplay,
-    private val floor: Int,
-    private val tbsDivergence: String?,
+    private val d1Floor: Int,
+    private val d2Floor: Int,
+    private val d6Floor: Int,
 ) {
+    private val tbsDivergence: String? get() = replay.oracle.tbsDivergence
+
     private val accepted get() = replay.accepted
 
     @Test
@@ -47,7 +50,7 @@ abstract class PlatformReplayTest internal constructor(
         val counts = dom.mapValues { it.value.size }
         println("D1 on ${replay.oracle.label}: ${accepted.size} accepted, $inside in the domain; D1-dom $counts")
         assertEquals(emptyList(), violations, "D1 violations")
-        assertTrue(inside > floor, "D1 exercised on only $inside inputs")
+        assertTrue(inside > d1Floor, "D1 exercised on only $inside inputs")
         // The by-rule classes are pinned, so a locator or `[0]` regression cannot move inputs out of the domain unseen.
         assertEquals<Set<String>?>(null, dom[PlatformReplay.NO_PLATFORM_CANON], "inputs with no platform canon")
         // Every other D1-dom entry is a corpus record (RecordsTest), with its reason.
@@ -78,7 +81,10 @@ abstract class PlatformReplayTest internal constructor(
             val r = a.reference ?: fail("${a.name}: revokt parses it and it has no raw-byte reference")
             val parts = a.readInput.canonParts ?: fail("${a.name}: revokt parses it and canon cannot be located")
             compared++
-            if (!assertEnvelope(a, c, parts, r)) divergences.getOrPut(tbsDivergence!!) { HashSet() } += a.name
+            if (!assertEnvelope(a, c, parts, r)) {
+                divergences.getOrPut(checkNotNull(tbsDivergence)) { HashSet() } +=
+                    a.name
+            }
             assertReference(a.name, c, r)
             r.divergences.forEach { divergences.getOrPut(it) { HashSet() } += a.name }
             if (Keyability.firstFailing(c) == null) assertProducerBytes(a, c)
@@ -87,13 +93,13 @@ abstract class PlatformReplayTest internal constructor(
         println("D2 on ${replay.oracle.label}: $compared compared; unavailable $unavailable; divergences $divergences")
         assertEquals(emptyList(), javaFields, "normalised Java fields that differ from ${replay.oracle.label}'s")
         assertEquals(emptyMap(), unavailable, "${replay.oracle.label} getters that threw on the committed corpus")
-        // The re-encoding allow-list (§9.2): the JDK re-encodes the non-minimal headers of an SPKI, outside the key the
+        // The re-encoding allow-list (§9.2): the platform re-encodes the non-minimal headers of an SPKI, outside the key the
         // BIT STRING encapsulates, and nothing else.
         val spkiMutants =
             accepted
                 .filter { it.certificate != null && SPKI_PATH in it.name && "$SPKI_PATH/1:03~" !in it.name }
                 .map { it.name }
-        assertEquals(spkiMutants.toSet(), reencoded, "inputs whose SPKI the JDK re-encodes")
+        assertEquals(spkiMutants.toSet(), reencoded, "inputs whose SPKI the platform re-encodes")
         // The divergence classes among the inputs compared are the committed D3_DIVERGENCE records (spec §9.2 D3).
         val parsed = accepted.filter { it.certificate != null }.map { it.name }.toSet()
         val recorded =
@@ -102,7 +108,7 @@ abstract class PlatformReplayTest internal constructor(
                 .mapValues { (_, paths) -> paths.filter { it in parsed }.toSet() }
                 .filterValues { it.isNotEmpty() }
         assertEquals(recorded, divergences, "D3 divergence classes")
-        assertTrue(compared > floor, "D2 exercised on only $compared inputs")
+        assertTrue(compared > d2Floor, "D2 exercised on only $compared inputs")
     }
 
     /** The normalised Java fields against the platform's, with the SPKI re-encoding allow-list's rule applied. */
@@ -203,7 +209,7 @@ abstract class PlatformReplayTest internal constructor(
             assertEquals(fingerprint(fromB, false), fingerprint(fromEncoded, false), "$name: parse(encoded)")
             roundTrips++
         }
-        assertTrue(resliced > 1000 && roundTrips > floor, "D6 exercised on $resliced and $roundTrips inputs only")
+        assertTrue(resliced > 1000 && roundTrips > d6Floor, "D6 exercised on $resliced and $roundTrips inputs only")
     }
 
     /** Every TBS offset lies in `Cert.tbs` from its tag octet; shifted, it re-slices `b` when the TBS is definite. */

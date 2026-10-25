@@ -56,13 +56,12 @@ internal object Oracle1 : PlatformOracle {
         name: String,
         certificate: X509Certificate,
     ): ProducerCorpus.Input? {
-        val jdk = certificate
-        val encoded = jdk.encoded
+        val encoded = certificate.encoded
         val parse = CertificateParser.parse(encoded)
         if (parse !is CertificateParse.Failed || parse.reason != ParseReason.STRUCTURE) {
             return ProducerCorpus.Input("$name (encoded)", encoded)
         }
-        val parts = platformCanon(jdk.tbsCertificate, jdk.signature) ?: return null
+        val parts = platformCanon(certificate.tbsCertificate, certificate.signature) ?: return null
         return ProducerCorpus.Input("$name $PLATFORM_CANON", parts.canon(), parts = parts)
     }
 

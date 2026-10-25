@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  * The replay against oracle 1, the test JDK's `SUN` factory: run it on every matrix JDK with `-Prevokt.testJdk`. It adds
  * what only oracle 1 has: the read fallback of spec §9.2 revision 39, and the SPKI re-encoding rule's own cases.
  */
-class JdkReplayTest : PlatformReplayTest(PlatformReplay.jdk, floor = 300, tbsDivergence = null) {
+class JdkReplayTest : PlatformReplayTest(PlatformReplay.jdk, d1Floor = 300, d2Floor = 1000, d6Floor = 1000) {
     private val accepted get() = PlatformReplay.jdk.accepted
 
     /**

@@ -20,6 +20,7 @@ import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
@@ -53,7 +54,11 @@ class RecordsTest {
     fun `the committed records equal the replay's classes on this run`() {
         val computed = computed().associateBy { it.key }
         val committed = CorpusRecord.committed()
-        assertEquals(committed.size, committed.map { it.key }.toSet().size, "one record per input and class")
+        assertEquals(
+            committed.size,
+            committed.map { it.key }.toSet().size,
+            "one record per input, class and divergence",
+        )
         val here = committed.filter { counts(it) }.associateBy { it.key }
         assertEquals(emptySet(), here.keys - computed.keys, "stale records on $run: regenerate them")
         assertEquals(emptySet(), computed.keys - here.keys, "unrecorded entries on $run: record them")
@@ -81,13 +86,13 @@ class RecordsTest {
                 }.map { "${it.path} ${it.recordClass}" }
         assertEquals(emptyList(), bare, "records of a D8-gap input without keyability")
         // KEYABILITY_GAP only for an input with no other class; an oracle-dependent class may hold on other oracle versions than the gap.
-        val independent = committed.filter { it.recordClass !in ORACLE_DEPENDENT }
+        val independent = committed.filterNot(::dependent)
         val gapAlongside =
             committed
                 .filter { it.recordClass == RecordClass.KEYABILITY_GAP }
                 .filter { g -> independent.any { it.sha256 == g.sha256 } }
         assertEquals(emptyList(), gapAlongside.map { it.path }, "KEYABILITY_GAP records of inputs admitted otherwise")
-        // Keyability on a JDK-independent record must hold on every JDK: the input is accepted wherever it is recorded.
+        // Keyability on an oracle-independent record must hold on every JDK: the input is accepted wherever it is recorded.
         val unevenGap =
             independent.filter {
                 it.keyability != null &&
@@ -98,7 +103,7 @@ class RecordsTest {
             unevenGap.map {
                 it.path
             },
-            "D8-gap inputs of a JDK-independent class not in the gap on every JDK",
+            "D8-gap inputs of an oracle-independent class not in the gap on every JDK",
         )
         val gap = computed.values.mapNotNull { it.keyability?.let { k -> "${k.clause}/${k.parser}" } }
         println("D8 gap on $run (clause/path → inputs): ${gap.groupingBy { it }.eachCount().toSortedMap()}")
@@ -117,9 +122,12 @@ class RecordsTest {
         CorpusRecord.write(file, merge(existing, computed()))
     }
 
+    /** Whether [r]'s class (or divergence) depends on the platform oracles, so that it holds per oracle version. */
+    private fun dependent(r: CorpusRecord): Boolean =
+        r.recordClass in ORACLE_DEPENDENT || r.divergence in ORACLE_DIVERGENCES
+
     /** Whether [r] counts on this run: an oracle-dependent class only where a platform entry of this run holds. */
-    private fun counts(r: CorpusRecord): Boolean =
-        r.recordClass !in ORACLE_DEPENDENT || r.oracles.any { isCurrent(it) && it.holds == true }
+    private fun counts(r: CorpusRecord): Boolean = !dependent(r) || r.oracles.any { isCurrent(it) && it.holds == true }
 
     /**
      * The record's fields that the replay decides: everything but the date and the platform entries of other versions, and
@@ -146,7 +154,7 @@ class RecordsTest {
         computed: List<CorpusRecord>,
     ): List<CorpusRecord> {
         val byKey = computed.associateBy { it.key }
-        val out = LinkedHashMap<Pair<String, RecordClass>, CorpusRecord>()
+        val out = LinkedHashMap<Triple<String, RecordClass, String?>, CorpusRecord>()
         for (e in existing) {
             val others = e.oracles.filter { isPlatform(it) && !isCurrent(it) }
             val c = byKey[e.key]
@@ -157,7 +165,7 @@ class RecordsTest {
                         justification = c.justification.ifBlank { e.justification },
                         added = e.added,
                     )
-            } else if (e.recordClass in ORACLE_DEPENDENT) {
+            } else if (dependent(e)) {
                 val here = platforms.map { entry(it, e.path, e.sha256, holds = false) }
                 val oracles = sortOracles(others + here + e.oracles.filterNot(::isPlatform))
                 if (oracles.any { it.holds == true }) out[e.key] = e.copy(oracles = oracles)
@@ -168,7 +176,27 @@ class RecordsTest {
     }
 
     private fun sortOracles(oracles: List<CorpusRecord.Oracle>) =
-        oracles.sortedWith(compareBy({ ORACLE_ORDER.indexOf(it.id) }, { it.version.padStart(3, '0') }))
+        oracles.sortedWith(
+            compareBy<CorpusRecord.Oracle> { ORACLE_ORDER.indexOf(it.id) }.thenComparator {
+                a,
+                b,
+                ->
+                versionOrder(a.version, b.version)
+            },
+        )
+
+    /** Versions compared numerically part by part (`2.9.0` before `2.10.0`), falling back to text. */
+    private fun versionOrder(
+        a: String,
+        b: String,
+    ): Int {
+        val (x, y) = listOf(a, b).map { v -> v.split('.').map { it.toIntOrNull() } }
+        for ((p, q) in x.zip(y)) {
+            if (p == null || q == null) return a.compareTo(b)
+            if (p != q) return p.compareTo(q)
+        }
+        return x.size.compareTo(y.size)
+    }
 
     /** [p]'s entry for the input at [path]: its outcome, the bytes it reads where they differ, and whether the class holds. */
     private fun entry(
@@ -188,41 +216,40 @@ class RecordsTest {
     }
 
     /**
-     * The records the replay classes on this JDK. A D8-gap input's keyability rides on each of its records, with the gap
-     * justification appended; it gets a `KEYABILITY_GAP` record of its own only when it has no other class.
+     * The records the replay classes on this run. Rule-based fields come from the platform oracles in [preferred] order. A
+     * D8-gap input's keyability rides on each of its records, with the gap justification appended; it gets a
+     * `KEYABILITY_GAP` record holding on the platform oracles where it is in the gap and has no other class.
      */
-    private fun computed(): List<CorpusRecord> {
+    private fun computed(preferred: List<PlatformReplay> = PlatformReplay.preferred): List<CorpusRecord> {
         val inputs = ProducerCorpus.inputs.associateBy { it.name }
-        val classed = classed(inputs)
-        // A D8-gap input's keyability, from the first platform oracle that puts it in the gap, and every one that does.
-        val gap = LinkedHashMap<String, Pair<CorpusRecord.Keyability, MutableSet<String>>>()
-        for (p in platforms) {
-            for (a in p.accepted) gap(p, a)?.let { gap.getOrPut(a.name) { it to HashSet() }.second += p.oracle.id }
+        val classed = classed(inputs, preferred)
+        // Each D8-gap input's keyability per platform oracle, in preferred order.
+        val gap = LinkedHashMap<String, LinkedHashMap<String, CorpusRecord.Keyability>>()
+        for (p in preferred) {
+            for (a in p.accepted) gap(p, a)?.let { gap.getOrPut(a.name) { LinkedHashMap() }[p.oracle.id] = it }
         }
         val out =
-            classed.map {
-                record(
-                    it.input,
-                    it.recordClass,
-                    it.divergence,
-                    gap[it.input.name]?.first,
-                    withGap(it.reason, gap[it.input.name]?.first),
-                    it.holdsOn,
-                )
+            classed.map { c ->
+                val k = gap[c.input.name]?.values?.first()
+                record(c.input, c.recordClass, c.divergence, k, withGap(c.reason, k), c.holdsOn)
             }
-        val otherwise = classed.map { it.input.name }.toSet()
-        val gapOnly = gap.filterKeys { it !in otherwise }
-        return out +
-            gapOnly.map { (name, g) ->
-                record(
-                    inputs.getValue(name),
-                    RecordClass.KEYABILITY_GAP,
-                    null,
-                    g.first,
-                    gapJustification(g.first),
-                    g.second,
-                )
+        val gapOnly =
+            gap.mapNotNull { (name, byPlatform) ->
+                val others = classed.filter { it.input.name == name }
+                val holdsOn = byPlatform.keys.filter { id -> others.none { !it.dependent || id in it.holdsOn } }
+                holdsOn.firstOrNull()?.let { first ->
+                    val k = byPlatform.getValue(first)
+                    record(
+                        inputs.getValue(name),
+                        RecordClass.KEYABILITY_GAP,
+                        null,
+                        k,
+                        gapJustification(k),
+                        holdsOn.toSet(),
+                    )
+                }
             }
+        return out + gapOnly
     }
 
     /** [reason] with [k]'s gap justification appended; none when the gap's rule yields none (a hand-written one is due). */
@@ -235,50 +262,81 @@ class RecordsTest {
     }
 
     /**
-     * One class the replay assigns an input, with its divergence, its rule-based reason (from the first platform oracle
-     * the class holds on) and the platform oracles it holds on.
+     * One class the replay assigns an input, with its divergence, its rule-based reason (from the first preferred platform
+     * oracle the class holds on) and, for an oracle-dependent class, the platform oracles it holds on.
      */
     private class Classed(
         val input: ProducerCorpus.Input,
         val recordClass: RecordClass,
         val divergence: String?,
         val reason: String,
+        val dependent: Boolean,
         val holdsOn: MutableSet<String> = HashSet(),
     )
 
-    /** The D1_DOM, D2_REENCODE_ALLOW and D3_DIVERGENCE classes on this run. */
-    private fun classed(inputs: Map<String, ProducerCorpus.Input>): List<Classed> {
-        val classed = LinkedHashMap<Pair<String, RecordClass>, Classed>()
+    /** The D1_DOM, D2_REENCODE_ALLOW and D3_DIVERGENCE classes on this run, the oracle-dependent ones from [preferred]. */
+    private fun classed(
+        inputs: Map<String, ProducerCorpus.Input>,
+        preferred: List<PlatformReplay>,
+    ): List<Classed> {
+        val classed = LinkedHashMap<Triple<String, RecordClass, String?>, Classed>()
 
         fun add(
             name: String,
             recordClass: RecordClass,
+            divergence: String?,
             reason: () -> String,
             p: PlatformReplay,
         ) {
-            classed
-                .getOrPut(
-                    name to recordClass,
-                ) { Classed(inputs.getValue(name), recordClass, null, reason()) }
-                .holdsOn +=
+            val key = Triple(name, recordClass, divergence)
+            classed.getOrPut(key) { Classed(inputs.getValue(name), recordClass, divergence, reason(), true) }.holdsOn +=
                 p.oracle.id
         }
-        for (p in platforms) {
+        for (p in preferred) {
             for (a in p.accepted) {
                 p.outsideDomain(a)?.let { reason ->
-                    add(a.name, RecordClass.D1_DOM, { d1Justification(a, reason) }, p)
+                    add(a.name, RecordClass.D1_DOM, null, { d1Justification(a, reason) }, p)
                 }
             }
-            for (name in p.spkiReencoded) add(name, RecordClass.D2_REENCODE_ALLOW, { REENCODE }, p)
+            for (name in p.spkiReencoded) add(name, RecordClass.D2_REENCODE_ALLOW, null, { REENCODE }, p)
+            p.oracle.tbsDivergence?.let { d ->
+                for (name in p.tbsDiffering) add(name, RecordClass.D3_DIVERGENCE, d, { DIVERGENCE.getValue(d) }, p)
+            }
         }
         val out = classed.values.toMutableList()
         for (input in ProducerCorpus.inputs) {
             if (CertificateParser.parse(input.der) !is CertificateParse.Parsed) continue
             for (d in ReferenceView.of(PlatformReplay.sha(input.der))?.divergences.orEmpty()) {
-                out += Classed(input, RecordClass.D3_DIVERGENCE, d, DIVERGENCE.getValue(d))
+                out += Classed(input, RecordClass.D3_DIVERGENCE, d, DIVERGENCE.getValue(d), false)
             }
         }
         return out
+    }
+
+    /**
+     * A platform oracle whose `getTBSCertificate()` never matches `Cert.tbs` lands every input it parses in its divergence
+     * class (`CONSCRYPT_TBS` for Conscrypt), holding on that oracle only (spec §9.2 D2: recorded, not a violation).
+     */
+    @Test
+    fun `a TBS that differs from the platform's is classed as the platform's divergence`() {
+        val tampered = PlatformReplay(TamperedTbsOracle)
+        val classed = classed(ProducerCorpus.inputs.associateBy { it.name }, listOf(tampered))
+        val divergent =
+            classed.filter {
+                it.recordClass == RecordClass.D3_DIVERGENCE &&
+                    it.divergence == TamperedTbsOracle.tbsDivergence
+            }
+        assertEquals(
+            tampered.accepted
+                .filter {
+                    it.certificate != null
+                }.map { it.name }
+                .toSet(),
+            divergent.map { it.input.name }.toSet(),
+        )
+        assertTrue(
+            divergent.isNotEmpty() && divergent.all { it.dependent && it.holdsOn == setOf(TamperedTbsOracle.id) },
+        )
     }
 
     /**
@@ -323,7 +381,7 @@ class RecordsTest {
                     )
                 }
             }
-        val dependent = recordClass in ORACLE_DEPENDENT
+        val dependent = recordClass in ORACLE_DEPENDENT || divergence in ORACLE_DIVERGENCES
         val missing = "no golden for ${input.name}; run native/revokt-oracle/record-goldens.sh"
         val oracles =
             platforms.map { entry(it, input.name, sha, if (dependent) it.oracle.id in holdsOn else null) } +
@@ -349,7 +407,7 @@ class RecordsTest {
      */
     private fun producerOutcome(input: ProducerCorpus.Input): String {
         input.canonSha256?.let { sha -> PlatformReplay.producer[sha]?.let { return it } }
-        val read = platforms.firstNotNullOfOrNull { it.acceptedByName[input.name]?.read?.canonSha256 }
+        val read = PlatformReplay.preferred.firstNotNullOfOrNull { it.acceptedByName[input.name]?.read?.canonSha256 }
         return read?.let { PlatformReplay.producer[it] }?.let { "read: $it" } ?: "no canon"
     }
 
@@ -466,6 +524,9 @@ class RecordsTest {
 
         val ORACLE_DEPENDENT = setOf(RecordClass.D1_DOM, RecordClass.D2_REENCODE_ALLOW, RecordClass.KEYABILITY_GAP)
 
+        /** D3 divergence classes that depend on a platform oracle's version, as the classes above do. */
+        val ORACLE_DIVERGENCES = setOf("CONSCRYPT_TBS")
+
         val ORACLE_ORDER = listOf("1", "2", "3a", "3b", "3c", "4")
 
         /** The oracle pins (spec §9.2, Appendix A): 3a in native/revokt-oracle/Cargo.toml, 4 in native/producer-oracle/go.mod. */
@@ -476,8 +537,8 @@ class RecordsTest {
         const val PRODUCER = "mozilla/crlite go 008299826177"
 
         const val REENCODE =
-            "The JDK re-encodes this SPKI's non-minimal headers in getPublicKey().getEncoded(), and keeps the key; " +
-                "allowed by the §9.2 re-encoding rule."
+            "The platform re-encodes this SPKI's non-minimal headers in getPublicKey().getEncoded(), and keeps " +
+                "the key; allowed by the §9.2 re-encoding rule."
 
         val DIVERGENCE =
             mapOf(
@@ -487,6 +548,9 @@ class RecordsTest {
                 "3A_TBS_LAX" to
                     "x509-parser takes an element with tag number 3 that is not a constructed context-specific [3] " +
                     "as extensions; the JDK and revokt ignore it (3A_TBS_LAX).",
+                "CONSCRYPT_TBS" to
+                    "Conscrypt's getTBSCertificate() differs from Cert.tbs: Conscrypt verifies over the presented " +
+                    "TBS TLV, so it cannot verify this input (§9.2 D2, CONSCRYPT_TBS).",
                 "DUPLICATE_EXTENSION" to
                     "x509-parser reports a duplicate SCT-list extension as an error; revokt takes the union of the " +
                     "extensions' pairs (§9.2 D3).",

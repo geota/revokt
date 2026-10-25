@@ -24,6 +24,8 @@ internal object Oracle2 : PlatformOracle {
 
     override val version: String = Conscrypt.version().let { "${it.major()}.${it.minor()}.${it.patch()}" }
 
+    override val tbsDivergence = "CONSCRYPT_TBS"
+
     @Suppress("TooGenericExceptionCaught") // §9.2: every exception other than CertificateException is a Crash
     override fun run(b: ByteArray): PlatformOracle.Outcome =
         try {

@@ -65,8 +65,8 @@ internal data class CorpusRecord(
         ISSUER_CORPUS,
     }
 
-    /** The record's identity: an input has at most one record per class. */
-    val key: Pair<String, RecordClass> get() = sha256 to recordClass
+    /** The record's identity: an input has at most one record per class and divergence. */
+    val key: Triple<String, RecordClass, String?> get() = Triple(sha256, recordClass, divergence)
 
     fun toJson(): Json.Obj =
         Json.obj(
