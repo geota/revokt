@@ -6,9 +6,9 @@ package dev.revokt.engine.parse.producer
 import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.EnvelopeVariants
 import dev.revokt.engine.parse.LengthForm
-import dev.revokt.engine.parse.oracle.Oracle1
 import dev.revokt.engine.parse.oracle.Oracle3a
 import dev.revokt.engine.parse.oracle.Oracle3b
+import dev.revokt.engine.parse.oracle.PlatformOracle
 import okio.ByteString.Companion.toByteString
 import java.io.File
 import java.util.Base64
@@ -198,10 +198,19 @@ internal object ProducerCorpus {
             .filter { it.isNotBlank() && !it.startsWith("#") }
             .associate { line -> line.substringBefore('\t') to line.substringAfter('\t') }
 
-    /** The bytes revokt reads for each input oracle 1 (the test JDK) accepts: `getEncoded()` or the platform canon. */
+    /**
+     * The bytes revokt reads for each input a platform oracle on this run accepts: oracle 1's `getEncoded()` or platform
+     * canon (the test JDK), and oracle 2's `getEncoded()` (Conscrypt).
+     */
     fun readInputs(): List<Input> =
-        inputs.mapNotNull { input ->
-            (Oracle1.run(input.der) as? Oracle1.Outcome.Accept)?.let { Oracle1.read(input.name, it.certificate) }
+        PlatformOracle.all.flatMap { oracle ->
+            inputs.mapNotNull { input ->
+                (
+                    oracle.run(
+                        input.der,
+                    ) as? PlatformOracle.Outcome.Accept
+                )?.let { oracle.read(input.name, it.certificate) }
+            }
         }
 
     /** Writes each distinct canon once when `revokt.writeProducerInputs` names a file; returns whether it did. */

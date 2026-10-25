@@ -60,6 +60,7 @@ io.gitlab.arturbosch.detekt:detekt-rules:1.23.8=detekt
 io.gitlab.arturbosch.detekt:detekt-tooling:1.23.8=detekt
 io.gitlab.arturbosch.detekt:detekt-utils:1.23.8=detekt
 org.apiguardian:apiguardian-api:1.1.2=allTestSourceSetsCompileDependenciesMetadata,jvmTestCompileClasspath,jvmTestResolvableDependenciesMetadata
+org.conscrypt:conscrypt-openjdk-uber:2.8.0=allTestSourceSetsCompileDependenciesMetadata,jvmTestCompileClasspath,jvmTestResolvableDependenciesMetadata,jvmTestRuntimeClasspath
 org.ec4j.core:ec4j-core:1.1.1=ktlint,ktlintBaselineReporter,ktlintRuleset
 org.jcommander:jcommander:1.85=detekt
 org.jetbrains.intellij.deps:trove4j:1.0.20200330=detekt

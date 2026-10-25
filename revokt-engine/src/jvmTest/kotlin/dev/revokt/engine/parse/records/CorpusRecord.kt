@@ -10,8 +10,8 @@ import java.io.File
  * One corpus record of spec §9.2 ("Corpus record schema"): `{sha256, path, revokt, oracles, class, divergence?,
  * keyability?, justification, added}`. An input has one record per class it is admitted under. Committed one per line
  * in `parse/records.jsonl`, written by `RecordsTest`'s hook and checked by it against the replay. The oracle entries
- * carry outcomes only: the spec's `fields | unavailable` arrive with oracle 2 (#13), the first oracle with getters that
- * can be unavailable on the PR tier.
+ * carry outcomes only: the replay fails on any platform getter that throws on the committed corpus, so the spec's
+ * `fields | unavailable` arrive with the secondary corpus (#15).
  */
 internal data class CorpusRecord(
     val sha256: String,
@@ -33,9 +33,9 @@ internal data class CorpusRecord(
     )
 
     /**
-     * One oracle's recorded outcome. Oracle 1 has one entry per matrix JDK, its version the feature release, with [read]
-     * the SHA-256 of the bytes revokt reads where they differ from the input and, on a JDK-dependent record, [holds]:
-     * whether the record's class holds on that JDK.
+     * One oracle's recorded outcome. A platform oracle has one entry per version (oracle 1 per JDK feature release,
+     * oracle 2 per Conscrypt release), with [read] the SHA-256 of the bytes revokt reads where they differ from the input
+     * and, on an oracle-dependent record, [holds]: whether the record's class holds on that version.
      */
     data class Oracle(
         val id: String,

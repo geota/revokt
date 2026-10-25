@@ -28,6 +28,7 @@ The dependency ingress files are protected paths (CODEOWNERS).
 | Key | Owner (key server uid) | Checked against | Added |
 |---|---|---|---|
 | `D233B6C6E7EDC0866D486C166054D87C226DFDC2` | Code Intelligence GmbH - Signing `<fuzzing@code-intelligence.com>` (`com.code-intelligence`, Jazzer) | the `.asc` signatures on Maven Central for `jazzer-junit` 0.30.0 carry this key id; uid on `keyserver.ubuntu.com` | 2026-10-22, clubcard port PR |
+| `3EC80CAD1A3D50AFBBEFC136C2B98E64C61147AC` | Norbert Fabritius `<nfabritius@google.com>` (`org.conscrypt:conscrypt-openjdk-uber` 2.8.0, oracle 2; trusted for that version only) | the `.asc` signatures on Maven Central for 2.8.0 carry this key; its uid on `keyserver.ubuntu.com` names the GitHub user `inorick` (Norbert Fabritius), who published the 2.8.0 release on `github.com/google/conscrypt` and merges its upstream PRs | 2026-10-25, #13 |
 
 ## State of signature verification
 

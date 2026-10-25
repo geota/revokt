@@ -26,7 +26,7 @@ The records of the parser replay corpus (`ProducerCorpus`), one JSON object per 
 has one record per class it is admitted under. `RecordsTest` recomputes every class from the replay on the test JDK
 and requires the committed records to equal it, field for field:
 
-| Class | Admitted for | Depends on the JDK |
+| Class | Admitted for | Depends on a platform oracle |
 |---|---|---|
 | `D1_DOM` | a platform-accepted input outside the D1 domain: oracle 4 rejects `canon(encoded)` or keys other bytes, or a rule (`[0]`, no platform canon) | yes |
 | `D2_REENCODE_ALLOW` | a parsed input whose SPKI oracle 1 re-encodes under the allow-list's rule | yes |
@@ -34,11 +34,13 @@ and requires the committed records to equal it, field for field:
 | `KEYABILITY_GAP` | an end-entity input in the D1 domain whose read parses outside the keyability profile (the D8 gap), when it has no other class | yes |
 
 - **`revokt`** is revokt's parse of the input bytes `b`; where the bytes read differ, the classes are decided on those.
-- **Oracle 1** has one entry per matrix JDK (its feature release), with `read` the SHA-256 of the bytes revokt reads where
-  they differ from the input and, on a JDK-dependent record, `holds`: whether the class holds on that JDK. A record counts
-  on a JDK where its entry holds. Oracles 3a and 3b carry their golden's outcome for the input, and oracle 4 its outcome
-  for `canon` of the input, or of the bytes read (`read: …`) where the input has none. The spec's `fields | unavailable`
-  arrive with oracle 2 (#13), the first oracle whose getters can be unavailable on the PR tier.
+- **Platform oracles** have one entry per version: oracle 1 per matrix JDK (its feature release), oracle 2 per Conscrypt
+  release. Each has `read`, the SHA-256 of the bytes revokt reads where they differ from the input, and, on an
+  oracle-dependent record, `holds`: whether the class holds on that oracle version. A record counts on a run where an
+  entry of that run's versions holds. Oracles 3a and 3b carry their golden's outcome for the input, and oracle 4 its
+  outcome for `canon` of the input, or of the bytes read (`read: …`) where the input has none. The spec's `fields |
+  unavailable` are not recorded: the replay fails on any platform getter that throws on the committed corpus, so none is
+  unavailable there; they arrive with the secondary corpus (#15), where the 0.1 % rate applies.
 - **`keyability`** (`parser`, `clause`, `zlint` as `<errors> <fatals>` or `unparseable`/`panic`) rides on every record of a
   D8-gap input, whatever its class.
 - **Justifications**: a rule-based one (the producer's error, the D1-dom rule, the divergence class, the re-encoding rule,
