@@ -41,6 +41,11 @@ internal object ProducerCorpus {
             "mozilla-content-signing-c2",
         )
 
+    /**
+     * The structural variants of `certs/variants/generate.py`, built from `letsencrypt.org-2`, a CA. Those that drop or
+     * hide the extensions (`spki-then-null-then-uid`, `tbs-null-before-extensions`, `uid-81-twice`, `uid-82-then-81`)
+     * read as leaves to every parser, so they belong in the D8 gap.
+     */
     private val variants =
         listOf(
             "cert-null-after-signature",
@@ -182,8 +187,13 @@ internal object ProducerCorpus {
     }
 
     /** canon SHA-256 → the oracle's line (`OK <serial> <spki-sha256> <ct|lax|zc>` or `REJECT <error>`). */
-    fun goldens(): Map<String, String> =
-        String(resource("producer/goldens.tsv"))
+    fun goldens(): Map<String, String> = tsv("producer/goldens.tsv")
+
+    /** canon SHA-256 → zlint's line (`LINT <errors|-> <warnings|->`, `UNPARSEABLE <error>` or `PANIC <error>`). */
+    fun zlint(): Map<String, String> = tsv("producer/zlint.tsv")
+
+    private fun tsv(path: String): Map<String, String> =
+        String(resource(path))
             .lineSequence()
             .filter { it.isNotBlank() && !it.startsWith("#") }
             .associate { line -> line.substringBefore('\t') to line.substringAfter('\t') }
