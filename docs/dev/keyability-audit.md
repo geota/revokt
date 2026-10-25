@@ -2,7 +2,9 @@
 
 Spec §9.2 (revision 35): "The table is the proof." For each clause K1–K8 of the conservative keyability profile
 (`dev.revokt.engine.parse.Keyability`, `KeyabilityKey`, `KeyabilityValues`, `ExtensionGrammars`), this table cites the
-fatal return sites of the producer's strict parse that the clause covers. If a leaf satisfies every clause, then:
+fatal return sites of the producer's strict parse that the clause covers (ct-go's `ParseCertificate` without a
+`lax` retry; non-fatal x509 errors allowed, oracle 4's `ct` path, spec §9.2 oracle table). If a leaf satisfies every
+clause, then:
 
 1. certificate-transparency-go's strict parse succeeds;
 2. no `lax` retry runs, and zcrypto is never reached;
