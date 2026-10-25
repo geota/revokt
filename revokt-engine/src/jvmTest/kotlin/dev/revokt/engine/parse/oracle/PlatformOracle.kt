@@ -40,6 +40,12 @@ internal interface PlatformOracle {
      */
     val tbsDivergence: String? get() = null
 
+    /**
+     * The D3 divergence class a `getNotBefore()`/`getNotAfter()` difference is recorded under where this oracle drops a
+     * `UTCTime` differential (spec §9.2 D2, revision 41), or null where every time difference is a violation.
+     */
+    val timeDivergence: String? get() = null
+
     fun run(b: ByteArray): Outcome
 
     /** The bytes revokt reads for an accepted [certificate] as a replay input, or null when there are none. */

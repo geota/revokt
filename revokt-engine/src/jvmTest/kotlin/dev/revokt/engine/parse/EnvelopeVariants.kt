@@ -210,6 +210,13 @@ internal object EnvelopeVariants {
                 c.alg().child(1).form = LengthForm.Long(1)
                 c.encode()
             },
+            // A non-zero unused-bits octet with the padding bits clear (§9.2 D7).
+            Variant("sig-unused-bits-1", Expected.SAME_AS_BASE) { c ->
+                val bits = c.sig().content
+                check(bits[bits.lastIndex].toInt() and 1 == 0) { "the fixture's last signature bit must be 0" }
+                bits[0] = 1
+                c.encode()
+            },
             Variant("sig-unused-bits-1-padding-set", Expected.SAME_AS_BASE) { c ->
                 val bits = c.sig().content
                 check(bits[bits.lastIndex].toInt() and 1 == 0) { "the fixture's last signature bit must be 0" }

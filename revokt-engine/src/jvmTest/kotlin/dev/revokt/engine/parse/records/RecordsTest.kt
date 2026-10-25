@@ -14,6 +14,7 @@ import dev.revokt.engine.parse.oracle.Oracle3a
 import dev.revokt.engine.parse.oracle.Oracle3b
 import dev.revokt.engine.parse.oracle.PlatformReplay
 import dev.revokt.engine.parse.oracle.ReferenceView
+import dev.revokt.engine.parse.producer.D7Corpus
 import dev.revokt.engine.parse.producer.ExternalCorpus
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import dev.revokt.engine.parse.records.CorpusRecord.RecordClass
@@ -28,7 +29,9 @@ import kotlin.test.fail
 
 /**
  * The corpus records of spec §9.2 against the replay on this run's platform oracles (the test JDK, Conscrypt): every
- * input the replay classes as D1-dom, as an SPKI a platform re-encodes (D2's allow-list), as a D3 divergence or as a D8-gap entry has its committed record, with the
+ * input the replay classes as D1-dom, as an SPKI a platform re-encodes (D2's allow-list), as a D3 divergence, as a D7 case
+ * (`D7_LENIENCY`, and Firefox's hand-recorded SCT divergence on the D7 cases it marks) or as a D8-gap entry has its
+ * committed record, with the
  * same fields, and no record is stale. A rule-based justification (the producer's error, the D1-dom rule, the class's
  * reason, the zlint errors) is compared too, so a changed reason fails; a record whose rule yields none (a D8-gap entry
  * with no zlint error, a release blocker) needs one written by hand. Every record of a D8-gap input carries
@@ -294,7 +297,10 @@ class RecordsTest {
         val holdsOn: MutableSet<String> = HashSet(),
     )
 
-    /** The D1_DOM, D2_REENCODE_ALLOW and D3_DIVERGENCE classes on this run, the oracle-dependent ones from [preferred]. */
+    /**
+     * The D1_DOM, D2_REENCODE_ALLOW, D3_DIVERGENCE and D7_LENIENCY classes on this run, the oracle-dependent ones from
+     * [preferred].
+     */
     private fun classed(
         inputs: Map<String, ProducerCorpus.Input>,
         preferred: List<PlatformReplay>,
@@ -313,17 +319,23 @@ class RecordsTest {
                 p.oracle.id
         }
         for (p in preferred) {
-            for (a in p.accepted) {
-                p.outsideDomain(a)?.let { reason ->
-                    add(a.name, RecordClass.D1_DOM, null, { d1Justification(a, reason) }, p)
-                }
-            }
-            for (name in p.spkiReencoded) add(name, RecordClass.D2_REENCODE_ALLOW, null, { REENCODE }, p)
-            p.oracle.tbsDivergence?.let { d ->
-                for (name in p.tbsDiffering) add(name, RecordClass.D3_DIVERGENCE, d, { DIVERGENCE.getValue(d) }, p)
-            }
+            classedOn(p) { name, recordClass, divergence, reason -> add(name, recordClass, divergence, reason, p) }
         }
         val out = classed.values.toMutableList()
+        for ((name, cases) in D7Corpus.byInput) {
+            out += Classed(inputs.getValue(name), RecordClass.D7_LENIENCY, null, d7Justification(cases), false)
+        }
+        // Firefox's decoder is not an oracle (§9.2 D3): its divergences are hand-recorded on the D7 cases that mark them.
+        for (name in D7Corpus.firefoxInputs) {
+            out +=
+                Classed(
+                    inputs.getValue(name),
+                    RecordClass.D3_DIVERGENCE,
+                    D7Corpus.FIREFOX,
+                    DIVERGENCE.getValue(D7Corpus.FIREFOX),
+                    false,
+                )
+        }
         for (input in ProducerCorpus.inputs) {
             if (CertificateParser.parse(input.der) !is CertificateParse.Parsed) continue
             for (d in ReferenceView.of(PlatformReplay.sha(input.der))?.divergences.orEmpty()) {
@@ -331,6 +343,24 @@ class RecordsTest {
             }
         }
         return out
+    }
+
+    /** The oracle-dependent classes [p] assigns, each passed to [add] with its rule-based reason. */
+    private fun classedOn(
+        p: PlatformReplay,
+        add: (String, RecordClass, String?, () -> String) -> Unit,
+    ) {
+        for (a in p.accepted) {
+            p.outsideDomain(a)?.let { reason -> add(a.name, RecordClass.D1_DOM, null) { d1Justification(a, reason) } }
+        }
+        for (name in p.spkiReencoded) add(name, RecordClass.D2_REENCODE_ALLOW, null) { REENCODE }
+        for (name in p.spkiNullParameters) add(name, RecordClass.D2_REENCODE_ALLOW, null) { REENCODE_NULL }
+        p.oracle.tbsDivergence?.let { d ->
+            for (name in p.tbsDiffering) add(name, RecordClass.D3_DIVERGENCE, d) { DIVERGENCE.getValue(d) }
+        }
+        p.oracle.timeDivergence?.let { d ->
+            for (name in p.timeOffsetDropped.keys) add(name, RecordClass.D3_DIVERGENCE, d) { DIVERGENCE.getValue(d) }
+        }
     }
 
     /**
@@ -506,6 +536,10 @@ class RecordsTest {
             }
         }
 
+    /** The D7 cases an input carries, as §9.2 names them. */
+    private fun d7Justification(cases: List<D7Corpus.Case>): String =
+        "$D7_RULE ${cases.joinToString("; ") { it.text }}."
+
     /**
      * The rule-based justification of a D8-gap entry with zlint errors. An entry with no zlint error, read conservatively
      * to include one zlint could not lint (`unparseable`, `panic`), is a profile defect that blocks the release: the rule
@@ -588,6 +622,8 @@ class RecordsTest {
 
         const val D1_BY_RULE = "D1-dom by rule"
 
+        const val D7_RULE = "A §9.2 D7 leniency case:"
+
         val ORACLE_DEPENDENT = setOf(RecordClass.D1_DOM, RecordClass.D2_REENCODE_ALLOW, RecordClass.KEYABILITY_GAP)
 
         val ORACLE_ORDER = listOf("1", "2", "3a", "3b", "3c", "4")
@@ -603,6 +639,11 @@ class RecordsTest {
             "The platform re-encodes this SPKI's non-minimal headers in getPublicKey().getEncoded(), and keeps " +
                 "the key; allowed by the §9.2 re-encoding rule."
 
+        const val REENCODE_NULL =
+            "The platform does not know this key's algorithm: its generic key's getEncoded() adds NULL parameters to " +
+                "the AlgorithmIdentifier and keeps the OID and the key bits; allowed by the §9.2 re-encoding rule's " +
+                "second case (revision 41)."
+
         val DIVERGENCE =
             mapOf(
                 "3A_HEADER_LAX" to
@@ -611,15 +652,23 @@ class RecordsTest {
                 "3A_TBS_LAX" to
                     "x509-parser takes an element with tag number 3 that is not a constructed context-specific [3] " +
                     "as extensions; the JDK and revokt ignore it (3A_TBS_LAX).",
+                "CONSCRYPT_TIME_OFFSET" to
+                    "Conscrypt reads this UTCTime's ±hhmm differential as if it were Z; revokt decodes it as the JDK " +
+                    "does, so the platform's time differs by exactly the differential (§9.2 D2, CONSCRYPT_TIME_OFFSET).",
                 "CONSCRYPT_TBS" to
                     "Conscrypt's getTBSCertificate() differs from Cert.tbs: Conscrypt verifies over the presented " +
                     "TBS TLV, so it cannot verify this input (§9.2 D2, CONSCRYPT_TBS).",
+                D7Corpus.FIREFOX to
+                    "Firefox's SCT decoder fails the whole list here (a version other than 0, trailing bytes in the " +
+                    "OCTET STRING, or an item length error), where revokt extracts the pairs: the more-checking " +
+                    "direction (§9.2 D3, hand-recorded).",
                 "DUPLICATE_EXTENSION" to
                     "x509-parser reports a duplicate SCT-list extension as an error; revokt takes the union of the " +
                     "extensions' pairs (§9.2 D3).",
             )
 
         /** Every rule's text: where a rule yields no justification, a hand-written one must contain none of them. */
-        val RULE_TEXTS: List<String> = listOf(GAP_RULE, D1_RULE, D1_BY_RULE, REENCODE) + DIVERGENCE.values
+        val RULE_TEXTS: List<String> =
+            listOf(GAP_RULE, D1_RULE, D1_BY_RULE, D7_RULE, REENCODE, REENCODE_NULL) + DIVERGENCE.values
     }
 }

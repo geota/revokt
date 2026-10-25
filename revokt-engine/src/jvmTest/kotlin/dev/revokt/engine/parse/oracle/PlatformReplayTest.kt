@@ -9,6 +9,7 @@ import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.Span
 import dev.revokt.engine.parse.oracle.PlatformReplay.Accepted
+import dev.revokt.engine.parse.producer.D7Corpus
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import dev.revokt.engine.parse.records.CorpusRecord
 import kotlin.test.Test
@@ -89,6 +90,9 @@ abstract class PlatformReplayTest internal constructor(
             r.divergences.forEach { divergences.getOrPut(it) { HashSet() } += a.name }
             if (Keyability.firstFailing(c) == null) assertProducerBytes(a, c)
             compareJavaFields(a, c, unavailable, reencoded, javaFields)
+            if (a.name in replay.timeOffsetDropped) {
+                divergences.getOrPut(checkNotNull(replay.oracle.timeDivergence)) { HashSet() } += a.name
+            }
         }
         println("D2 on ${replay.oracle.label}: $compared compared; unavailable $unavailable; divergences $divergences")
         assertEquals(emptyList(), javaFields, "normalised Java fields that differ from ${replay.oracle.label}'s")
@@ -105,6 +109,7 @@ abstract class PlatformReplayTest internal constructor(
         val recorded =
             CorpusRecord
                 .divergences(on = replay.oracle)
+                .filterKeys { it != D7Corpus.FIREFOX } // hand-recorded, observed by no oracle
                 .mapValues { (_, paths) -> paths.filter { it in parsed }.toSet() }
                 .filterValues { it.isNotEmpty() }
         assertEquals(recorded, divergences, "D3 divergence classes")
@@ -122,10 +127,16 @@ abstract class PlatformReplayTest internal constructor(
         val (unavailableHere, differing) = JavaFields.compare(a.x509, c).partition { it.unavailable }
         unavailableHere.forEach { unavailable.merge(it.name, 1, Int::plus) }
         for (f in differing.filter { it.mismatch != null }) {
-            if (f.name == "spki" && PlatformReplay.reencodesSpki(c.rawSpki(), a.x509.publicKey.encoded)) {
-                reencoded += a.name
-            } else {
-                mismatches += "${a.name}: ${f.name}: ${f.mismatch}"
+            val spki = f.name == "spki"
+            when {
+                spki && PlatformReplay.reencodesSpki(c.rawSpki(), a.x509.publicKey.encoded) -> reencoded += a.name
+
+                // The allow-list's second rule, and the oracle's time divergence: both recorded (RecordsTest).
+                spki && a.name in replay.spkiNullParameters -> Unit
+
+                f.name in replay.timeOffsetDropped[a.name].orEmpty() -> Unit
+
+                else -> mismatches += "${a.name}: ${f.name}: ${f.mismatch}"
             }
         }
     }

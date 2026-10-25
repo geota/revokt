@@ -57,9 +57,10 @@ and requires the committed records to equal it, field for field:
 | Class | Admitted for | Depends on a platform oracle |
 |---|---|---|
 | `D1_DOM` | a platform-accepted input outside the D1 domain: oracle 4 rejects `canon(encoded)` or keys other bytes, or a rule (`[0]`, no platform canon) | yes |
-| `D2_REENCODE_ALLOW` | a parsed input whose SPKI oracle 1 re-encodes under the allow-list's rule | yes |
-| `D3_DIVERGENCE` | a parsed input in a 3a divergence class (`3A_HEADER_LAX`, `3A_TBS_LAX`, `DUPLICATE_EXTENSION`) | no |
+| `D2_REENCODE_ALLOW` | a parsed input whose SPKI a platform oracle re-encodes under one of the allow-list's two rules (§9.2 D2: every header minimal; or that and NULL parameters added, revision 41) | yes |
+| `D3_DIVERGENCE` | a parsed input in a 3a divergence class (`3A_HEADER_LAX`, `3A_TBS_LAX`, `DUPLICATE_EXTENSION`), or in a Conscrypt one (`CONSCRYPT_TBS`, `CONSCRYPT_TIME_OFFSET`: Conscrypt drops a `UTCTime` differential, revision 41), or hand-recorded as `FIREFOX_SCT_STRICT` on the D7 cases that mark it | the 3a and Firefox classes no; the Conscrypt ones yes, per Conscrypt version |
 | `KEYABILITY_GAP` | an end-entity input in the D1 domain whose read parses outside the keyability profile (the D8 gap), when it has no other class | yes |
+| `D7_LENIENCY` | an input that carries a case of §9.2's D7 list (`D7Corpus`: each case, its inputs and revokt's required outcome where the spec states one, which `D7Test` asserts); the justification names the cases | no |
 
 - **`revokt`** is revokt's parse of the input bytes `b`; where the bytes read differ, the classes are decided on those.
 - **Platform oracles** have one entry per version: oracle 1 per matrix JDK (its feature release), oracle 2 per Conscrypt
@@ -74,7 +75,12 @@ and requires the committed records to equal it, field for field:
 - **Justifications**: a rule-based one (the producer's error, the D1-dom rule, the divergence class, the re-encoding rule,
   the zlint errors) is compared too, so a changed reason fails. A record whose rule yields none (a D8-gap entry with no
   zlint error, a release blocker under §9.2) carries one written by hand.
-- `D7_LENIENCY`, `FUZZ_FINDING` and `ISSUER_CORPUS` records arrive with their corpora (#14, #15).
+- `FUZZ_FINDING` and `ISSUER_CORPUS` records arrive with their corpora (#15).
+- **D7**: the cases already held for another reason (boundary, variants, envelope, `d3/`, `unsigned/`, `fuzz/`) are named,
+  the rest are built on a valid key as `d7/<name>`. A D7 input in the D8 gap keeps its keyability and the gap's rule:
+  where that yields none (no zlint error), the record needs a justification written by hand, as any gap entry does.
+  The D7 SCT cases where Firefox's decoder fails the whole list while revokt extracts pairs (§9.2 D3) also get a
+  hand-recorded `D3_DIVERGENCE` record, class `FIREFOX_SCT_STRICT`, which no oracle observes.
 - The large corpus's records are in its `replay/records.jsonl`. Its D8-gap entries with no zlint verdict (zcrypto cannot
   parse them) or no zlint error carry justifications written per entry from the form that fails the clause; whether
   to widen K7 or K8 for the lint-clean ones is #57.

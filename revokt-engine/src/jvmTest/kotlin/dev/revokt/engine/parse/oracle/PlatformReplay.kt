@@ -100,13 +100,59 @@ internal class PlatformReplay(
             .toSet()
     }
 
-    /** The parsed inputs whose SPKI [oracle] reports re-encoded, under the allow-list's rule (spec §9.2). */
+    /** The parsed inputs whose SPKI [oracle] reports re-encoded, under the allow-list's first rule (spec §9.2). */
     val spkiReencoded: Set<String> by lazy {
         accepted
             .mapNotNull { a ->
                 a.certificate?.let { c -> a.name.takeIf { reencoded(c.rawSpki(), a.x509.publicKey.encoded) } }
             }.toSet()
     }
+
+    /** The parsed inputs whose SPKI [oracle] reports with NULL parameters added, the allow-list's second rule. */
+    val spkiNullParameters: Set<String> by lazy {
+        accepted
+            .mapNotNull { a ->
+                a.certificate?.let { c -> a.name.takeIf { addsNullParameters(c.rawSpki(), a.x509.publicKey.encoded) } }
+            }.toSet()
+    }
+
+    /**
+     * The parsed inputs whose validity times [oracle] reads with a `UTCTime` differential dropped (spec §9.2 D2,
+     * revision 41): the time carries one, revokt's value equals the test JDK's, and the platform's differs by exactly
+     * that differential. Input name → the fields (`notBefore`, `notAfter`) so read; empty for an oracle with no
+     * [PlatformOracle.timeDivergence].
+     */
+    val timeOffsetDropped: Map<String, Set<String>> by lazy {
+        if (oracle.timeDivergence == null) emptyMap() else accepted.mapNotNull(::droppedTimes).toMap()
+    }
+
+    /**
+     * [a]'s name and the validity fields [oracle] reads with a `UTCTime` differential dropped, or null for none. The
+     * times' bytes come from the platform's own `getTBSCertificate()`, walked by the test's DER reader, never from
+     * revokt's parse (spec §9.2 D2, revision 41).
+     */
+    private fun droppedTimes(a: Accepted): Pair<String, Set<String>>? {
+        val c = a.certificate
+        val oracle1 = jdk.acceptedByName[a.name]?.x509
+        val times = validityTimes(a.x509.tbsCertificate)
+        if (c == null || oracle1 == null || times == null) return null
+        val v = c.tbs.validity
+        val fields = HashSet<String>()
+        if (dropped(times.first, v.notBeforeMillis, a.x509.notBefore.time, oracle1.notBefore.time)) {
+            fields += "notBefore"
+        }
+        if (dropped(times.second, v.notAfterMillis, a.x509.notAfter.time, oracle1.notAfter.time)) {
+            fields += "notAfter"
+        }
+        return if (fields.isEmpty()) null else a.name to fields
+    }
+
+    private fun dropped(
+        time: ByteArray,
+        revokt: Long?,
+        platform: Long,
+        oracle1: Long,
+    ): Boolean = revokt != null && platform != revokt && droppedDifferential(time, revokt, platform, oracle1)
 
     companion object {
         const val PRODUCER_REJECTS = "oracle 4 rejects"
@@ -147,6 +193,58 @@ internal class PlatformReplay(
             val r = a.reference ?: return null
             return if (serial == r.serial && spki == sha(Oracle3a.bytes(r.spki))) null else PRODUCER_KEYS_OTHER_BYTES
         }
+
+        /** The notBefore and notAfter TLVs of a TBS (after `[0]` if present, serial, signature, issuer), or null. */
+        fun validityTimes(tbs: ByteArray): Pair<ByteArray, ByteArray>? =
+            try {
+                val fields = DerNode.parse(tbs).children!!
+                val validity = fields[if (fields[0].tag == 0xa0) 4 else 3]
+                validity.child(0).encode() to validity.child(1).encode()
+            } catch (_: RuntimeException) {
+                null
+            }
+
+        /**
+         * Whether a platform time [platform] is revokt's [revokt] with the differential of the `UTCTime` TLV [time]
+         * dropped, revokt agreeing with oracle 1's [oracle1] (spec §9.2 D2, `CONSCRYPT_TIME_OFFSET`).
+         */
+        fun droppedDifferential(
+            time: ByteArray,
+            revokt: Long,
+            platform: Long,
+            oracle1: Long,
+        ): Boolean {
+            if (time.size < 2 || time[0] != 0x17.toByte() || revokt != oracle1) return false
+            val text =
+                String(time.copyOfRange(Oracle1.header(time, 0)?.size ?: return false, time.size), Charsets.US_ASCII)
+            val m = Regex("^\\d{10}(\\d{2})?([+-])(\\d{2})(\\d{2})$").matchEntire(text) ?: return false
+            val g = m.groupValues
+            val minutes = (g[3].toInt() * 60 + g[4].toInt()) * if (g[2] == "+") 1 else -1
+            // Local time read as UTC: the platform is ahead of the true time by the differential.
+            return platform - revokt == minutes * 60_000L
+        }
+
+        /**
+         * The allow-list's second rule (revision 41), on the bytes alone: [platform] is [rawSpki] with every header minimal
+         * and NULL parameters added to an AlgorithmIdentifier that has none, nothing else differing (a generic key of an
+         * algorithm the platform does not know).
+         */
+        fun addsNullParameters(
+            rawSpki: ByteArray,
+            platform: ByteArray,
+        ): Boolean =
+            try {
+                // rawSpki with every header minimal and NULL added to an AlgorithmIdentifier that holds only its OID.
+                val expected = DerNode.parse(rawSpki)
+                val alg = expected.child(0).children!!
+                alg.size == 1 &&
+                    run {
+                        alg += DerNode(0x05, ByteArray(0), null)
+                        expected.encode().contentEquals(platform)
+                    }
+            } catch (_: RuntimeException) {
+                false
+            }
 
         /** The re-encoding allow-list's rule: the platform's `getPublicKey().getEncoded()` is [rawSpki] with every header minimal. */
         fun reencodesSpki(
