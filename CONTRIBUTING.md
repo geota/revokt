@@ -362,8 +362,9 @@ every required check in Appendix B passes**.
 
 **Every PR (required checks, offline except where noted):**
 - `check` on JDK 17, 21, the current LTS and the current feature release (Linux; §9.2 matrix), with the
-  Conscrypt dimension inside each job (the replay test task runs once per Conscrypt uber version listed in
-  the committed matrix file, selected by `-Prevokt.conscrypt=<version>`); Kover instrumentation only on the
+  Conscrypt dimension inside each job (`gradle/oracle-matrix.properties` names the JDKs and the Conscrypt uber
+  versions; `jvmTest` replays on the current Conscrypt and `jvmTestConscryptPrevious` on the previous minor, both in
+  `check`; `verifyOracleMatrix` keeps CI and the nightly in step with the file); Kover instrumentation only on the
   JDK 21 job; `check` on JDK 21 on macOS and Windows for `revokt-engine` and `revokt-jsse` only (file
   locking, `ATOMIC_MOVE`).
 - `ci-extras` on Linux/JDK 21: `-Prevokt.ci` (Android lint and Robolectric from 0.3, consumer builds, purity).

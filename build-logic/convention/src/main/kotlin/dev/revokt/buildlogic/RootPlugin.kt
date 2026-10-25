@@ -73,6 +73,14 @@ class RootPlugin : Plugin<Project> {
             externalCorpus.set(providers.gradleProperty("revokt.corpus").map { layout.projectDirectory.dir(it) })
             rootDir.set(layout.projectDirectory)
         }
+        val verifyMatrix = tasks.register<VerifyOracleMatrixTask>("verifyOracleMatrix") {
+            description = "CI and the nightly run the §9.2 version matrix of gradle/oracle-matrix.properties."
+            group = "verification"
+            matrix.set(layout.projectDirectory.file("gradle/oracle-matrix.properties"))
+            ci.set(layout.projectDirectory.file(".github/workflows/ci.yml"))
+            nightly.set(layout.projectDirectory.file(".github/workflows/nightly.yml"))
+            catalog.set(layout.projectDirectory.file("gradle/libs.versions.toml"))
+        }
         tasks.register<WriteCorpusManifestTask>("writeCorpusManifest") {
             description = "Regenerates corpus/manifest.sha256; only in a PR that admits corpus entries (docs/dev/corpus.md)."
             group = "revokt"
@@ -87,7 +95,7 @@ class RootPlugin : Plugin<Project> {
 
         // `base` registers the root `check` lifecycle task that the gates hang off.
         tasks.named("check") {
-            dependsOn(specStatusCheck, verifyHeaders, verifyCorpus)
+            dependsOn(specStatusCheck, verifyHeaders, verifyCorpus, verifyMatrix)
             // build-logic is an included build; its own tests (TestKit, the detekt rules) are part of the gate.
             dependsOn(gradle.includedBuild("build-logic").task(":convention:check"))
             dependsOn(gradle.includedBuild("build-logic").task(":revokt-detekt-rules:check"))

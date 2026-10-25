@@ -217,3 +217,44 @@ abstract class ResolveAndLockAllTask : DefaultTask() {
         logger.lifecycle("resolveAndLockAll: ${project.path} resolved $count configurations; run with --write-locks to persist them.")
     }
 }
+
+/**
+ * The §9.2 version matrix is one file (`gradle/oracle-matrix.properties`, CONTRIBUTING §6): the CI `check` matrix runs
+ * exactly its JDKs, the nightly replays its EA JDK, and every Conscrypt key it names is a catalog version.
+ */
+abstract class VerifyOracleMatrixTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val matrix: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val ci: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val nightly: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val catalog: RegularFileProperty
+
+    @TaskAction
+    fun verify() {
+        val props = java.util.Properties().apply { matrix.get().asFile.reader().use(::load) }
+        fun list(key: String) = props.getProperty(key)?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+        val jdks = list("jdk").toSet()
+        val ciJdks = Regex("""jdk:\s*"(\d+)"""").findAll(ci.get().asFile.readText()).map { it.groupValues[1] }.toSet()
+        if (ciJdks != jdks) fail("verifyOracleMatrix: ci.yml runs JDKs $ciJdks, gradle/oracle-matrix.properties names $jdks")
+        val ea = props.getProperty("jdk.ea")?.trim() ?: fail("verifyOracleMatrix: no jdk.ea in gradle/oracle-matrix.properties")
+        val night = nightly.get().asFile.readText()
+        for (needle in listOf("java-version: \"$ea-ea\"", "-Prevokt.testJdk=$ea ", "JAVA_HOME_${ea}_X64")) {
+            if (needle !in night) fail("verifyOracleMatrix: nightly.yml does not replay on JDK $ea-ea (no `$needle`)")
+        }
+        val versions = Regex("""^([A-Za-z0-9-]+)\s*=""", RegexOption.MULTILINE).findAll(
+            catalog.get().asFile.readText().substringAfter("[versions]").substringBefore("[libraries]"),
+        ).map { it.groupValues[1] }.toSet()
+        val missing = list("conscrypt") - versions
+        if (missing.isNotEmpty()) fail("verifyOracleMatrix: $missing are not gradle/libs.versions.toml versions")
+    }
+}

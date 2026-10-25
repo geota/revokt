@@ -6,8 +6,9 @@
 # run through the producer pinned in go.mod and through zlint (native/zlint-oracle, its own pin), then the corpus
 # records. Needs Go and the matrix JDKs; the PR tier replays the committed goldens and
 # needs neither. Run from the repository root:  sh native/producer-oracle/record-goldens.sh
-# REVOKT_RECORD_JDKS lists the JDKs to record on, by default the CI matrix of .github/workflows/ci.yml ("17 21 25 27");
-# each must be installed. Any arguments are passed to Gradle, for example
+# REVOKT_RECORD_JDKS lists the JDKs to record on, by default the matrix of gradle/oracle-matrix.properties; each must
+# be installed. The matrix's previous Conscrypt gets one more pass (jvmTestConscryptPrevious). Any arguments are passed
+# to Gradle, for example
 # -Porg.gradle.java.installations.paths=<comma-separated JDK homes>.
 set -eu
 root=$(pwd)
@@ -17,12 +18,14 @@ trap 'rm -rf "${work:?}"' EXIT
 ( cd native/producer-oracle && go build -o "$work/producer-oracle" . )
 ( cd native/zlint-oracle && go build -o "$work/zlint-oracle" . )
 # One pass per matrix JDK (the bytes revokt reads depend on oracle 1's version), merged.
-jdks=${REVOKT_RECORD_JDKS:-17 21 25 27}
+jdks=${REVOKT_RECORD_JDKS:-$(sed -n 's/^jdk=//p' gradle/oracle-matrix.properties | tr ',' ' ')}
 case $jdks in *[!0-9\ ]*) echo "REVOKT_RECORD_JDKS must list JDK feature versions: $jdks" >&2; exit 1 ;; esac
 for jdk in $jdks; do
   ./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.producer.ProducerGoldensWriterTest' \
     -Drevokt.writeProducerInputs="$work/inputs-$jdk.tsv" -Prevokt.testJdk="$jdk" --rerun "$@" </dev/null
 done
+./gradlew -q :revokt-engine:jvmTestConscryptPrevious --tests 'dev.revokt.engine.parse.producer.ProducerGoldensWriterTest' \
+  -Drevokt.writeProducerInputs="$work/inputs-conscrypt-previous.tsv" --rerun "$@" </dev/null
 LC_ALL=C sort -u "$work"/inputs-*.tsv > "$work/inputs.tsv"
 cut -f2 "$work/inputs.tsv" > "$work/b64.txt"
 echo '##' >> "$work/b64.txt"
@@ -53,4 +56,6 @@ for jdk in $jdks; do
   ./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.records.RecordsTest.the records writer*' \
     -Drevokt.writeRecords="$records" -Prevokt.testJdk="$jdk" --rerun "$@" </dev/null
 done
+./gradlew -q :revokt-engine:jvmTestConscryptPrevious --tests 'dev.revokt.engine.parse.records.RecordsTest.the records writer*' \
+  -Drevokt.writeRecords="$records" --rerun "$@" </dev/null
 echo "wrote $(grep -c . "$records") records to $records"

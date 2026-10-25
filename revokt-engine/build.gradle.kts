@@ -61,3 +61,31 @@ class ZlintGoMod(
 ) : CommandLineArgumentProvider {
     override fun asArguments(): List<String> = listOf("-Drevokt.zlintGoMod=${file.absolutePath}")
 }
+
+// The Conscrypt dimension of the §9.2 matrix (gradle/oracle-matrix.properties): jvmTest runs oracle 2 on the catalog's
+// `conscrypt`; this task reruns the Conscrypt-dependent tests (and the recording hooks) on `conscrypt-previous`, with that
+// uber jar in place of the current one. Part of `check`.
+val conscryptPrevious by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+dependencies { conscryptPrevious(libs.conscrypt.openjdk.uber.previous) }
+
+val jvmTestConscryptPrevious =
+    tasks.register<Test>("jvmTestConscryptPrevious") {
+        description = "The Conscrypt-dependent replay and records on the matrix's previous Conscrypt minor."
+        group = "verification"
+        val test = kotlin.jvm().compilations.getByName("test")
+        testClassesDirs = test.output.classesDirs
+        val runtime = test.output.allOutputs + files(test.runtimeDependencyFiles)
+        classpath = runtime.filter { !it.name.startsWith("conscrypt-openjdk-uber-") } + conscryptPrevious
+        useJUnitPlatform()
+        filter {
+            for (test in listOf("ConscryptReplayTest", "RecordsTest", "Oracle3aTest", "ProducerGoldensWriterTest")) {
+                includeTestsMatching("*.$test")
+            }
+        }
+    }
+
+tasks.named("check") { dependsOn(jvmTestConscryptPrevious) }
