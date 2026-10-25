@@ -365,7 +365,7 @@ every required check in Appendix B passes**.
 
 **Every PR (required checks, offline except where noted):**
 - `check` on JDK 17, 21, the current LTS and the current feature release (Linux; §9.2 matrix), each at the latest
-  patch at run time (`check-latest`; the test JDK's patch and vendor are test inputs, so a cached result never stands
+  patch at run time (`check-latest`; the test JDK's patch and vendor are inputs of the replay's tests, so a cached result never stands
   in for another patch, and a patch that changes an outcome fails `check` until the records are regenerated), with
   the Conscrypt dimension inside each job (`gradle/oracle-matrix.properties` names the JDKs and the Conscrypt uber
   versions; `jvmTest` replays on the current Conscrypt and `jvmTestConscryptPrevious` on the previous minor, both in
