@@ -185,15 +185,15 @@ internal sealed class Json {
         private fun string(): String {
             expect('"')
             val out = StringBuilder()
-            while (more() && s[pos] != '"') {
+            check(pos < s.length) { "unterminated string" }
+            while (s[pos] != '"') {
                 val c = s[pos++]
                 out.append(if (c == '\\') escape() else c)
+                check(pos < s.length) { "unterminated string" }
             }
             pos++
             return out.toString()
         }
-
-        private fun more(): Boolean = true.also { check(pos < s.length) { "unterminated string" } }
 
         private fun escape(): Char {
             check(pos < s.length) { "unterminated escape" }

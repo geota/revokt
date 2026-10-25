@@ -33,6 +33,7 @@ and requires the committed records to equal it, field for field:
 | `D3_DIVERGENCE` | a parsed input in a 3a divergence class (`3A_HEADER_LAX`, `3A_TBS_LAX`, `DUPLICATE_EXTENSION`) | no |
 | `KEYABILITY_GAP` | an end-entity input in the D1 domain whose read parses outside the keyability profile (the D8 gap), when it has no other class | yes |
 
+- **`revokt`** is revokt's parse of the input bytes `b`; where the bytes read differ, the classes are decided on those.
 - **Oracle 1** has one entry per matrix JDK (its feature release), with `read` the SHA-256 of the bytes revokt reads where
   they differ from the input and, on a JDK-dependent record, `holds`: whether the class holds on that JDK. A record counts
   on a JDK where its entry holds. Oracles 3a and 3b carry their golden's outcome for the input, and oracle 4 its outcome

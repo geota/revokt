@@ -50,7 +50,14 @@ class RecordsTest {
             val rule = c.justification.isNotBlank()
             assertEquals(fields(c, rule), fields(record, rule), record.path)
             // Where the rule yields none (a release blocker), the justification must be written by hand, not a stale rule.
-            if (!rule) assertFalse(GAP_RULE in record.justification, "${record.path}: a stale rule-based justification")
+            if (!rule) {
+                assertFalse(
+                    RULE_TEXTS.any {
+                        it in record.justification
+                    },
+                    "${record.path}: a stale rule-based justification",
+                )
+            }
         }
         val unjustified = committed.filter { it.justification.isBlank() }.map { "${it.path} ${it.recordClass}" }
         assertEquals(emptyList(), unjustified, "records without a written justification")
@@ -61,11 +68,26 @@ class RecordsTest {
                     it.sha256 in gapInputs && it.keyability == null
                 }.map { "${it.path} ${it.recordClass}" }
         assertEquals(emptyList(), bare, "records of a D8-gap input without keyability")
+        // KEYABILITY_GAP only for an input with no other class; a JDK-dependent class may hold on other JDKs than the gap.
+        val independent = committed.filter { it.recordClass !in JDK_DEPENDENT }
         val gapAlongside =
             committed
                 .filter { it.recordClass == RecordClass.KEYABILITY_GAP }
-                .filter { g -> committed.any { it.sha256 == g.sha256 && it.recordClass != RecordClass.KEYABILITY_GAP } }
+                .filter { g -> independent.any { it.sha256 == g.sha256 } }
         assertEquals(emptyList(), gapAlongside.map { it.path }, "KEYABILITY_GAP records of inputs admitted otherwise")
+        // Keyability on a JDK-independent record must hold on every JDK: the input is accepted wherever it is recorded.
+        val unevenGap =
+            independent.filter {
+                it.keyability != null &&
+                    it.oracles.any { o -> o.id == "1" && o.outcome != "Accept" }
+            }
+        assertEquals(
+            emptyList(),
+            unevenGap.map {
+                it.path
+            },
+            "D8-gap inputs of a JDK-independent class not in the gap on every JDK",
+        )
         val gap = computed.values.mapNotNull { it.keyability?.let { k -> "${k.clause}/${k.parser}" } }
         println("D8 gap on JDK $version (clause/path → inputs): ${gap.groupingBy { it }.eachCount().toSortedMap()}")
     }
@@ -123,8 +145,14 @@ class RecordsTest {
                         added = e.added,
                     )
             } else if (e.recordClass in JDK_DEPENDENT) {
-                val accepted = acceptedByName.containsKey(e.path)
-                val here = CorpusRecord.Oracle("1", version, if (accepted) "Accept" else "Reject", holds = false)
+                val a = acceptedByName[e.path]
+                val read =
+                    a
+                        ?.read
+                        ?.der
+                        ?.let(OracleReplay::sha)
+                        ?.takeIf { it != e.sha256 }
+                val here = CorpusRecord.Oracle("1", version, if (a != null) "Accept" else "Reject", read, holds = false)
                 val oracles = sortOracles(others + here + e.oracles.filter { it.id != "1" })
                 if (oracles.any { it.holds == true }) out[e.key] = e.copy(oracles = oracles)
             }
@@ -281,7 +309,7 @@ class RecordsTest {
             OracleReplay.PRODUCER_REJECTS -> {
                 val error = OracleReplay.producerGolden(a).removePrefix("REJECT ")
                 "Oracle 4 rejects canon of the bytes read ($error): no filter can contain it, so it is never queried " +
-                    "(§9.2 D1-dom)."
+                    "$D1_RULE"
             }
 
             OracleReplay.PRODUCER_KEYS_OTHER_BYTES -> {
@@ -379,6 +407,11 @@ class RecordsTest {
         /** The tail of the D8-gap rule's justification, which a hand-written one never repeats. */
         const val GAP_RULE = "errors, so it is not CA/B-conformant (§9.2 D8 gap)."
 
+        /** D1-dom rule texts, which a hand-written justification never repeats. */
+        const val D1_RULE = "(§9.2 D1-dom)."
+
+        const val D1_BY_RULE = "D1-dom by rule"
+
         val JDK_DEPENDENT = setOf(RecordClass.D1_DOM, RecordClass.D2_REENCODE_ALLOW, RecordClass.KEYABILITY_GAP)
 
         val ORACLE_ORDER = listOf("1", "2", "3a", "3b", "3c", "4")
@@ -406,5 +439,8 @@ class RecordsTest {
                     "x509-parser reports a duplicate SCT-list extension as an error; revokt takes the union of the " +
                     "extensions' pairs (§9.2 D3).",
             )
+
+        /** Every rule's text: where a rule yields no justification, a hand-written one must contain none of them. */
+        val RULE_TEXTS: List<String> = listOf(GAP_RULE, D1_RULE, D1_BY_RULE, REENCODE) + DIVERGENCE.values
     }
 }
