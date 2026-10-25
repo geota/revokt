@@ -250,7 +250,7 @@ class ProducerD8Test {
                         }.certificate!!,
                 )
             }
-        assertTrue(caFixtures.size >= 8, "the CA fixtures are read as CAs: $caFixtures")
+        assertEquals(CA_FIXTURES, caFixtures.toSet(), "the CA fixtures are read as CAs")
         println(
             "D8 gap over the replay corpus (clause/path → inputs): ${gap.groupingBy {
                 "${it.clause}/${it.golden!!.substringAfterLast(
@@ -263,12 +263,19 @@ class ProducerD8Test {
     @Test
     fun `the zlint results name the zlint pin`() {
         val header = String(ProducerCorpus.resource("producer/zlint.tsv")).lineSequence().first()
-        val goMod = File("../native/zlint-oracle/go.mod").readLines()
+        val goMod =
+            File(
+                checkNotNull(System.getProperty("revokt.zlintGoMod")) { "revokt.zlintGoMod not set" },
+            ).readLines()
         val pin = goMod.single { it.trim().startsWith("github.com/zmap/zlint/v3 ") }.trim().split(' ')[1]
         assertEquals("# zlint pin: $pin", header.substringBefore(" (native"), "re-record zlint.tsv after a zlint bump")
     }
 
-    /** Whether basicConstraints marks [c] a CA, read from its extension value independently of the keyability profile. */
+    /**
+     * Whether basicConstraints marks [c] a CA, read from its extension value independently of the keyability profile. A
+     * basicConstraints value that cannot be decoded reads as not a CA, so such a mutant of a CA would count as a leaf;
+     * none in the corpus does (the gap's CA-derived entries carry no extensions at all).
+     */
     private fun isCa(c: ParsedCertificate): Boolean {
         val value =
             c.tbs.extensions
@@ -310,6 +317,22 @@ class ProducerD8Test {
                 listOf("", "/0:30", "/0:30/0:06", "/0:30/1:16").map {
                     "mutant/certs/github.com-1/0:30/0:30/7:a3/0:30/5:30/1:04~/0:30/0:30/1:30$it"
                 }
+
+        /** The fixtures that are CA certificates: every chain's issuers, and Mozilla's content-signing root and intermediate. */
+        val CA_FIXTURES: Set<String> =
+            setOf(
+                "github.com-2",
+                "github.com-3",
+                "letsencrypt.org-2",
+                "letsencrypt.org-3",
+                "letsencrypt.org-4",
+                "www.google.com-2",
+                "www.google.com-3",
+                "www.mozilla.org-2",
+                "www.mozilla.org-3",
+                "mozilla-content-signing-c1",
+                "mozilla-content-signing-c2",
+            )
 
         /** The structural variants revokt rejects as `STRUCTURE` by rule (spec §9.2, the D7 list). */
         val STRICT_VARIANTS =

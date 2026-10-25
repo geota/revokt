@@ -26,9 +26,9 @@ done
 LC_ALL=C sort -u "$work"/inputs-*.tsv > "$work/inputs.tsv"
 cut -f2 "$work/inputs.tsv" > "$work/b64.txt"
 echo '##' >> "$work/b64.txt"
-"$work/producer-oracle" < "$work/b64.txt" | grep -v '^##$' > "$work/verdicts.txt"
+# Both oracles run with GODEBUG unset: a GODEBUG setting would change zcrypto's parsing (the producer's zc path, zlint).
+env -u GODEBUG "$work/producer-oracle" < "$work/b64.txt" | grep -v '^##$' > "$work/verdicts.txt"
 [ "$(wc -l < "$work/inputs.tsv")" -eq "$(wc -l < "$work/verdicts.txt")" ] || { echo "verdict count mismatch" >&2; exit 1; }
-# zlint runs with GODEBUG unset, which changes zcrypto's parsing.
 env -u GODEBUG "$work/zlint-oracle" < "$work/b64.txt" | grep -v '^##$' > "$work/zlint.txt"
 [ "$(wc -l < "$work/inputs.tsv")" -eq "$(wc -l < "$work/zlint.txt")" ] || { echo "zlint reply count mismatch" >&2; exit 1; }
 zlint_pin=$(awk '$1 == "github.com/zmap/zlint/v3" { print $2 }' native/zlint-oracle/go.mod)
