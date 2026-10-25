@@ -2087,8 +2087,9 @@ sequence jump.
   `refreshAnchors()`). The identity keys stay over `getEncoded()`: `chainHash` and with it the verdict-cache,
   path-cache and acceptance-memo keys, which on a fixed JDK determine the bytes read. The bytes read are the
   certificate's DER only where the engine needs it: `Cert.der` and `bytesHash`, the anchor-by-bytes check,
-  `reportedPathSha256s`, `anchorSha256`, `AnchorSnapshot.sha256`, `PresentedChain.der` and `MAX_CERT_BYTES`. The PKIX
-  fallback is given the platform's own anchor objects' `getEncoded()`.
+  `reportedPathSha256s`, `anchorSha256`, `AnchorSnapshot.sha256`, `PresentedChain.der` and `MAX_CERT_BYTES`, which is
+  checked on `getEncoded()` before any parse and again on the bytes read. The PKIX fallback is given the platform's
+  own anchor objects' `getEncoded()`.
 
 ### 5.4 Ktor engine caveats (verified against Ktor 3.6.0 source)
 - **CIO**: a JVM artifact that also runs on Android, TLS 1.2 only, 2-arg `checkServerTrusted`, never runs CT; **refused on Android by revokt** (`RootTrustManager`'s 2-arg overload throws with any `<domain-config>`).
