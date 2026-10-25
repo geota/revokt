@@ -94,6 +94,7 @@ class Oracle3bSlicesTest {
         assertEquals(WALK_FAILS_WHERE_3A_ACCEPTS, walkFailed.toSet(), "inputs 3a accepts and 3b's walk does not")
         // The divergence classes are the committed D3_DIVERGENCE records (spec §9.2 D3, RecordsTest); 3b decides two.
         val recorded = CorpusRecord.divergences().filterKeys { it in setOf("3A_HEADER_LAX", "3A_TBS_LAX") }
+        assertEquals(setOf("3A_HEADER_LAX", "3A_TBS_LAX"), recorded.keys, "both 3b-decided classes are recorded")
         assertEquals(recorded, divergences.mapValues { it.value.toSet() }, "divergence classes")
         assertTrue(located.size > 1000, "only ${located.size} inputs compared")
     }

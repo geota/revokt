@@ -13,15 +13,32 @@ internal sealed class Json {
     ) : Json() {
         operator fun get(key: String): Json? = fields[key]
 
-        fun string(key: String): String = (fields[key] as? Str)?.value ?: error("missing string $key")
+        fun string(key: String): String = stringOrNull(key) ?: error("missing string $key")
 
-        fun stringOrNull(key: String): String? = (fields[key] as? Str)?.value
+        /** The string at [key], null when absent; a value of another type fails. */
+        fun stringOrNull(key: String): String? = typed<Str>(key)?.value
 
-        fun array(key: String): List<Json> = (fields[key] as? Arr)?.items ?: error("missing array $key")
+        fun strings(key: String): List<String> =
+            array(key).map { (it as? Str ?: error("$key holds a non-string")).value }
 
-        fun child(key: String): Obj = fields[key] as? Obj ?: error("missing object $key")
+        fun boolOrNull(key: String): Boolean? = typed<Bool>(key)?.value
 
-        fun childOrNull(key: String): Obj? = fields[key] as? Obj
+        fun array(key: String): List<Json> = typed<Arr>(key)?.items ?: error("missing array $key")
+
+        fun child(key: String): Obj = childOrNull(key) ?: error("missing object $key")
+
+        fun childOrNull(key: String): Obj? = typed<Obj>(key)
+
+        /** This object, after checking it has no key outside [keys]. */
+        fun only(keys: Set<String>): Obj =
+            also { check(keys.containsAll(fields.keys)) { "unknown keys ${fields.keys - keys}" } }
+
+        private inline fun <reified T : Json> typed(key: String): T? =
+            when (val v = fields[key]) {
+                null -> null
+                is T -> v
+                else -> error("$key is not a ${T::class.simpleName}")
+            }
     }
 
     class Arr(
@@ -168,21 +185,37 @@ internal sealed class Json {
         private fun string(): String {
             expect('"')
             val out = StringBuilder()
-            while (s[pos] != '"') {
+            while (more() && s[pos] != '"') {
                 val c = s[pos++]
-                if (c != '\\') {
-                    out.append(c)
-                    continue
-                }
-                when (val e = s[pos++]) {
-                    '"', '\\', '/' -> out.append(e)
-                    'n' -> out.append('\n')
-                    'u' -> out.append(s.substring(pos, pos + 4).toInt(16).toChar()).also { pos += 4 }
-                    else -> error("escape \\$e at $pos")
-                }
+                out.append(if (c == '\\') escape() else c)
             }
             pos++
             return out.toString()
+        }
+
+        private fun more(): Boolean = true.also { check(pos < s.length) { "unterminated string" } }
+
+        private fun escape(): Char {
+            check(pos < s.length) { "unterminated escape" }
+            return when (val e = s[pos++]) {
+                '"', '\\', '/' -> e
+                'n' -> '\n'
+                't' -> '\t'
+                'r' -> '\r'
+                'b' -> '\b'
+                'f' -> '\u000c'
+                'u' -> hex4()
+                else -> error("escape \\$e at $pos")
+            }
+        }
+
+        /** Four hex digits after `\u`, exactly. */
+        private fun hex4(): Char {
+            check(pos + 4 <= s.length) { "short \\u escape" }
+            val digits = s.substring(pos, pos + 4)
+            check(digits.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) { "bad \\u escape $digits" }
+            pos += 4
+            return digits.toInt(16).toChar()
         }
 
         private fun literal(): Json =

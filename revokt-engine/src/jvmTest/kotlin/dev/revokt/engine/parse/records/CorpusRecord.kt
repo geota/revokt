@@ -9,9 +9,11 @@ import java.io.File
 /**
  * One corpus record of spec §9.2 ("Corpus record schema"): `{sha256, path, revokt, oracles, class, divergence?,
  * keyability?, justification, added}`. An input has one record per class it is admitted under. Committed one per line
- * in `parse/records.jsonl`, written by `RecordsTest`'s hook and checked by it against the replay.
+ * in `parse/records.jsonl`, written by `RecordsTest`'s hook and checked by it against the replay. The oracle entries
+ * carry outcomes only: the spec's `fields | unavailable` arrive with oracle 2 (#13), the first oracle with getters that
+ * can be unavailable on the PR tier.
  */
-internal class CorpusRecord(
+internal data class CorpusRecord(
     val sha256: String,
     val path: String,
     val revokt: Revokt,
@@ -23,7 +25,7 @@ internal class CorpusRecord(
     val added: String,
 ) {
     /** revokt's outcome: `Parsed` or the `ParseReason`, with the key bytes and SCT pairs when parsed. */
-    class Revokt(
+    data class Revokt(
         val outcome: String,
         val rawSerial: String?,
         val spkiSha256: String?,
@@ -32,17 +34,22 @@ internal class CorpusRecord(
 
     /**
      * One oracle's recorded outcome. Oracle 1 has one entry per matrix JDK, its version the feature release, with [read]
-     * the SHA-256 of the bytes revokt reads where they differ from the input.
+     * the SHA-256 of the bytes revokt reads where they differ from the input and, on a JDK-dependent record, [holds]:
+     * whether the record's class holds on that JDK.
      */
-    class Oracle(
+    data class Oracle(
         val id: String,
         val version: String,
         val outcome: String,
         val read: String? = null,
+        val holds: Boolean? = null,
     )
 
-    /** The D8-gap fields: oracle 4's path, the first failing `KeyabilityClause` and the pinned zlint errors. */
-    class Keyability(
+    /**
+     * The D8-gap fields: oracle 4's path, the first failing `KeyabilityClause` and the pinned zlint result (`<errors>
+     * <fatals>`, or `unparseable`/`panic`).
+     */
+    data class Keyability(
         val parser: String,
         val clause: String,
         val zlint: String,
@@ -60,13 +67,6 @@ internal class CorpusRecord(
 
     /** The record's identity: an input has at most one record per class. */
     val key: Pair<String, RecordClass> get() = sha256 to recordClass
-
-    /** Whether oracle 1 of [version] accepts the input. */
-    fun acceptedOn(version: String): Boolean =
-        oracles.any {
-            it.id == "1" && it.version == version &&
-                it.outcome == "Accept"
-        }
 
     fun toJson(): Json.Obj =
         Json.obj(
@@ -87,6 +87,7 @@ internal class CorpusRecord(
                             "version" to Json.Str(it.version),
                             "outcome" to Json.Str(it.outcome),
                             "read" to Json.str(it.read),
+                            "holds" to it.holds?.let(Json::Bool),
                         )
                     },
                 ),
@@ -107,8 +108,15 @@ internal class CorpusRecord(
     companion object {
         private const val RESOURCE = "records.jsonl"
 
+        private val RECORD_KEYS =
+            setOf("sha256", "path", "revokt", "oracles", "class", "divergence", "keyability", "justification", "added")
+
+        private val ORACLE_KEYS = setOf("id", "version", "outcome", "read", "holds")
+
+        /** A record from its JSON object; an unknown key or a value of the wrong type fails, so a typo cannot vanish. */
         fun fromJson(j: Json.Obj): CorpusRecord {
-            val r = j.child("revokt")
+            j.only(RECORD_KEYS)
+            val r = j.child("revokt").only(setOf("outcome", "rawSerial", "spkiSha256", "scts"))
             val recordClass = RecordClass.valueOf(j.string("class"))
             val record =
                 CorpusRecord(
@@ -118,18 +126,14 @@ internal class CorpusRecord(
                         r.string("outcome"),
                         r.stringOrNull("rawSerial"),
                         r.stringOrNull("spkiSha256"),
-                        r.array("scts").map { (it as Json.Str).value },
+                        r.strings("scts"),
                     ),
-                    j.array("oracles").map {
-                        val o = it as Json.Obj
-                        Oracle(o.string("id"), o.string("version"), o.string("outcome"), o.stringOrNull("read"))
-                    },
+                    j.array("oracles").map { oracle(it) },
                     recordClass,
                     j.stringOrNull("divergence"),
-                    j
-                        .childOrNull(
-                            "keyability",
-                        )?.let { Keyability(it.string("parser"), it.string("clause"), it.string("zlint")) },
+                    j.childOrNull("keyability")?.only(setOf("parser", "clause", "zlint"))?.let {
+                        Keyability(it.string("parser"), it.string("clause"), it.string("zlint"))
+                    },
                     j.string("justification"),
                     j.string("added"),
                 )
@@ -140,6 +144,17 @@ internal class CorpusRecord(
                 recordClass != RecordClass.KEYABILITY_GAP || record.keyability != null,
             ) { "${record.path}: no keyability" }
             return record
+        }
+
+        private fun oracle(j: Json): Oracle {
+            val o = (j as? Json.Obj ?: error("an oracle entry is not an object")).only(ORACLE_KEYS)
+            return Oracle(
+                o.string("id"),
+                o.string("version"),
+                o.string("outcome"),
+                o.stringOrNull("read"),
+                o.boolOrNull("holds"),
+            )
         }
 
         /** The committed records. */

@@ -54,6 +54,10 @@ class Oracle3aTest {
         println("D2 against 3a: $compared inputs; divergences ${divergences.mapValues { it.value.size }}")
         // The divergence classes are the committed D3_DIVERGENCE records (spec §9.2 D3, RecordsTest).
         val recorded = CorpusRecord.divergences()
+        // A floor, so a class gone from both the records and the replay cannot pass as null == null.
+        for (name in listOf("3A_HEADER_LAX", "3A_TBS_LAX", "DUPLICATE_EXTENSION")) {
+            assertTrue(recorded[name].orEmpty().isNotEmpty(), "no $name record")
+        }
         for ((d, name) in listOf(
             Divergence.HEADER_LAX to "3A_HEADER_LAX",
             Divergence.DUPLICATE to "DUPLICATE_EXTENSION",
