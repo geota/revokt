@@ -35,8 +35,11 @@ import kotlin.test.fail
  *
  * D1_DOM, D2_REENCODE_ALLOW and KEYABILITY_GAP depend on the platform oracles: each record has an entry per oracle
  * version (oracle 1 per matrix JDK, oracle 2 per Conscrypt release), and counts on a run where an entry of its versions
- * `holds`. Regenerate with `native/producer-oracle/record-goldens.sh`, which runs the writer hook once per matrix JDK; it
- * keeps every hand-written justification and `added` date.
+ * `holds`. Regenerate with `native/producer-oracle/record-goldens.sh`, which runs the writer hook once per matrix JDK and
+ * once on the previous Conscrypt (`jvmTestConscryptPrevious`); it keeps every hand-written justification and `added`
+ * date, and prunes entries of versions that have left the matrix. Fields taken once per record from the preferred oracle
+ * (keyability, the justification, oracle 4's `read:`) must agree across Conscrypt versions; if they ever differ, the
+ * runs fail rather than silently keep the last writer's view.
  */
 class RecordsTest {
     private val platforms = PlatformReplay.all
@@ -51,6 +54,22 @@ class RecordsTest {
             it.oracle.id == o.id &&
                 it.oracle.version == o.version
         }
+
+    /** The matrix's versions per platform oracle (gradle/oracle-matrix.properties, passed in by the build). */
+    private val matrix: Map<String, Set<String>> =
+        mapOf("1" to "revokt.matrixJdks", "2" to "revokt.matrixConscrypt").mapValues { (_, key) ->
+            System
+                .getProperty(key)
+                .orEmpty()
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+        }
+
+    /** Whether [o]'s version is still in the matrix; an entry of a version that has left it is pruned on the next write. */
+    private fun inMatrix(o: CorpusRecord.Oracle): Boolean =
+        matrix[o.id]?.takeIf { it.isNotEmpty() }?.contains(o.version) ?: true
 
     @Test
     fun `the committed records equal the replay's classes on this run`() {
@@ -158,7 +177,7 @@ class RecordsTest {
         val byKey = computed.associateBy { it.key }
         val out = LinkedHashMap<Triple<String, RecordClass, String?>, CorpusRecord>()
         for (e in existing) {
-            val others = e.oracles.filter { isPlatform(it) && !isCurrent(it) }
+            val others = e.oracles.filter { isPlatform(it) && !isCurrent(it) && inMatrix(it) }
             val c = byKey[e.key]
             if (c != null) {
                 out[e.key] =
@@ -313,6 +332,32 @@ class RecordsTest {
             }
         }
         return out
+    }
+
+    /**
+     * A record holding on one Conscrypt version only counts on runs of that version: its other version's entry is
+     * neither counted nor compared here.
+     */
+    @Test
+    fun `a record that holds on one oracle version counts only on that version's runs`() {
+        val base = CorpusRecord.committed().first { it.recordClass == RecordClass.D1_DOM }
+        val elsewhere = CorpusRecord.Oracle(Oracle2.id, "0.0.1", "Accept", holds = true)
+        val here = CorpusRecord.Oracle(Oracle2.id, Oracle2.version, "Reject", holds = false)
+        val otherOnly =
+            base.copy(
+                oracles =
+                    base.oracles.filter { it.id != Oracle2.id && it.id != Oracle1.id } + elsewhere + here,
+            )
+        assertFalse(counts(otherOnly), "holds on another Conscrypt version only")
+        assertTrue(
+            counts(
+                otherOnly.copy(
+                    oracles =
+                        otherOnly.oracles - here + here.copy(outcome = "Accept", holds = true),
+                ),
+            ),
+        )
+        assertEquals(listOf(here), otherOnly.oracles.filter(::isCurrent), "only this run's entries are compared")
     }
 
     /**

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Nightly (CONTRIBUTING §6): the native oracle job, the EA replay, fuzzing, the Android matrix and the minified-build
-# tests. Each job is added with its milestone; today the native build skeleton, the purity compile and the EA replay
-# run. Never a PR gate.
+# tests. Each job is added with its milestone; today the native build skeleton, the purity compile, the EA replay and
+# the Conscrypt-release check run. Never a PR gate.
 name: nightly
 
 on:
@@ -54,9 +54,10 @@ jobs:
       - run: ./gradlew :revokt-engine:compileKotlinLinuxX64 :revokt-clubcard:compileKotlinLinuxX64 -Prevokt.purityGate --no-daemon
 
   ea-replay:
-    name: ea replay (D1 on the newest JDK EA; the newest Conscrypt release)
+    name: ea replay (D1 on the newest JDK EA)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,17 +79,31 @@ jobs:
         run: >
           ./gradlew :revokt-engine:jvmTest --tests '*JdkReplayTest.D1*'
           -Prevokt.testJdk=28 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_28_X64 --no-daemon
-      # A Conscrypt release newer than the matrix cannot be replayed until it is admitted like any dependency (its
-      # checksums and signing key verified, CONTRIBUTING §3), so the nightly fails until it is added to the matrix.
-      - name: the newest Conscrypt release is in the matrix
+
+  conscrypt-release:
+    name: conscrypt release (the newest is admitted to the matrix)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Spec §9.2 revision 40: a release newer than the matrix's current Conscrypt cannot be replayed until it is
+      # admitted like any dependency (CONTRIBUTING §3), so this fails until it is; alphas and patches of an older minor
+      # do not count.
+      - name: the newest Conscrypt release is not newer than the matrix's current one
         run: |
           set -euo pipefail
-          latest=$(curl -fsS https://repo1.maven.org/maven2/org/conscrypt/conscrypt-openjdk-uber/maven-metadata.xml \
-            | sed -n 's:.*<release>\(.*\)</release>.*:\1:p')
-          current=$(sed -n 's/^conscrypt = "\(.*\)"$/\1/p' gradle/libs.versions.toml)
-          if [ -z "$latest" ] || [ -z "$current" ]; then echo "::error::cannot read the Conscrypt versions"; exit 1; fi
-          if [ "$latest" != "$current" ]; then
-            echo "::error::Conscrypt $latest is released; the matrix's current is $current: admit it (CONTRIBUTING §3) and roll the matrix"
+          key=$(sed -n 's/^conscrypt[[:space:]]*[=:][[:space:]]*//p' gradle/oracle-matrix.properties | cut -d, -f1 | tr -d ' ')
+          case $key in ''|*[!a-z-]*) echo "::error::no Conscrypt key in gradle/oracle-matrix.properties"; exit 1 ;; esac
+          current=$(sed -n "s/^${key}[[:space:]]*=[[:space:]]*\"\([0-9][0-9.]*\)\"\$/\1/p" gradle/libs.versions.toml)
+          newest=$(curl -fsS --retry 3 --max-time 30 \
+              https://repo1.maven.org/maven2/org/conscrypt/conscrypt-openjdk-uber/maven-metadata.xml \
+            | sed -n 's:.*<version>\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)</version>.*:\1:p' | sort -V | tail -n 1)
+          if [ -z "$current" ] || [ -z "$newest" ]; then echo "::error::cannot read the Conscrypt versions"; exit 1; fi
+          if [ "$(printf '%s\n' "$current" "$newest" | sort -V | tail -n 1)" != "$current" ]; then
+            echo "::error::Conscrypt $newest is released and the matrix's current is $current: admit it (CONTRIBUTING §3) and roll gradle/oracle-matrix.properties"
             exit 1
           fi
 

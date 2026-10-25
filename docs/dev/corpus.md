@@ -49,9 +49,10 @@ and requires the committed records to equal it, field for field:
 - `D7_LENIENCY`, `FUZZ_FINDING` and `ISSUER_CORPUS` records arrive with their corpora (#14, #15).
 
 Regenerate with `native/producer-oracle/record-goldens.sh` after `native/revokt-oracle/record-goldens.sh`. It runs the
-writer once per JDK in `REVOKT_RECORD_JDKS`, merging that JDK's view: `added` dates and hand-written justifications are
-kept, rule-based justifications are recomputed, and a new D8-gap entry with no zlint error gets none, so the replay
-fails until one is written by hand.
+writer once per JDK in `REVOKT_RECORD_JDKS` (by default the JDKs of `gradle/oracle-matrix.properties`) and once on the
+matrix's previous Conscrypt (`jvmTestConscryptPrevious`), merging each run's view: `added` dates and hand-written
+justifications are kept, rule-based justifications are recomputed, entries of versions that have left the matrix are
+pruned, and a new D8-gap entry with no zlint error gets none, so the replay fails until one is written by hand.
 
 ## Clubcard corpus (`corpus/clubcard/`)
 

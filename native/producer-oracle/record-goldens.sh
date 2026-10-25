@@ -18,7 +18,8 @@ trap 'rm -rf "${work:?}"' EXIT
 ( cd native/producer-oracle && go build -o "$work/producer-oracle" . )
 ( cd native/zlint-oracle && go build -o "$work/zlint-oracle" . )
 # One pass per matrix JDK (the bytes revokt reads depend on oracle 1's version), merged.
-jdks=${REVOKT_RECORD_JDKS:-$(sed -n 's/^jdk=//p' gradle/oracle-matrix.properties | tr ',' ' ')}
+jdks=${REVOKT_RECORD_JDKS:-$(sed -n 's/^jdk[[:space:]]*[=:][[:space:]]*//p' gradle/oracle-matrix.properties | tr ',' ' ')}
+[ -n "$(printf '%s' "$jdks" | tr -d ' ')" ] || { echo "no JDKs to record on (REVOKT_RECORD_JDKS, gradle/oracle-matrix.properties)" >&2; exit 1; }
 case $jdks in *[!0-9\ ]*) echo "REVOKT_RECORD_JDKS must list JDK feature versions: $jdks" >&2; exit 1 ;; esac
 for jdk in $jdks; do
   ./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.producer.ProducerGoldensWriterTest' \
