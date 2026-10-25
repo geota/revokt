@@ -6,14 +6,24 @@ Status: **draft spec / project proposal, revision 39** · Target: JVM 17+ and An
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
 
-### Changes in revision 39 (the raw-byte-reference metric and D1-dom, 2026-10-25)
-- **Corrected** (found while implementing #12, oracle 1): D2's gate metric, the count of platform-accepted inputs with
-  no raw-byte reference, had to be zero on the committed corpora, but the D7 corpus's own reject side breaks it. The
-  JDK parses an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI `30 82 00 …`) and fails to
-  verify it, and 3a and 3b locate neither. JDK 27 also parses a definite TBS with an indefinite Validity (probed,
-  Appendix A). Such an input is now D1-dom by rule: no `canon` exists for oracle 4 to read, and every producer path
-  rejects a non-minimal length (Appendix A). The JDK-27 case already was D1-dom, since oracle 4 rejects its `canon`.
-  The metric now excludes D1-dom inputs revokt does not parse; any parsed input without a reference still counts.
+### Changes in revision 39 (the JDK read fallback, 2026-10-25)
+- **Added** (found while implementing #12, oracle 1; #49): on the JDK, a certificate whose `getEncoded()` revokt cannot
+  parse is re-read once through the bytes the JDK verified the signature over, `getTBSCertificate()` and
+  `getSignature()`, assembled as `canon` is (the platform canon, §9.2). A valid signature makes those bytes what the
+  CA signed, however the presented encoding was altered, so a certificate the platform verified is read as the CA
+  issued it. Oracle 1's `encoded` is the bytes so read, and D1, its domain, D2 and D6 follow unchanged. The JVM bindings
+  implement the fallback; Conscrypt needs none, since it parses strict DER.
+- **Why**: the committed D7 corpus holds platform-accepted inputs that neither 3a nor 3b locates (an indefinite TBS
+  holding a non-minimal definite child, on JDK 17, 21 and 27; a definite TBS holding an indefinite Validity, on JDK
+  27; Appendix A), which broke D2's raw-byte-reference metric. A rule-based exclusion was drafted, but its argument
+  misread what the JDK verifies (the independent review of #48). With the fallback, revokt's safety does not depend
+  on that question, which #49 keeps open. The replay (#12) reads the nine indefinite-TBS inputs through their platform
+  canon: each parses, has a raw-byte reference and passes D1 and D2 on all three JDKs, and oracle 4 rejects the
+  platform canon of JDK 27's three, which are D1-dom.
+- **Changed**: a JDK-accepted input for which no platform canon can be built is D1-dom by rule, since the producer
+  cannot key a TBS whose signature AlgorithmIdentifier cannot be located. D2's metric excludes only the inputs revokt
+  does not read on whose `canon(encoded)` oracle 4 rejects or for which no platform canon can be built. The 3b row
+  names its `canon`-only outcome, and D7's SPKI form reads `30 83 00 …`, as the corpus builds it.
 
 ### Changes in revision 38 (the JVM floor is 17; an indefinite `signatureValue` is `STRUCTURE` again, 2026-10-24)
 - **Changed** (the maintainer's decision, 2026-10-24, on #42): the JVM floor and bytecode target move from 11 to 17.
@@ -2661,7 +2671,15 @@ P3. Run under Jazzer with the mutation list as the structured input, plus the co
 **Why it is load-bearing.** Every certificate the trust manager parses has already been accepted by
 the platform: presented chain, platform-built chain, anchors and preloads all arrive as platform
 `X509Certificate`s and are re-read through `getEncoded()` (SunJSSE returns the stored bytes;
-Conscrypt returns `i2d_X509` of the parsed object). `PARSE_FAILED` on the leaf allows in `DEFAULT`
+Conscrypt returns `i2d_X509` of the parsed object). **The read fallback**: on the JDK, a certificate whose
+`getEncoded()` is `ParseFailed(STRUCTURE)` is read once more through the **platform canon**, `SEQUENCE {
+getTBSCertificate(), the signature AlgorithmIdentifier TLV located in it (its third element, or its second without
+`[0]`), BIT STRING { 00, getSignature() } }` with minimal new headers. Those are the bytes the JDK verifies the
+signature over, so a valid signature makes them what the CA signed, however the presented encoding was altered (#49).
+Where the AlgorithmIdentifier cannot be located, or a getter throws, the certificate stays `PARSE_FAILED`. The
+platform canon is its own `canon(encoded)`. A certificate so read carries no `AlgorithmIdMismatch` finding, since the
+platform canon repeats the TBS's AlgorithmIdentifier. Conscrypt needs no fallback: it parses strict DER.
+`PARSE_FAILED` on the leaf allows in `DEFAULT`
 and an unparseable candidate is dropped (decision, §10 item 8). Two failure classes matter: (i) a
 certificate the platform accepts and revokt rejects is unchecked (a leaf) or invisible as an issuer
 (a dropped candidate ends the walk `NO_ISSUER`, which allows in `DEFAULT` for every leaf under that
@@ -2859,10 +2877,10 @@ reported, never rejected as `ParseFailed`; whether such a leaf is queried is the
 
 | # | Oracle | What it answers | Accept | Reject | Crash |
 |---|---|---|---|---|---|
-| 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()` | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
+| 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()`, or the platform canon where revokt does not parse that (the read fallback above) | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
 | 2 | Conscrypt `CertificateFactory` (BoringSSL): `conscrypt-openjdk-uber` versions in the matrix; the **platform** Conscrypt on the instrumented tier | platform acceptance on Android; `encoded = getEncoded()` (`i2d_X509`) | as above | as above | as above |
 | 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error; the TBS TLV re-headed to minimal, its signature AlgorithmIdentifier and the `signatureValue` octets, for `canon` | `Ok` | `Err` | caught panic |
-| 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate`, the outer `signatureAlgorithm` and the `signatureValue` (an indefinite `signatureValue` is not located) and re-encode the TBS under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the content of a definite `signatureValue` after its unused-bits octet, for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located | not located | caught panic |
+| 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate`, the outer `signatureAlgorithm` and the `signatureValue` (an indefinite `signatureValue` is not located) and re-encode the TBS under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the content of a definite `signatureValue` after its unused-bits octet, for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located (or its `canon` parts only, when the walk fails) | not located | caught panic |
 | 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
 | 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key `canon(encoded)` (above), with which bytes and through which path (`ct` for certificate-transparency-go's strict parse, `lax` for ct-go only through a `lax` retry, `zc` for the zcrypto fallback) | both calls return | a `ParseCertificate` error, or a panic anywhere in the producer (the shim recovers around the whole call) | unrecovered; counts as `Reject` under D8 |
 
@@ -2890,13 +2908,13 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   reference view's, and any input with content after the INTEGER inside `[0]`, excluded by rule (the `[0]`
   flattening above). That case is excluded conservatively, not because its key is outside the universe. It costs
   `PARSE_FAILED` for such a leaf and a dropped candidate for such an intermediate, both allowing in `DEFAULT`; such
-  certificates are not CA/B-conformant. Also D1-dom by rule is any input whose TBS the unsigned-header rule makes
-  `STRUCTURE` for a non-minimal definite length on the indefinite chain: it has no `canon` for oracle 4 to read, and
-  every producer path rejects a non-minimal length (Appendix A). For it and the other D1-dom inputs, no filter can
-  contain such a certificate and its key is outside the filter's universe, so it must never be queried (a query
-  would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and with high probability under
-  an inverted issuer block); D8's gated direction enforces that; each entry is kept with the producer's error so a
-  producer change can be re-evaluated.
+  certificates are not CA/B-conformant. Also by rule, a JDK-accepted input for which no platform canon can be built
+  (the read fallback above) is D1-dom: the producer decodes the TBS's fields in order through its signature
+  AlgorithmIdentifier, so it cannot key a verified TBS in which that element cannot be located. For the other D1-dom
+  inputs, no filter can contain such a certificate and its key is outside the filter's universe, so it must never be
+  queried (a query would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and with high probability under an
+  inverted issuer block); D8's gated direction enforces that; each entry is kept with the producer's error (a by-rule
+  entry with its rule) so a producer change can be re-evaluated.
 - **D8 producer-keyability (0.1 gate, zero tolerance, one direction)**: `producerKeyable(encoded)` ⇒ oracle 4 on
   `canon(encoded)` returns `Accept` through certificate-transparency-go's strict parse (`ct`), with serial content equal to
   `rawSerial` and SPKI equal to `rawSpki`.
@@ -2952,8 +2970,9 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   element with tag number 3 that is not a constructed context-specific `[3]` (a primitive `[3]`, or tag number 3 in
   another class; decided by 3b's TBS walk), the reference extension table and SCT pairs are the §9.2 read (∅),
   recorded as `3A_TBS_LAX`; the normalised Java fields equal oracle *i,v*'s. A violation is a P0.
-  The count of platform-accepted inputs with no raw-byte reference (3a rejects, and 3b's walk does not locate the
-  input), other than D1-dom inputs revokt does not parse, is a gate metric and must be zero on the committed corpora.
+  The count of platform-accepted inputs whose `encoded` has no raw-byte reference (3a rejects, and 3b does not locate
+  it: its re-encoding or its walk fails), other than inputs revokt does not parse on whose `canon(encoded)` oracle 4
+  rejects or for which no platform canon can be built, is a gate metric and must be zero on the committed corpora.
 - **D3 SCT classification**: mapping from 3a: no extension → `NO_SCTS`; `ParseError` → `NO_SCTS`
   (an empty list is a `ParseError`; `x509-parser` 0.18.1 never returns `Ok([])`); `Ok(list)` → pair-set equality (D2), with the per-extension ∅ expectation for an inner identifier other than `0x04` (`3A_HEADER_LAX`); 3a's duplicate-extension error →
   the union rule, recorded as a divergence class. Firefox's decoder (fails the whole list on
@@ -3010,7 +3029,7 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   unused-bits octet `01` and the padding bit set; required outcome for each: `Parsed`, with
   the `producerKeyable` and key bytes of the unmodified certificate and a `VERIFIED` link, since the profile reads
   `Cert.tbs`; and on the reject side an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI
-  `30 82 00 …`), which the JDK accepts and fails to verify, an indefinite outer AlgorithmIdentifier holding a
+  `30 83 00 …`), which the JDK accepts and fails to verify, an indefinite outer AlgorithmIdentifier holding a
   non-minimal OID header (`30 80 06 81 08 … 00 00`), which the JDK rejects, and an indefinite `signatureValue`
   (`03 80 <content> 00 00`, whether or not its content reads as a chain of minimal TLVs), which JDK 17 and later
   reject; each `STRUCTURE`); and a CA-signed TBS whose extensions are followed by a trailing element with a
@@ -3071,7 +3090,7 @@ platform-accepted premise and is documented as such (§4).
 **Acceptance.** 0.1 gate: zero D1, D2, D3 and D8 violations on the pinned seed corpus, `x509-limbo`,
 the D7 corpus and the issuer corpus against oracles 1 (every JDK in the matrix), 2 (uber versions
 in the matrix), 3a/3b and 4; the producer SPKI check green; the D8-gap baseline recorded, and zero on the real end-entity fixtures; zero platform-accepted inputs without a
-raw-byte reference, outside the D1-dom inputs revokt does not parse; Kover branch coverage of the parser
+raw-byte reference, outside the unparsed inputs D2's metric excludes; Kover branch coverage of the parser
 package ≥ 90 % measured over the committed
 replay (fuzz-run coverage is reported only). 0.3 gate: the same replay on the platform Conscrypt
 tier (API 26, 31, 34, 36) at zero tolerance. Continuous: no open D1, D2 or D8 finding at any release; the
@@ -3502,6 +3521,8 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   - JDK 27 alone also accepts a definite TBS holding an indefinite Validity, on the same three leaves. `verify` fails,
     3a rejects it, and 3b's walk does not locate it. Oracle 4 rejects its `canon` ("Validity: indefinite length found
     (not DER)").
+  - Read through the platform canon (§9.2 revision 39), each of the nine parses, has a raw-byte reference and passes
+    D1 and D2 on all three JDKs; oracle 4 rejects the platform canon of JDK 27's three, which are D1-dom.
   - No other platform-accepted input lacks a raw-byte reference. `getEncoded()` differs from the input on 18 inputs: a
     non-minimal outer `Certificate` header, re-encoded minimally, and trailing bytes, dropped.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
