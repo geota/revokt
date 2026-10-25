@@ -164,12 +164,23 @@ internal data class CorpusRecord(
         val external: File? get() = ExternalCorpus.replay("records.jsonl")
 
         private val cached: List<CorpusRecord> by lazy {
-            parse(String(ProducerCorpus.resource(RESOURCE))) +
+            val committed = parse(String(ProducerCorpus.resource(RESOURCE)))
+            val large =
                 external
                     ?.takeIf { it.isFile }
                     ?.readText()
                     ?.let(::parse)
                     .orEmpty()
+            // The writer files each record in the corpus that holds its input; a misfiled one is a stale recording.
+            committed
+                .firstOrNull {
+                    ExternalCorpus.owns(it.path)
+                }?.let { error("$RESOURCE holds ${it.path}, a large-corpus input") }
+            large
+                .firstOrNull {
+                    !ExternalCorpus.owns(it.path)
+                }?.let { error("replay/records.jsonl holds ${it.path}, a committed input") }
+            committed + large
         }
 
         /** The committed records, and the large corpus's on a run with its checkout. */

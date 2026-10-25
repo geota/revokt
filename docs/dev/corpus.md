@@ -30,10 +30,16 @@ jvmTest; the tree but its `.git` is a test input, and the test heap is 4 GB). Th
 - **Goldens and records** for those inputs, and for the bytes an oracle reads for them, are in `replay/` of the corpus:
   `3a.tsv.gz`, `3b.tsv.gz`, `producer.tsv.gz`, `zlint.tsv.gz` (the committed files' formats, gzipped) and
   `records.jsonl`. The readers merge them with the committed ones, so D1–D3, D6, D8 and the records run over both.
-- **Recording**: set `REVOKT_CORPUS` to a revokt-corpus working tree for both recorders (below). Each golden goes to the
-  corpus that holds its input, and the records writer splits the records by path; the committed files come out
-  unchanged where the committed corpus did not change. Regenerate the corpus manifest, tag the corpus, and update the
-  pin in one revokt PR.
+- **Recording**: set `REVOKT_CORPUS` to a revokt-corpus working tree for both recorders (below), never
+  `-Prevokt.corpus`, which they reject. Each golden goes to the corpus that holds its input, and the records writer
+  splits the records by path; the committed files come out unchanged where the committed corpus did not change, and a
+  key or record found in both corpora fails the replay. The `.gz` files are written with `gzip -9n`; the recorded ones
+  came from macOS's Apple gzip, and another gzip changes their bytes (not their content), so record on macOS or accept
+  a new tag. Then regenerate the corpus's manifest (its README, "Manifest"), commit and tag the corpus, and update the
+  pin with the new manifest hash in one revokt PR. D8-gap entries no rule justifies get their written justification
+  from the corpus's `tools/limbo-gap-justifications/`; the writer keeps it on every later run.
+- **Coverage**: the ubuntu `check` jobs measure the Kover parser gate with the large corpus included; `check-os` (macOS,
+  Windows) runs it over the committed replay alone, the measure §9.2's acceptance names.
 
 ## Admission
 

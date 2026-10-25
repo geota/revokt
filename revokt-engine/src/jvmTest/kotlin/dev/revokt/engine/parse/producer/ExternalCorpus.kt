@@ -68,6 +68,12 @@ internal object ExternalCorpus {
         }
     }
 
+    /** The first line of `replay/<name>.tsv.gz`, or null without a checkout or before it is recorded. */
+    fun header(name: String): String? =
+        replay("$name.tsv.gz")?.takeIf { it.isFile }?.let { f ->
+            GZIPInputStream(f.inputStream()).bufferedReader().use { it.readLine() }
+        }
+
     /** A file of `replay/`, or null without a checkout. */
     fun replay(name: String): File? = dir?.let { File(it, "replay/$name") }
 }

@@ -211,6 +211,14 @@ class ProducerD8Test {
             ).readLines()
         val pin = goMod.single { it.trim().startsWith("github.com/zmap/zlint/v3 ") }.trim().split(' ')[1]
         assertEquals("# zlint pin: $pin", header.substringBefore(" (native"), "re-record zlint.tsv after a zlint bump")
+        if (ExternalCorpus.dir != null) {
+            val large = assertNotNull(ExternalCorpus.header("zlint"), "the large corpus has no replay/zlint.tsv.gz")
+            assertEquals(
+                "# zlint pin: $pin",
+                large.substringBefore(" (native"),
+                "re-record the large corpus's zlint results (REVOKT_CORPUS) after a zlint bump",
+            )
+        }
     }
 
     private companion object {

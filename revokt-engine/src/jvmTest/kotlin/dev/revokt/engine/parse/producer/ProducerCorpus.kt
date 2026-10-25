@@ -198,11 +198,23 @@ internal object ProducerCorpus {
     /** canon SHA-256 → zlint's line (`LINT <errors|-> <warnings|->`, `UNPARSEABLE <error>` or `PANIC <error>`). */
     fun zlint(): Map<String, String> = zlintResults
 
-    /** The committed goldens at [path] and the large corpus's `replay/<external>.tsv.gz` (ExternalCorpus), merged. */
+    /**
+     * The committed goldens at [path] and the large corpus's `replay/<external>.tsv.gz` (ExternalCorpus), merged. The
+     * recorders file each golden in the corpus that holds its input, so a key in both is a stale recording and fails.
+     */
     fun goldens(
         path: String,
         external: String,
-    ): Map<String, String> = tsv(path) + ExternalCorpus.tsv(external)
+    ): Map<String, String> {
+        val committed = tsv(path)
+        val large = ExternalCorpus.tsv(external)
+        val both = committed.keys intersect large.keys
+        check(both.isEmpty()) {
+            "$path and the large corpus's replay/$external.tsv.gz both hold ${both.size} keys (${both.first()}): " +
+                "re-record both with REVOKT_CORPUS (docs/dev/corpus.md)"
+        }
+        return committed + large
+    }
 
     private fun tsv(path: String): Map<String, String> =
         String(resource(path))
