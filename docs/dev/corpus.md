@@ -6,10 +6,13 @@ Two kinds (CONTRIBUTING §3):
   every `check`. Regenerate the manifest only in a PR that admits entries: `./gradlew writeCorpusManifest` (lands with
   the first corpus entry; until then the manifest is empty).
 - **Large**, in the public `revokt-corpus` repository (CT leaves, `x509-limbo`, the D7 and issuer corpora, spec §9.2),
-  pinned by tag and by its manifest's SHA-256 in `gradle/corpus-pin.properties`, and checked out by CI's `check` jobs into
-  `build/corpus` (cached by tag); `-Prevokt.corpus=build/corpus` makes `verifyCorpusManifest` check it against the pinned
-  manifest hash, and the replay read it. Its tags are immutable (a ruleset on the repository); a new corpus arrives under
-  a new tag through a revokt PR that updates the pin. Locally: `git clone --depth 1 --branch <tag>
+  pinned by tag and by its manifest's SHA-256 in `gradle/corpus-pin.properties` (a protected path): the manifest is
+  committed in revokt-corpus and bound here by its hash, which is how §9.2's "committed SHA-256 manifest" holds for it.
+  CI's `check` jobs check the tag out into `build/corpus` (cached by the pin); `-Prevokt.corpus=build/corpus` makes
+  `verifyCorpusManifest` check the manifest against the pinned hash and every file but the root's `README.md` against
+  the manifest, and the replay (#14) will read only manifest-listed paths. Its `v*` tags are immutable (a ruleset on
+  the repository); a new corpus arrives under a new tag through a revokt PR that updates the pin. Locally (`v1` has no
+  `.gitattributes`, so keep line endings on Windows): `git clone -c core.autocrlf=false --depth 1 --branch <tag>
   https://github.com/geota/revokt-corpus build/corpus`.
 
 | Pin | Value |

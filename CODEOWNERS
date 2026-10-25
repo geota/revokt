@@ -16,6 +16,8 @@
 /gradle/libs.versions.toml         @geota
 /gradle/verification-metadata.xml  @geota
 /gradle/verification-keyring.keys  @geota
+/gradle/corpus-pin.properties      @geota
+/gradle/oracle-matrix.properties   @geota
 /**/*.lockfile                     @geota
 /renovate.json                     @geota
 /.commitlintrc.cjs                 @geota

@@ -164,7 +164,8 @@ abstract class VerifyCorpusManifestTask : DefaultTask() {
             val extManifest = File(ext, "manifest.sha256")
             if (!extManifest.isFile) fail("verifyCorpusManifest: ${ext.path} has no manifest.sha256; the corpus checkout is incomplete (docs/dev/corpus.md).")
             val pin = java.util.Properties().apply { corpusPin.get().asFile.reader().use(::load) }
-            val pinned = pin.getProperty("manifest.sha256")?.trim()
+            val pinned = pin.getProperty("manifest.sha256")?.trim().orEmpty()
+            if (!Regex("[0-9a-f]{64}").matches(pinned)) fail("verifyCorpusManifest: gradle/corpus-pin.properties has no valid manifest.sha256 (64 lower-case hex digits).")
             if (sha256(extManifest) != pinned) {
                 fail(
                     "verifyCorpusManifest: ${ext.path}/manifest.sha256 is not the one gradle/corpus-pin.properties pins " +
@@ -178,15 +179,14 @@ abstract class VerifyCorpusManifestTask : DefaultTask() {
     private fun verifyDir(dir: File, manifestFile: File) {
         val expected = manifestFile.readLines().filter { it.isNotBlank() && !it.startsWith("#") }
             .associate { line -> line.substringAfter("  ").trim() to line.substringBefore("  ").trim() }
-        // A checkout's .git is not corpus data.
-        val actual = dir.walkTopDown().onEnter { it.name != ".git" }.filter { it.isFile && it.name != "manifest.sha256" && it.name != "README.md" }
-            .associate { it.relativeTo(dir).path.replace(File.separatorChar, '/') to sha256(it) }
+        // Only the root's manifest, README.md and a checkout's .git are not corpus data; the same names deeper are.
+        val actual = corpusFiles(dir).associate { it.relativeTo(dir).path.replace(File.separatorChar, '/') to sha256(it) }
         val missing = expected.keys - actual.keys
         val unlisted = actual.keys - expected.keys
         val changed = expected.filter { (k, v) -> actual[k] != null && actual[k] != v }.keys
         if (missing.isNotEmpty() || unlisted.isNotEmpty() || changed.isNotEmpty()) {
             fail(
-                "verifyCorpusManifest: ${dir.relativeTo(rootDir.get().asFile)} disagrees with its manifest " +
+                "verifyCorpusManifest: ${dir.toRelativeStringOrNull(rootDir.get().asFile) ?: dir.path} disagrees with its manifest " +
                     "(missing=$missing unlisted=$unlisted changed=$changed). Corpora are data admitted through docs/dev/corpus.md: " +
                     "regenerate the manifest with `./gradlew writeCorpusManifest` only in a PR that admits the entries.",
             )
@@ -195,6 +195,14 @@ abstract class VerifyCorpusManifestTask : DefaultTask() {
 
     private fun sha256(file: File): String = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
 }
+
+/** The files of a corpus directory a manifest covers: all but the root's `manifest.sha256`, `README.md` and `.git`. */
+internal fun corpusFiles(dir: File): Sequence<File> {
+    val skipped = setOf("manifest.sha256", "README.md", ".git").map { File(dir, it) }.toSet()
+    return dir.walkTopDown().onEnter { it !in skipped }.filter { it.isFile && it !in skipped }
+}
+
+private fun File.toRelativeStringOrNull(base: File): String? = runCatching { relativeTo(base).path }.getOrNull()
 
 /** Writes corpus/manifest.sha256 from the files present; run only in a PR that admits entries (docs/dev/corpus.md). */
 abstract class WriteCorpusManifestTask : DefaultTask() {
@@ -208,7 +216,7 @@ abstract class WriteCorpusManifestTask : DefaultTask() {
     @TaskAction
     fun write() {
         val dir = corpusDir.get().asFile
-        val lines = dir.walkTopDown().filter { it.isFile && it.name != "manifest.sha256" && it.name != "README.md" }
+        val lines = corpusFiles(dir)
             .map { f -> MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) } + "  " + f.relativeTo(dir).path.replace(File.separatorChar, '/') }
             .sorted().toList()
         manifest.get().asFile.writeText("# sha256  path   (relative to corpus/; regenerated only in a PR that admits entries, docs/dev/corpus.md)\n" + lines.joinToString("") { it + "\n" })
