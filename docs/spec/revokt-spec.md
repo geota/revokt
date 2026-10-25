@@ -12,17 +12,17 @@ Status: **draft spec / project proposal, revision 39** · Target: JVM 17+ and An
   `getTBSCertificate()` and `getSignature()`, assembled as `canon` is but with the padding bits cleared (the platform
   canon, §9.2). A valid signature makes those bytes what the CA signed, however the presented encoding was altered,
   so a certificate the platform or the walker verified is read as the CA issued it. Oracle 1's `encoded` is the
-  bytes so read, and D1, its domain, D2 and D6 follow unchanged. The JVM binding applies the fallback before it
-  builds the request, and the bytes read are the certificate's DER throughout the engine (§5.3, 0.2). Conscrypt
-  needs none, since it parses strict DER. A certificate so read carries no `AlgorithmIdMismatch` finding unless its
+  bytes so read, and D1, its domain, D2 and D6 follow unchanged. The JVM binding applies the fallback where the
+  engine parses a certificate; the bytes read are its DER for parsing and the engine's hashes, while the identity
+  keys stay over `getEncoded()` (§5.3, 0.2). Conscrypt needs none, since it parses strict DER. A certificate so read carries no `AlgorithmIdMismatch` finding unless its
   TBS AlgorithmIdentifier is not minimal DER.
 - **Why**: the committed D7 corpus holds platform-accepted inputs that neither 3a nor 3b locates (an indefinite TBS
-  holding a non-minimal definite child, on JDK 17, 21 and 27; a definite TBS holding an indefinite Validity, on JDK
-  27; Appendix A), which broke D2's raw-byte-reference metric. A rule-based exclusion was drafted, but its argument
-  misread what the JDK verifies (the independent review of #48). With the fallback, revokt's safety does not depend
-  on that question, which #49 keeps open. The replay (#12) reads the nine indefinite-TBS inputs through their platform
-  canon: each parses, has a raw-byte reference and passes D1 and D2 on all three JDKs, and oracle 4 rejects the
-  platform canon of JDK 27's three, which are D1-dom. D7 records the nine's outcome accordingly.
+  holding a non-minimal definite child, on JDK 17, 21 and 27; a definite TBS holding an indefinite Validity, on JDK 25
+  and 27; Appendix A), which broke D2's raw-byte-reference metric. A rule-based exclusion was drafted, but its
+  argument misread what the JDK verifies (the independent review of #48). With the fallback, revokt's safety does not
+  depend on that question, which #49 keeps open. The replay (#12) reads the nine indefinite-TBS inputs through their
+  platform canon: each parses, has a raw-byte reference and passes D1 and D2 on all four matrix JDKs, and oracle 4
+  rejects the platform canon of JDK 25 and 27's three, which are D1-dom. D7 records the nine's outcome accordingly.
 - **Changed**: a JDK-accepted input for which no platform canon can be built is D1-dom by rule, since the producer
   cannot key a TBS in which the locator finds no signature AlgorithmIdentifier. D2's metric gains an exclusion: inputs
   revokt does not parse on whose `canon(encoded)` oracle 4 rejects, or for which no platform canon can be built; the
@@ -1283,7 +1283,7 @@ class RevoktPolicy private constructor(…) {           // newBuilder() only fro
     class Builder {                                      // every method returns Builder; build() returns RevoktPolicy and runs the build()-time checks below
         fun rule(rule: Rule, outcome: Outcome): Builder
         fun exempt(rule: Rule, exemption: Exemption): Builder                 // a second call for the same rule replaces the first; clearExemption(rule)
-        fun exemptAnchors(sha256s: Collection<ByteArray>): Builder             // = exempt(rule, anchorIn(sha256s)) for every exemptable rule that is not EVIDENCE, is not marked "empty path" in the §8 table, and whose outcome in the builder at this call is REJECT; applied at its call position over the rule set as it stands then (a later rule() or exempt() on the same builder wins, so a narrower explicit exempt() written after it is kept): EVIDENCE rules (M2 ONECRL, M4 DISTRUST) need an explicit exempt(), so an M1 call never widens to evidence on upgrade, while a non-EVIDENCE rule that flips to REJECT in a later minor (M3 CT_UNVERIFIED) is covered by a call made after the flip, as a private CA wants; the "empty path" rules (NO_ISSUER, ISSUER_UNVERIFIED; a column of the golden fixture, so a future rule must declare it) fire only on an empty reported path, where anchorIn can never match (use hostSuffixIn, platformOnly), whereas M2's ISSUER_UNKNOWN_TO_MOZILLA fires on a Found path and is covered
+        fun exemptAnchors(sha256s: Collection<ByteArray>): Builder             // = exempt(rule, anchorIn(sha256s)) for every exemptable rule that is not EVIDENCE, is not marked "empty path" in the §8 table, and whose outcome in the builder at this call is REJECT; applied at its call position over the rule set as it stands then (a later rule() or exempt() on the same builder wins, so a narrower explicit exempt() written after it is kept): EVIDENCE rules (M2 ONECRL, M4 DISTRUST) need an explicit exempt(), so an M1 call never widens to evidence on upgrade, while a non-EVIDENCE rule that flips to REJECT in a later minor (M3 CT_UNVERIFIED) is covered by a call made after the flip, as a private CA wants; the "empty path" rules (NO_ISSUER, ISSUER_UNVERIFIED; a column of the golden fixture, so a future rule must declare it) fire only on an empty reported path, where anchorIn can never match (use hostSuffixIn, platformOnly), whereas M2's ISSUER_UNKNOWN_TO_MOZILLA fires on a Found path and is covered; sha256s are of each anchor's DER as revokt reads it (§5.3), which is getEncoded() unless the §9.2 read fallback applies
         fun requiredDatasets(set: Set<Dataset>): Builder
         fun staleness(dataset: Dataset, s: Staleness): Builder; fun clearStaleness(dataset: Dataset): Builder   // clearing a required dataset's entry → validate() WARNING STALENESS_CLEARED_FOR_REQUIRED_DATASET
         fun rejectStaleAfter(dataset: Dataset, d: java.time.Duration?): Builder; fun rejectStaleAfterMillis(dataset: Dataset, millis: Long?): Builder   // null clears only the reject threshold; the loud flag stays; on a dataset with no entry, creates one with staleAfter = rejectStaleAfter
@@ -1343,7 +1343,7 @@ fun interface Exemption { fun isExempt(context: ExemptionContext): Boolean   // 
         @JvmStatic fun platformOnly(): Exemption } }                         // context.path.noIssuerReason == PLATFORM_ONLY; a null host or anchorSha256 never matches hostIn/anchorIn
 // Exemptions.kt, @file:JvmName("Exemptions"): infix fun Exemption.and(other: Exemption): Exemption; infix fun Exemption.or(other: Exemption): Exemption   // Java: Exemptions.and(a, b); a throw in either operand is the EXEMPTION engine error
 class ExemptionContext private constructor(…) { val rule: Rule; val chain: PresentedChain? /* null for a non-X.509 credential (M5) */; val credentialType: CredentialType; val path: Finding.Path; val host: String? /* normalised */; val nowMillis: Long; val dataStates: Map<Dataset, Finding.DataState> }   // growable: new evidence (M3 SCTs, M4 distrust record) lands as new nullable properties; builder @RevoktTestingApi on the type
-class AnchorSnapshot private constructor(…) { val id: Long /* process-local counter, like generationEpoch; not stable across processes */; val sha256: ByteArray /* of the sorted anchor DERs only; stable */; val anchors: List<ByteArray>; val createdMillis: Long; val preloadGenerationId: String? /* null in M1; M2: the INTERMEDIATES generation the index holds; an INTERMEDIATES install rebuilds every live index and advances id, so both caches miss */ }
+class AnchorSnapshot private constructor(…) { val id: Long /* process-local counter, like generationEpoch; not stable across processes */; val sha256: ByteArray /* of the sorted anchor DERs only (the bytes read, §5.3); stable */; val anchors: List<ByteArray>; val createdMillis: Long; val preloadGenerationId: String? /* null in M1; M2: the INTERMEDIATES generation the index holds; an INTERMEDIATES install rebuilds every live index and advances id, so both caches miss */ }
 class SyncResult private constructor(…) { val outcome: SyncOutcome; val atMillis: Long; val installed: Map<Dataset, String>; val sourceId: String? /* the source the outcome is about */; val stage: SyncStage? /* where a FAILED/STORE_FAILED/CLOCK_SKEW sync stopped */; val httpStatus: Int? /* the last response status when a fetch was involved */; @Transient val cause: Throwable? /* the fetcher's or loader's throwable; null after deserialisation */; val blockedSource: String? /* BLOCKED_BY_SELF: which source */; val blockedChainSha256: ByteArray?; val blockedLeafSerial: ByteArray? /* BLOCKED_BY_SELF only */; val warnings: List<PolicyDiagnostic> }
 class RevoktEvent private constructor(…) { val sequence: Long; val atMillis: Long; val policyEpoch: Long; val credentialType: CredentialType; val host: String?; val chainSha256: ByteArray; val leafSerial: ByteArray? /* rawSerial */; val verdict: Verdict; val shadowVerdict: Verdict? /* null when no shadowPolicy is set, and when the enforced evaluate threw before the shadow ran */; val enforcement: Enforcement; val enforced: Boolean /* = verdict is Rejected && enforcement == ENFORCE */ }
 interface RevoktListener { fun onVerdict(event: RevoktEvent); fun onStateChanged(state: RevoktState) {} }   // second method has a default body; Java alternative to the state flow
@@ -1894,7 +1894,7 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` is emitted once per OID in `Walk.unsupportedOids`
   on **every** outcome, with `outcomeDepended = (status == ISSUER_UNVERIFIED)`; fixture (n) asserts the
   `false` case on a `Found`.
-- **PKIX fallback contract** (`PathBuilderFallback`; the fallback re-parses the snapshot's anchors with `CertificateFactory` once per `AnchorSnapshot.id`, memoised, and its `CollectionCertStore` holds every presented certificate): result lists the leaf first and **appends the
+- **PKIX fallback contract** (`PathBuilderFallback`; the fallback re-parses the snapshot's anchors' `getEncoded()` with `CertificateFactory` once per `AnchorSnapshot.id`, memoised, and its `CollectionCertStore` holds every presented certificate): result lists the leaf first and **appends the
   trust anchor's certificate**; the leaf must be in the `CollectionCertStore`; one base
   `PKIXBuilderParameters` per snapshot, `clone()` per call; `CertPathBuilder.getInstance("PKIX")` per
   call; `setRevocationEnabled(false)`, `setPolicyQualifiersRejected(false)`, `setDate(now)`,
@@ -2079,11 +2079,14 @@ sequence jump.
   for every JVM binding (SunJSSE's `AbstractTrustManagerWrapper.checkAdditionalTrust` applies algorithm constraints on both the socket and the engine path and endpoint identification on the engine path; fronting a plain delegate removes them).
 - `pathBuilder` is `CertPathBuilder("PKIX")`; `PlatformTrust.canonicalSubject` defaults to `X500Principal.getName(CANONICAL)`,
   which is what SunJSSE's `X500Name.equals` compares. Every M1 chain is `RECONSTRUCTED`.
-- Every certificate (presented, platform-built, anchor) is read through the §9.2 read fallback before the request is
-  built: `getEncoded()`, or the platform canon where revokt's parse of that is `ParseFailed(STRUCTURE)`. The bytes
-  read are the certificate's DER everywhere after: `chainHash`, `bytesHash`, the anchor-by-bytes check,
-  `reportedPathSha256s`, `anchorSha256` (so `exemptAnchors` hashes are taken over them), `PresentedChain.der` and
-  `MAX_CERT_BYTES`.
+- Certificates are read through the §9.2 read fallback where the engine parses them: `getEncoded()`, or the platform
+  canon where revokt's parse of that is `ParseFailed(STRUCTURE)`. Presented and platform-built certificates are read
+  inside `decide`, after the `MAX_PRESENTED` and `MAX_PRESENTED_BYTES` checks; anchors when the `AnchorSnapshot` is
+  built (`start()`, `refreshAnchors()`). The identity keys stay over `getEncoded()`: `chainHash` and with it the
+  verdict-cache, path-cache and acceptance-memo keys, which on a fixed JDK determine the bytes read. The bytes read
+  are the certificate's DER only where the engine needs it: `Cert.der` and `bytesHash`, the anchor-by-bytes check,
+  `reportedPathSha256s`, `anchorSha256`, `AnchorSnapshot.sha256`, `PresentedChain.der` and `MAX_CERT_BYTES`. The PKIX
+  fallback is given the platform's own anchor objects' `getEncoded()`.
 
 ### 5.4 Ktor engine caveats (verified against Ktor 3.6.0 source)
 - **CIO**: a JVM artifact that also runs on Android, TLS 1.2 only, 2-arg `checkServerTrusted`, never runs CT; **refused on Android by revokt** (`RootTrustManager`'s 2-arg overload throws with any `<domain-config>`).
@@ -2690,13 +2693,14 @@ identifiers and definite lengths of at most four octets: after the TBS header it
 there (an optional `[0]`, an INTEGER, a SEQUENCE; ct-go, its `lax` retry and zcrypto reject indefinite lengths and
 lengths of 2^31 or more, Appendix A). The platform canon is the bytes the JDK verifies the signature over, so a valid
 signature makes it what the CA signed, however the presented encoding was altered (#49). That covers the path the
-platform verified and, since the walker verifies over the same `Cert.tbs` and `Cert.sig`, every certificate on a path
-revokt reports; an anchor is read as the JDK's own view of it. Where the AlgorithmIdentifier cannot be located,
+platform verified and, since the walker verifies over the same `Cert.tbs` and `Cert.sig`, every certificate on a link
+the walker verified; an anchor is read as the JDK's own view of it. Where the AlgorithmIdentifier cannot be located,
 `encoded` stays `getEncoded()`: a leaf is `PARSE_FAILED(STRUCTURE)` and a candidate is dropped, and a getter that
 throws has the same outcome and is counted `unavailable` (below). The platform canon is defined as its own
 `canon(encoded)`, and the replay asserts that the reference view, where it locates it, yields the same. A certificate
-so read carries no `AlgorithmIdMismatch` finding unless its TBS AlgorithmIdentifier is not minimal DER. The bytes read
-are its DER throughout the engine (§5.3). Conscrypt needs no fallback: it parses strict DER.
+so read carries no `AlgorithmIdMismatch` finding unless its TBS AlgorithmIdentifier is not minimal DER. Where the bytes
+read stand for the certificate, and where `getEncoded()` still does, is §5.3's. Conscrypt needs no fallback: it parses
+strict DER.
 `PARSE_FAILED` on the leaf allows in `DEFAULT` and an unparseable candidate is dropped (decision, §10 item 8). Two
 failure classes matter: (i) a certificate the platform accepts and revokt rejects is unchecked (a leaf) or invisible
 as an issuer (a dropped candidate ends the walk `NO_ISSUER`, which allows in `DEFAULT` for every leaf under that CA),
@@ -2929,12 +2933,12 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
   `PARSE_FAILED` for such a leaf and a dropped candidate for such an intermediate, both allowing in `DEFAULT`; such
   certificates are not CA/B-conformant. Also by rule, a JDK-accepted input for which no platform canon can be built
   (the read fallback above) is D1-dom: the producer's parse needs at least the forms the locator reads up to the
-  signature AlgorithmIdentifier, so it cannot key a TBS in which the locator finds none. A getter that throws there
-  is counted `unavailable`, not D1-dom. For the other D1-dom
-  inputs, no filter can contain such a certificate and its key is outside the filter's universe, so it must never be
-  queried (a query would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and with high probability under an
-  inverted issuer block); D8's gated direction enforces that; each entry is kept with the producer's error (a by-rule
-  entry with its rule) so a producer change can be re-evaluated.
+  signature AlgorithmIdentifier, so it cannot key a TBS in which the locator finds none. A getter that throws there is
+  counted `unavailable`, not D1-dom: D1 is skipped for that input, which counts toward the 0.1 % infrastructure
+  threshold. For the other D1-dom inputs, no filter can contain such a certificate and its key is outside the filter's
+  universe, so it must never be queried (a query would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and
+  with high probability under an inverted issuer block); D8's gated direction enforces that; each entry is kept with
+  the producer's error (a by-rule entry with its rule) so a producer change can be re-evaluated.
 - **D8 producer-keyability (0.1 gate, zero tolerance, one direction)**: `producerKeyable(encoded)` ⇒ oracle 4 on
   `canon(encoded)` returns `Accept` through certificate-transparency-go's strict parse (`ct`), with serial content equal to
   `rawSerial` and SPKI equal to `rawSpki`.
@@ -3541,11 +3545,12 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
     `02 84 00 00 00`) or SPKI header (`30 83 00 …`), on each of the three leaves the D7 envelope cases use. `verify`
     fails ("Signature does not match"), and neither 3a nor 3b locates them: 3b fails with "non-minimal length under an
     indefinite element".
-  - JDK 27 alone also accepts a definite TBS holding an indefinite Validity, on the same three leaves. `verify` fails,
-    3a rejects it, and 3b's walk does not locate it. Oracle 4 rejects its `canon` ("Validity: indefinite length found
-    (not DER)").
+  - JDK 27 (and, in the replay, JDK 25) also accepts a definite TBS holding an indefinite Validity, on the same three
+    leaves. `verify` fails, 3a rejects it, and 3b's walk does not locate it. Oracle 4 rejects its `canon` ("Validity:
+    indefinite length found (not DER)").
   - Read through the platform canon (§9.2 revision 39), each of the nine parses, has a raw-byte reference and passes
-    D1 and D2 on all three JDKs; oracle 4 rejects the platform canon of JDK 27's three, which are D1-dom.
+    D1 and D2 on JDK 17, 21, 25 and 27; oracle 4 rejects the platform canon of JDK 25 and 27's three, which are
+    D1-dom.
   - No other platform-accepted input lacks a raw-byte reference. `getEncoded()` differs from the input on 18 inputs: a
     non-minimal outer `Certificate` header, re-encoded minimally, and trailing bytes, dropped.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
