@@ -222,16 +222,6 @@ internal object D7Corpus {
                         },
                     "trailing-9f01-definite" to withTbs(leaf, trailingTbs, LengthForm.Minimal),
                     "trailing-9f01-indefinite" to withTbs(leaf, trailingTbs, LengthForm.Indefinite),
-                    // A non-zero unused-bits octet on an RSA signatureValue whose padding bits are clear.
-                    "www.mozilla.org-1/sig-unused-bits-1" to
-                        DerNode.parse(ProducerCorpus.resource("certs/www.mozilla.org-1.der")).let { c ->
-                            val bits = c.child(2).content
-                            check(
-                                bits[bits.lastIndex].toInt() and 1 == 0,
-                            ) { "the fixture's last signature bit must be 0" }
-                            bits[0] = 1
-                            c.encode()
-                        },
                 )
         return built.map { (name, der) -> "d7/$name" to der }
     }
@@ -440,17 +430,11 @@ internal object D7Corpus {
             ),
             Case(
                 "the envelope re-encodings (non-minimal outer signatureAlgorithm and signatureValue headers, the " +
-                    "outer NULL flipped, RSA unused bits with the padding bit set, indefinite and non-minimal " +
-                    "headers in the outer AlgorithmIdentifier, the TBS header long-form or indefinite, an indefinite " +
-                    "TBS with indefinite children): Parsed with the unmodified certificate's producerKeyable and key " +
-                    "bytes",
+                    "outer NULL flipped, a non-zero RSA unused-bits octet with the padding bits clear and with them " +
+                    "set, indefinite and non-minimal headers in the outer AlgorithmIdentifier, the TBS header " +
+                    "long-form or indefinite, an indefinite TBS with indefinite children): Parsed with the " +
+                    "unmodified certificate's producerKeyable and key bytes",
                 sameAsBase,
-                Required.SAME_AS_BASE,
-            ),
-            Case(
-                "a non-zero unused-bits octet on an RSA signatureValue: Parsed with the unmodified certificate's " +
-                    "producerKeyable and key bytes",
-                listOf("d7/www.mozilla.org-1/sig-unused-bits-1"),
                 Required.SAME_AS_BASE,
             ),
             Case(
