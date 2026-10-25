@@ -129,10 +129,7 @@ class ParserReplayTest {
         assertEquals(FALLBACK_PARSED, fallback.filter { it.certificate != null }.map { it.name }.toSet())
         for (a in fallback) {
             val read = a.readInput
-            val located = read.referenceParts?.canon()
-            if (located !=
-                null
-            ) {
+            read.referenceParts?.canon()?.let { located ->
                 assertEquals(Oracle3a.hex(read.der), Oracle3a.hex(located), "${a.name}: canon of its canon")
             }
             a.certificate?.let {

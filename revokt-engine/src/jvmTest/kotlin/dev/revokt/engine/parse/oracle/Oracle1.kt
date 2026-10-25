@@ -174,7 +174,7 @@ internal object Oracle1 {
 
     /** `getExtensionValue`'s DER OCTET STRING, unwrapped to its content (hex). */
     private fun unwrap(wrapped: ByteArray?): String? {
-        if (wrapped == null || wrapped[0] != 0x04.toByte()) return null
+        if (wrapped == null || wrapped.isEmpty() || wrapped[0] != 0x04.toByte()) return null
         val header = header(wrapped, 0) ?: return null
         return Oracle3a.hex(wrapped.copyOfRange(header.size, wrapped.size))
     }
