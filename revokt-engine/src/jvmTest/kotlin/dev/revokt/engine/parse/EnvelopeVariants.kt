@@ -37,8 +37,8 @@ internal object EnvelopeVariants {
 
     /**
      * Forms the JDK cross-check does not assert, for oracle 3b only: an `85` length and `00 00` inside a definite child
-     * under an indefinite TBS, a nested indefinite element inside an indefinite `signatureValue`, and long definite
-     * lengths on the `Certificate`, `[0]` and TBS `signature` headers, which 3a and 3b must both read.
+     * under an indefinite TBS, an indefinite `signatureValue` holding a nested one (`STRUCTURE` since revision 38), and
+     * long definite lengths on the `Certificate`, `[0]` and TBS `signature` headers, which 3a and 3b must both read.
      */
     fun converterForms(): List<Pair<String, (DerNode) -> ByteArray>> =
         listOf(

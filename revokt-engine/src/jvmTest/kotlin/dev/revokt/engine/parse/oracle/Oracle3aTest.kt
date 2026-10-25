@@ -148,10 +148,8 @@ class Oracle3aTest {
                 "unsigned/letsencrypt.org-1/tbs-indefinite",
                 "unsigned/www.google.com-1/tbs-indefinite",
                 "unsigned/www.mozilla.org-1/tbs-indefinite",
-                "boundary/indefinite-signature-value",
                 "envelope/www.mozilla.org-1/alg-indefinite-null-indefinite",
                 "envelope/letsencrypt.org-1/tbs-indefinite-serial-eoc-content",
-                "envelope/letsencrypt.org-1/sig-indefinite-nested",
                 // Signature padding bits set, which x509-parser's DER BIT STRING refuses.
                 "boundary/signature-padding-bits",
                 "envelope/www.mozilla.org-1/sig-unused-bits-1-padding-set",

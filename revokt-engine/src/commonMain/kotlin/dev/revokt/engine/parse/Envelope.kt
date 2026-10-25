@@ -17,9 +17,10 @@ internal class UnsignedElement(
 }
 
 /**
- * The three headers the signature does not cover, read as the JDK reads them (spec §9.2 revision 35): `tbsCertificate`,
- * the outer `signatureAlgorithm` and `signatureValue`, each in any definite length form or indefinite (JDK 11 alone
- * verifies an indefinite `signatureValue`). A non-minimal header here is recorded but does not change what is verified.
+ * The three headers the signature does not cover, read as the JDK reads them (spec §9.2 revision 38): `tbsCertificate`
+ * and the outer `signatureAlgorithm`, each in any definite length form or indefinite, and `signatureValue` in any
+ * definite length form (JDK 17 and later reject an indefinite one). A non-minimal header here is recorded but does not
+ * change what is verified.
  * Re-encoding can grow an element (a 4-octet indefinite frame becomes up to 5 octets of header), so `Cert.tbs` may
  * exceed the input by about a fifth at most, as the JDK's own message does.
  */
@@ -46,6 +47,7 @@ internal object Envelope {
         if (position + 1 >= limit) fail("missing length for $site at $position")
         val first = der[position + 1].toInt() and 0xff
         if (first == INDEFINITE) {
+            if (site == HeaderSite.SIGNATURE_VALUE) fail("indefinite $site at $position")
             val (end, content) = convert(der, position + 2, limit, site, ctx)
             return UnsignedElement(Tlv(tag, Span(position, end), Span(position + 2, end - 2)), true, content)
         }

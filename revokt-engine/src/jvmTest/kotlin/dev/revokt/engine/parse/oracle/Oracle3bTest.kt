@@ -116,12 +116,8 @@ class Oracle3bTest {
                 }
             }
         println("3b against the JDK: ${compared.size} inputs")
-        // JDK 11 refuses far more of the corpus (non-minimal lengths, indefinite elements below the TBS).
-        val modern = Runtime.version().feature() >= 17
-        assertTrue(compared.size > if (modern) 1000 else 300, "only ${compared.size} inputs compared")
-        if (modern) {
-            assertEquals(emptyList(), NESTED_INDEFINITE.filter { it !in compared }, "nested chains the JDK parses")
-        }
+        assertTrue(compared.size > 1000, "only ${compared.size} inputs compared")
+        assertEquals(emptyList(), NESTED_INDEFINITE.filter { it !in compared }, "nested chains the JDK parses")
     }
 
     /** The JDK clears the last octet's padding bits; 3b keeps them. */
@@ -140,7 +136,7 @@ class Oracle3bTest {
     private companion object {
         val THREE_B_NOT_LOCATED: Set<String> = setOf("variants/cert-null-after-signature", "fuzz/trailing-byte")
 
-        /** Nested indefinite chains JDK 17 and later parse (and verify, `CertificateParserEnvelopeJdkTest`). */
+        /** Nested indefinite chains the JDK parses (and verifies, `CertificateParserEnvelopeJdkTest`). */
         val NESTED_INDEFINITE: List<String> =
             listOf(
                 "envelope/letsencrypt.org-1/tbs-indefinite-validity",
