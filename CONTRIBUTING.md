@@ -215,9 +215,10 @@ Jazzer regression inputs (`src/test/resources/<pkg>/<Class>Inputs/`, the only lo
 `docs/dev/rulesets/*.json`. Everything else the build can produce is not committed (Scorecard
 `Binary-Artifacts`): no jars, no `.so`, no generated sources, no reports. Corpora are data: small ones under
 `corpus/` with their SHA-256 manifest (capped at a few MB); the large corpus is the **public** `revokt-corpus`
-repository, checked out by CI at the manifest's pinned tag into `build/corpus`, cached by tag, and read by
-the replay task from a Gradle property so a local run can skip it; `verifyCorpusManifest` always checks
-`corpus/` against its manifest and checks `build/corpus` when the property is set.
+repository, checked out by CI into `build/corpus` at the tag `gradle/corpus-pin.properties` pins with its
+manifest's SHA-256, cached by the pin, and read by the replay (#14) from a Gradle property so a local run can skip it;
+`verifyCorpusManifest` always checks `corpus/` against its manifest and, when the property is set, checks
+`build/corpus`'s manifest against the pinned hash and its files against that manifest.
 
 **Oracles are tools, never shipped** (FilmCraft's rule for FFmpeg, stated for ours): `revokt-oracle`, the
 Go producer CLI, `rust-query-crlite`, `clubcard-crlite` and the upki engine are test oracles and fixture
@@ -320,7 +321,9 @@ a trailer rule is violated:
   review; it becomes a boundary at three.
 - Protected paths (CODEOWNERS and the `protected-paths` Action, one list, kept in `.github/protected-paths.txt`): `revokt-clubcard/**`,
   `**/verify/**`, `**/walker/**`, `**/RevoktTrustManager*`, `**/parser/**`, `**/fetch/**`, `**/signature/**`,
-  `data/seed/**`, `.github/**`, `build-logic/**`, the dependency ingress files (section 3), `docs/spec/**`.
+  `data/seed/**`, `.github/**`, `build-logic/**`, the dependency ingress files (section 3), `docs/spec/**`,
+  `gradle/corpus-pin.properties` (which corpus CI trusts) and `gradle/oracle-matrix.properties` (which oracle versions
+  it replays).
 - Ordinary paths: one maintainer approval (0 during the solo-maintainer phase, ADR-0005, where the
   `Independent review` comment and the maintainer's own full read of the diff stand in). The author never
   approves their own PR. Agent review comments are advisory once a second maintainer exists; the human

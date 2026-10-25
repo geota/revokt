@@ -13,6 +13,8 @@ docs/spec/**
 gradle/libs.versions.toml
 gradle/verification-metadata.xml
 gradle/verification-keyring.keys
+gradle/corpus-pin.properties
+gradle/oracle-matrix.properties
 **/*.lockfile
 renovate.json
 .commitlintrc.cjs
