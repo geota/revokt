@@ -75,6 +75,8 @@ val conscryptPrevious =
     }
 dependencies { add("conscryptPrevious", libs.conscrypt.openjdk.uber.previous) }
 
+// verifyOracleMatrix (build-logic VerificationTasks.kt, WIRED_CONSCRYPT) checks the matrix names exactly the two
+// catalog keys this build wires: `conscrypt` (jvmTest) and `conscrypt-previous` (here). Change both together.
 val conscryptPreviousTests = listOf("ConscryptReplayTest", "RecordsTest", "Oracle3aTest", "ProducerGoldensWriterTest")
 
 val jvmTestConscryptPrevious =
@@ -95,7 +97,8 @@ val jvmTestConscryptPrevious =
         filter { for (name in conscryptPreviousTests) includeTestsMatching("*.$name") }
         val results = reports.junitXml.outputLocation
         val classes = conscryptPreviousTests
-        val narrowed = gradle.startParameter.taskRequests.any { "--tests" in it.args }
+        val narrowed =
+            gradle.startParameter.taskRequests.any { r -> r.args.any { it == "--tests" || it.startsWith("--tests=") } }
         doLast {
             // A renamed class would drop out of the filter silently: each must have run, unless --tests narrowed it.
             if (!narrowed) {

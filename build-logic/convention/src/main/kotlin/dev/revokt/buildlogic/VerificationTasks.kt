@@ -290,6 +290,7 @@ abstract class VerifyOracleMatrixTask : DefaultTask() {
     }
 
     private companion object {
+        /** The catalog keys revokt-engine/build.gradle.kts wires (jvmTest, jvmTestConscryptPrevious); change both together. */
         val WIRED_CONSCRYPT = listOf("conscrypt", "conscrypt-previous")
     }
 }
