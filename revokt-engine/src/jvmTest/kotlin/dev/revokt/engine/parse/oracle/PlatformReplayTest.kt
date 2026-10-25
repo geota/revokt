@@ -9,6 +9,7 @@ import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.Span
 import dev.revokt.engine.parse.oracle.PlatformReplay.Accepted
+import dev.revokt.engine.parse.producer.D7Corpus
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import dev.revokt.engine.parse.records.CorpusRecord
 import kotlin.test.Test
@@ -108,6 +109,7 @@ abstract class PlatformReplayTest internal constructor(
         val recorded =
             CorpusRecord
                 .divergences(on = replay.oracle)
+                .filterKeys { it != D7Corpus.FIREFOX } // hand-recorded, observed by no oracle
                 .mapValues { (_, paths) -> paths.filter { it in parsed }.toSet() }
                 .filterValues { it.isNotEmpty() }
         assertEquals(recorded, divergences, "D3 divergence classes")

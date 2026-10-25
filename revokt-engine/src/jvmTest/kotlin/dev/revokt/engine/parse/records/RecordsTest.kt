@@ -29,7 +29,9 @@ import kotlin.test.fail
 
 /**
  * The corpus records of spec §9.2 against the replay on this run's platform oracles (the test JDK, Conscrypt): every
- * input the replay classes as D1-dom, as an SPKI a platform re-encodes (D2's allow-list), as a D3 divergence or as a D8-gap entry has its committed record, with the
+ * input the replay classes as D1-dom, as an SPKI a platform re-encodes (D2's allow-list), as a D3 divergence, as a D7 case
+ * (`D7_LENIENCY`, and Firefox's hand-recorded SCT divergence on the D7 cases it marks) or as a D8-gap entry has its
+ * committed record, with the
  * same fields, and no record is stale. A rule-based justification (the producer's error, the D1-dom rule, the class's
  * reason, the zlint errors) is compared too, so a changed reason fails; a record whose rule yields none (a D8-gap entry
  * with no zlint error, a release blocker) needs one written by hand. Every record of a D8-gap input carries
@@ -252,14 +254,7 @@ class RecordsTest {
         val out =
             classed.map { c ->
                 val k = gap[c.input.name]?.values?.first()
-                // A D7 case is named by §9.2 itself, so its text stands where the gap's rule yields none.
-                val justification =
-                    if (c.recordClass == RecordClass.D7_LENIENCY) {
-                        listOfNotNull(c.reason, k?.let(::gapJustification)?.ifEmpty { null }).joinToString(" ")
-                    } else {
-                        withGap(c.reason, k)
-                    }
-                record(c.input, c.recordClass, c.divergence, k, justification, c.holdsOn)
+                record(c.input, c.recordClass, c.divergence, k, withGap(c.reason, k), c.holdsOn)
             }
         val gapOnly =
             gap.mapNotNull { (name, byPlatform) ->
@@ -329,6 +324,17 @@ class RecordsTest {
         val out = classed.values.toMutableList()
         for ((name, cases) in D7Corpus.byInput) {
             out += Classed(inputs.getValue(name), RecordClass.D7_LENIENCY, null, d7Justification(cases), false)
+        }
+        // Firefox's decoder is not an oracle (§9.2 D3): its divergences are hand-recorded on the D7 cases that mark them.
+        for (name in D7Corpus.firefoxInputs) {
+            out +=
+                Classed(
+                    inputs.getValue(name),
+                    RecordClass.D3_DIVERGENCE,
+                    D7Corpus.FIREFOX,
+                    DIVERGENCE.getValue(D7Corpus.FIREFOX),
+                    false,
+                )
         }
         for (input in ProducerCorpus.inputs) {
             if (CertificateParser.parse(input.der) !is CertificateParse.Parsed) continue
@@ -652,6 +658,10 @@ class RecordsTest {
                 "CONSCRYPT_TBS" to
                     "Conscrypt's getTBSCertificate() differs from Cert.tbs: Conscrypt verifies over the presented " +
                     "TBS TLV, so it cannot verify this input (§9.2 D2, CONSCRYPT_TBS).",
+                D7Corpus.FIREFOX to
+                    "Firefox's SCT decoder fails the whole list here (a version other than 0, trailing bytes in the " +
+                    "OCTET STRING, or an item length error), where revokt extracts the pairs: the more-checking " +
+                    "direction (§9.2 D3, hand-recorded).",
                 "DUPLICATE_EXTENSION" to
                     "x509-parser reports a duplicate SCT-list extension as an error; revokt takes the union of the " +
                     "extensions' pairs (§9.2 D3).",

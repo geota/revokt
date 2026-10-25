@@ -91,6 +91,11 @@ class JdkReplayTest : PlatformReplayTest(PlatformReplay.jdk, d1Floor = 300, d2Fl
         )
         val withParams = spki(seq(mlDsa, tlv(0x05)), bytes(1, 2, 3))
         assertEquals(false, PlatformReplay.addsNullParameters(withParams, withParams), "parameters already present")
+        // The bytes JDK 17.0.20.1 returns for x509-limbo's rfc9881::ml-dsa-44 leaf (spec Appendix A, revision 41 probes).
+        val real = ProducerCorpus.resource("oracle/ml-dsa-44-spki.der")
+        val jdk17020 = ProducerCorpus.resource("oracle/ml-dsa-44-spki-jdk-17.0.20.1.der")
+        assertTrue(PlatformReplay.addsNullParameters(real, jdk17020), "JDK 17.0.20.1's generic key")
+        assertEquals(false, PlatformReplay.reencodesSpki(real, jdk17020), "not the first rule's minimal re-encoding")
     }
 
     @Test
@@ -99,7 +104,11 @@ class JdkReplayTest : PlatformReplayTest(PlatformReplay.jdk, d1Floor = 300, d2Fl
         val utc = { s: String -> tlv(0x17, ascii(s)) }
         val revokt = 1_792_673_130_000 // 2026-10-22T12:45:30Z, 261022134530+0100 as the JDK reads it
         assertTrue(PlatformReplay.droppedDifferential(utc("261022134530+0100"), revokt, revokt + hour, revokt))
-        assertTrue(PlatformReplay.droppedDifferential(utc("2610221345-0130"), revokt, revokt - 90 * 60_000L, revokt))
+        // 2610221345-0130: local 13:45 is 15:15Z as the JDK reads it, 13:45Z with the differential dropped.
+        val negative = 1_792_682_100_000
+        assertTrue(
+            PlatformReplay.droppedDifferential(utc("2610221345-0130"), negative, negative - 90 * 60_000L, negative),
+        )
         assertEquals(
             false,
             PlatformReplay.droppedDifferential(utc("261022134530+0100"), revokt, revokt + 2 * hour, revokt),

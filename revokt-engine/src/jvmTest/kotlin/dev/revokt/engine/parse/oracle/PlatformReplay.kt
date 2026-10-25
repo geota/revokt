@@ -7,7 +7,6 @@ import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.ParsedCertificate
-import dev.revokt.engine.parse.Span
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import okio.ByteString.Companion.toByteString
 import java.security.cert.X509Certificate
@@ -127,29 +126,33 @@ internal class PlatformReplay(
         if (oracle.timeDivergence == null) emptyMap() else accepted.mapNotNull(::droppedTimes).toMap()
     }
 
-    /** [a]'s name and the validity fields [oracle] reads with a `UTCTime` differential dropped, or null for none. */
+    /**
+     * [a]'s name and the validity fields [oracle] reads with a `UTCTime` differential dropped, or null for none. The
+     * times' bytes come from the platform's own `getTBSCertificate()`, walked by the test's DER reader, never from
+     * revokt's parse (spec §9.2 D2, revision 41).
+     */
     private fun droppedTimes(a: Accepted): Pair<String, Set<String>>? {
         val c = a.certificate
         val oracle1 = jdk.acceptedByName[a.name]?.x509
-        if (c == null || oracle1 == null) return null
+        val times = validityTimes(a.x509.tbsCertificate)
+        if (c == null || oracle1 == null || times == null) return null
         val v = c.tbs.validity
         val fields = HashSet<String>()
-        if (dropped(c.tbsBytes, v.notBefore, v.notBeforeMillis, a.x509.notBefore.time, oracle1.notBefore.time)) {
+        if (dropped(times.first, v.notBeforeMillis, a.x509.notBefore.time, oracle1.notBefore.time)) {
             fields += "notBefore"
         }
-        if (dropped(c.tbsBytes, v.notAfter, v.notAfterMillis, a.x509.notAfter.time, oracle1.notAfter.time)) {
+        if (dropped(times.second, v.notAfterMillis, a.x509.notAfter.time, oracle1.notAfter.time)) {
             fields += "notAfter"
         }
         return if (fields.isEmpty()) null else a.name to fields
     }
 
     private fun dropped(
-        tbs: ByteArray,
-        span: Span,
+        time: ByteArray,
         revokt: Long?,
         platform: Long,
         oracle1: Long,
-    ): Boolean = revokt != null && platform != revokt && droppedDifferential(span.bytes(tbs), revokt, platform, oracle1)
+    ): Boolean = revokt != null && platform != revokt && droppedDifferential(time, revokt, platform, oracle1)
 
     companion object {
         const val PRODUCER_REJECTS = "oracle 4 rejects"
@@ -190,6 +193,16 @@ internal class PlatformReplay(
             val r = a.reference ?: return null
             return if (serial == r.serial && spki == sha(Oracle3a.bytes(r.spki))) null else PRODUCER_KEYS_OTHER_BYTES
         }
+
+        /** The notBefore and notAfter TLVs of a TBS (after `[0]` if present, serial, signature, issuer), or null. */
+        fun validityTimes(tbs: ByteArray): Pair<ByteArray, ByteArray>? =
+            try {
+                val fields = DerNode.parse(tbs).children!!
+                val validity = fields[if (fields[0].tag == 0xa0) 4 else 3]
+                validity.child(0).encode() to validity.child(1).encode()
+            } catch (_: RuntimeException) {
+                null
+            }
 
         /**
          * Whether a platform time [platform] is revokt's [revokt] with the differential of the `UTCTime` TLV [time]

@@ -35,6 +35,41 @@ class D7Test {
         assertEquals(emptyList(), wrong)
     }
 
+    @Test
+    fun `a trailing multi-octet tag reads the same under a definite and an indefinite TBS header`() {
+        val (definite, indefinite) =
+            listOf("d7/trailing-9f01-definite", "d7/trailing-9f01-indefinite").map {
+                (CertificateParser.parse(byName.getValue(it).der) as? CertificateParse.Parsed)?.certificate
+                    ?: fail("$it does not parse")
+            }
+        assertContentEquals(definite.tbsBytes, indefinite.tbsBytes, "Cert.tbs")
+        assertContentEquals(definite.rawSpki(), indefinite.rawSpki(), "SPKI")
+        assertEquals(Keyability.firstFailing(definite), Keyability.firstFailing(indefinite), "first failing clause")
+        assertEquals(definite.ignoredElements.map { it.site }, indefinite.ignoredElements.map { it.site }, "ignored")
+    }
+
+    /**
+     * Every built input carries a key a platform accepts: the boundary corpus's P-256 point or a real fixture's, so a
+     * platform's verdict is about the case, never about TestCert's placeholder point.
+     */
+    @Test
+    fun `every built D7 input carries a valid key`() {
+        val keys =
+            listOf(D7Corpus.key) +
+                listOf("letsencrypt.org-1", "www.mozilla.org-1").map {
+                    (CertificateParser.parse(ProducerCorpus.resource("certs/$it.der")) as CertificateParse.Parsed)
+                        .certificate
+                        .rawSpki()
+                }
+        val without = D7Corpus.inputs().filter { (_, der) -> keys.none { contains(der, it) } }.map { it.first }
+        assertEquals(emptyList(), without, "built D7 inputs without a valid key")
+    }
+
+    private fun contains(
+        haystack: ByteArray,
+        needle: ByteArray,
+    ): Boolean = (0..haystack.size - needle.size).any { i -> needle.indices.all { haystack[i + it] == needle[it] } }
+
     private fun check(
         name: String,
         required: D7Corpus.Required,
@@ -42,8 +77,8 @@ class D7Test {
         val parse = CertificateParser.parse(byName.getValue(name).der)
         val out = ArrayList<String>()
         if (required.reason != null) {
-            val reason = (parse as? CertificateParse.Failed)?.reason?.name ?: "Parsed"
-            if (reason != required.reason) out += "$name: $reason, required ${required.reason}"
+            val reason = (parse as? CertificateParse.Failed)?.reason
+            if (reason != required.reason) out += "$name: ${reason ?: "Parsed"}, required ${required.reason}"
             return out
         }
         val c = (parse as? CertificateParse.Parsed)?.certificate ?: return listOf("$name: $parse, required Parsed")
@@ -56,8 +91,8 @@ class D7Test {
             val base =
                 (CertificateParser.parse(ProducerCorpus.resource("certs/$leaf.der")) as? CertificateParse.Parsed)
                     ?.certificate ?: fail("$leaf does not parse")
-            assertContentEquals(base.rawSerial(), c.rawSerial(), "$name: serial")
-            assertContentEquals(base.rawSpki(), c.rawSpki(), "$name: SPKI")
+            if (!base.rawSerial().contentEquals(c.rawSerial())) out += "$name: serial differs from $leaf"
+            if (!base.rawSpki().contentEquals(c.rawSpki())) out += "$name: SPKI differs from $leaf"
             if (Keyability.firstFailing(base) !=
                 Keyability.firstFailing(c)
             ) {

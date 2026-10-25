@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.parse.producer
 
+import dev.revokt.ParseReason
 import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.EnvelopeVariants
 import dev.revokt.engine.parse.LengthForm
@@ -24,13 +25,13 @@ import dev.revokt.engine.parse.TestDer.tlvWithLength
 internal object D7Corpus {
     /** revokt's required outcome: `Parsed` with [scts] SCTs and [keyable], or a [reason]; null fields are not asserted. */
     class Required(
-        val reason: String? = null,
+        val reason: ParseReason? = null,
         val scts: Int? = null,
         val keyable: Boolean? = null,
         val sameAsBase: Boolean = false,
     ) {
         companion object {
-            val STRUCTURE = Required(reason = "STRUCTURE")
+            val STRUCTURE = Required(reason = ParseReason.STRUCTURE)
 
             fun parsed(
                 scts: Int? = null,
@@ -42,11 +43,20 @@ internal object D7Corpus {
         }
     }
 
+    /**
+     * One D7 case. [firefox] marks an SCT case where Firefox's decoder fails the whole list while revokt extracts pairs
+     * (§9.2 D3: version ≠ 0, trailing bytes in the OCTET STRING, an item length error), hand-recorded as a
+     * `FIREFOX_SCT_STRICT` divergence.
+     */
     class Case(
         val text: String,
         val inputs: List<String>,
         val required: Required? = null,
+        val firefox: Boolean = false,
     )
+
+    /** The divergence class of a [Case.firefox] case's inputs. */
+    const val FIREFOX = "FIREFOX_SCT_STRICT"
 
     private const val SCT = "1.3.6.1.4.1.11129.2.4.2"
 
@@ -76,6 +86,14 @@ internal object D7Corpus {
     }
 
     private fun withSct(value: ByteArray) = BoundaryCorpus.base(extensions = listOf(extension(SCT, value)))
+
+    /**
+     * The boundary corpus's valid P-256 key, for every input built on [TestCert], whose default key is not a point: a
+     * platform would reject the input for its key before reaching the case.
+     */
+    val key: ByteArray by lazy {
+        DerNode.parse(BoundaryCorpus.base()).child(0, 6).let { DerNode(it.tag, it.content, null).encode() }
+    }
 
     private fun withTimes(
         notBefore: ByteArray,
@@ -116,18 +134,25 @@ internal object D7Corpus {
             // An SCT extension after the Extensions SEQUENCE inside [3], where the read skips bytes unparsed.
             "sct-in-ignored-bytes" to
                 TestCert(
-                    spki =
-                        DerNode
-                            .parse(
-                                BoundaryCorpus.base(),
-                            ).child(0, 6)
-                            .let { DerNode(it.tag, it.content, null).encode() },
+                    spki = key,
                     extensionsWrapper = { exts ->
                         tlv(0xa3, seq(*exts.toTypedArray()), extension(SCT, tlv(0x04, list(item(12)))))
                     },
                 ).der,
         )
     }
+
+    /** The time cases built here. */
+    private fun timeInputs(): List<Pair<String, ByteArray>> =
+        listOf(
+            "gentime-fraction" to withTimes(utc("261022134530Z"), gen("20500101000000.5Z")),
+            "utctime-2050" to withTimes(utc("261022134530Z"), utc("500101000000Z")),
+            "time-offset" to withTimes(utc("261022134530+0100"), gen("20500101000000Z")),
+            "time-offset-negative" to withTimes(utc("261022134530-0130"), gen("20500101000000Z")),
+            "gentime-offset" to withTimes(utc("261022134530Z"), gen("20500101000000+0100")),
+            "time-no-seconds" to withTimes(utc("2610221345Z"), gen("20500101000000Z")),
+            "time-feb-31" to withTimes(utc("260231000000Z"), gen("20500101000000Z")),
+        )
 
     /** The inputs built here, as `d7/<name>`. */
     fun inputs(): List<Pair<String, ByteArray>> {
@@ -137,14 +162,21 @@ internal object D7Corpus {
             leafTbs.encode().let { it.copyOfRange(it.size - leafTbs.content.size, it.size) } +
                 bytes(0x9f, 0x01, 0x02, 0x05, 0x00)
         val built =
-            sctInputs() +
+            sctInputs() + timeInputs() +
                 listOf(
-                    "gentime-fraction" to withTimes(utc("261022134530Z"), gen("20500101000000.5Z")),
-                    "utctime-2050" to withTimes(utc("261022134530Z"), utc("500101000000Z")),
                     "name-printable" to subject(tlv(0x13, ascii("leaf.example"))),
                     "name-teletex" to subject(tlv(0x14, ascii("t61"))),
                     "name-bmp" to subject(tlv(0x1e, bytes(0, 0x41))),
                     "empty-subject" to BoundaryCorpus.base(subject = seq()),
+                    // The form CAs issue: an empty subject with a critical subjectAltName (RFC 5280 §4.2.1.6).
+                    "empty-subject-san" to
+                        BoundaryCorpus.base(
+                            subject = seq(),
+                            extensions =
+                                listOf(
+                                    extension("2.5.29.17", seq(tlv(0x82, ascii("leaf.example"))), critical = true),
+                                ),
+                        ),
                     "duplicate-ski" to
                         BoundaryCorpus.base(
                             extensions =
@@ -153,31 +185,31 @@ internal object D7Corpus {
                                     extension("2.5.29.14", tlv(0x04, bytes(5, 6, 7, 8))),
                                 ),
                         ),
-                    "stop-9f01" to TestCert(uniqueIds = bytes(0x9f, 0x01, 0x01, 0x00)).der,
-                    "stop-bf02" to TestCert(uniqueIds = bytes(0xbf, 0x02, 0x01, 0x00)).der,
-                    "stop-9f1f" to TestCert(uniqueIds = bytes(0x9f, 0x1f, 0x1f) + ByteArray(31)).der,
-                    "version-trailing-null" to TestCert(version = tlv(0xa0, tlv(0x02, bytes(2)), tlv(0x05))).der,
-                    "ext3-83-00" to TestCert(extensions = emptyList(), tbsTrailing = bytes(0x83, 0x00)).der,
+                    "stop-9f01" to TestCert(spki = key, uniqueIds = bytes(0x9f, 0x01, 0x01, 0x00)).der,
+                    "stop-bf02" to TestCert(spki = key, uniqueIds = bytes(0xbf, 0x02, 0x01, 0x00)).der,
+                    "stop-9f1f" to TestCert(spki = key, uniqueIds = bytes(0x9f, 0x1f, 0x1f) + ByteArray(31)).der,
+                    "version-trailing-null" to
+                        TestCert(spki = key, version = tlv(0xa0, tlv(0x02, bytes(2)), tlv(0x05))).der,
+                    "ext3-83-00" to TestCert(spki = key, extensions = emptyList(), tbsTrailing = bytes(0x83, 0x00)).der,
                     "uid-a1-then-ext3-long" to
                         TestCert(
+                            spki = key,
                             uniqueIds = tlv(0xa1, tlv(0x03, bytes(0, 0x55))),
                             extensionsWrapper = { exts ->
                                 val list = seq(*exts.toTypedArray())
                                 tlvWithLength(0xa3, bytes(0x81, list.size), list)
                             },
                         ).der,
-                    "v1-with-extensions" to TestCert(version = ByteArray(0)).der,
+                    "v1-with-extensions" to TestCert(spki = key, version = ByteArray(0)).der,
                     "v1-with-unique-id" to
                         TestCert(
+                            spki = key,
                             version = ByteArray(0),
                             uniqueIds = tlv(0x81, bytes(0, 0x55)),
                             extensions = emptyList(),
                         ).der,
-                    "v2-with-extensions" to TestCert(version = tlv(0xa0, tlv(0x02, bytes(1)))).der,
-                    "uid-not-bit-string" to TestCert(uniqueIds = tlv(0x81, bytes(0x08, 0x55))).der,
-                    "time-offset" to withTimes(utc("261022134530+0100"), gen("20500101000000Z")),
-                    "time-no-seconds" to withTimes(utc("2610221345Z"), gen("20500101000000Z")),
-                    "time-feb-31" to withTimes(utc("260231000000Z"), gen("20500101000000Z")),
+                    "v2-with-extensions" to TestCert(spki = key, version = tlv(0xa0, tlv(0x02, bytes(1)))).der,
+                    "uid-not-bit-string" to TestCert(spki = key, uniqueIds = tlv(0x81, bytes(0x08, 0x55))).der,
                     "extension-64k" to
                         BoundaryCorpus.base(
                             extensions = listOf(extension("1.3.6.1.4.1.99999.4", ByteArray(65_536) { 0x5a })),
@@ -190,6 +222,16 @@ internal object D7Corpus {
                         },
                     "trailing-9f01-definite" to withTbs(leaf, trailingTbs, LengthForm.Minimal),
                     "trailing-9f01-indefinite" to withTbs(leaf, trailingTbs, LengthForm.Indefinite),
+                    // A non-zero unused-bits octet on an RSA signatureValue whose padding bits are clear.
+                    "www.mozilla.org-1/sig-unused-bits-1" to
+                        DerNode.parse(ProducerCorpus.resource("certs/www.mozilla.org-1.der")).let { c ->
+                            val bits = c.child(2).content
+                            check(
+                                bits[bits.lastIndex].toInt() and 1 == 0,
+                            ) { "the fixture's last signature bit must be 0" }
+                            bits[0] = 1
+                            c.encode()
+                        },
                 )
         return built.map { (name, der) -> "d7/$name" to der }
     }
@@ -220,14 +262,14 @@ internal object D7Corpus {
             Case("a negative serial", listOf("boundary/negative-serial")),
             Case("a serial over 20 bytes", listOf("boundary/21-octet-serial")),
             Case("a serial with leading zeros", listOf("boundary/reject-serial-non-minimal")),
-            Case("a TBS/outer algorithm mismatch (NULL vs absent)", envelope("alg-null-flipped", rsaOnly = true)),
+            Case("a TBS/outer algorithm mismatch (NULL vs absent)", envelope("alg-null-flipped")),
             Case("a GeneralizedTime with fractional seconds", listOf("d7/gentime-fraction")),
             Case("a UTCTime used for a date in 2050 or later", listOf("d7/utctime-2050")),
             Case(
                 "PrintableString, UTF8String, TeletexString and BMPString names",
                 listOf("d7/name-printable", "boundary/base", "d7/name-teletex", "d7/name-bmp"),
             ),
-            Case("an empty subject", listOf("d7/empty-subject")),
+            Case("an empty subject", listOf("d7/empty-subject", "d7/empty-subject-san")),
             Case("duplicate extension OIDs", listOf("d7/duplicate-ski", "d3/sct-two-extensions")),
             Case(
                 "two SCT extensions, an empty list first and a covered SCT second: the union is queried",
@@ -244,6 +286,7 @@ internal object D7Corpus {
                 "an SCT list whose declared length is shorter than its content: the items that fit are extracted",
                 listOf("d7/sct-declared-shorter"),
                 Required.parsed(scts = 1),
+                firefox = true,
             ),
             Case(
                 "a malformed first SCT followed by valid ones: the list fails",
@@ -272,17 +315,24 @@ internal object D7Corpus {
                 listOf("d3/sct-constructed-inner"),
                 Required.parsed(scts = 0),
             ),
-            Case("a non-zero SCT version: extracted", listOf("d7/sct-version-1"), Required.parsed(scts = 1)),
+            Case(
+                "a non-zero SCT version: extracted",
+                listOf("d7/sct-version-1"),
+                Required.parsed(scts = 1),
+                firefox = true,
+            ),
             Case(
                 "a truncated last SCT: the items before it are extracted",
                 listOf("d7/sct-truncated-last"),
                 Required.parsed(scts = 1),
+                firefox = true,
             ),
             Case(
                 "trailing bytes after the inner OCTET STRING, after the declared list region and inside an SCT " +
                     "after its signature: ignored",
                 listOf("d7/sct-trailing-after-inner", "d7/sct-trailing-after-list", "d7/sct-trailing-in-item"),
                 Required.parsed(scts = 1),
+                firefox = true,
             ),
             Case(
                 "an SCT hidden in ignored bytes: never extracted",
@@ -296,24 +346,28 @@ internal object D7Corpus {
                 listOf("d3/sct-inner-30"),
                 Required.parsed(scts = 0),
             ),
+            // The ignored-element cases: Parsed, and outside the profile since every ignored element is (K2).
             Case(
                 "bytes after [3]: ignored",
                 listOf("variants/tbs-junk-after-extensions", "variants/tbs-null-after-extensions"),
+                Required.parsed(keyable = false),
             ),
             Case(
                 "an element between subjectPublicKeyInfo and [3], dropping the extensions",
-                listOf(
-                    "variants/tbs-null-before-extensions",
-                    "variants/spki-then-null-then-uid",
-                    "variants/tbs-junk-before-extensions",
-                ),
+                listOf("variants/tbs-null-before-extensions", "variants/spki-then-null-then-uid"),
+                Required.parsed(keyable = false),
             ),
             Case(
                 "[2] before [1] and [1] twice, dropping them",
                 listOf("variants/uid-82-then-81", "variants/uid-81-twice"),
+                Required.parsed(keyable = false),
             ),
             Case("a constructed [1] or [2]", listOf("variants/uid-constructed-a1", "variants/uid-a2-constructed")),
-            Case("a primitive [3]: ignored", listOf("d3/primitive-3", "variants/ext3-primitive-83")),
+            Case(
+                "a primitive [3]: ignored",
+                listOf("d3/primitive-3", "variants/ext3-primitive-83"),
+                Required.parsed(keyable = false),
+            ),
             Case(
                 "an element with tag number 3 in another class or form holding an Extensions SEQUENCE (03, 23, " +
                     "43, 63, C3, E3): ignored, Parsed and outside the profile (K2), 3A_TBS_LAX",
@@ -326,10 +380,11 @@ internal object D7Corpus {
                 listOf("d3/tag3-9f03", "d3/tag3-bf03", "d7/stop-9f01", "d7/stop-bf02", "d7/stop-9f1f"),
                 Required.STRUCTURE,
             ),
-            Case("two [3], the second ignored", listOf("variants/tbs-two-ext3")),
+            Case("two [3], the second ignored", listOf("variants/tbs-two-ext3"), Required.parsed(keyable = false)),
             Case(
                 "bytes after the Extensions SEQUENCE inside [3] and after extnValue: ignored",
                 listOf("variants/ext3-null-after-sequence", "variants/extension-null-after-extnvalue"),
+                Required.parsed(keyable = false),
             ),
             Case(
                 "anything after the INTEGER inside [0]: STRUCTURE (the producer flattens [0] and keys other " +
@@ -357,9 +412,16 @@ internal object D7Corpus {
                 listOf("d7/uid-not-bit-string"),
             ),
             Case(
-                "times with an offset, without seconds and with a day past the month's end (2026-02-31, rolling " +
-                    "over to 2026-03-03)",
-                listOf("d7/time-offset", "d7/time-no-seconds", "d7/time-feb-31"),
+                "times with an offset (UTCTime +0100 and -0130, a CONSCRYPT_TIME_OFFSET record against oracle 2; " +
+                    "GeneralizedTime, which oracle 2 rejects), without seconds and with a day past the month's end " +
+                    "(2026-02-31, rolling over to 2026-03-03)",
+                listOf(
+                    "d7/time-offset",
+                    "d7/time-offset-negative",
+                    "d7/gentime-offset",
+                    "d7/time-no-seconds",
+                    "d7/time-feb-31",
+                ),
             ),
             Case("a 64 KB extension", listOf("d7/extension-64k")),
             Case(
@@ -369,7 +431,8 @@ internal object D7Corpus {
                     "tbs-long-leading-zero",
                     "tbs-long5",
                     "tbs-long8",
-                ).map { "unsigned/letsencrypt.org-1/$it" },
+                ).map { "unsigned/letsencrypt.org-1/$it" } +
+                    listOf("fuzz/indefinite", "boundary/reject-rsa-key-header-non-minimal"),
             ),
             Case(
                 "a Certificate with trailing bytes",
@@ -382,6 +445,12 @@ internal object D7Corpus {
                     "TBS with indefinite children): Parsed with the unmodified certificate's producerKeyable and key " +
                     "bytes",
                 sameAsBase,
+                Required.SAME_AS_BASE,
+            ),
+            Case(
+                "a non-zero unused-bits octet on an RSA signatureValue: Parsed with the unmodified certificate's " +
+                    "producerKeyable and key bytes",
+                listOf("d7/www.mozilla.org-1/sig-unused-bits-1"),
                 Required.SAME_AS_BASE,
             ),
             Case(
@@ -427,7 +496,7 @@ internal object D7Corpus {
     /** The inputs built here that a case requires to be `STRUCTURE`. */
     val builtRejects: Set<String> by lazy {
         cases
-            .filter { it.required?.reason == "STRUCTURE" }
+            .filter { it.required?.reason == ParseReason.STRUCTURE }
             .flatMap { it.inputs }
             .filter {
                 it.startsWith(
@@ -435,6 +504,9 @@ internal object D7Corpus {
                 )
             }.toSet()
     }
+
+    /** The inputs of the [Case.firefox] cases. */
+    val firefoxInputs: Set<String> by lazy { cases.filter { it.firefox }.flatMap { it.inputs }.toSet() }
 
     /** Each D7 input with the cases it carries, in [cases] order. */
     val byInput: Map<String, List<Case>> by lazy {
