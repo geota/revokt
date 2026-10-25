@@ -127,7 +127,7 @@ commands or boundaries differ (`revokt-clubcard/AGENTS.md` for the MPL port rule
 AGP 8.13.2 (Kotlin 2.4 supports up to AGP 9.3; the Android modules arrive in 0.3); JDKs from `actions/setup-java`, never
 auto-provisioned (`org.gradle.java.installations.auto-download=false`, no foojay resolver); `jvmToolchain(21)`
 to build, `-Xjdk-release=17` and `jvmTarget = 17` on every jvm module (spec revision 38; Android consumers dex it with
-D8 from AGP 8.0), `jvmToolchain(22)` only inside
+the AGP 8.5.2+ that Kotlin 2.4 already requires), `jvmToolchain(22)` only inside
 `revokt-engine-upki`; `org.gradle.configuration-cache=true`, `org.gradle.caching=true` (local cache only;
 no remote cache, section 7); `gradle/actions/setup-gradle`
 with `cache-read-only` on every branch but `main`; Kotlin/Native's compiler distribution (downloaded by KGP
