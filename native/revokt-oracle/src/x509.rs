@@ -17,7 +17,8 @@
 //! AlgorithmIdentifier TLV and `signature` the `signatureValue` octets after the unused-bits octet (padding not
 //! cleared), the parts of `canon`; `unused` is the `signatureValue`'s unused-bits count, and `duplicate` is `1` when the
 //! SCT-list extension occurs more than once (x509-parser's `DuplicateExtensions` for it). Element boundaries come from
-//! asn1-rs's own headers. Every value is what x509-parser reports, never revokt.
+//! asn1-rs's own headers: `spki`, `subject` and `issuer` are the whole TLVs so delimited in the TBS, since x509-parser's
+//! own raw slices stop where it stops parsing. Every value comes from x509-parser and asn1-rs, never revokt.
 
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};

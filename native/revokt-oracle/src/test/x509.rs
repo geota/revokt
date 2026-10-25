@@ -127,34 +127,29 @@ fn the_tbs_signature_slice_handles_every_header_form() {
     }
 }
 
-/// The issuer, subject and SPKI are each sliced whole from their own header (#43), not cut where x509-parser stopped.
+/// The issuer, subject and SPKI are each sliced whole from their own header (#43), not cut where x509-parser stopped:
+/// name values tagged `1f` and `9f`, and an SPKI with an element after its BIT STRING, all of which x509-parser accepts.
 #[test]
 fn the_names_and_spki_are_sliced_from_their_headers() {
-    let issuer = seq(&[tlv(
-        0x31,
-        &seq(&[tlv(0x06, &[0x55, 0x04, 0x06]), tlv(0x1f, b"GB")]),
-    )]);
-    let subject = seq(&[tlv(
-        0x31,
-        &seq(&[tlv(0x06, &[0x55, 0x04, 0x03]), tlv(0x9f, b"a")]),
-    )]);
-    let spki = seq(&[
-        seq(&[tlv(0x06, &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01])]),
-        tlv(0x03, &[0, 4]),
-    ]);
-    let validity = seq(&[tlv(0x17, b"260101000000Z"), tlv(0x17, b"270101000000Z")]);
-    let elements = [
-        tlv(0xa0, &tlv(0x02, &[2])),
-        tlv(0x02, &[7]),
-        seq(&[tlv(0x06, &[0x2a])]),
-        issuer.clone(),
-        validity,
-        subject.clone(),
-        spki.clone(),
-    ];
-    let slices = tbs_parts(&seq(&elements)).expect("sliced");
+    let name = |value_tag: u8| {
+        seq(&[tlv(
+            0x31,
+            &seq(&[tlv(0x06, &[0x55, 0x04, 0x03]), tlv(value_tag, b"a")]),
+        )])
+    };
+    let mut elements = tbs_elements();
+    let well_formed_spki = elements[6].clone();
+    let spki = tlv(0x30, &[&well_formed_spki[2..], &[0x05, 0x00][..]].concat());
+    elements[3] = name(0x1f);
+    elements[5] = name(0x9f);
+    elements[6] = spki.clone();
+    let reply = describe(&certificate_from(&elements));
+    let f: Vec<&str> = reply.split('\t').collect();
+    assert_eq!(f[0], "OK", "{reply}");
     assert_eq!(
-        [hex(&slices.issuer), hex(&slices.subject), hex(&slices.spki)],
-        [hex(&issuer), hex(&subject), hex(&spki)]
+        [f[2], f[3], f[4]],
+        [hex(&spki), hex(&elements[5]), hex(&elements[3])]
+            .each_ref()
+            .map(String::as_str)
     );
 }
