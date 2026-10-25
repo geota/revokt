@@ -6,7 +6,8 @@ package dev.revokt.engine.parse.producer
 import java.io.ByteArrayOutputStream
 
 /**
- * `canon(encoded)` of spec §9.2 (revision 35), written independently of revokt's parser until #12's oracle 3b exists:
+ * `canon(encoded)` of spec §9.2, written a third time, independently of revokt's parser and of oracle 3b, as the
+ * cross-check of 3b's re-encoding (`Oracle3bTest`):
  * `SEQUENCE { the TBS re-encoded by the unsigned-header rule, the signature AlgorithmIdentifier taken from that TBS, a
  * BIT STRING with zero unused bits holding the signatureValue content after its unused-bits octet }`. The TBS and
  * the signatureValue are re-encoded as the JDK's `DerIndefLenConverter` does, here by straightforward recursion, which

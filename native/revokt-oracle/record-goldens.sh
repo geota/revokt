@@ -1,0 +1,36 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Records the goldens of oracles 3a (x509-parser 0.18.1) and 3b (the independent locator) for every input of the replay
+# corpus (spec §9.2, #35, #36). 3b supplies canon(encoded), so run this before native/producer-oracle/record-goldens.sh.
+# Needs Rust and JDK 21; the PR tier replays the committed goldens and needs neither. Run from the repository root:
+#   sh native/revokt-oracle/record-goldens.sh
+set -eu
+root=$(pwd)
+dir="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/oracle"
+work=$(mktemp -d)
+trap 'rm -rf "${work:?}"' EXIT
+( cd native && cargo build --locked --release -q )
+./gradlew -q :revokt-engine:jvmTest --tests 'dev.revokt.engine.parse.oracle.Oracle3aTest.the 3a recording hook*' \
+  -Drevokt.writeOracleInputs="$work/inputs.tsv" --rerun </dev/null
+cut -f2 "$work/inputs.tsv" > "$work/b64.txt"
+echo '##' >> "$work/b64.txt"
+mkdir -p "$dir"
+for oracle in "x509:3a:OK <fields> | ERR <error> | PANIC <error>" \
+  "locate:3b:CANON <fields> | NOT_LOCATED <reason> | PANIC <reason>"; do
+  cmd=${oracle%%:*}
+  rest=${oracle#*:}
+  name=${rest%%:*}
+  format=${rest#*:}
+  "$root/native/target/release/revokt-oracle" "$cmd" < "$work/b64.txt" | grep -v '^##$' > "$work/$name.txt"
+  [ "$(wc -l < "$work/inputs.tsv")" -eq "$(wc -l < "$work/$name.txt")" ] || { echo "$name reply count mismatch" >&2; exit 1; }
+  {
+    echo "# Oracle $name (native/revokt-oracle $cmd) replies for the replay corpus of ProducerCorpus."
+    echo "# sha256 of the input <TAB> $format. Regenerate with native/revokt-oracle/record-goldens.sh, never edit."
+    cut -f1 "$work/inputs.tsv" | paste - "$work/$name.txt" | LC_ALL=C sort -u
+  } > "$dir/$name.tsv"
+  dups=$(grep -v '^#' "$dir/$name.tsv" | cut -f1 | uniq -d)
+  [ -z "$dups" ] || { echo "$name inputs with more than one reply: $dups" >&2; exit 1; }
+  echo "wrote $(grep -vc '^#' "$dir/$name.tsv") $name goldens"
+done

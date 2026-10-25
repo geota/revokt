@@ -87,9 +87,12 @@ class ProducerD8Test {
     }
 
     @Test
-    fun `every replay input parses except the strict structural variants and the malformed fuzz seeds`() {
+    fun `every replay input parses except the strict variants, the malformed fuzz seeds and the envelope rejects`() {
         val failing = outcomes.filter { it.certificate == null }.map { it.input.name }.toSet()
-        assertEquals(STRICT_VARIANTS.map { "variants/$it" }.toSet() + MALFORMED_FUZZ_SEEDS.map { "fuzz/$it" }, failing)
+        val expected =
+            STRICT_VARIANTS.map { "variants/$it" }.toSet() + MALFORMED_FUZZ_SEEDS.map { "fuzz/$it" } +
+                ProducerCorpus.envelopeRejects()
+        assertEquals(expected, failing)
     }
 
     @Test

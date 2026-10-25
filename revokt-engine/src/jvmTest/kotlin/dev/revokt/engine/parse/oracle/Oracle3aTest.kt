@@ -37,7 +37,7 @@ class Oracle3aTest {
                     .sha256()
                     .hex()
             val reply =
-                goldens[sha] ?: fail("${input.name}: no 3a golden; run native/revokt-oracle/record-3a-goldens.sh")
+                goldens[sha] ?: fail("${input.name}: no 3a golden; run native/revokt-oracle/record-goldens.sh")
             val c = (CertificateParser.parse(input.der) as? CertificateParse.Parsed)?.certificate
             val a = Oracle3a.accepted(reply)
             if (c != null && a != null) {
@@ -156,8 +156,22 @@ class Oracle3aTest {
                 "unsigned/www.google.com-1/tbs-indefinite",
                 "unsigned/www.mozilla.org-1/tbs-indefinite",
                 "boundary/indefinite-signature-value",
+                "envelope/www.mozilla.org-1/alg-indefinite-null-indefinite",
+                "envelope/letsencrypt.org-1/tbs-indefinite-serial-eoc-content",
+                "envelope/letsencrypt.org-1/sig-indefinite-nested",
                 // Signature padding bits set, which x509-parser's DER BIT STRING refuses.
                 "boundary/signature-padding-bits",
-            )
+                "envelope/www.mozilla.org-1/sig-unused-bits-1-padding-set",
+            ) +
+                ProducerCorpus.envelopeLeaves.flatMap { (leaf, _) ->
+                    listOf(
+                        "tbs-indefinite-version",
+                        "tbs-indefinite-validity",
+                        "tbs-indefinite-subject-chain",
+                        "tbs-indefinite-extension-chain",
+                        "tbs-indefinite-definite-subject-indefinite-rdn",
+                        "alg-indefinite",
+                    ).map { "envelope/$leaf/$it" }
+                }
     }
 }

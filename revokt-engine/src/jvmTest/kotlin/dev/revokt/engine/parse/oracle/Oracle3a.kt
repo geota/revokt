@@ -12,7 +12,7 @@ import java.util.Base64
 /**
  * Oracle 3a of spec §9.2 (`x509-parser` 0.18.1, `native/revokt-oracle x509`), read from its recorded goldens
  * (`oracle/3a.tsv`, keyed by the SHA-256 of the input) so the PR tier needs no Rust. Regenerate with
- * `native/revokt-oracle/record-3a-goldens.sh` when the corpus changes.
+ * `native/revokt-oracle/record-goldens.sh` when the corpus changes.
  */
 internal object Oracle3a {
     /** One extension as 3a reports it; [sct] is null for another OID, empty for a parse error, else its pairs. */
@@ -43,6 +43,11 @@ internal object Oracle3a {
         val extensions: List<Extension>,
         val duplicateSct: Boolean,
     )
+
+    private val cached: Map<String, String> by lazy { goldens() }
+
+    /** sha256 of the input → 3a's reply, or null when no golden is recorded. */
+    fun reply(sha256: String): String? = cached[sha256]
 
     /** sha256 of the input → 3a's reply line. */
     fun goldens(): Map<String, String> =

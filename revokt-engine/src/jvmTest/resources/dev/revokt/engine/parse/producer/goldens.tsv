@@ -51,6 +51,7 @@
 07a2316a45a0e7aa46ffdde4b3913156224751e533538ea454e9ef114bab9813	REJECT asn1: structure error: PublicKey: superfluous leading zeros in length
 07b09a483ac396ceef584092f6dd98beff3e6fdf69e101c8a35b08f0333077c4	REJECT asn1: structure error: Value: superfluous leading zeros in length
 07ea5c176acf62a29b2a82b9f8bd56d179b9c16777ecf1843e5b95e13e8a6177	REJECT asn1: structure error: superfluous leading zeros in length
+0816b3bcc1d7724c3f7626c4d965d132bc6a471062a00d32dc5801a6a5666507	OK 0543933be386b3a2b3add534f2103bc8b65f c7c96daa1fb334f606ed1652f888c5ca69dda32e980162cf692929b6a79bcdf7 ct
 08334852323d7f1ae7c943e5f93851d5cdff8e5f251b684cf0c96406f2118b14	REJECT asn1: structure error: superfluous leading zeros in length
 08431032dbbdfa2f1e977ca7fcf24a7d4437c59898460732365080bf6dbb6781	REJECT asn1: structure error: superfluous leading zeros in length
 0887840af764bc456d24ac16de4d59a805846e9ed3803280d05fff9a2239b4f4	OK 00f24b6d17f9d9ad7cb1c9fea78782699f 7e4e8838a8add6295de7ae3b047d3aba3488ab95db0a0aa56d897a00d8618bcf zc
@@ -93,6 +94,7 @@
 0d27430554f5288913ce6717d651da0c756dfa6b83a7c5341fc011bbcd06ef87	REJECT asn1: structure error: Id: superfluous leading zeros in length
 0d3b2427d4ea276f2f8872687ab183fcda348de51544ec39f0edb2f75800e8a2	REJECT asn1: structure error: superfluous leading zeros in length
 0d591af9099f5f9f3300ad8ead76dd02cb9aca10c3ddebfa334a077d6a640a89	REJECT asn1: structure error: Id: superfluous leading zeros in length
+0d6ec9dd7398c1c91e01d30ee0bcfb09e49439c2864e5498dde9f3ea1579bf82	REJECT asn1: structure error: Version: superfluous leading zeros in length
 0d72742afbfb2f9aa8daabae73c5266aad1c5e727fd4a312d6079e10c7d7657d	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 0d871e973f8258be543579a9f489426b39c27471ffa90688667e5920059b5c5c	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 0d979e6b5ac24b99416476c8a8da6bfea5389b611fff28bd1cf7315208849ada	REJECT asn1: structure error: Policy: superfluous leading zeros in length
@@ -494,8 +496,10 @@
 4c2c0f1caf2347bc8ab765d10d449ea236442b9f1adc481c51628820ce12848c	REJECT asn1: structure error: Method: superfluous leading zeros in length
 4c84280a02e5421495ef871c1daeb919eb6eb7ac4c32bb23b4b4d6e5a9294050	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 4c8a18bf073345f3c6bb61f44be9041e0844abfe5f5c31a724b785fb13dd25cc	REJECT asn1: structure error: Id: superfluous leading zeros in length
+4c9486a0f3b3bd6e2da522f1b1047a2048eb9a26febf605456654a1a0086c939	REJECT asn1: syntax error: Validity: indefinite length found (not DER)
 4cc20b22dbdc939fe4c19f33fa4ebe4a92b0b4a99b10eff7b73efae5fbfe8289	REJECT asn1: structure error: superfluous leading zeros in length
 4cce427043fffe3b0b8382c5cc66c962fe72dda7f18d67522ec96cf784d5453f	REJECT asn1: structure error: Id: superfluous leading zeros in length
+4cd8aefa9725e31d8c16c7b5bd0e960c9dcd59326c1a42d1ce527f9736b3ab1a	REJECT asn1: structure error: SignatureAlgorithm: superfluous leading zeros in length
 4cf5d85f9e36b45c959de57ffac4601d793d54816eacad82c3f2e6f7e12f6651	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 4d0c749e04cacc0c52277ea687ff9ca56290c05fb43838f1e372c61670df309e	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 4d1f56a98efad0e5e8e6c70dd7a5ea75691c9eba0f4529a4f6d9bbe38ec8c876	REJECT asn1: structure error: Type: superfluous leading zeros in length
@@ -623,6 +627,7 @@
 6031e4d863ea0c9ea6a3d2f0c2ce71da52dfed7365ca0caa9f281db9fe4604e9	REJECT asn1: structure error: UniqueId: superfluous leading zeros in length
 603fa87fda8251949e2c8ac87ed54a752adbb5d3f2f6bf503909b39da62fc788	REJECT asn1: structure error: Type: superfluous leading zeros in length
 603fafa3ba40436280c4195f3618501dc9407cc95e90a28cbb61f5ae82c34f7b	REJECT x509: failed to unmarshal elliptic curve point
+60bf3cb343e70d9f46df0f1b91e3e6f26f064ca2a978e315e3d2462959a6a50e	REJECT asn1: syntax error: indefinite length found (not DER)
 60de5a614d5fd34648079b9d92ab823bf9ce63905c1165a1aae1071c96ecc76e	REJECT asn1: structure error: Policy: superfluous leading zeros in length
 60f7d1bfd5ad0832093e22a8a3cb856d16b1c16fe40279837e6d13d68f65a008	REJECT asn1: structure error: superfluous leading zeros in length
 61152c60c634584d89615c0ca9a5f806aad7003c31efbc9e89fdc151a214643e	REJECT asn1: structure error: superfluous leading zeros in length
@@ -786,6 +791,7 @@
 7a8cfe248889822d871e517a599c4c71b41b2d5d80b1368cde87db7b2b4f4bba	REJECT asn1: structure error: superfluous leading zeros in length
 7a8ed1839946f6cf82868c6025df3a049dd8342f3a617932c6544997847e2fc2	REJECT asn1: structure error: Id: superfluous leading zeros in length
 7a9097a721c7b8daa324ecc33ab88c260e9161c1c4a7c2b4b35a453b5d58ba8b	REJECT asn1: structure error: superfluous leading zeros in length
+7aae6b0396f21a97056ba2a8d76d262c3138209ee2f6c48ae7d44cce46a60130	REJECT asn1: syntax error: Validity: indefinite length found (not DER)
 7abbc2b06f765f01f361c0a907d9b7ebe215ff3ccb1570a3d67469a130368344	REJECT asn1: structure error: Id: superfluous leading zeros in length
 7acdea79d64bb0a744115878983b61fcef5e2f4037374d6a4788939b4d7447e8	REJECT asn1: structure error: NotBefore: superfluous leading zeros in length
 7af697bf0bee6392726cfdf85c09537f9d04d8ea446a02c753dafb78aac22c03	REJECT asn1: structure error: UniqueId: superfluous leading zeros in length
@@ -833,6 +839,7 @@
 8206f30b69d3dc996ab64f9bf723568062a7b7594ee97ff2c517c259ef589353	OK 1729108740 aa735d0b9a372af43fa286b23034603991d82bb07052b43bb9f7f966641d226c ct
 820924d31da43d4d504ea6e7b0918bb1a139bbc21f74fdec2d30fc1c8fb4dad1	REJECT asn1: structure error: NotBefore: superfluous leading zeros in length
 824213e84aa9bcc176a7d27afdeb81fba3f92fd499895a45d6a8d0e1ffa01252	REJECT asn1: structure error: Id: superfluous leading zeros in length
+8259d37488e3f93444107d568d80de30b21b5beded7b3cf183900f79a53b1a90	OK 00000543933be386b3a2b3add534f2103bc8b65f c7c96daa1fb334f606ed1652f888c5ca69dda32e980162cf692929b6a79bcdf7 lax
 825cf84eb13b5e3ebfbddaa6745e6a450964fd4513e7fc631d21eee96b5440c0	REJECT asn1: structure error: Id: superfluous leading zeros in length
 8264e9b041a764230b0e96b2e4d6e852a2955e0827a6f10629291caa7605e9b9	REJECT asn1: structure error: Parameters: superfluous leading zeros in length
 827390895b7bb26a8ddeb05d484d518ae79691eb720cdc72b7ba8106d78a3507	REJECT asn1: structure error: Value: superfluous leading zeros in length
@@ -1117,6 +1124,7 @@ b0f68b85d09e263cb9f551d0c2081941b5605165c645e965fedeae61923aa117	REJECT asn1: st
 b1b344d501c578764c6ecee8b7a9e1b0d6d5d809e9aa6c872e58791767fc5837	REJECT asn1: structure error: FullName: superfluous leading zeros in length
 b1e1321e5e0518488cdf3abaefabed7a87d443b3f90ebaa2969debc5b26ed473	REJECT asn1: structure error: Id: superfluous leading zeros in length
 b217590f79a01e2f68d4b5e9ea2da003e57d003d174d4631461ae794ab5b15e5	REJECT asn1: structure error: Value: superfluous leading zeros in length
+b21e75082592f47371af439418ac00e8b2df975a13ad5f8d16068f58650c8838	OK 0590f778e5ef7c2dae6a8135bdc04ef77b4a 242de3a046ceafa562cc7e94a539624f06dd5135154494e9bd0e6288bc29ba42 ct
 b235a947899f218c39187fcfd8c5a73a6373df21086cf5b5e3212d0c0d59a2d6	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
 b24b06e62e24d19bfec7160251ffae723ee028c1efc60b2d13e7b3b044b46994	OK 4df3b15dd6c0784c507cd37b58e6f115 b3fb5d00e994cddf2cc9a4eea9f806bc5727e83cc0e4299bf956f2d524fe5376 ct
 b26b7b1fbfac0a1dd18adef84130a9c26f0bd29d363a0f7e61ada1e78b6e78c5	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
@@ -1342,6 +1350,7 @@ d6349474083f6eeb6a96a5f2b4d8785d54009f3b568418b4da6ffb6658d40de6	REJECT asn1: st
 d63a5bdca9b292bde7394afceb2c41127ce4aebc724ed3edcc41a6218c4c84be	REJECT asn1: structure error: Validity: superfluous leading zeros in length
 d6441850afa592258649729e81e77a373ca6402d922fe32dd25d31c443c096f3	REJECT asn1: structure error: superfluous leading zeros in length
 d64c971d0b1a09808bbe1ad503f02bd3d6933e19ccef57cc4e989bf7d9eda117	REJECT asn1: structure error: Extensions: superfluous leading zeros in length
+d6793daebf1326d00a66e5f26b12f9f3f1e76b290ded70574c54d08f29480af6	REJECT asn1: syntax error: indefinite length found (not DER)
 d69d307736b8e62a636235ece091ff41a21c78c5afc4cdfe727a0b294c4221c1	REJECT asn1: structure error: Parameters: superfluous leading zeros in length
 d6e282277185ded8f8894a0603c7fe05674a2474dae1d453b817b7b5c81d963b	REJECT asn1: structure error: Type: superfluous leading zeros in length
 d728161265f9c8b756fc3836857d4c704abc5451017678a04ecf0503bdedc815	REJECT asn1: structure error: Algorithm: superfluous leading zeros in length
@@ -1529,6 +1538,7 @@ f21dfdad76977277de44e087cce80efac123831bf70ef43503f234c596427098	REJECT asn1: st
 f2258af9807b23206f223936227dfdde5289b12e1194fabf5c477ce55fbbf739	REJECT asn1: structure error: NotAfter: superfluous leading zeros in length
 f22c444727e0eed6c255d79fa276c05cb78596df5def9a9b864ff63da1ab86e0	REJECT asn1: structure error: Critical: superfluous leading zeros in length
 f2390dce20e4a3d281623c79914de1310c01b6ceba95d7d3c21fb44b80b0810c	REJECT asn1: structure error: superfluous leading zeros in length
+f2517230cd7a4303515d2ecbd49ddf498ff9bf7e90d912ab11c895c67d535205	REJECT asn1: syntax error: indefinite length found (not DER)
 f253233aee25f14ce70049989bbe3c08743ac3f1262fbb6ea7292599bfa820d0	REJECT asn1: structure error: PublicKey: superfluous leading zeros in length
 f26ce969ecfa4a841e1e6d5d8e2ae77111d065eb23f32f88fc121f9534dbd220	REJECT asn1: structure error: Extensions: sequence tag mismatch (got:{class:0 tag:5 length:0 isCompound:false}, want:0/16/true)
 f286f6ffc3addf4e19c801d718421c5eb5f7538baf1a940842161214a534866e	REJECT asn1: structure error: Value: superfluous leading zeros in length
@@ -1569,6 +1579,7 @@ f7851c66309421edd9579cae2671aa8288696a43d65092595d65310dab8d8639	REJECT asn1: st
 f785cb4646236c44e2e87aee3aefd68bc992d93b0c75da5ec908648afa403f6e	REJECT asn1: structure error: Type: superfluous leading zeros in length
 f789f7b3b6b09308107dd8005a831504b1bbda5e796e8445f8d0a73621671034	REJECT asn1: structure error: Id: superfluous leading zeros in length
 f78a4f59e299e0d34f00f2913c23a1af442805dc10cf289351bb721b9ffe9dc2	REJECT asn1: structure error: superfluous leading zeros in length
+f796dbd1543467b8a59561e31d11a9b18455b559ab38e5d8c84dff828ea6b7a3	REJECT asn1: syntax error: Validity: indefinite length found (not DER)
 f7a26e4cfb62ac5eb5e627a94c6a54e0bda8c4716bc8bdd1e0801e3fbd9ca0e6	REJECT asn1: structure error: superfluous leading zeros in length
 f7b3cb3154d4781f5763a7735ae7a585b272a4263dccf08b445d8147c1d9a142	OK 00a59ebdb596751db7f5c095079613953c ff088be6f80e2e0c040f8d564b40cd17c4224c1551fcfe3529dd7aded985c4ad ct
 f7ee80360d538fc795ca7c60f79033f78f24316abdc8b461b1c75e17e7bcee17	REJECT asn1: structure error: Id: superfluous leading zeros in length
