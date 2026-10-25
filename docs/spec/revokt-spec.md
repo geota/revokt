@@ -1,10 +1,19 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 39** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
+Status: **draft spec / project proposal, revision 40** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 40 (the matrix file and the nightly's Conscrypt release, 2026-10-25)
+- **Clarified** (found while implementing #13): the version matrix runs one job per JDK with every Conscrypt version
+  of the matrix inside it, a test run per version, as CONTRIBUTING §6 already said; the committed matrix file is
+  `gradle/oracle-matrix.properties`, naming the Conscrypt versions by their catalog keys.
+- **Changed**: the nightly replays the committed corpus against the newest JDK EA as before, but cannot replay a
+  Conscrypt release newer than the matrix: an unadmitted dependency fails dependency verification (CONTRIBUTING §3),
+  and running an unverified native library in CI is not acceptable. The nightly fails instead until that release is
+  admitted, its checksums and signing key checked, and rolled into the matrix, after which every PR replays it.
 
 ### Changes in revision 39 (the JDK read fallback, 2026-10-25)
 - **Added** (found while implementing #12, oracle 1; #49): on the JDK, a certificate whose `getEncoded()` is
@@ -3093,17 +3102,18 @@ bias: a mutant oracle 1 or 2 accepts enters the **secondary corpus** only if it 
 coverage (`-merge=1` over the accepted set) or is a D1/D2/D3 divergence; hash-keyed, capped by
 entry count and bytes, stored in the corpus repository, re-seeded each run.
 
-**Tiers and matrix.** Fuzzing runs on one pinned JDK ≥ 22 (Panama) with oracle 1 of that JDK, one
-Conscrypt uber artifact and 3a/3b/3c in-process, oracle 4 out of process; one ClusterFuzzLite job per generator. The
-**version matrix** is a replay of the union corpus (committed, secondary, divergence): one job per
-(JDK, Conscrypt) pair, with 3a/3b/4 goldens read from the records so no matrix job needs a
-native oracle. Versions are named in a committed matrix file (JDK: 17, 21, the current LTS, the
-current feature release; Conscrypt uber: current and previous minor; Android system images by
-revision, with the Conscrypt APEX version logged per run since it is updated out of band) with the
-roll rule "add the new version, keep the old until its support ends", except that the bytecode
-target (JDK 17) stays while it is the target. A nightly job replays the committed corpus against the
-newest JDK EA and Conscrypt release and fails on any new D1 violation
-against the recorded baseline. A scheduled **producer job** (weekly, on every change to the producer,
+**Tiers and matrix.** Fuzzing runs on one pinned JDK ≥ 22 (Panama) with oracle 1 of that JDK, one Conscrypt uber
+artifact and 3a/3b/3c in-process, oracle 4 out of process; one ClusterFuzzLite job per generator. The **version
+matrix** is a replay of the union corpus (committed, secondary, divergence): one job per JDK, each running every
+Conscrypt version of the matrix, with 3a/3b/4 goldens read from the records so no matrix job needs a native oracle.
+Versions are named in a committed matrix file, `gradle/oracle-matrix.properties` (JDK: 17, 21, the current LTS, the
+current feature release; Conscrypt uber: current and previous minor; Android system images by revision, with the
+Conscrypt APEX version logged per run since it is updated out of band) with the roll rule "add the new version, keep
+the old until its support ends", except that the bytecode target (JDK 17) stays while it is the target. A nightly job
+replays the committed corpus against the newest JDK EA and fails on any new D1 violation against the recorded
+baseline. A Conscrypt release newer than the matrix fails the nightly until it is admitted like any dependency
+(checksums and signing key verified) and rolled into the matrix, after which every PR replays it; an unverified native
+library is never run. A scheduled **producer job** (weekly, on every change to the producer,
 certificate-transparency-go, zcrypto or Go pin, and before each release) builds oracle 4 at the pin and at
 `mozilla/crlite` `main`, replays D8's gated direction over the union corpus with both, and runs at least 100 000
 fresh entries from CRLite-enrolled logs, precertificates included, through oracles 1 and 4 and the profile. A violation
