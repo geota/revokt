@@ -8,9 +8,11 @@ import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.DerNode
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
+import dev.revokt.engine.parse.oracle.Oracle1
+import dev.revokt.engine.parse.oracle.Oracle2
 import dev.revokt.engine.parse.oracle.Oracle3a
 import dev.revokt.engine.parse.oracle.Oracle3b
-import dev.revokt.engine.parse.oracle.OracleReplay
+import dev.revokt.engine.parse.oracle.PlatformReplay
 import dev.revokt.engine.parse.oracle.ReferenceView
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import dev.revokt.engine.parse.records.CorpusRecord.RecordClass
@@ -20,31 +22,48 @@ import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * The corpus records of spec §9.2 against the replay on the test JDK: every input the replay classes as D1-dom, as an
- * SPKI the JDK re-encodes (D2's allow-list), as a D3 divergence or as a D8-gap entry has its committed record, with the
+ * The corpus records of spec §9.2 against the replay on this run's platform oracles (the test JDK, Conscrypt): every
+ * input the replay classes as D1-dom, as an SPKI a platform re-encodes (D2's allow-list), as a D3 divergence or as a D8-gap entry has its committed record, with the
  * same fields, and no record is stale. A rule-based justification (the producer's error, the D1-dom rule, the class's
  * reason, the zlint errors) is compared too, so a changed reason fails; a record whose rule yields none (a D8-gap entry
  * with no zlint error, a release blocker) needs one written by hand. Every record of a D8-gap input carries
  * `keyability`, and a `KEYABILITY_GAP` record exists only for an input with no other class.
  *
- * D1_DOM, D2_REENCODE_ALLOW and KEYABILITY_GAP depend on oracle 1: each record has an oracle-1 entry per matrix JDK, and
- * counts on a JDK where that entry `holds`. Regenerate with `native/producer-oracle/record-goldens.sh`, which runs the
- * writer hook once per matrix JDK; it keeps every hand-written justification and `added` date.
+ * D1_DOM, D2_REENCODE_ALLOW and KEYABILITY_GAP depend on the platform oracles: each record has an entry per oracle
+ * version (oracle 1 per matrix JDK, oracle 2 per Conscrypt release), and counts on a run where an entry of its versions
+ * `holds`. Regenerate with `native/producer-oracle/record-goldens.sh`, which runs the writer hook once per matrix JDK; it
+ * keeps every hand-written justification and `added` date.
  */
 class RecordsTest {
-    private val version = Runtime.version().feature().toString()
+    private val platforms = PlatformReplay.all
+
+    /** This run's platform oracles and versions, as failures name them. */
+    private val run = platforms.joinToString { it.oracle.label }
+
+    private fun isPlatform(o: CorpusRecord.Oracle) = platforms.any { it.oracle.id == o.id }
+
+    private fun isCurrent(o: CorpusRecord.Oracle) =
+        platforms.any {
+            it.oracle.id == o.id &&
+                it.oracle.version == o.version
+        }
 
     @Test
-    fun `the committed records equal the replay's classes on this JDK`() {
+    fun `the committed records equal the replay's classes on this run`() {
         val computed = computed().associateBy { it.key }
         val committed = CorpusRecord.committed()
-        assertEquals(committed.size, committed.map { it.key }.toSet().size, "one record per input and class")
+        assertEquals(
+            committed.size,
+            committed.map { it.key }.toSet().size,
+            "one record per input, class and divergence",
+        )
         val here = committed.filter { counts(it) }.associateBy { it.key }
-        assertEquals(emptySet(), here.keys - computed.keys, "stale records on JDK $version: regenerate them")
-        assertEquals(emptySet(), computed.keys - here.keys, "unrecorded entries on JDK $version: record them")
+        assertEquals(emptySet(), here.keys - computed.keys, "stale records on $run: regenerate them")
+        assertEquals(emptySet(), computed.keys - here.keys, "unrecorded entries on $run: record them")
         for ((key, record) in here) {
             val c = computed.getValue(key)
             val rule = c.justification.isNotBlank()
@@ -68,14 +87,14 @@ class RecordsTest {
                     it.sha256 in gapInputs && it.keyability == null
                 }.map { "${it.path} ${it.recordClass}" }
         assertEquals(emptyList(), bare, "records of a D8-gap input without keyability")
-        // KEYABILITY_GAP only for an input with no other class; a JDK-dependent class may hold on other JDKs than the gap.
-        val independent = committed.filter { it.recordClass !in JDK_DEPENDENT }
+        // KEYABILITY_GAP only for an input with no other class; an oracle-dependent class may hold on other oracle versions than the gap.
+        val independent = committed.filterNot(::dependent)
         val gapAlongside =
             committed
                 .filter { it.recordClass == RecordClass.KEYABILITY_GAP }
                 .filter { g -> independent.any { it.sha256 == g.sha256 } }
         assertEquals(emptyList(), gapAlongside.map { it.path }, "KEYABILITY_GAP records of inputs admitted otherwise")
-        // Keyability on a JDK-independent record must hold on every JDK: the input is accepted wherever it is recorded.
+        // Keyability on an oracle-independent record must hold on every JDK: the input is accepted wherever it is recorded.
         val unevenGap =
             independent.filter {
                 it.keyability != null &&
@@ -86,14 +105,14 @@ class RecordsTest {
             unevenGap.map {
                 it.path
             },
-            "D8-gap inputs of a JDK-independent class not in the gap on every JDK",
+            "D8-gap inputs of an oracle-independent class not in the gap on every JDK",
         )
         val gap = computed.values.mapNotNull { it.keyability?.let { k -> "${k.clause}/${k.parser}" } }
-        println("D8 gap on JDK $version (clause/path → inputs): ${gap.groupingBy { it }.eachCount().toSortedMap()}")
+        println("D8 gap on $run (clause/path → inputs): ${gap.groupingBy { it }.eachCount().toSortedMap()}")
     }
 
     @Test
-    fun `the records writer merges this JDK's view when requested`() {
+    fun `the records writer merges this run's view when requested`() {
         val path = System.getProperty("revokt.writeRecords") ?: return
         val file = File(path)
         val existing =
@@ -105,37 +124,41 @@ class RecordsTest {
         CorpusRecord.write(file, merge(existing, computed()))
     }
 
-    /** Whether [r] counts on this JDK: an oracle-dependent class only where its oracle-1 entry for this JDK holds. */
-    private fun counts(r: CorpusRecord): Boolean =
-        r.recordClass !in JDK_DEPENDENT || r.oracles.any { it.id == "1" && it.version == version && it.holds == true }
+    /** Whether [r]'s class (or divergence) depends on the platform oracles, so that it holds per oracle version. */
+    private fun dependent(r: CorpusRecord): Boolean =
+        r.recordClass in ORACLE_DEPENDENT || r.divergence in CorpusRecord.ORACLE_DIVERGENCES
+
+    /** Whether [r] counts on this run: an oracle-dependent class only where a platform entry of this run holds. */
+    private fun counts(r: CorpusRecord): Boolean = !dependent(r) || r.oracles.any { isCurrent(it) && it.holds == true }
 
     /**
-     * The record's fields that the replay decides: everything but the date and other JDKs' oracle-1 entries, and the
-     * justification only when [withJustification] (the replay's own justification is rule-based).
+     * The record's fields that the replay decides: everything but the date and the platform entries of other versions, and
+     * the justification only when [withJustification] (the replay's own justification is rule-based).
      */
     private fun fields(
         r: CorpusRecord,
         withJustification: Boolean,
     ): String {
-        val own = r.oracles.filter { it.id != "1" || it.version == version }
+        val own = r.oracles.filter { !isPlatform(it) || isCurrent(it) }
         val justification = if (withJustification) r.justification else ""
         return r.copy(oracles = own, justification = justification, added = "").toJson().write()
     }
 
     /**
-     * [existing] with this JDK's view merged in. Every record's oracle-1 entry for this JDK is replaced: a computed record
-     * takes the computed one; a JDK-dependent record not computed here records this JDK's outcome with `holds` false,
-     * and is dropped once no JDK holds it; any other record not computed here is stale and dropped. A rule-based
-     * justification replaces the one written; a hand-written one is kept only where the rule yields none.
+     * [existing] with this run's view merged in. Every record's platform entries for this run's versions are replaced: a
+     * computed record takes the computed ones; an oracle-dependent record not computed here records each platform's
+     * outcome with `holds` false, and is dropped once no platform version holds it; any other record not computed here is
+     * stale and dropped. A rule-based justification replaces the one written; a hand-written one is kept only where the
+     * rule yields none.
      */
     private fun merge(
         existing: List<CorpusRecord>,
         computed: List<CorpusRecord>,
     ): List<CorpusRecord> {
         val byKey = computed.associateBy { it.key }
-        val out = LinkedHashMap<Pair<String, RecordClass>, CorpusRecord>()
+        val out = LinkedHashMap<Triple<String, RecordClass, String?>, CorpusRecord>()
         for (e in existing) {
-            val others = e.oracles.filter { it.id == "1" && it.version != version }
+            val others = e.oracles.filter { isPlatform(it) && !isCurrent(it) }
             val c = byKey[e.key]
             if (c != null) {
                 out[e.key] =
@@ -144,16 +167,9 @@ class RecordsTest {
                         justification = c.justification.ifBlank { e.justification },
                         added = e.added,
                     )
-            } else if (e.recordClass in JDK_DEPENDENT) {
-                val a = acceptedByName[e.path]
-                val read =
-                    a
-                        ?.read
-                        ?.der
-                        ?.let(OracleReplay::sha)
-                        ?.takeIf { it != e.sha256 }
-                val here = CorpusRecord.Oracle("1", version, if (a != null) "Accept" else "Reject", read, holds = false)
-                val oracles = sortOracles(others + here + e.oracles.filter { it.id != "1" })
+            } else if (dependent(e)) {
+                val here = platforms.map { entry(it, e.path, e.sha256, holds = false) }
+                val oracles = sortOracles(others + here + e.oracles.filterNot(::isPlatform))
                 if (oracles.any { it.holds == true }) out[e.key] = e.copy(oracles = oracles)
             }
         }
@@ -162,36 +178,80 @@ class RecordsTest {
     }
 
     private fun sortOracles(oracles: List<CorpusRecord.Oracle>) =
-        oracles.sortedWith(compareBy({ ORACLE_ORDER.indexOf(it.id) }, { it.version.padStart(3, '0') }))
+        oracles.sortedWith(
+            compareBy<CorpusRecord.Oracle> { ORACLE_ORDER.indexOf(it.id) }.thenComparator {
+                a,
+                b,
+                ->
+                versionOrder(a.version, b.version)
+            },
+        )
 
-    private val acceptedByName: Map<String, OracleReplay.Accepted> by lazy {
-        OracleReplay.accepted.associateBy { it.name }
+    /** Versions compared numerically part by part (`2.9.0` before `2.10.0`), falling back to text. */
+    private fun versionOrder(
+        a: String,
+        b: String,
+    ): Int {
+        val (x, y) = listOf(a, b).map { v -> v.split('.').map { it.toIntOrNull() } }
+        for ((p, q) in x.zip(y)) {
+            if (p == null || q == null) return a.compareTo(b)
+            if (p != q) return p.compareTo(q)
+        }
+        return x.size.compareTo(y.size)
+    }
+
+    /** [p]'s entry for the input at [path]: its outcome, the bytes it reads where they differ, and whether the class holds. */
+    private fun entry(
+        p: PlatformReplay,
+        path: String,
+        sha256: String,
+        holds: Boolean?,
+    ): CorpusRecord.Oracle {
+        val a = p.acceptedByName[path]
+        val read =
+            a
+                ?.read
+                ?.der
+                ?.let(PlatformReplay::sha)
+                ?.takeIf { it != sha256 }
+        return CorpusRecord.Oracle(p.oracle.id, p.oracle.version, if (a != null) "Accept" else "Reject", read, holds)
     }
 
     /**
-     * The records the replay classes on this JDK. A D8-gap input's keyability rides on each of its records, with the gap
-     * justification appended; it gets a `KEYABILITY_GAP` record of its own only when it has no other class.
+     * The records the replay classes on this run. Rule-based fields come from the platform oracles in [preferred] order. A
+     * D8-gap input's keyability rides on each of its records, with the gap justification appended; it gets a
+     * `KEYABILITY_GAP` record holding on the platform oracles where it is in the gap and has no other class.
      */
-    private fun computed(): List<CorpusRecord> {
+    private fun computed(preferred: List<PlatformReplay> = PlatformReplay.preferred): List<CorpusRecord> {
         val inputs = ProducerCorpus.inputs.associateBy { it.name }
-        val classed = classed(inputs)
-        val gap = OracleReplay.accepted.mapNotNull { a -> gap(a)?.let { a.name to it } }.toMap()
+        val classed = classed(inputs, preferred)
+        // Each D8-gap input's keyability per platform oracle, in preferred order.
+        val gap = LinkedHashMap<String, LinkedHashMap<String, CorpusRecord.Keyability>>()
+        for (p in preferred) {
+            for (a in p.accepted) gap(p, a)?.let { gap.getOrPut(a.name) { LinkedHashMap() }[p.oracle.id] = it }
+        }
         val out =
-            classed.map {
-                record(
-                    it.input,
-                    it.recordClass,
-                    it.divergence,
-                    gap[it.input.name],
-                    withGap(it.reason, gap[it.input.name]),
-                )
+            classed.map { c ->
+                val k = gap[c.input.name]?.values?.first()
+                record(c.input, c.recordClass, c.divergence, k, withGap(c.reason, k), c.holdsOn)
             }
-        val otherwise = classed.map { it.input.name }.toSet()
-        val gapOnly = gap.filterKeys { it !in otherwise }
-        return out +
-            gapOnly.map { (name, k) ->
-                record(inputs.getValue(name), RecordClass.KEYABILITY_GAP, null, k, gapJustification(k))
+        val gapOnly =
+            gap.mapNotNull { (name, byPlatform) ->
+                val others = classed.filter { it.input.name == name }
+                val holdsOn = byPlatform.keys.filter { id -> others.none { !it.dependent || id in it.holdsOn } }
+                holdsOn.firstOrNull()?.let { first ->
+                    val k = byPlatform.getValue(first)
+                    record(
+                        inputs.getValue(name),
+                        RecordClass.KEYABILITY_GAP,
+                        null,
+                        k,
+                        gapJustification(k),
+                        holdsOn.toSet(),
+                    )
+                }
             }
+        return out + gapOnly
     }
 
     /** [reason] with [k]'s gap justification appended; none when the gap's rule yields none (a hand-written one is due). */
@@ -203,42 +263,116 @@ class RecordsTest {
         return if (gap.isEmpty()) "" else "$reason $gap"
     }
 
-    /** One class the replay assigns an input, with its divergence and its rule-based reason. */
+    /**
+     * One class the replay assigns an input, with its divergence, its rule-based reason (from the first preferred platform
+     * oracle the class holds on) and, for an oracle-dependent class, the platform oracles it holds on.
+     */
     private class Classed(
         val input: ProducerCorpus.Input,
         val recordClass: RecordClass,
         val divergence: String?,
         val reason: String,
+        val dependent: Boolean,
+        val holdsOn: MutableSet<String> = HashSet(),
     )
 
-    /** The D1_DOM, D2_REENCODE_ALLOW and D3_DIVERGENCE classes on this JDK. */
-    private fun classed(inputs: Map<String, ProducerCorpus.Input>): List<Classed> {
-        val classed = ArrayList<Classed>()
-        for (a in OracleReplay.accepted) {
-            val reason = OracleReplay.outsideDomain(a) ?: continue
-            classed += Classed(inputs.getValue(a.name), RecordClass.D1_DOM, null, d1Justification(a, reason))
+    /** The D1_DOM, D2_REENCODE_ALLOW and D3_DIVERGENCE classes on this run, the oracle-dependent ones from [preferred]. */
+    private fun classed(
+        inputs: Map<String, ProducerCorpus.Input>,
+        preferred: List<PlatformReplay>,
+    ): List<Classed> {
+        val classed = LinkedHashMap<Triple<String, RecordClass, String?>, Classed>()
+
+        fun add(
+            name: String,
+            recordClass: RecordClass,
+            divergence: String?,
+            reason: () -> String,
+            p: PlatformReplay,
+        ) {
+            val key = Triple(name, recordClass, divergence)
+            classed.getOrPut(key) { Classed(inputs.getValue(name), recordClass, divergence, reason(), true) }.holdsOn +=
+                p.oracle.id
         }
-        for (name in OracleReplay.spkiReencoded) {
-            classed += Classed(inputs.getValue(name), RecordClass.D2_REENCODE_ALLOW, null, REENCODE)
-        }
-        for (input in ProducerCorpus.inputs) {
-            if (CertificateParser.parse(input.der) !is CertificateParse.Parsed) continue
-            for (d in ReferenceView.of(OracleReplay.sha(input.der))?.divergences.orEmpty()) {
-                classed += Classed(input, RecordClass.D3_DIVERGENCE, d, DIVERGENCE.getValue(d))
+        for (p in preferred) {
+            for (a in p.accepted) {
+                p.outsideDomain(a)?.let { reason ->
+                    add(a.name, RecordClass.D1_DOM, null, { d1Justification(a, reason) }, p)
+                }
+            }
+            for (name in p.spkiReencoded) add(name, RecordClass.D2_REENCODE_ALLOW, null, { REENCODE }, p)
+            p.oracle.tbsDivergence?.let { d ->
+                for (name in p.tbsDiffering) add(name, RecordClass.D3_DIVERGENCE, d, { DIVERGENCE.getValue(d) }, p)
             }
         }
-        return classed
+        val out = classed.values.toMutableList()
+        for (input in ProducerCorpus.inputs) {
+            if (CertificateParser.parse(input.der) !is CertificateParse.Parsed) continue
+            for (d in ReferenceView.of(PlatformReplay.sha(input.der))?.divergences.orEmpty()) {
+                out += Classed(input, RecordClass.D3_DIVERGENCE, d, DIVERGENCE.getValue(d), false)
+            }
+        }
+        return out
+    }
+
+    /**
+     * The replay reads an oracle-dependent divergence only on the oracle versions it holds on: a `CONSCRYPT_TBS` record
+     * holding on Conscrypt counts there and nowhere else.
+     */
+    @Test
+    fun `an oracle-dependent divergence counts only on the oracle versions it holds on`() {
+        val base = CorpusRecord.committed().first { it.recordClass == RecordClass.D3_DIVERGENCE }
+        val oracles = listOf(CorpusRecord.Oracle(Oracle2.id, Oracle2.version, "Accept", holds = true))
+        val tbs = base.copy(divergence = "CONSCRYPT_TBS", oracles = oracles)
+        assertEquals(setOf(base.path), CorpusRecord.divergences(listOf(tbs), Oracle2)["CONSCRYPT_TBS"])
+        assertEquals(null, CorpusRecord.divergences(listOf(tbs), Oracle1)["CONSCRYPT_TBS"])
+        val older = tbs.copy(oracles = oracles.map { it.copy(version = "0.0.1") })
+        assertEquals(
+            null,
+            CorpusRecord.divergences(listOf(older), Oracle2)["CONSCRYPT_TBS"],
+            "another Conscrypt version",
+        )
+        assertEquals(setOf(base.path), CorpusRecord.divergences(listOf(base), Oracle1)[base.divergence], "independent")
+    }
+
+    /**
+     * A platform oracle whose `getTBSCertificate()` never matches `Cert.tbs` lands every input it parses in its divergence
+     * class (`CONSCRYPT_TBS` for Conscrypt), holding on that oracle only (spec §9.2 D2: recorded, not a violation).
+     */
+    @Test
+    fun `a TBS that differs from the platform's is classed as the platform's divergence`() {
+        val tampered = PlatformReplay(TamperedTbsOracle)
+        val classed = classed(ProducerCorpus.inputs.associateBy { it.name }, listOf(tampered))
+        val divergent =
+            classed.filter {
+                it.recordClass == RecordClass.D3_DIVERGENCE &&
+                    it.divergence == TamperedTbsOracle.tbsDivergence
+            }
+        assertEquals(
+            tampered.accepted
+                .filter {
+                    it.certificate != null
+                }.map { it.name }
+                .toSet(),
+            divergent.map { it.input.name }.toSet(),
+        )
+        assertTrue(
+            divergent.isNotEmpty() && divergent.all { it.dependent && it.holdsOn == setOf(TamperedTbsOracle.id) },
+        )
     }
 
     /**
      * The D8-gap fields of a platform-accepted input in the D1 domain whose read parses outside the profile: end-entity
      * inputs only, since `producerKeyable` is a leaf predicate (spec §9.2); null otherwise.
      */
-    private fun gap(a: OracleReplay.Accepted): CorpusRecord.Keyability? {
+    private fun gap(
+        p: PlatformReplay,
+        a: PlatformReplay.Accepted,
+    ): CorpusRecord.Keyability? {
         val c = a.certificate ?: return null
-        val clause = Keyability.firstFailing(c)?.takeUnless { isCa(c) || OracleReplay.outsideDomain(a) != null }
+        val clause = Keyability.firstFailing(c)?.takeUnless { isCa(c) || p.outsideDomain(a) != null }
         return clause?.let {
-            val golden = OracleReplay.producerGolden(a)
+            val golden = PlatformReplay.producerGolden(a)
             CorpusRecord.Keyability(golden.substringAfterLast(' '), it.name, zlintResult(a.readInput))
         }
     }
@@ -249,8 +383,9 @@ class RecordsTest {
         divergence: String?,
         keyability: CorpusRecord.Keyability?,
         justification: String,
+        holdsOn: Set<String>,
     ): CorpusRecord {
-        val sha = OracleReplay.sha(input.der)
+        val sha = PlatformReplay.sha(input.der)
         val revokt =
             when (val p = CertificateParser.parse(input.der)) {
                 is CertificateParse.Failed -> {
@@ -263,65 +398,62 @@ class RecordsTest {
                     CorpusRecord.Revokt(
                         "Parsed",
                         Oracle3a.hex(c.rawSerial()),
-                        OracleReplay.sha(c.rawSpki()),
+                        PlatformReplay.sha(c.rawSpki()),
                         scts.sorted(),
                     )
                 }
             }
-        val a = acceptedByName[input.name]
-        val read =
-            a
-                ?.read
-                ?.der
-                ?.let(OracleReplay::sha)
-                ?.takeIf { it != sha }
-        val holds = if (recordClass in JDK_DEPENDENT) true else null
+        val dependent = recordClass in ORACLE_DEPENDENT || divergence in CorpusRecord.ORACLE_DIVERGENCES
         val missing = "no golden for ${input.name}; run native/revokt-oracle/record-goldens.sh"
         val oracles =
-            listOf(
-                CorpusRecord.Oracle("1", version, if (a != null) "Accept" else "Reject", read, holds),
-                CorpusRecord.Oracle(
-                    "3a",
-                    X509_PARSER,
-                    checkNotNull(Oracle3a.reply(sha)) { missing }.substringBefore('\t'),
-                ),
-                CorpusRecord.Oracle("3b", LOCATOR, checkNotNull(Oracle3b.reply(sha)) { missing }.substringBefore('\t')),
-                CorpusRecord.Oracle("4", PRODUCER, producerOutcome(input, a)),
-            )
+            platforms.map { entry(it, input.name, sha, if (dependent) it.oracle.id in holdsOn else null) } +
+                listOf(
+                    CorpusRecord.Oracle(
+                        "3a",
+                        X509_PARSER,
+                        checkNotNull(Oracle3a.reply(sha)) { missing }.substringBefore('\t'),
+                    ),
+                    CorpusRecord.Oracle(
+                        "3b",
+                        LOCATOR,
+                        checkNotNull(Oracle3b.reply(sha)) { missing }.substringBefore('\t'),
+                    ),
+                    CorpusRecord.Oracle("4", PRODUCER, producerOutcome(input)),
+                )
         return CorpusRecord(sha, input.name, revokt, oracles, recordClass, divergence, keyability, justification, today)
     }
 
-    /** Oracle 4's golden for canon of the input, else for canon of the bytes read (marked `read:`), else `no canon`. */
-    private fun producerOutcome(
-        input: ProducerCorpus.Input,
-        a: OracleReplay.Accepted?,
-    ): String {
-        input.canonSha256?.let { sha -> OracleReplay.producer[sha]?.let { return it } }
-        val read = a?.read?.canonSha256?.let { OracleReplay.producer[it] }
-        return read?.let { "read: $it" } ?: "no canon"
+    /**
+     * Oracle 4's golden for canon of the input, else for canon of the bytes the first platform oracle that reads any reads
+     * (marked `read:`), else `no canon`.
+     */
+    private fun producerOutcome(input: ProducerCorpus.Input): String {
+        input.canonSha256?.let { sha -> PlatformReplay.producer[sha]?.let { return it } }
+        val read = PlatformReplay.preferred.firstNotNullOfOrNull { it.acceptedByName[input.name]?.read?.canonSha256 }
+        return read?.let { PlatformReplay.producer[it] }?.let { "read: $it" } ?: "no canon"
     }
 
     private fun d1Justification(
-        a: OracleReplay.Accepted,
+        a: PlatformReplay.Accepted,
         reason: String,
     ): String =
         when (reason) {
-            OracleReplay.PRODUCER_REJECTS -> {
-                val error = OracleReplay.producerGolden(a).removePrefix("REJECT ")
+            PlatformReplay.PRODUCER_REJECTS -> {
+                val error = PlatformReplay.producerGolden(a).removePrefix("REJECT ")
                 "Oracle 4 rejects canon of the bytes read ($error): no filter can contain it, so it is never queried " +
                     "$D1_RULE"
             }
 
-            OracleReplay.PRODUCER_KEYS_OTHER_BYTES -> {
+            PlatformReplay.PRODUCER_KEYS_OTHER_BYTES -> {
                 "Oracle 4 keys bytes other than the reference view's: no filter holds this certificate's key " +
                     "(§9.2 D1-dom)."
             }
 
-            OracleReplay.VERSION_TRAILING -> {
+            PlatformReplay.VERSION_TRAILING -> {
                 "Content after the INTEGER inside [0]: D1-dom by rule, the [0] flattening of §9.2."
             }
 
-            OracleReplay.NO_PLATFORM_CANON -> {
+            PlatformReplay.NO_PLATFORM_CANON -> {
                 "No platform canon can be built: D1-dom by rule (§9.2, revision 39)."
             }
 
@@ -412,7 +544,7 @@ class RecordsTest {
 
         const val D1_BY_RULE = "D1-dom by rule"
 
-        val JDK_DEPENDENT = setOf(RecordClass.D1_DOM, RecordClass.D2_REENCODE_ALLOW, RecordClass.KEYABILITY_GAP)
+        val ORACLE_DEPENDENT = setOf(RecordClass.D1_DOM, RecordClass.D2_REENCODE_ALLOW, RecordClass.KEYABILITY_GAP)
 
         val ORACLE_ORDER = listOf("1", "2", "3a", "3b", "3c", "4")
 
@@ -424,8 +556,8 @@ class RecordsTest {
         const val PRODUCER = "mozilla/crlite go 008299826177"
 
         const val REENCODE =
-            "The JDK re-encodes this SPKI's non-minimal headers in getPublicKey().getEncoded(), and keeps the key; " +
-                "allowed by the §9.2 re-encoding rule."
+            "The platform re-encodes this SPKI's non-minimal headers in getPublicKey().getEncoded(), and keeps " +
+                "the key; allowed by the §9.2 re-encoding rule."
 
         val DIVERGENCE =
             mapOf(
@@ -435,6 +567,9 @@ class RecordsTest {
                 "3A_TBS_LAX" to
                     "x509-parser takes an element with tag number 3 that is not a constructed context-specific [3] " +
                     "as extensions; the JDK and revokt ignore it (3A_TBS_LAX).",
+                "CONSCRYPT_TBS" to
+                    "Conscrypt's getTBSCertificate() differs from Cert.tbs: Conscrypt verifies over the presented " +
+                    "TBS TLV, so it cannot verify this input (§9.2 D2, CONSCRYPT_TBS).",
                 "DUPLICATE_EXTENSION" to
                     "x509-parser reports a duplicate SCT-list extension as an error; revokt takes the union of the " +
                     "extensions' pairs (§9.2 D3).",

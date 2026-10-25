@@ -8,7 +8,7 @@ import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.Span
-import dev.revokt.engine.parse.oracle.OracleReplay.Accepted
+import dev.revokt.engine.parse.oracle.PlatformReplay.Accepted
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import dev.revokt.engine.parse.records.CorpusRecord
 import kotlin.test.Test
@@ -17,12 +17,21 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * The PR-tier replay of spec §9.2 against oracle 1 (the test JDK's `SUN` factory, live) with the recorded 3a, 3b and
- * oracle-4 goldens: D1 and its recorded domain, D2 and D3 on `parse(encoded)`, the "no raw-byte reference" gate metric,
- * and D6. Run it on every matrix JDK with `-Prevokt.testJdk`.
+ * The PR-tier replay of spec §9.2 against one platform oracle, live, with the recorded 3a, 3b and oracle-4 goldens: D1
+ * and its recorded domain, D2 and D3 on `parse(encoded)`, the "no raw-byte reference" gate metric, and D6. The floors
+ * are the least number of inputs D1's domain ([d1Floor]), D2 ([d2Floor]) and D6's round trip ([d6Floor]) must exercise. A
+ * difference from the platform's `getTBSCertificate()` is a D2 violation unless the oracle names a divergence class for it.
  */
-class ParserReplayTest {
-    private val accepted get() = OracleReplay.accepted
+@Suppress("UnnecessaryAbstractClass") // abstract so that JUnit runs only the per-oracle subclasses
+abstract class PlatformReplayTest internal constructor(
+    private val replay: PlatformReplay,
+    private val d1Floor: Int,
+    private val d2Floor: Int,
+    private val d6Floor: Int,
+) {
+    private val tbsDivergence: String? get() = replay.oracle.tbsDivergence
+
+    private val accepted get() = replay.accepted
 
     @Test
     fun `D1 - every platform-accepted input in the producer's domain parses`() {
@@ -30,7 +39,7 @@ class ParserReplayTest {
         val violations = ArrayList<String>()
         var inside = 0
         for (a in accepted) {
-            val reason = OracleReplay.outsideDomain(a)
+            val reason = replay.outsideDomain(a)
             if (reason != null) {
                 dom.getOrPut(reason) { HashSet() } += a.name
             } else {
@@ -39,37 +48,12 @@ class ParserReplayTest {
             }
         }
         val counts = dom.mapValues { it.value.size }
-        println("D1 on JDK ${Oracle1.version}: ${accepted.size} accepted, $inside in the domain; D1-dom $counts")
+        println("D1 on ${replay.oracle.label}: ${accepted.size} accepted, $inside in the domain; D1-dom $counts")
         assertEquals(emptyList(), violations, "D1 violations")
-        assertTrue(inside > 300, "D1 exercised on only $inside inputs")
+        assertTrue(inside > d1Floor, "D1 exercised on only $inside inputs")
         // The by-rule classes are pinned, so a locator or `[0]` regression cannot move inputs out of the domain unseen.
-        assertEquals<Set<String>?>(null, dom[OracleReplay.NO_PLATFORM_CANON], "inputs with no platform canon")
+        assertEquals<Set<String>?>(null, dom[PlatformReplay.NO_PLATFORM_CANON], "inputs with no platform canon")
         // Every other D1-dom entry is a corpus record (RecordsTest), with its reason.
-    }
-
-    /**
-     * The read fallback (spec §9.2 revision 39) is pinned: the nine indefinite-TBS inputs on every matrix JDK are read
-     * through the platform canon and parse, each platform canon is its own `canon` as the reference view locates it, and
-     * no platform-canon read reports an `AlgorithmIdMismatch` (their TBS AlgorithmIdentifiers are minimal DER).
-     */
-    @Test
-    fun `the read fallback parses the nine indefinite-TBS inputs through their platform canon`() {
-        val fallback = accepted.filter { it.platformCanon }
-        assertEquals(FALLBACK_PARSED, fallback.filter { it.certificate != null }.map { it.name }.toSet())
-        for (a in fallback) {
-            val read = a.readInput
-            read.referenceParts?.canon()?.let { located ->
-                assertEquals(Oracle3a.hex(read.der), Oracle3a.hex(located), "${a.name}: canon of its canon")
-            }
-            a.certificate?.let {
-                assertEquals(
-                    false,
-                    it.envelope.algorithmIdMismatch,
-                    "${a.name}: AlgorithmIdMismatch",
-                )
-            }
-        }
-        assertTrue(fallback.count { it.readInput.referenceParts != null } >= FALLBACK_PARSED.size, "canon checked")
     }
 
     @Test
@@ -79,14 +63,14 @@ class ParserReplayTest {
                 .filter { it.reference == null }
                 .filterNot {
                     it.certificate == null &&
-                        OracleReplay.outsideDomain(it) in
-                        setOf(OracleReplay.PRODUCER_REJECTS, OracleReplay.NO_PLATFORM_CANON)
+                        replay.outsideDomain(it) in
+                        setOf(PlatformReplay.PRODUCER_REJECTS, PlatformReplay.NO_PLATFORM_CANON)
                 }.map { it.name }
         assertEquals(emptyList(), missing, "platform-accepted inputs with no raw-byte reference")
     }
 
     @Test
-    fun `D2 and D3 - on every parsed encoding revokt's fields equal canon, oracle 1 and the reference view`() {
+    fun `D2 and D3 - on every parsed encoding revokt's fields equal canon, the platform's and the reference view`() {
         var compared = 0
         val unavailable = HashMap<String, Int>()
         val divergences = HashMap<String, MutableSet<String>>()
@@ -97,56 +81,77 @@ class ParserReplayTest {
             val r = a.reference ?: fail("${a.name}: revokt parses it and it has no raw-byte reference")
             val parts = a.readInput.canonParts ?: fail("${a.name}: revokt parses it and canon cannot be located")
             compared++
-            assertEnvelope(a, c, parts, r)
+            if (!assertEnvelope(a, c, parts, r)) {
+                divergences.getOrPut(checkNotNull(tbsDivergence)) { HashSet() } +=
+                    a.name
+            }
             assertReference(a.name, c, r)
             r.divergences.forEach { divergences.getOrPut(it) { HashSet() } += a.name }
             if (Keyability.firstFailing(c) == null) assertProducerBytes(a, c)
-            val (unavailableHere, differing) = Oracle1.compare(a.jdk, c).partition { it.unavailable }
-            unavailableHere.forEach { unavailable.merge(it.name, 1, Int::plus) }
-            for (f in differing.filter { it.mismatch != null }) {
-                if (f.name == "spki" && OracleReplay.reencodesSpki(c.rawSpki(), a.jdk.publicKey.encoded)) {
-                    reencoded += a.name
-                } else {
-                    javaFields += "${a.name}: ${f.name}: ${f.mismatch}"
-                }
-            }
+            compareJavaFields(a, c, unavailable, reencoded, javaFields)
         }
-        println("D2 on JDK ${Oracle1.version}: $compared compared; unavailable $unavailable; divergences $divergences")
-        assertEquals(emptyList(), javaFields, "normalised Java fields that differ from oracle 1's")
-        assertEquals(emptyMap(), unavailable, "oracle-1 getters that threw on the committed corpus")
-        // The re-encoding allow-list (§9.2): the JDK re-encodes the non-minimal headers of an SPKI, outside the key the
+        println("D2 on ${replay.oracle.label}: $compared compared; unavailable $unavailable; divergences $divergences")
+        assertEquals(emptyList(), javaFields, "normalised Java fields that differ from ${replay.oracle.label}'s")
+        assertEquals(emptyMap(), unavailable, "${replay.oracle.label} getters that threw on the committed corpus")
+        // The re-encoding allow-list (§9.2): the platform re-encodes the non-minimal headers of an SPKI, outside the key the
         // BIT STRING encapsulates, and nothing else.
         val spkiMutants =
             accepted
                 .filter { it.certificate != null && SPKI_PATH in it.name && "$SPKI_PATH/1:03~" !in it.name }
                 .map { it.name }
-        assertEquals(spkiMutants.toSet(), reencoded, "inputs whose SPKI the JDK re-encodes")
+        assertEquals(spkiMutants.toSet(), reencoded, "inputs whose SPKI the platform re-encodes")
         // The divergence classes among the inputs compared are the committed D3_DIVERGENCE records (spec §9.2 D3).
         val parsed = accepted.filter { it.certificate != null }.map { it.name }.toSet()
         val recorded =
             CorpusRecord
-                .divergences()
+                .divergences(on = replay.oracle)
                 .mapValues { (_, paths) -> paths.filter { it in parsed }.toSet() }
                 .filterValues { it.isNotEmpty() }
         assertEquals(recorded, divergences, "D3 divergence classes")
-        assertTrue(compared > 1000, "D2 exercised on only $compared inputs")
+        assertTrue(compared > d2Floor, "D2 exercised on only $compared inputs")
     }
 
-    /** `Cert.tbs` against canon's first element and oracle 1's `getTBSCertificate()`; `Cert.sig` against canon's. */
+    /** The normalised Java fields against the platform's, with the SPKI re-encoding allow-list's rule applied. */
+    private fun compareJavaFields(
+        a: Accepted,
+        c: ParsedCertificate,
+        unavailable: MutableMap<String, Int>,
+        reencoded: MutableSet<String>,
+        mismatches: MutableList<String>,
+    ) {
+        val (unavailableHere, differing) = JavaFields.compare(a.x509, c).partition { it.unavailable }
+        unavailableHere.forEach { unavailable.merge(it.name, 1, Int::plus) }
+        for (f in differing.filter { it.mismatch != null }) {
+            if (f.name == "spki" && PlatformReplay.reencodesSpki(c.rawSpki(), a.x509.publicKey.encoded)) {
+                reencoded += a.name
+            } else {
+                mismatches += "${a.name}: ${f.name}: ${f.mismatch}"
+            }
+        }
+    }
+
+    /**
+     * `Cert.tbs` against canon's first element and the platform's `getTBSCertificate()`, and `Cert.sig` against canon's.
+     * Returns whether `Cert.tbs` equals the platform's; a difference fails unless [tbsDivergence] records it.
+     */
     private fun assertEnvelope(
         a: Accepted,
         c: ParsedCertificate,
         parts: Oracle3b.Parts,
         r: ReferenceView,
-    ) {
+    ): Boolean {
         assertEquals(parts.tbs, Oracle3a.hex(c.tbsBytes), "${a.name}: Cert.tbs against canon")
-        assertEquals(
-            Oracle3a.hex(a.jdk.tbsCertificate),
-            Oracle3a.hex(c.tbsBytes),
-            "${a.name}: Cert.tbs against oracle 1",
-        )
         val signature = Oracle3a.cleared(parts.signature, r.unusedBits)
         assertEquals(signature, Oracle3a.hex(c.envelope.signature), "${a.name}: Cert.sig")
+        val same = a.x509.tbsCertificate.contentEquals(c.tbsBytes)
+        if (tbsDivergence == null) {
+            assertEquals(
+                Oracle3a.hex(a.x509.tbsCertificate),
+                Oracle3a.hex(c.tbsBytes),
+                "${a.name}: Cert.tbs against ${replay.oracle.label}",
+            )
+        }
+        return same
     }
 
     private fun assertReference(
@@ -176,28 +181,11 @@ class ParserReplayTest {
         a: Accepted,
         c: ParsedCertificate,
     ) {
-        val golden = OracleReplay.producerGolden(a)
+        val golden = PlatformReplay.producerGolden(a)
         val (status, serial, spki) = golden.split(' ')
         assertEquals("OK", status, "${a.name}: producerKeyable and oracle 4 answers $golden")
         assertEquals(serial, Oracle3a.hex(c.rawSerial()), "${a.name}: rawSerial against oracle 4")
-        assertEquals(spki, OracleReplay.sha(c.rawSpki()), "${a.name}: SHA-256(rawSpki) against oracle 4")
-    }
-
-    @Test
-    fun `the SPKI re-encoding rule allows only a minimal re-encoding of the same key`() {
-        val keys =
-            listOf("letsencrypt.org-1", "www.mozilla.org-1").map {
-                val c =
-                    (
-                        CertificateParser.parse(
-                            ProducerCorpus.resource("certs/$it.der"),
-                        ) as CertificateParse.Parsed
-                    ).certificate
-                c.rawSpki()
-            }
-        assertTrue(OracleReplay.reencodesSpki(keys[0], keys[0]), "the same minimal SPKI")
-        assertEquals(false, OracleReplay.reencodesSpki(keys[0], keys[1]), "another key")
-        assertEquals(false, OracleReplay.reencodesSpki(keys[1], keys[0]), "another key, RSA against EC")
+        assertEquals(spki, PlatformReplay.sha(c.rawSpki()), "${a.name}: SHA-256(rawSpki) against oracle 4")
     }
 
     @Test
@@ -221,7 +209,7 @@ class ParserReplayTest {
             assertEquals(fingerprint(fromB, false), fingerprint(fromEncoded, false), "$name: parse(encoded)")
             roundTrips++
         }
-        assertTrue(resliced > 1000 && roundTrips > 1000, "D6 exercised on $resliced and $roundTrips inputs only")
+        assertTrue(resliced > 1000 && roundTrips > d6Floor, "D6 exercised on $resliced and $roundTrips inputs only")
     }
 
     /** Every TBS offset lies in `Cert.tbs` from its tag octet; shifted, it re-slices `b` when the TBS is definite. */
@@ -293,13 +281,6 @@ class ParserReplayTest {
     }
 
     private companion object {
-        /** The inputs read through the platform canon that parse, on every matrix JDK (spec §9.2 revision 39). */
-        val FALLBACK_PARSED: Set<String> =
-            ProducerCorpus.envelopeLeaves
-                .flatMap { (leaf, _) ->
-                    listOf("serial-81", "serial-84", "spki-83").map { "envelope/$leaf/tbs-indefinite-$it" }
-                }.toSet()
-
         /** The length-mutant path of a header in the SPKI, its own included (`LengthMutants`). */
         const val SPKI_PATH = "/0:30/0:30/6:30"
     }

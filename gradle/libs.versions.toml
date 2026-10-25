@@ -22,6 +22,8 @@ jazzer = "0.30.0"
 okhttp = "5.5.1"
 ktor = "3.6.0"
 robolectric = "4.17"
+# Oracle 2 of spec §9.2 (test only): the current minor; #13 adds the previous one through the matrix file.
+conscrypt = "2.8.0"
 
 [libraries]
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
@@ -36,6 +38,7 @@ gummy-bears-api26 = { module = "com.toasttab.android:gummy-bears-api-26", versio
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+conscrypt-openjdk-uber = { module = "org.conscrypt:conscrypt-openjdk-uber", version.ref = "conscrypt" }
 
 # Plugin artifacts consumed by build-logic (convention plugins) and the detekt rule set.
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }

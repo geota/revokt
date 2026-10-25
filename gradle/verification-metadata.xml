@@ -27,6 +27,7 @@
          <trusted-key id="2E92113263FC31C74CCBAAB20E91C2DE43B72BB1" group="org.ec4j.core"/>
          <trusted-key id="32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA" group="org.codehaus.mojo"/>
          <trusted-key id="33FD4BFD33554634053D73C0C2148900BCD3C2AF" group="^org[.]jetbrains($|([.].*))" regex="true"/>
+         <trusted-key id="3EC80CAD1A3D50AFBBEFC136C2B98E64C61147AC" group="org.conscrypt" name="conscrypt-openjdk-uber" version="2.8.0"/>
          <trusted-key id="47EB6836245D2D40E89DFB4136D4E9618F3ADAB5" group="io.github.oshai"/>
          <trusted-key id="5DD80B0DDCCBE005F0A47FD66751E1A6E2001B8D" group="com.squareup.okio"/>
          <trusted-key id="5F6C2148AD4911FE308110E5F0D0AE433308B042" group="io.gitlab.arturbosch.detekt"/>

@@ -22,6 +22,7 @@ kotlin {
             implementation(project.dependencies.platform(libs.junit.bom))
             implementation(libs.junit.jupiter)
             implementation(libs.jazzer.junit)
+            implementation(libs.conscrypt.openjdk.uber)
             runtimeOnly(libs.junit.platform.launcher)
         }
     }
@@ -35,6 +36,8 @@ tasks.withType<Test>().configureEach {
     // The zlint pin test reads the pin: go.mod is an input, so a bump that touches only go.mod re-runs it, and its
     // path reaches the test without entering the cache key.
     jvmArgumentProviders.add(ZlintGoMod(rootProject.file("native/zlint-oracle/go.mod")))
+    // Oracle 2 (Conscrypt) loads its JNI library; JDK 24+ warn and a later release blocks it without this (JDK 17+).
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
 // Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of the parser package of at least 90 % over

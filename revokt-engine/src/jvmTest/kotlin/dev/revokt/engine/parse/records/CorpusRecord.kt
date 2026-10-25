@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.parse.records
 
+import dev.revokt.engine.parse.oracle.PlatformOracle
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import java.io.File
 
@@ -10,8 +11,8 @@ import java.io.File
  * One corpus record of spec §9.2 ("Corpus record schema"): `{sha256, path, revokt, oracles, class, divergence?,
  * keyability?, justification, added}`. An input has one record per class it is admitted under. Committed one per line
  * in `parse/records.jsonl`, written by `RecordsTest`'s hook and checked by it against the replay. The oracle entries
- * carry outcomes only: the spec's `fields | unavailable` arrive with oracle 2 (#13), the first oracle with getters that
- * can be unavailable on the PR tier.
+ * carry outcomes only: the replay fails on any platform getter that throws on the committed corpus, so the spec's
+ * `fields | unavailable` arrive with the secondary corpus (#15).
  */
 internal data class CorpusRecord(
     val sha256: String,
@@ -33,9 +34,9 @@ internal data class CorpusRecord(
     )
 
     /**
-     * One oracle's recorded outcome. Oracle 1 has one entry per matrix JDK, its version the feature release, with [read]
-     * the SHA-256 of the bytes revokt reads where they differ from the input and, on a JDK-dependent record, [holds]:
-     * whether the record's class holds on that JDK.
+     * One oracle's recorded outcome. A platform oracle has one entry per version (oracle 1 per JDK feature release,
+     * oracle 2 per Conscrypt release), with [read] the SHA-256 of the bytes revokt reads where they differ from the input
+     * and, on an oracle-dependent record, [holds]: whether the record's class holds on that version.
      */
     data class Oracle(
         val id: String,
@@ -65,8 +66,8 @@ internal data class CorpusRecord(
         ISSUER_CORPUS,
     }
 
-    /** The record's identity: an input has at most one record per class. */
-    val key: Pair<String, RecordClass> get() = sha256 to recordClass
+    /** The record's identity: an input has at most one record per class and divergence. */
+    val key: Triple<String, RecordClass, String?> get() = Triple(sha256, recordClass, divergence)
 
     fun toJson(): Json.Obj =
         Json.obj(
@@ -165,21 +166,33 @@ internal data class CorpusRecord(
                 .map { fromJson(Json.parse(it) as Json.Obj) }
                 .toList()
 
-        /** The committed D3_DIVERGENCE records: divergence class → input paths. */
-        fun divergences(): Map<String, Set<String>> =
-            committed()
+        /** D3 divergence classes that depend on a platform oracle's version (holding per oracle entry, like D1_DOM). */
+        val ORACLE_DIVERGENCES = setOf("CONSCRYPT_TBS")
+
+        /**
+         * The D3_DIVERGENCE records of [records] (the committed ones by default): divergence class → input paths. A class in
+         * [ORACLE_DIVERGENCES] counts only where it holds on [on] (its id and version); with [on] null, it is left out.
+         */
+        fun divergences(
+            records: List<CorpusRecord> = committed(),
+            on: PlatformOracle? = null,
+        ): Map<String, Set<String>> =
+            records
                 .filter { it.recordClass == RecordClass.D3_DIVERGENCE }
-                .groupBy({ it.divergence!! }, { it.path })
+                .filter { r ->
+                    r.divergence !in ORACLE_DIVERGENCES ||
+                        r.oracles.any { on != null && it.id == on.id && it.version == on.version && it.holds == true }
+                }.groupBy({ it.divergence!! }, { it.path })
                 .mapValues { it.value.toSet() }
 
-        /** Writes [records] sorted by path and class, one per line. */
+        /** Writes [records] sorted by path, class and divergence, one per line. */
         fun write(
             file: File,
             records: List<CorpusRecord>,
         ) {
             file.writeText(
                 records
-                    .sortedWith(compareBy({ it.path }, { it.recordClass }))
+                    .sortedWith(compareBy({ it.path }, { it.recordClass }, { it.divergence }))
                     .joinToString("") { it.toJson().write() + "\n" },
             )
         }
