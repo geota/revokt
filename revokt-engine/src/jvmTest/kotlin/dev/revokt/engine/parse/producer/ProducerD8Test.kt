@@ -111,6 +111,23 @@ class ProducerD8Test {
     }
 
     @Test
+    fun `the D8 gap is zero on the committed real end-entity certificates`() {
+        val leaves =
+            listOf(
+                "github.com-1",
+                "letsencrypt.org-1",
+                "www.google.com-1",
+                "www.mozilla.org-1",
+                "mozilla-content-signing-c0",
+            )
+        for (leaf in leaves) {
+            val o = outcomes.single { it.input.name == "certs/$leaf" }
+            assertEquals(null, o.clause, "$leaf is inside the profile (producer: ${o.golden})")
+            assertTrue(o.golden!!.endsWith(" ct"), "$leaf is keyed through ct")
+        }
+    }
+
+    @Test
     fun `the boundary corpus's accept side is inside the profile and its reject side outside`() {
         for (o in outcomes.filter { it.input.name.startsWith("boundary/") }) {
             val reject =
@@ -119,8 +136,27 @@ class ProducerD8Test {
                     .startsWith("reject-")
             assertTrue(o.certificate != null, "${o.input.name} parses")
             assertEquals(reject, o.clause != null, "${o.input.name}: clause ${o.clause}, producer ${o.golden}")
-            // Reject side: the strict ct-go parse does not key it (a `lax` or zcrypto key, or a rejection).
-            if (reject) assertTrue(!o.golden!!.endsWith(" ct"), "${o.input.name}: not keyed through ct (${o.golden})")
+            // Reject side: the producer's exact outcome is pinned (zcrypto-only, lax-only, or a rejection).
+            if (reject) {
+                val name = o.input.name
+                val expected =
+                    when {
+                        "key-usage" in name -> " zc"
+                        "serial-non-minimal" in name || "printable-at" in name -> " lax"
+                        else -> "REJECT"
+                    }
+                val golden = o.golden!!
+                assertTrue(
+                    if (expected ==
+                        "REJECT"
+                    ) {
+                        golden.startsWith(expected)
+                    } else {
+                        golden.endsWith(expected)
+                    },
+                    "$name: expected $expected, producer $golden",
+                )
+            }
         }
     }
 

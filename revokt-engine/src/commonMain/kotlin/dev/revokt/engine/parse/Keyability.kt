@@ -6,11 +6,10 @@ package dev.revokt.engine.parse
 import dev.revokt.KeyabilityClause
 
 /**
- * The conservative keyability profile of spec §9.2 (revision 34), read on `Cert.tbs` alone: true only when every clause
+ * The conservative keyability profile of spec §9.2 (revision 35), read on `Cert.tbs` alone: true only when every clause
  * K1–K8 holds. It is not a model of the producer; a leaf outside it is never queried even when the producer keys it
- * (the D8 gap). Evaluated for the leaf only. K8 accepts no extension that ct-go parses fatally, and requires every
- * critical flag `00` or `FF`, until its grammars land (#28). The SPKI's own shape is K7's; K2 and K4 read only its
- * algorithm and BIT STRING.
+ * (the D8 gap). Evaluated for the leaf only. The SPKI's own shape is K7's; K2 and K4 read only its algorithm and BIT
+ * STRING. K8's grammars are [ExtensionGrammars].
  */
 internal object Keyability {
     private const val SEQUENCE = 0x30
@@ -23,21 +22,8 @@ internal object Keyability {
     private const val OID_ARC_LIMIT = 1L shl 31
     private val EC_PUBLIC_KEY = byteArrayOf(0x2a, 0x86.toByte(), 0x48, 0xce.toByte(), 0x3d, 0x02, 0x01)
 
-    /** The extensions ct-go parses with a fatal return (K8's list), and the two whose presence alone is outside. */
-    private val FATAL_EXTENSIONS: List<ByteArray> =
-        listOf(
-            byteArrayOf(0x55, 0x1d, 0x0f), // keyUsage
-            byteArrayOf(0x55, 0x1d, 0x13), // basicConstraints
-            byteArrayOf(0x55, 0x1d, 0x11), // subjectAltName
-            byteArrayOf(0x55, 0x1d, 0x1f), // cRLDistributionPoints
-            Oid.AUTHORITY_KEY_IDENTIFIER_CONTENT,
-            byteArrayOf(0x55, 0x1d, 0x25), // extKeyUsage
-            Oid.SUBJECT_KEY_IDENTIFIER_CONTENT,
-            byteArrayOf(0x55, 0x1d, 0x20), // certificatePolicies
-            byteArrayOf(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x01), // authorityInfoAccess
-            byteArrayOf(0x55, 0x1d, 0x1e), // nameConstraints
-            byteArrayOf(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x0b), // subjectInfoAccess
-        )
+    /** K8's list (the extensions ct-go parses with a fatal return): K1 walks their values. */
+    private val FATAL_EXTENSIONS: List<ByteArray> = ExtensionGrammars.LISTED
 
     /** The first failing clause, K1 to K8 in order, or null when [c] is inside the profile (`producerKeyable`). */
     fun firstFailing(c: ParsedCertificate): KeyabilityClause? =
@@ -103,7 +89,7 @@ internal object Keyability {
                 spkiShape(b, t.spki)
         }
 
-    /** K4: the algorithm OIDs, the EC curve, every attribute type and every extension ID. */
+    /** K4: the algorithm OIDs, the EC curve, every attribute type, every extension ID and the OIDs inside K8's values. */
     private fun oids(c: ParsedCertificate): Boolean {
         val b = c.tbsBytes
         val spkiAlgorithm = spki(b, c.tbs.spki, exact = false)?.first
@@ -111,7 +97,8 @@ internal object Keyability {
             listOfNotNull(algorithm(b, c.tbs.signature)?.first, spkiAlgorithm?.first, curve(b, spkiAlgorithm)) +
                 attributes(b, c.tbs.issuer).orEmpty().map { it.first } +
                 attributes(b, c.tbs.subject).orEmpty().map { it.first } +
-                c.tbs.extensions.map { it.oid }
+                c.tbs.extensions.map { it.oid } +
+                c.tbs.extensions.flatMap { ExtensionGrammars.oids(b, it) }
         return spans.all { minimalOid(b, it) }
     }
 
@@ -132,7 +119,7 @@ internal object Keyability {
             }
         }
 
-    /** K8, until #28: no extension on K8's list, and every critical flag `00` or `FF`. */
+    /** K8: every extension on K8's list matches its grammar, and every critical flag is `00` or `FF`. */
     private fun extensions(c: ParsedCertificate): Boolean =
         derOk {
             val b = c.tbsBytes
@@ -142,7 +129,7 @@ internal object Keyability {
                 fields.read(OBJECT_IDENTIFIER, HeaderSite.EXTENSION_OID)
                 val flag = fields.readOptional(BOOLEAN, HeaderSite.EXTENSION_CRITICAL)?.content
                 val flagOk = flag == null || (flag.length == 1 && b[flag.start].toInt() and 0xff in setOf(0x00, 0xff))
-                flagOk && FATAL_EXTENSIONS.none { Oid.matches(b, e.oid, it) }
+                flagOk && ExtensionGrammars.valid(b, e)
             }
         }
 

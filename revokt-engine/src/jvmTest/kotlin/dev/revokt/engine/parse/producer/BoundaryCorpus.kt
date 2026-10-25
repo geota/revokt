@@ -13,7 +13,7 @@ import dev.revokt.engine.parse.TestDer.tlv
 import dev.revokt.engine.parse.TestDer.tlvWithLength
 
 /**
- * The boundary corpus of spec §9.2 D8 (revision 35), K1–K7 edges: synthetic leaves at each clause's edge, accept side
+ * The boundary corpus of spec §9.2 D8 (revision 35), K1–K8 edges: synthetic leaves at each clause's edge, accept side
  * unless named `reject-`. Every input is deterministic; the oracle-4 verdicts are recorded in `producer/goldens.tsv`.
  * The real-certificate entries (the unsigned-header forms) are in [ProducerCorpus].
  */
@@ -137,6 +137,7 @@ internal object BoundaryCorpus {
         out += "v1-without-extensions" to base(version = ByteArray(0), extensions = emptyList())
         out += "explicit-v1" to base(version = tlv(0xa0, tlv(0x02, bytes(0))), extensions = emptyList())
         out += "zero-serial" to base(serial = tlv(0x02, bytes(0)))
+        out += k8Edges()
         // Unused bits 3 with padding set: Cert.sig clears them, canon keeps them (D2's Cert.sig check).
         out += "signature-padding-bits" to base(signature = bytes(0x03, 0x03, 0x04, 0x12, 0x3f))
         out +=
@@ -177,9 +178,31 @@ internal object BoundaryCorpus {
             out += "reject-ec-point-$i-flipped-x" to point(0x04, flippedX, hex(y))
             out += "reject-ec-point-$i-prefix-05" to point(0x05, hex(x), hex(y))
         }
+        out += "reject-key-usage-03-00" to base(extensions = listOf(extension("2.5.29.15", tlv(0x03))))
+        out +=
+            "reject-key-usage-03-01-05" to
+            base(extensions = listOf(extension("2.5.29.15", tlv(0x03, bytes(0x01, 0x05)))))
         out +=
             "reject-rsa-key-header-non-minimal" to
             base(spki = rsa(rsaModulus, bytes(0x01, 0x00, 0x01), nonMinimalKeyHeader = true))
         return out
+    }
+
+    /** K8's accept-side edges. */
+    private fun k8Edges(): List<Pair<String, ByteArray>> {
+        fun with(
+            oid: String,
+            value: ByteArray,
+        ) = base(extensions = listOf(extension(oid, value)))
+        val qualifier = seq(oid("1.3.6.1.5.5.7.2.1"), tlv(0x16, ascii("https://cps.example")))
+        return listOf(
+            "basic-constraints-path-len-2^31-1" to
+                with("2.5.29.19", seq(tlv(0x01, bytes(0xff)), tlv(0x02, bytes(0x7f, 0xff, 0xff, 0xff)))),
+            "basic-constraints-explicit-false" to with("2.5.29.19", seq(tlv(0x01, bytes(0x00)))),
+            "key-usage-nine-bits" to with("2.5.29.15", tlv(0x03, bytes(0x07, 0xff, 0x80))),
+            "san-ipv6" to with("2.5.29.17", seq(tlv(0x87, ByteArray(16) { it.toByte() }))),
+            "crldp-empty" to with("2.5.29.31", seq()),
+            "policy-with-qualifier" to with("2.5.29.32", seq(seq(oid("2.23.140.1.2.1"), seq(qualifier)))),
+        )
     }
 }
