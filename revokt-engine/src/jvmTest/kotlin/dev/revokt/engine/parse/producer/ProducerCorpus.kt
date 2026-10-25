@@ -103,6 +103,8 @@ internal object ProducerCorpus {
         for (leaf in listOf("letsencrypt.org-1", "www.google.com-1", "www.mozilla.org-1")) {
             for ((form, name) in listOf(
                 LengthForm.Long(3) to "tbs-long-leading-zero",
+                LengthForm.Long(5) to "tbs-long5",
+                LengthForm.Long(8) to "tbs-long8",
                 LengthForm.Indefinite to "tbs-indefinite",
             )) {
                 val tree = DerNode.parse(resource("certs/$leaf.der"))

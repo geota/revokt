@@ -242,3 +242,75 @@ fn the_tbs_signature_slice_follows_asn1_headers() {
         vec![0x84, 0x01, 0x00, 0x00, 0x00]
     );
 }
+
+/// The TBS `signature` slice follows asn1-rs headers, so each element is skipped as x509-parser reads it: a `[0]` in
+/// any form, an identifier in high-tag-number form and a long-form length of any size.
+#[test]
+fn the_tbs_signature_slice_handles_every_header_form() {
+    let algorithm = tlv(
+        0x30,
+        &tlv(0x06, &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]),
+    );
+    let serial = tlv(0x02, &[0x01, 0x23]);
+    let version = tlv(0xa0, &tlv(0x02, &[2]));
+    let long5 = [vec![0x30, 0x85, 0, 0, 0, 0, 0x0a], algorithm[2..].to_vec()].concat();
+    let high = [vec![0x3f, 0x10], algorithm[1..].to_vec()].concat();
+    let cases = [
+        (
+            "primitive [0]",
+            vec![vec![0x80, 0x01, 0x02], serial.clone(), algorithm.clone()],
+            &algorithm,
+        ),
+        (
+            "bf 00",
+            vec![
+                [vec![0xbf, 0x00], version[1..].to_vec()].concat(),
+                serial.clone(),
+                algorithm.clone(),
+            ],
+            &algorithm,
+        ),
+        (
+            "3f 10 algorithm",
+            vec![version.clone(), serial.clone(), high.clone()],
+            &high,
+        ),
+        (
+            "1f 02 serial",
+            vec![
+                version.clone(),
+                vec![0x1f, 0x02, 0x02, 0x01, 0x23],
+                algorithm.clone(),
+            ],
+            &algorithm,
+        ),
+        (
+            "serial 82",
+            vec![
+                version.clone(),
+                vec![0x02, 0x82, 0x00, 0x02, 0x01, 0x23],
+                algorithm.clone(),
+            ],
+            &algorithm,
+        ),
+        (
+            "serial 42",
+            vec![
+                version.clone(),
+                vec![0x42, 0x02, 0x01, 0x23],
+                algorithm.clone(),
+            ],
+            &algorithm,
+        ),
+        (
+            "algorithm 85",
+            vec![version.clone(), serial.clone(), long5.clone()],
+            &long5,
+        ),
+    ];
+    for (name, elements, expected) in cases {
+        let tbs = tlv(0x30, &[elements.concat(), tlv(0x30, &[])].concat());
+        let (_, slice) = tbs_parts(&tbs).unwrap_or_else(|| panic!("{name}: not sliced"));
+        assert_eq!(hex(&slice), hex(expected), "{name}");
+    }
+}
