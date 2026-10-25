@@ -205,7 +205,7 @@ class ProducerD8Test {
     @Test
     fun `the zlint results name the zlint pin`() {
         val header = String(ProducerCorpus.resource("producer/zlint.tsv")).lineSequence().first()
-        val goMod = File("../native/zlint-oracle/go.mod").readLines()
+        val goMod = File(checkNotNull(System.getProperty("revokt.zlintGoMod")) { "revokt.zlintGoMod not set" }).readLines()
         val pin = goMod.single { it.trim().startsWith("github.com/zmap/zlint/v3 ") }.trim().split(' ')[1]
         assertEquals("# zlint pin: $pin", header.substringBefore(" (native"), "re-record zlint.tsv after a zlint bump")
     }

@@ -41,6 +41,11 @@ internal object ProducerCorpus {
             "mozilla-content-signing-c2",
         )
 
+    /**
+     * The structural variants of `certs/variants/generate.py`, built from `letsencrypt.org-2`, a CA. Those that drop or
+     * hide the extensions (`spki-then-null-then-uid`, `tbs-null-before-extensions`, `uid-81-twice`, `uid-82-then-81`)
+     * read as leaves to every parser, so they belong in the D8 gap.
+     */
     private val variants =
         listOf(
             "cert-null-after-signature",
