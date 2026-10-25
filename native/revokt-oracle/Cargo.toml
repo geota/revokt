@@ -22,3 +22,7 @@ clubcard-crlite = { version = "=0.6.2", features = ["builder", "bincode", "sha2"
 clubcard = { version = "=0.3.4", features = ["builder"] }
 # Already a dependency of clubcard-crlite; used only to write the ct-logs.json the builder reads.
 base64 = "0.23"
+# Oracle 3a (spec §9.2, Appendix A pins x509-parser 0.18.1 with asn1-rs 0.7.2; Cargo.lock holds the rest).
+x509-parser = "=0.18.1"
+asn1-rs = "=0.7.2"
+nom = "=7.1.3"

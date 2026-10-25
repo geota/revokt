@@ -103,6 +103,8 @@ internal object ProducerCorpus {
         for (leaf in listOf("letsencrypt.org-1", "www.google.com-1", "www.mozilla.org-1")) {
             for ((form, name) in listOf(
                 LengthForm.Long(3) to "tbs-long-leading-zero",
+                LengthForm.Long(5) to "tbs-long5",
+                LengthForm.Long(8) to "tbs-long8",
                 LengthForm.Indefinite to "tbs-indefinite",
             )) {
                 val tree = DerNode.parse(resource("certs/$leaf.der"))
@@ -112,6 +114,7 @@ internal object ProducerCorpus {
         }
         for ((name, der) in BoundaryCorpus.inputs(rsaModulus())) out += Input("boundary/$name", der)
         for (f in fuzzInputs) out += Input("fuzz/$f", resource("CertificateParserFuzzTestInputs/$f"))
+        for ((name, der) in BoundaryCorpus.divergences()) out += Input("d3/$name", der)
         val mutated =
             fixtures.map { "certs/$it" to resource("certs/$it.der") } + ("boundary/base" to BoundaryCorpus.base())
         for ((name, der) in mutated) {

@@ -205,4 +205,42 @@ internal object BoundaryCorpus {
             "policy-with-qualifier" to with("2.5.29.32", seq(seq(oid("2.23.140.1.2.1"), seq(qualifier)))),
         )
     }
+
+    /** One SCT list item: version 0, a 32-octet log id, the timestamp, no extensions, a hash and signature pair, an empty signature. */
+    private fun sctList(timestamp: Long): ByteArray {
+        val item =
+            bytes(0) + ByteArray(32) { 0x11 } + ByteArray(8) { (timestamp ushr (56 - 8 * it)).toByte() } +
+                bytes(0, 0, 4, 3, 0, 0)
+        val items = bytes(item.size shr 8, item.size and 0xff) + item
+        return bytes(items.size shr 8, items.size and 0xff) + items
+    }
+
+    /** The D3 divergence classes against oracle 3a (spec §9.2): `3A_HEADER_LAX` and `3A_TBS_LAX`. */
+    fun divergences(): List<Pair<String, ByteArray>> {
+        val sct = "1.3.6.1.4.1.11129.2.4.2"
+        return listOf(
+            "sct-inner-04" to base(extensions = listOf(extension(sct, tlv(0x04, sctList(1))))),
+            "sct-inner-44" to base(extensions = listOf(extension(sct, tlv(0x44, sctList(2))))),
+            "sct-inner-1f04" to
+                base(extensions = listOf(extension(sct, bytes(0x1f, 0x04, sctList(4).size) + sctList(4)))),
+            "sct-empty-list" to base(extensions = listOf(extension(sct, tlv(0x04, bytes(0, 0))))),
+            "sct-inner-80" to base(extensions = listOf(extension(sct, bytes(0x04, 0x80) + sctList(5) + bytes(0, 0)))),
+            "sct-inner-81" to
+                base(
+                    extensions = listOf(extension(sct, bytes(0x04, 0x81, sctList(6).size) + sctList(6))),
+                ),
+            "sct-constructed-inner" to base(extensions = listOf(extension(sct, tlv(0x24, tlv(0x04, sctList(7)))))),
+            "sct-inner-30" to base(extensions = listOf(extension(sct, tlv(0x30, sctList(8))))),
+            "sct-two-extensions" to
+                base(
+                    extensions = listOf(extension(sct, tlv(0x04, bytes(0, 0))), extension(sct, tlv(0x04, sctList(9)))),
+                ),
+            "primitive-3" to
+                TestCert(
+                    spki = ec(points[0].first, points[0].second, points[0].third),
+                    extensions = emptyList(),
+                    tbsTrailing = tlv(0x83, seq(extension(sct, tlv(0x04, sctList(3))))),
+                ).der,
+        )
+    }
 }

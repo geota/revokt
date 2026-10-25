@@ -10,10 +10,13 @@
 //! revokt-oracle build-synthetic <outdir>
 //! revokt-oracle gen-queries <filter> <count> <seed> <out.tsv>
 //! revokt-oracle goldens <filter> <queries.tsv> <out.tsv>
+//! revokt-oracle x509            (oracle 3a over a pipe; see x509.rs)
 //! ```
 //!
 //! Query line: `issuer_spki_hash_hex \t serial_hex \t scts \t expected`, where `scts` is a comma-separated list of
 //! `log_id_hex:timestamp` (empty allowed) and `expected` is one of `Good`, `Revoked`, `NotCovered`, `NotEnrolled`.
+
+mod x509;
 
 use std::fs;
 use std::path::Path;
@@ -370,7 +373,8 @@ fn run(args: &[String]) -> Result<(), String> {
             gen_queries(path, count, seed, out)
         }
         [cmd, filter, queries, out] if cmd == "goldens" => goldens(filter, queries, out),
-        _ => Err("usage: revokt-oracle inspect <filter> | transcode <filter> <out.v4> | build-synthetic <outdir> | gen-queries <filter> <count> <seed> <out.tsv> | goldens <filter> <queries.tsv> <out.tsv>".into()),
+        [cmd] if cmd == "x509" => x509::run(),
+        _ => Err("usage: revokt-oracle inspect <filter> | transcode <filter> <out.v4> | build-synthetic <outdir> | gen-queries <filter> <count> <seed> <out.tsv> | goldens <filter> <queries.tsv> <out.tsv> | x509".into()),
     }
 }
 
