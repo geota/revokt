@@ -3112,13 +3112,13 @@ matrix** is a replay of the union corpus (committed, secondary, divergence): one
 Conscrypt version of the matrix, with 3a/3b/4 goldens read from the records so no matrix job needs a native oracle.
 Versions are named in a committed matrix file, `gradle/oracle-matrix.properties` (JDK: 17, 21, the current LTS, the
 current feature release; the nightly's JDK EA release, rolled by hand; Conscrypt uber: current and previous minor,
-named by their catalog keys; Android system images by revision, with the Conscrypt APEX version logged per run since
-it is updated out of band) with the roll rule "add the new version, keep the old until its support ends", except that
-the bytecode target (JDK 17) stays while it is the target. A nightly job replays the committed corpus against the
-newest JDK EA and fails on any new D1 violation against the recorded baseline. A Conscrypt release newer than the
-matrix's current one fails the nightly, and so blocks a release, until it is admitted like any dependency (checksums
-and signing key verified) and rolled into the matrix, after which every PR replays it; no unverified Conscrypt
-artifact is resolved in CI. A scheduled **producer job** (weekly, on every change to the producer,
+named by their catalog keys; Android system images by revision (from 0.3), with the Conscrypt APEX version logged per
+run since it is updated out of band) with the roll rule "add the new version, keep the old until its support ends",
+except that the bytecode target (JDK 17) stays while it is the target. A nightly job replays the committed corpus
+against the newest JDK EA and fails on any new D1 violation against the recorded baseline. A Conscrypt release newer
+than the matrix's current one fails the nightly, and so blocks a release, until it is admitted like any dependency
+(checksums and signing key verified) and rolled into the matrix, after which every PR replays it; no unverified
+Conscrypt artifact is resolved in CI. A scheduled **producer job** (weekly, on every change to the producer,
 certificate-transparency-go, zcrypto or Go pin, and before each release) builds oracle 4 at the pin and at
 `mozilla/crlite` `main`, replays D8's gated direction over the union corpus with both, and runs at least 100 000 fresh
 entries from CRLite-enrolled logs, precertificates included, through oracles 1 and 4 and the profile. A violation at
