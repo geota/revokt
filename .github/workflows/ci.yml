@@ -58,7 +58,7 @@ jobs:
           tag=$(sed -n 's/^tag=//p' gradle/corpus-pin.properties)
           # A v* tag, the ones the corpus repository's ruleset makes immutable; the manifest hash is the integrity check.
           case $tag in v[0-9]|v[0-9]*[0-9]) ;; *) echo "::error::bad tag in gradle/corpus-pin.properties"; exit 1 ;; esac
-          case $tag in *[!v0-9.]*) echo "::error::bad tag in gradle/corpus-pin.properties"; exit 1 ;; esac
+          case $tag in v*[!0-9.]*|*..*) echo "::error::bad tag in gradle/corpus-pin.properties"; exit 1 ;; esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: corpus-cache
