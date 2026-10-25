@@ -221,6 +221,20 @@ internal object BoundaryCorpus {
         return listOf(
             "sct-inner-04" to base(extensions = listOf(extension(sct, tlv(0x04, sctList(1))))),
             "sct-inner-44" to base(extensions = listOf(extension(sct, tlv(0x44, sctList(2))))),
+            "sct-inner-1f04" to
+                base(extensions = listOf(extension(sct, bytes(0x1f, 0x04, sctList(4).size) + sctList(4)))),
+            "sct-empty-list" to base(extensions = listOf(extension(sct, tlv(0x04, bytes(0, 0))))),
+            "sct-inner-80" to base(extensions = listOf(extension(sct, bytes(0x04, 0x80) + sctList(5) + bytes(0, 0)))),
+            "sct-inner-81" to
+                base(
+                    extensions = listOf(extension(sct, bytes(0x04, 0x81, sctList(6).size) + sctList(6))),
+                ),
+            "sct-constructed-inner" to base(extensions = listOf(extension(sct, tlv(0x24, tlv(0x04, sctList(7)))))),
+            "sct-inner-30" to base(extensions = listOf(extension(sct, tlv(0x30, sctList(8))))),
+            "sct-two-extensions" to
+                base(
+                    extensions = listOf(extension(sct, tlv(0x04, bytes(0, 0))), extension(sct, tlv(0x04, sctList(9)))),
+                ),
             "primitive-3" to
                 TestCert(
                     spki = ec(points[0].first, points[0].second, points[0].third),

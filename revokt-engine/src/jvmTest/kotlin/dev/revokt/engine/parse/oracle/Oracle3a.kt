@@ -24,6 +24,14 @@ internal object Oracle3a {
         val sctError: Boolean,
     )
 
+    /** The parts of `canon` as 3a slices them, and the `signatureValue`'s unused-bits count. */
+    class CanonParts(
+        val tbs: String,
+        val tbsSignature: String,
+        val signature: String,
+        val unusedBits: Int,
+    )
+
     /** 3a's `Ok` reply; every byte field is lower-case hex. */
     class Accepted(
         val serial: String,
@@ -31,10 +39,9 @@ internal object Oracle3a {
         val subject: String,
         val issuer: String,
         val trailing: Int,
-        val tbs: String,
-        val tbsSignature: String,
-        val signature: String,
+        val canon: CanonParts,
         val extensions: List<Extension>,
+        val duplicateSct: Boolean,
     )
 
     /** sha256 of the input → 3a's reply line. */
@@ -58,21 +65,41 @@ internal object Oracle3a {
                     val sct = parts[3]
                     val pairs =
                         when (sct) {
-                            "-", "E" -> null
-                            "" -> emptyList()
-                            else -> sct.split('+').map { it.substringBefore('@') to it.substringAfter('@').toLong() }
+                            "-", "E" -> {
+                                null
+                            }
+
+                            "" -> {
+                                emptyList()
+                            }
+
+                            else -> {
+                                sct.split('+').map {
+                                    it.substringBefore('@') to
+                                        it.substringAfter('@').toULong().toLong()
+                                }
+                            }
                         }
                     Extension(oid, critical == "1", value, if (sct == "E") emptyList() else pairs, sct == "E")
                 }
             }
-        return Accepted(f[1], f[2], f[3], f[4], f[5].toInt(), f[6], f[7], f[8], extensions)
+        return Accepted(
+            f[1],
+            f[2],
+            f[3],
+            f[4],
+            f[5].toInt(),
+            CanonParts(f[6], f[7], f[8], f[10].toInt()),
+            extensions,
+            f[11] == "1",
+        )
     }
 
     fun hex(b: ByteArray): String = b.toByteString().hex()
 
     fun bytes(hex: String): ByteArray = hex.decodeHex().toByteArray()
 
-    /** Writes each distinct input once when `revokt.writeOracleInputs` names a file; returns whether it did. */
+    /** Writes every corpus input when `revokt.writeOracleInputs` names a file; returns whether it did. */
     fun writeInputsIfRequested(): Boolean {
         val path = System.getProperty("revokt.writeOracleInputs") ?: return false
         File(path).printWriter().use { w ->

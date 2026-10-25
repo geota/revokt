@@ -25,3 +25,4 @@ base64 = "0.23"
 # Oracle 3a (spec §9.2, Appendix A pins x509-parser 0.18.1 with asn1-rs 0.7.2; Cargo.lock holds the rest).
 x509-parser = "=0.18.1"
 asn1-rs = "=0.7.2"
+nom = "=7.1.3"

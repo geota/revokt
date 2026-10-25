@@ -23,12 +23,13 @@ import kotlin.test.fail
 class Oracle3aTest {
     private val goldens by lazy { Oracle3a.goldens() }
 
-    private enum class Divergence { HEADER_LAX, TBS_LAX }
+    private enum class Divergence { HEADER_LAX, TBS_LAX, DUPLICATE }
 
     @Test
     fun `revokt extracts what 3a extracts wherever both accept`() {
         var compared = 0
         val divergences = HashMap<Divergence, MutableList<String>>()
+        val rejectedByThreeA = ArrayList<String>()
         for (input in ProducerCorpus.inputs) {
             val sha =
                 input.der
@@ -42,10 +43,24 @@ class Oracle3aTest {
             if (c != null && a != null) {
                 compared++
                 compare(input.name, c, a, divergences)
+            } else if (c != null) {
+                rejectedByThreeA += input.name
             }
         }
         println("D2 against 3a: $compared inputs; divergences ${divergences.mapValues { it.value.size }}")
-        assertEquals<List<String>?>(listOf("d3/sct-inner-44"), divergences[Divergence.HEADER_LAX], "3A_HEADER_LAX")
+        assertEquals(
+            setOf("d3/sct-inner-44", "d3/sct-inner-1f04"),
+            divergences[Divergence.HEADER_LAX]?.toSet(),
+            "3A_HEADER_LAX",
+        )
+        assertEquals<List<String>?>(
+            listOf("d3/sct-two-extensions"),
+            divergences[Divergence.DUPLICATE],
+            "the duplicate-extension class",
+        )
+        // Inputs revokt parses and 3a rejects (x509-parser refuses indefinite and some JDK-tolerated forms): pinned, so
+        // a wrapper regression cannot shrink D2 unnoticed. They are D2-referenced by 3b (#38).
+        assertEquals(THREE_A_REJECTS, rejectedByThreeA.toSet(), "inputs revokt parses that 3a rejects")
         assertEquals<List<String>?>(listOf("d3/primitive-3"), divergences[Divergence.TBS_LAX], "3A_TBS_LAX")
         assertTrue(compared > 1000, "only $compared inputs compared")
     }
@@ -60,18 +75,21 @@ class Oracle3aTest {
         assertEquals(a.spki, Oracle3a.hex(c.rawSpki()), "$name spki")
         assertEquals(a.subject, Oracle3a.hex(c.rawSubject()), "$name subject")
         assertEquals(a.issuer, Oracle3a.hex(c.rawIssuer()), "$name issuer")
-        assertEquals(a.tbs, Oracle3a.hex(c.tbsBytes), "$name Cert.tbs")
-        assertEquals(a.tbsSignature, Oracle3a.hex(c.tbs.signature.bytes(c.tbsBytes)), "$name TBS signature")
-        val presented = c.envelope.signatureValue
-        val unused = if (presented.length > 0) c.der[presented.start].toInt() and 0xff else 0
-        assertEquals(cleared(a.signature, unused), Oracle3a.hex(c.envelope.signature), "$name Cert.sig")
+        assertEquals(a.canon.tbs, Oracle3a.hex(c.tbsBytes), "$name Cert.tbs")
+        assertEquals(a.canon.tbsSignature, Oracle3a.hex(c.tbs.signature.bytes(c.tbsBytes)), "$name TBS signature")
+        assertEquals(
+            cleared(a.canon.signature, a.canon.unusedBits),
+            Oracle3a.hex(c.envelope.signature),
+            "$name Cert.sig",
+        )
         val revoktExtensions =
             c.tbs.extensions.map {
                 "${Oracle3a.hex(it.oid.bytes(c.tbsBytes))},${it.critical},${Oracle3a.hex(it.value.bytes(c.tbsBytes))}"
             }
         val oracleExtensions = a.extensions.map { "${it.oid},${it.critical},${it.value}" }
         if (revoktExtensions != oracleExtensions) {
-            // 3A_TBS_LAX: 3a takes a primitive [3] as extensions; revokt, like the JDK, ignores it (spec §9.2, D3).
+            // 3A_TBS_LAX: 3a takes a primitive [3] as extensions; revokt, like the JDK, ignores it (spec §9.2, D3). The
+            // spec says 3b's TBS walk decides the class; until #38 lands that walk, revokt's own stop element stands in.
             val primitive3 =
                 c.ignoredElements.any {
                     it.site == IgnoredSite.TBS_AFTER_STOP &&
@@ -86,17 +104,18 @@ class Oracle3aTest {
             return
         }
         val expected = HashSet<Pair<String, Long>>()
-        for ((index, e) in a.extensions.withIndex()) {
+        for (e in a.extensions) {
             if (e.sct == null) continue
             val pairs = e.sct
-            val value = c.tbs.extensions[index].value
-            val innerIsOctetString = value.length > 0 && c.tbsBytes[value.start].toInt() and 0xff == 0x04
+            // The inner identifier octet is read from 3a's reply, never from revokt (spec §9.2 D2).
+            val innerIsOctetString = e.value.startsWith("04")
             if (innerIsOctetString) {
                 expected += pairs
             } else if (pairs.isNotEmpty()) {
                 divergences.getOrPut(Divergence.HEADER_LAX) { ArrayList() }.add(name)
             }
         }
+        if (a.duplicateSct) divergences.getOrPut(Divergence.DUPLICATE) { ArrayList() }.add(name)
         val actual =
             c.fields.scts
                 .map { Oracle3a.hex(it.logId.toByteArray()) to it.timestamp }
@@ -117,5 +136,28 @@ class Oracle3aTest {
     @Test
     fun `the 3a recording hook writes the corpus on request`() {
         Oracle3a.writeInputsIfRequested()
+    }
+
+    private companion object {
+        val THREE_A_REJECTS: Set<String> =
+            setOf(
+                // JDK-tolerated trailing elements and unique-id forms x509-parser refuses.
+                "variants/ext3-null-after-sequence",
+                "variants/ext3-primitive-83",
+                "variants/spki-then-null-then-uid",
+                "variants/tbs-junk-after-extensions",
+                "variants/tbs-null-after-extensions",
+                "variants/tbs-null-before-extensions",
+                "variants/tbs-two-ext3",
+                "variants/uid-81-twice",
+                "variants/uid-82-then-81",
+                // Indefinite lengths, which x509-parser rejects everywhere.
+                "unsigned/letsencrypt.org-1/tbs-indefinite",
+                "unsigned/www.google.com-1/tbs-indefinite",
+                "unsigned/www.mozilla.org-1/tbs-indefinite",
+                "boundary/indefinite-signature-value",
+                // Signature padding bits set, which x509-parser's DER BIT STRING refuses.
+                "boundary/signature-padding-bits",
+            )
     }
 }

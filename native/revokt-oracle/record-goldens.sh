@@ -17,15 +17,20 @@ trap 'rm -rf "${work:?}"' EXIT
 cut -f2 "$work/inputs.tsv" > "$work/b64.txt"
 echo '##' >> "$work/b64.txt"
 mkdir -p "$dir"
-for oracle in x509:3a locate:3b; do
+for oracle in "x509:3a:OK <fields> | ERR <error> | PANIC <error>" \
+  "locate:3b:CANON <fields> | NOT_LOCATED <reason> | PANIC <reason>"; do
   cmd=${oracle%%:*}
-  name=${oracle##*:}
+  rest=${oracle#*:}
+  name=${rest%%:*}
+  format=${rest#*:}
   "$root/native/target/release/revokt-oracle" "$cmd" < "$work/b64.txt" | grep -v '^##$' > "$work/$name.txt"
   [ "$(wc -l < "$work/inputs.tsv")" -eq "$(wc -l < "$work/$name.txt")" ] || { echo "$name reply count mismatch" >&2; exit 1; }
   {
     echo "# Oracle $name (native/revokt-oracle $cmd) replies for the replay corpus of ProducerCorpus."
-    echo "# sha256 of the input <TAB> reply. Regenerate with native/revokt-oracle/record-goldens.sh, never edit."
+    echo "# sha256 of the input <TAB> $format. Regenerate with native/revokt-oracle/record-goldens.sh, never edit."
     cut -f1 "$work/inputs.tsv" | paste - "$work/$name.txt" | LC_ALL=C sort -u
   } > "$dir/$name.tsv"
+  dups=$(grep -v '^#' "$dir/$name.tsv" | cut -f1 | uniq -d)
+  [ -z "$dups" ] || { echo "$name inputs with more than one reply: $dups" >&2; exit 1; }
   echo "wrote $(grep -vc '^#' "$dir/$name.tsv") $name goldens"
 done
