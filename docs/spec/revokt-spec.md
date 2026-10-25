@@ -3706,10 +3706,11 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   "emSign Root TLS CA - G3", itself absent from that day's report), consistent with their leaving the report after the
   generation. Of the `intermediates` records, 1 020 (modified 2019-06-07 to 2024-10-21) carry `crlite_enrolled: false`
   and the 883 since 2024-11-09 omit it; none marks it true.
-- Revision 43 probe, run 2026-10-25 over the issuer corpus (10 332 distinct certificates; the revision 42 snapshots
-  with the CCADB `AllCertificatePEMsCSVFormat` export by `NotBeforeYear`, the matrix JDKs' `cacerts` and AOSP
-  `ca-certificates`): every key of the fixture generation's two indexes (1 035) is `SHA-256(rawSpki)` of one of them,
-  so no certificate was fetched from CT; 10 328 parse through oracle 4's `ct` path and all agree with revokt. On 5 of
+- Revision 43 probe, run 2026-10-25 over the issuer corpus (10 347 distinct certificates; the revision 42 snapshots
+  with the CCADB `AllCertificatePEMsCSVFormat` export by `NotBeforeYear`, the 15 records-export certificates that
+  export lacks from crt.sh by fingerprint, the matrix JDKs' `cacerts` and AOSP `ca-certificates`): every key of the
+  fixture generation's two indexes (1 035) is `SHA-256(rawSpki)` of one of them, so no certificate was fetched by SPKI
+  hash for coverage; 10 343 parse through oracle 4's `ct` path and all agree with revokt. On 5 of
   those, `canon` differs from the DER only in the outer `signatureAlgorithm` (sha1WithRSAEncryption where the TBS
   names ecdsa-with-SHA384 or sha384WithRSAEncryption); their TBS is the DER's, and ct-go rejects their DER
   ("mismatching signature algorithm identifiers", `x509/x509.go`). None of their SPKIs is an index key. The records
