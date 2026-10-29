@@ -17,4 +17,4 @@ reason = "Informational 'unmaintained' advisory (no defect) for bincode 1.3.3, t
 [[IgnoredVulns]]
 id = "GHSA-qwgh-2vcv-g2f7"
 ignoreUntil = 2027-04-30
-reason = "block-buffer 0.10.4 via clubcard-crlite 0.6.2 -> sha2 0.10.9 in native/revokt-oracle, a test oracle never shipped (CONTRIBUTING §3). No fix in the digest 0.10 line. Not reachable: 0.10.4 keeps its cursor in a separate pos field that a panicking compress leaves valid (the advisory's inline cursor is the 0.11+ layout), and SHA-256's compression never panics. Revisit at the next clubcard-crlite re-sync; tracked in #68."
+reason = "block-buffer 0.10.4 via clubcard-crlite 0.6.2 -> sha2 0.10.9 in native/revokt-oracle, a test oracle never shipped (CONTRIBUTING §3). No fix in the digest 0.10 line. Not reachable: 0.10.4 keeps its cursor in a separate pos field that a panicking compress leaves valid (the advisory's inline cursor is the 0.11+ layout), SHA-256's compression never panics, and no catch_unwind in the oracle encloses a hash. Revisit at the next clubcard-crlite re-sync; tracked in #68."
