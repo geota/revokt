@@ -42,6 +42,7 @@ class RootPlugin : Plugin<Project> {
             spec.set(layout.projectDirectory.file("docs/spec/revokt-spec.md"))
             testRoots.from(subprojects.map { it.layout.projectDirectory.dir("src") })
             output.set(layout.projectDirectory.file("docs/dev/status.md"))
+            ctSeedGap.set(layout.projectDirectory.file("revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/ct-seed-gap.tsv"))
             checkOnly.set(false)
             rootDir.set(layout.projectDirectory)
         }
@@ -51,6 +52,7 @@ class RootPlugin : Plugin<Project> {
             spec.set(layout.projectDirectory.file("docs/spec/revokt-spec.md"))
             testRoots.from(subprojects.map { it.layout.projectDirectory.dir("src") })
             committed.set(layout.projectDirectory.file("docs/dev/status.md"))
+            ctSeedGap.set(layout.projectDirectory.file("revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/ct-seed-gap.tsv"))
             checkOnly.set(true)
             rootDir.set(layout.projectDirectory)
         }

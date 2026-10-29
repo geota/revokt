@@ -27,17 +27,83 @@ internal class PlatformReplay(
     class Accepted(
         val name: String,
         val presented: ByteArray,
-        val x509: X509Certificate,
+        val view: PlatformView,
         val read: ProducerCorpus.Input?,
-        val reference: ReferenceView?,
         val parse: CertificateParse,
     ) {
+        /** The reference view of the bytes read, built on each access from the goldens (#64: not retained). */
+        val reference: ReferenceView? get() = read?.let { ReferenceView.of(sha(it.der)) }
+
         val certificate: ParsedCertificate? get() = (parse as? CertificateParse.Parsed)?.certificate
 
         val platformCanon: Boolean get() = read?.name?.endsWith(Oracle1.PLATFORM_CANON) == true
 
         /** The bytes read, which revokt parsed. */
         val readInput: ProducerCorpus.Input get() = checkNotNull(read) { "$name: no bytes read" }
+    }
+
+    /**
+     * What the replay reads from a platform's `X509Certificate`, taken once at acceptance so that the certificate itself
+     * is not retained (#64): the normalised Java fields against revokt's parse (empty where revokt does not parse), and
+     * the bytes behind the D2 checks only where they differ from revokt's.
+     */
+    class PlatformView(
+        val javaFields: List<JavaFields.Field>,
+        /** `getTBSCertificate()` where it differs from `Cert.tbs`, else null; null too where revokt does not parse. */
+        val tbs: ByteArray?,
+        /** `getPublicKey().getEncoded()` where it differs from `rawSpki` (or the getter threw: null), else null. */
+        val publicKey: ByteArray?,
+        /** `getNotBefore()` in epoch milliseconds, null where the getter threw. */
+        val notBefore: Long?,
+        /** `getNotAfter()` in epoch milliseconds, null where the getter threw. */
+        val notAfter: Long?,
+        /** The notBefore and notAfter TLVs of `getTBSCertificate()`, where a platform time differs from revokt's. */
+        val times: Pair<ByteArray, ByteArray>?,
+    ) {
+        companion object {
+            @Suppress("TooGenericExceptionCaught") // §9.2: a getter that throws marks its field unavailable
+            fun of(
+                x509: X509Certificate,
+                c: ParsedCertificate?,
+                ocspNoCheckEmpty: Boolean,
+            ): PlatformView {
+                // Where revokt does not parse, nothing is compared: the TBS and key getters are not called.
+                val tbs = c?.let { x509.tbsCertificate }
+                val key =
+                    try {
+                        c?.let { x509.publicKey.encoded }
+                    } catch (_: RuntimeException) {
+                        null
+                    }
+                val notBefore =
+                    try {
+                        x509.notBefore.time
+                    } catch (_: RuntimeException) {
+                        null
+                    }
+                val notAfter =
+                    try {
+                        x509.notAfter.time
+                    } catch (_: RuntimeException) {
+                        null
+                    }
+                val v = c?.tbs?.validity
+                val timesDiffer = v != null && (v.notBeforeMillis != notBefore || v.notAfterMillis != notAfter)
+                return PlatformView(
+                    // Only the fields that differ or are unavailable: an agreeing field carries nothing.
+                    javaFields =
+                        c?.let { JavaFields.compare(x509, it, ocspNoCheckEmpty) }.orEmpty().filter {
+                            it.mismatch !=
+                                null
+                        },
+                    tbs = tbs?.takeIf { !it.contentEquals(c.tbsBytes) },
+                    publicKey = key.takeIf { c != null && !(it?.contentEquals(c.rawSpki()) ?: false) },
+                    notBefore = notBefore,
+                    notAfter = notAfter,
+                    times = if (timesDiffer && tbs != null) validityTimes(tbs) else null,
+                )
+            }
+        }
     }
 
     /** The platform-accepted inputs of the replay corpus, in corpus order. */
@@ -70,13 +136,17 @@ internal class PlatformReplay(
     ): Accepted {
         val name = input.name
         val read = oracle.read(name, x509)
-        val reference =
-            try {
-                read?.let { ReferenceView.of(sha(it.der)) }
-            } catch (e: IllegalStateException) {
-                fail("$name: ${e.message}; run native/revokt-oracle/record-goldens.sh with ${oracle.label}")
-            }
-        return Accepted(name, input.der, x509, read, reference, CertificateParser.parse(read?.der ?: x509.encoded))
+        // A missing golden fails here, at acceptance, with its fix; the view itself is rebuilt on access.
+        try {
+            read?.let { ReferenceView.of(sha(it.der)) }
+        } catch (e: IllegalStateException) {
+            fail("$name: ${e.message}; run native/revokt-oracle/record-goldens.sh with ${oracle.label}")
+        }
+        val bytes = read?.der ?: x509.encoded
+        // Both platform oracles usually read the same bytes: one parse serves both (#64).
+        val parse = parses.getOrPut(sha(bytes)) { CertificateParser.parse(bytes) }
+        val view = PlatformView.of(x509, (parse as? CertificateParse.Parsed)?.certificate, oracle.ocspNoCheckEmpty)
+        return Accepted(name, input.der, view, read, parse)
     }
 
     /** Why a platform-accepted input is outside the D1 domain, or null when it is inside. */
@@ -95,7 +165,7 @@ internal class PlatformReplay(
     val tbsDiffering: Set<String> by lazy {
         accepted
             .filter { a ->
-                a.certificate?.let { !a.x509.tbsCertificate.contentEquals(it.tbsBytes) } == true
+                a.certificate != null && a.view.tbs != null
             }.map { it.name }
             .toSet()
     }
@@ -104,7 +174,9 @@ internal class PlatformReplay(
     val spkiReencoded: Set<String> by lazy {
         accepted
             .mapNotNull { a ->
-                a.certificate?.let { c -> a.name.takeIf { reencoded(c.rawSpki(), a.x509.publicKey.encoded) } }
+                a.certificate?.let { c ->
+                    a.name.takeIf { a.view.publicKey?.let { reencoded(c.rawSpki(), it) } == true }
+                }
             }.toSet()
     }
 
@@ -112,7 +184,9 @@ internal class PlatformReplay(
     val spkiNullParameters: Set<String> by lazy {
         accepted
             .mapNotNull { a ->
-                a.certificate?.let { c -> a.name.takeIf { addsNullParameters(c.rawSpki(), a.x509.publicKey.encoded) } }
+                a.certificate?.let { c ->
+                    a.name.takeIf { a.view.publicKey?.let { addsNullParameters(c.rawSpki(), it) } == true }
+                }
             }.toSet()
     }
 
@@ -123,36 +197,57 @@ internal class PlatformReplay(
      * [PlatformOracle.timeDivergence].
      */
     val timeOffsetDropped: Map<String, Set<String>> by lazy {
-        if (oracle.timeDivergence == null) emptyMap() else accepted.mapNotNull(::droppedTimes).toMap()
+        if (oracle.timeDivergence ==
+            null
+        ) {
+            emptyMap()
+        } else {
+            accepted.mapNotNull { timesWhere(it, ::droppedDifferential) }.toMap()
+        }
     }
 
     /**
-     * [a]'s name and the validity fields [oracle] reads with a `UTCTime` differential dropped, or null for none. The
-     * times' bytes come from the platform's own `getTBSCertificate()`, walked by the test's DER reader, never from
-     * revokt's parse (spec §9.2 D2, revision 41).
+     * The parsed inputs whose validity times [oracle] reads in the Julian calendar before 1582-10-15 (spec §9.2 D2,
+     * revision 44): its value is the time's fields read in `java.util.GregorianCalendar`'s hybrid calendar, revokt's is
+     * the proleptic Gregorian reading and equals the test JDK's. Input name → the fields so read.
      */
-    private fun droppedTimes(a: Accepted): Pair<String, Set<String>>? {
+    val julianTimes: Map<String, Set<String>> by lazy {
+        if (oracle.julianDivergence ==
+            null
+        ) {
+            emptyMap()
+        } else {
+            accepted.mapNotNull { timesWhere(it, ::julianReading) }.toMap()
+        }
+    }
+
+    /** [a]'s name and the validity fields where [rule] (time TLV, revokt, platform, oracle 1) holds, or null for none. */
+    private fun timesWhere(
+        a: Accepted,
+        rule: (ByteArray, Long, Long, Long) -> Boolean,
+    ): Pair<String, Set<String>>? {
         val c = a.certificate
-        val oracle1 = jdk.acceptedByName[a.name]?.x509
-        val times = validityTimes(a.x509.tbsCertificate)
+        val oracle1 = jdk.acceptedByName[a.name]?.view
+        val times = a.view.times
         if (c == null || oracle1 == null || times == null) return null
         val v = c.tbs.validity
         val fields = HashSet<String>()
-        if (dropped(times.first, v.notBeforeMillis, a.x509.notBefore.time, oracle1.notBefore.time)) {
-            fields += "notBefore"
-        }
-        if (dropped(times.second, v.notAfterMillis, a.x509.notAfter.time, oracle1.notAfter.time)) {
-            fields += "notAfter"
-        }
+        if (differsBy(rule, times.first, v.notBeforeMillis, a.view.notBefore, oracle1.notBefore)) fields += "notBefore"
+        if (differsBy(rule, times.second, v.notAfterMillis, a.view.notAfter, oracle1.notAfter)) fields += "notAfter"
         return if (fields.isEmpty()) null else a.name to fields
     }
 
-    private fun dropped(
+    /** Whether the platform's [platform] differs from revokt's [revokt] and [rule] holds; never where a value is missing. */
+    private fun differsBy(
+        rule: (ByteArray, Long, Long, Long) -> Boolean,
         time: ByteArray,
         revokt: Long?,
-        platform: Long,
-        oracle1: Long,
-    ): Boolean = revokt != null && platform != revokt && droppedDifferential(time, revokt, platform, oracle1)
+        platform: Long?,
+        oracle1: Long?,
+    ): Boolean {
+        if (revokt == null || platform == null || oracle1 == null) return false
+        return revokt != platform && rule(time, revokt, platform, oracle1)
+    }
 
     companion object {
         const val PRODUCER_REJECTS = "oracle 4 rejects"
@@ -163,6 +258,9 @@ internal class PlatformReplay(
 
         /** D1-dom by rule (spec §9.2 revision 39): the producer cannot key a TBS whose AlgorithmIdentifier is not located. */
         const val NO_PLATFORM_CANON = "rule: no platform canon"
+
+        /** revokt's parse of each byte string a platform oracle reads, by its SHA-256, shared across the oracles. */
+        private val parses = HashMap<String, CertificateParse>()
 
         val jdk = PlatformReplay(Oracle1)
 
@@ -244,6 +342,54 @@ internal class PlatformReplay(
                     }
             } catch (_: RuntimeException) {
                 false
+            }
+
+        /**
+         * Whether a platform time [platform] is the time TLV [time]'s fields read in `java.util.GregorianCalendar`'s
+         * Julian–Gregorian hybrid, the time being before 1582-10-15, while revokt's [revokt] is their proleptic Gregorian
+         * reading and equals oracle 1's [oracle1] (spec §9.2 D2, `CONSCRYPT_TIME_JULIAN`). Only a GeneralizedTime `Z` time
+         * without fractional seconds: a `UTCTime` is never before the reform.
+         */
+        fun julianReading(
+            time: ByteArray,
+            revokt: Long,
+            platform: Long,
+            oracle1: Long,
+        ): Boolean {
+            if (time.size < 2 || time[0] != 0x18.toByte() || revokt != oracle1) return false
+            val text =
+                String(time.copyOfRange(Oracle1.header(time, 0)?.size ?: return false, time.size), Charsets.US_ASCII)
+            val g =
+                Regex("^(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})?Z$").matchEntire(text)?.groupValues
+                    ?: return false
+            val f = listOf(g[1], g[2], g[3], g[4], g[5], g[6].ifEmpty { "0" }).map { it.toInt() }
+            val proleptic = prolepticMillis(f) ?: return false
+            if (revokt != proleptic || proleptic >=
+                java.util
+                    .GregorianCalendar()
+                    .gregorianChange.time
+            ) {
+                return false
+            }
+            val hybrid =
+                java.util
+                    .GregorianCalendar(java.util.TimeZone.getTimeZone("UTC"))
+                    .apply {
+                        clear()
+                        isLenient = true
+                        set(f[0], f[1] - 1, f[2], f[3], f[4], f[5])
+                    }.timeInMillis
+            return hybrid != proleptic && platform == hybrid
+        }
+
+        /** The time fields [f] (year, month, day, hour, minute, second) in the proleptic Gregorian calendar, or null if invalid. */
+        private fun prolepticMillis(f: List<Int>): Long? =
+            try {
+                java.time.LocalDateTime
+                    .of(f[0], f[1], f[2], f[3], f[4], f[5])
+                    .toEpochSecond(java.time.ZoneOffset.UTC) * 1000
+            } catch (_: java.time.DateTimeException) {
+                null
             }
 
         /** The re-encoding allow-list's rule: the platform's `getPublicKey().getEncoded()` is [rawSpki] with every header minimal. */

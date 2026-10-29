@@ -93,6 +93,9 @@ abstract class PlatformReplayTest internal constructor(
             if (a.name in replay.timeOffsetDropped) {
                 divergences.getOrPut(checkNotNull(replay.oracle.timeDivergence)) { HashSet() } += a.name
             }
+            if (a.name in replay.julianTimes) {
+                divergences.getOrPut(checkNotNull(replay.oracle.julianDivergence)) { HashSet() } += a.name
+            }
         }
         println("D2 on ${replay.oracle.label}: $compared compared; unavailable $unavailable; divergences $divergences")
         assertEquals(emptyList(), javaFields, "normalised Java fields that differ from ${replay.oracle.label}'s")
@@ -124,19 +127,19 @@ abstract class PlatformReplayTest internal constructor(
         reencoded: MutableSet<String>,
         mismatches: MutableList<String>,
     ) {
-        val (unavailableHere, differing) = JavaFields.compare(a.x509, c).partition { it.unavailable }
+        val (unavailableHere, differing) = a.view.javaFields.partition { it.unavailable }
         unavailableHere.forEach { unavailable.merge(it.name, 1, Int::plus) }
         for (f in differing.filter { it.mismatch != null }) {
             val spki = f.name == "spki"
-            when {
-                spki && PlatformReplay.reencodesSpki(c.rawSpki(), a.x509.publicKey.encoded) -> reencoded += a.name
-
-                // The allow-list's second rule, and the oracle's time divergence: both recorded (RecordsTest).
-                spki && a.name in replay.spkiNullParameters -> Unit
-
-                f.name in replay.timeOffsetDropped[a.name].orEmpty() -> Unit
-
-                else -> mismatches += "${a.name}: ${f.name}: ${f.mismatch}"
+            // The allow-list's second rule, and the oracle's time divergence: both recorded (RecordsTest).
+            val recorded =
+                (spki && a.name in replay.spkiNullParameters) ||
+                    f.name in replay.timeOffsetDropped[a.name].orEmpty() ||
+                    f.name in replay.julianTimes[a.name].orEmpty()
+            if (spki && a.view.publicKey?.let { PlatformReplay.reencodesSpki(c.rawSpki(), it) } == true) {
+                reencoded += a.name
+            } else if (!recorded) {
+                mismatches += "${a.name}: ${f.name}: ${f.mismatch}"
             }
         }
     }
@@ -154,15 +157,15 @@ abstract class PlatformReplayTest internal constructor(
         assertEquals(parts.tbs, Oracle3a.hex(c.tbsBytes), "${a.name}: Cert.tbs against canon")
         val signature = Oracle3a.cleared(parts.signature, r.unusedBits)
         assertEquals(signature, Oracle3a.hex(c.envelope.signature), "${a.name}: Cert.sig")
-        val same = a.x509.tbsCertificate.contentEquals(c.tbsBytes)
-        if (tbsDivergence == null) {
+        val platformTbs = a.view.tbs
+        if (tbsDivergence == null && platformTbs != null) {
             assertEquals(
-                Oracle3a.hex(a.x509.tbsCertificate),
+                Oracle3a.hex(platformTbs),
                 Oracle3a.hex(c.tbsBytes),
                 "${a.name}: Cert.tbs against ${replay.oracle.label}",
             )
         }
-        return same
+        return platformTbs == null
     }
 
     private fun assertReference(

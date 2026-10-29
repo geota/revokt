@@ -18,6 +18,8 @@ import java.security.cert.X509Certificate
  * certificate marks its field `unavailable`.
  */
 internal object Oracle1 : PlatformOracle {
+    override val ocspNoCheckEmpty = true
+
     /** A definite TLV header: its length in octets and its content length. */
     class Header(
         val size: Int,

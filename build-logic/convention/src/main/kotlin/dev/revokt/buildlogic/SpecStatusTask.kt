@@ -19,6 +19,7 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import java.io.File
+import java.util.Locale
 
 /**
  * `./gradlew specStatus` (CONTRIBUTING §2): the spec's §9 fixture inventory and §11 deliverables against the test
@@ -49,6 +50,12 @@ abstract class SpecStatusTask : DefaultTask() {
 
     @get:Input
     abstract val checkOnly: Property<Boolean>
+
+    /** The D8 gap over the CT seed corpus (spec §9.2), as RecordsTest records it per matrix JDK; absent before #64. */
+    @get:InputFile
+    @get:Optional
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val ctSeedGap: RegularFileProperty
 
     @get:Internal
     abstract val rootDir: DirectoryProperty
@@ -93,6 +100,7 @@ abstract class SpecStatusTask : DefaultTask() {
             sb.appendLine(text)
             sb.appendLine()
         }
+        ctSeedGap.orNull?.asFile?.takeIf { it.isFile }?.let { appendGap(sb, it) }
         sb.appendLine("## Totals")
         sb.appendLine()
         sb.appendLine("- implemented-fixtures: $implementedTotal")
@@ -119,6 +127,26 @@ abstract class SpecStatusTask : DefaultTask() {
             out.writeText(rendered)
             logger.lifecycle("specStatus: $implementedTotal / $total fixtures implemented; wrote ${out.relativeTo(rootDir.get().asFile)}")
         }
+    }
+
+    /** The D8 gap section: per matrix JDK, the unexpired leaves it accepts, those in the D1 domain, the gap and its clauses. */
+    private fun appendGap(sb: StringBuilder, file: File) {
+        val lines = file.readLines()
+        sb.appendLine("## D8 gap over the CT seed corpus (spec §9.2)")
+        sb.appendLine()
+        // `#` lines describe the record; `##` lines are notes for its maintainers only.
+        lines.filter { it.startsWith("#") && !it.startsWith("##") }.forEach { sb.appendLine(it.removePrefix("#").trim()) }
+        sb.appendLine()
+        sb.appendLine("| JDK | unexpired leaves accepted | in the D1 domain | gap | rate | by clause |")
+        sb.appendLine("|---|---|---|---|---|---|")
+        for (line in lines.filter { it.isNotBlank() && !it.startsWith("#") }) {
+            val (jdk, unexpired, inDomain, gap, clauses) = line.split('\t')
+            val rate = if (unexpired.toLong() == 0L) 0.0 else gap.toDouble() / unexpired.toDouble()
+            sb.appendLine("| $jdk | $unexpired | $inDomain | $gap | ${"%.2e".format(Locale.ROOT, rate)} | $clauses |")
+        }
+        sb.appendLine()
+        sb.appendLine("The re-decision threshold is 10^-4 of the unexpired leaves (spec §9.2 D8 gap).")
+        sb.appendLine()
     }
 
     private fun collectTestNames(): Set<String> {

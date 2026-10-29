@@ -18,7 +18,7 @@ Two kinds (CONTRIBUTING §3):
 
 | Pin | Value |
 |---|---|
-| `revokt-corpus` tag | `v3` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`; `issuer/`, the issuer corpus's snapshots of 2026-10-25; `ct-seed/`, the CT seed pilot; and `replay/` (their goldens and records) |
+| `revokt-corpus` tag | `v4` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`; `issuer/`, the issuer corpus's snapshots of 2026-10-25; `ct-seed/`, the CT seed corpus (110 043 leaves); and `replay/` (their goldens and records) |
 
 ### The large corpus in the replay
 
@@ -36,11 +36,15 @@ jvmTest; the tree but its `.git` is a test input, and the test heap is 6 GB). Th
   (a v1 root has no basicConstraints). `ProducerSpkiCheckTest` is the producer SPKI check: SPKI agreement with oracle
   4's `ct` path over the issuer corpus, and coverage of each index of the fixture generation (`corpus/clubcard`). An
   index key no snapshot covers needs its certificates fetched from CT by SPKI hash and admitted (none so far).
-- **CT seed** (`ct-seed/`): the pilot of the seed corpus's CT leaves, from `tools/ct-seed/collect.py` (its
-  `PROVENANCE` and `sample.json` record the logs, tree sizes and indices), named `ct-seed/<sha256>`. RecordsTest prints
-  the D8 gap over its unexpired leaves by clause against the 10^-4 re-decision threshold.
+- **CT seed** (`ct-seed/`): the seed corpus's CT leaves (at least 100 000), from `tools/ct-seed/collect.py` (its
+  `PROVENANCE` and `sample.json` record each log's checkpoint or signed tree head and the tiles and index ranges read),
+  in 16 shards `ct-seed/leaves/<0-f>.tsv.gz` (a tag before `v4` has one `leaves.tsv.gz`), named `ct-seed/<sha256>`. RecordsTest records the
+  D8 gap over its unexpired leaves by clause per matrix JDK in `revokt-engine/.../parse/ct-seed-gap.tsv` (the records
+  writer writes it; a stale line fails), which `specStatus` shows in `docs/dev/status.md`; the 10^-4 re-decision is
+  the spec's.
 - **Goldens and records** for those inputs, and for the bytes an oracle reads for them, are in `replay/` of the corpus:
-  `3a.tsv.gz`, `3b.tsv.gz`, `producer.tsv.gz`, `zlint.tsv.gz` (the committed files' formats, gzipped) and
+  `3a/`, `3b/`, `producer/`, `zlint/` (the committed files' formats, gzipped, in 16 shards `<0-f>.tsv.gz` by the
+  key's first hex digit so that no file nears GitHub's 50 MB; a tag before `v4` has one `<name>.tsv.gz`) and
   `records.jsonl`. The readers merge them with the committed ones, so D1–D3, D6, D8 and the records run over both.
 - **Recording**: set `REVOKT_CORPUS` to a revokt-corpus working tree for both recorders (below), never
   `-Prevokt.corpus`, which they reject. Each golden goes to the corpus that holds its input, and the records writer
@@ -70,8 +74,8 @@ and requires the committed records to equal it, field for field:
 |---|---|---|
 | `D1_DOM` | a platform-accepted input outside the D1 domain: oracle 4 rejects `canon(encoded)` or keys other bytes, or a rule (`[0]`, no platform canon) | yes |
 | `D2_REENCODE_ALLOW` | a parsed input whose SPKI a platform oracle re-encodes under one of the allow-list's two rules (§9.2 D2: every header minimal; or that and NULL parameters added, revision 41) | yes |
-| `D3_DIVERGENCE` | a parsed input in a 3a divergence class (`3A_HEADER_LAX`, `3A_TBS_LAX`, `DUPLICATE_EXTENSION`), or in a Conscrypt one (`CONSCRYPT_TBS`, `CONSCRYPT_TIME_OFFSET`: Conscrypt drops a `UTCTime` differential, revision 41), or hand-recorded as `FIREFOX_SCT_STRICT` on the D7 cases that mark it | the 3a and Firefox classes no; the Conscrypt ones yes, per Conscrypt version |
-| `KEYABILITY_GAP` | an end-entity input in the D1 domain whose read parses outside the keyability profile (the D8 gap), when it has no other class | yes |
+| `D3_DIVERGENCE` | a parsed input in a 3a divergence class (`3A_HEADER_LAX`, `3A_TBS_LAX`, `DUPLICATE_EXTENSION`), or in a Conscrypt one (`CONSCRYPT_TBS`, `CONSCRYPT_TIME_OFFSET`: Conscrypt drops a `UTCTime` differential, revision 41; `CONSCRYPT_TIME_JULIAN`: Conscrypt reads a pre-1582 time in the Julian calendar, revision 44), or hand-recorded as `FIREFOX_SCT_STRICT` on the D7 cases that mark it | the 3a and Firefox classes no; the Conscrypt ones yes, per Conscrypt version |
+| `KEYABILITY_GAP` | an end-entity input in the D1 domain whose read parses outside the keyability profile (the D8 gap), when, on that oracle version, it has no other class | yes |
 | `D7_LENIENCY` | an input that carries a case of §9.2's D7 list (`D7Corpus`: each case, its inputs and revokt's required outcome where the spec states one, which `D7Test` asserts); the justification names the cases | no |
 
 - **`revokt`** is revokt's parse of the input bytes `b`; where the bytes read differ, the classes are decided on those.

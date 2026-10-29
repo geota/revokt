@@ -70,6 +70,19 @@ a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `Candidat
 
 §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2; caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `status()` and `state`; Android instrumented suite including the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (revision 38's Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc`
 
+## D8 gap over the CT seed corpus (spec §9.2)
+
+Unexpired as of 2026-10-25T23:56:38Z (the ct-logs snapshot).
+
+| JDK | unexpired leaves accepted | in the D1 domain | gap | rate | by clause |
+|---|---|---|---|---|---|
+| 17 | 91345 | 91345 | 6 | 6.57e-05 | {EXTENSION=2, TIME=4} |
+| 21 | 91345 | 91345 | 6 | 6.57e-05 | {EXTENSION=2, TIME=4} |
+| 25 | 91345 | 91345 | 6 | 6.57e-05 | {EXTENSION=2, TIME=4} |
+| 27 | 91345 | 91345 | 6 | 6.57e-05 | {EXTENSION=2, TIME=4} |
+
+The re-decision threshold is 10^-4 of the unexpired leaves (spec §9.2 D8 gap).
+
 ## Totals
 
 - implemented-fixtures: 0

@@ -46,6 +46,19 @@ internal interface PlatformOracle {
      */
     val timeDivergence: String? get() = null
 
+    /**
+     * The D3 divergence class a time difference is recorded under where this oracle reads a time before the Gregorian
+     * reform (1582-10-15) in the Julian calendar (spec §9.2 D2, revision 44), or null where that is a violation.
+     */
+    val julianDivergence: String? get() = null
+
+    /**
+     * Whether this oracle's `getExtensionValue` reports `id-pkix-ocsp-nocheck` with empty content whatever the certificate
+     * carries (the JDK's `OCSPNoCheckExtension` keeps no value), so D2 expects that extension's value empty, in effect
+     * comparing its presence only (spec §9.2 revision 44).
+     */
+    val ocspNoCheckEmpty: Boolean get() = false
+
     fun run(b: ByteArray): Outcome
 
     /** The bytes revokt reads for an accepted [certificate] as a replay input, or null when there are none. */

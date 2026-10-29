@@ -55,14 +55,23 @@ write_goldens() {
     [ "$(grep -vc '^#' "$2")" -eq "$(wc -l < "$work/inputs.tsv")" ] || { echo "$2: a reply was lost" >&2; exit 1; }
     return 0
   fi
-  ext="$corpus/replay/$3.tsv.gz"
-  { printf '%s\n' "$4" "# The large corpus's inputs (revokt-engine ExternalCorpus); the committed corpus's are in revokt."
-    awk -F "$tab" '$2 == "x"' "$work/keyed.tsv" | cut -f1,3- | LC_ALL=C sort -u; } | gzip -9n > "$ext"
-  dups=$(gzip -dc "$ext" | grep -v '^#' | cut -f1 | uniq -d)
+  # The large corpus's goldens in 16 shards by the key's first hex digit (#64), each well under GitHub's 50 MB.
+  ext="$corpus/replay/${3:?}"
+  mkdir -p "$ext"
+  awk -F "$tab" '$2 == "x"' "$work/keyed.tsv" | cut -f1,3- | LC_ALL=C sort -u > "$work/external.tsv"
+  total=0
+  for d in 0 1 2 3 4 5 6 7 8 9 a b c d e f; do
+    { printf '%s\n' "$4" "# The large corpus's inputs (revokt-engine ExternalCorpus), keys starting $d; the committed corpus's are in revokt."
+      grep "^$d" "$work/external.tsv" || true; } | gzip -9n > "$ext/$d.tsv.gz"
+    n=$(gzip -dc "$ext/$d.tsv.gz" | grep -vc '^#' || true)
+    total=$((total + n))
+  done
+  dups=$(cut -f1 "$work/external.tsv" | uniq -d)
   [ -z "$dups" ] || { echo "$ext: inputs with more than one reply: $dups" >&2; exit 1; }
-  echo "wrote $(gzip -dc "$ext" | grep -vc '^#') goldens to $ext"
-  # Without pipefail a failed stage would leave a short file: every input's reply is in one of the two.
-  [ $(( $(grep -vc '^#' "$2") + $(gzip -dc "$ext" | grep -vc '^#') )) -eq "$(wc -l < "$work/inputs.tsv")" ] ||
+  rm -f "$corpus/replay/$3.tsv.gz" # an older tag's single file, replaced by the shards
+  echo "wrote $total goldens to $ext/"
+  # Without pipefail a failed stage would leave a short shard: every input's reply is in one of the two corpora.
+  [ $(( $(grep -vc '^#' "$2") + total )) -eq "$(wc -l < "$work/inputs.tsv")" ] ||
     { echo "$2, $ext: a reply was lost" >&2; exit 1; }
 }
 mkdir -p "$dir"

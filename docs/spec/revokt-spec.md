@@ -1,10 +1,30 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 43** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-25
+Status: **draft spec / project proposal, revision 44** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-29
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 44 (the seed corpus's CT leaves pinned, 2026-10-29)
+- **Recorded** (#64, toward #15's seed corpus): the CT seed corpus is pinned at revokt-corpus `v4`, 110 043 distinct
+  leaves from 80 of the 81 CRLite-enrolled logs (Appendix A). A random sample of the logs, it has some 400 distinct
+  issuer names; that it covers every enrolled CA (§9.2) is not yet checked, and #15 stays open for it. Its D8 gap over
+  the unexpired leaves each matrix JDK accepts is 6 of 91 345 (6.6·10^-5, the same on JDK 17, 21, 25 and 27), below the
+  10^-4 re-decision threshold, so exact keyability is not reconsidered (§9.2 D8: the pin has the 100 000 leaves; a later
+  pin that #15's coverage check brings is re-evaluated). All 6 are leaves of one CA ("EM DV TLS CA - G3B", eMudhra) for
+  subjects under the `.invalid` TLD: 2 outside the profile at EXTENSION with zlint errors, and 4 at TIME, lint-clean,
+  whose `notBefore` is the GeneralizedTime year 0000 or 0001, outside K6's 1950 to 9999. They carry written
+  justifications, and whether to widen K6 joins #57's decision. The count by clause is recorded per matrix JDK and shown
+  in `docs/dev/status.md`.
+- **Added** (found on the same corpus): two more recorded platform cases in D2's normalisation, where revokt is right.
+  `CONSCRYPT_TIME_JULIAN`: Conscrypt 2.7.0 and 2.8.0 read a time before the Gregorian reform (1582-10-15) in
+  `java.util.GregorianCalendar`'s Julian–Gregorian hybrid, so the four year-0000/0001 `notBefore` above come out two
+  days earlier than the JDK's and revokt's proleptic Gregorian reading; a difference is recorded per Conscrypt version
+  only where the platform's value is exactly that hybrid reading of the time's fields and revokt's equals oracle 1's.
+  And the JDK's `getExtensionValue` reports `id-pkix-ocsp-nocheck` (whose value RFC 6960 makes NULL) with empty content
+  whatever the certificate carries, since its `OCSPNoCheckExtension` keeps no value: on oracle 1, D2 expects that
+  extension's value empty, in effect comparing its presence only (2 leaves of the corpus).
 
 ### Changes in revision 43 (oracle 4's input in the producer SPKI check, 2026-10-25)
 - **Corrected** (found while implementing #15): revision 42 said oracle 4 runs on the DER, not `canon`, and that the
@@ -2842,7 +2862,8 @@ Ignored bytes contribute no field. Their offsets are recorded, and any ignored e
 - `GeneralizedTime` fractions after `.` or `,` of any length, truncated to milliseconds;
 - a day of 1 to 31 in any month, a day past the month's end rolling into the next month as the JDK's lenient calendar does (2026-02-31 is 2026-03-03, 2026-04-31 is 2026-05-01).
 
-Conscrypt 2.7.0 and 2.8.0 drop a `UTCTime` differential and reject a `GeneralizedTime` one (`CONSCRYPT_TIME_OFFSET`, D2).
+Conscrypt 2.7.0 and 2.8.0 drop a `UTCTime` differential and reject a `GeneralizedTime` one (`CONSCRYPT_TIME_OFFSET`, D2),
+and read a time before 1582-10-15 in the Julian calendar (`CONSCRYPT_TIME_JULIAN`, D2).
 
 revokt also accepts optional minutes, second 60 (the first second of the next minute) and an absent zone, which it takes as UTC. A time outside these forms is null; only platform-rejected input reaches that. A rule that needs a null time fails closed: M4's distrust-after treats a null `notBefore` as after any distrust date.
 
@@ -3016,7 +3037,12 @@ unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epo
 `notBefore`/`notAfter`, where oracle 2's difference on a `UTCTime` with a `±hhmm` differential (read from the input
 bytes) is recorded as `CONSCRYPT_TIME_OFFSET` (a `D3_DIVERGENCE` record per Conscrypt version, revision 41) when oracle
 2's value is revokt's plus the signed differential, revokt's being the local time minus the differential ("Times"),
-and, on a matrix run, revokt's equals oracle 1's: Conscrypt drops the differential. Raw-byte equality is asserted against 3a, else 3b.
+and, on a matrix run, revokt's equals oracle 1's: Conscrypt drops the differential; oracle 2's difference on a `Z` time
+without fractional seconds before 1582-10-15 is recorded as `CONSCRYPT_TIME_JULIAN` (a `D3_DIVERGENCE` record per
+Conscrypt version, revision 44) when oracle 2's value is the time's fields read in `java.util.GregorianCalendar`'s
+Julian–Gregorian hybrid and revokt's, the proleptic Gregorian reading, equals oracle 1's; on oracle 1,
+`id-pkix-ocsp-nocheck`'s value is expected empty (in effect, presence only), since the JDK reports it empty whatever
+the certificate carries (revision 44). Raw-byte equality is asserted against 3a, else 3b.
 
 **Properties.** For each platform oracle *i* ∈ {1, 2} and each version *v* in the matrix:
 - **D1 leniency (security)**: `Accept_i,v(b)` ⇒ `parse(encoded_i,v)` is `Parsed`, for every input in
@@ -3074,8 +3100,9 @@ and, on a matrix run, revokt's equals oracle 1's: Conscrypt drops the differenti
     or the entry is justified.
   - The count by clause over the seed corpus's CT leaves is reported in each release's notes and in
     `docs/dev/status.md`.
-  - **Re-decision**: if gap entries among the seed corpus's unexpired CT leaves exceed 10^-4 of them when #15 pins it,
-    exact keyability is reconsidered in a spec revision before 0.1 ships.
+  - **Re-decision**: if gap entries among the seed corpus's unexpired CT leaves exceed 10^-4 of them once at least
+    100 000 leaves are pinned (re-evaluated whenever a later pin changes them), exact keyability is reconsidered in a
+    spec revision before 0.1 ships.
 - **D1-raw (informational)**: inputs where `encoded ≠ b`, or `parse(b)` fails while
   `parse(encoded)` succeeds. This is the `EvaluationRequest.presented` raw-DER surface (§4), documented,
   not gated.
@@ -3093,8 +3120,8 @@ and, on a matrix run, revokt's equals oracle 1's: Conscrypt drops the differenti
   element with tag number 3 that is not a constructed context-specific `[3]` (a primitive `[3]`, or tag number 3 in
   another class; decided by 3b's TBS walk), the reference extension table and SCT pairs are the §9.2 read (∅),
   recorded as `3A_TBS_LAX`; the normalised Java fields equal oracle *i,v*'s, except that a `notBefore`/`notAfter`
-  difference from oracle 2 meeting the `CONSCRYPT_TIME_OFFSET` condition (Java field normalisation, above) is recorded,
-  not a violation. A violation is a P0.
+  difference from oracle 2 meeting the `CONSCRYPT_TIME_OFFSET` or `CONSCRYPT_TIME_JULIAN` condition (Java field
+  normalisation, above) is recorded, not a violation. A violation is a P0.
   The count of platform-accepted inputs whose `encoded` has no raw-byte reference (3a rejects, and 3b does not locate
   it: its re-encoding or its walk fails), other than inputs revokt does not parse on whose `canon(encoded)` oracle 4
   rejects or for which no platform canon can be built, is a gate metric and must be zero on the committed corpora.
@@ -3194,7 +3221,7 @@ revokt-corpus) and admitted, and a key still uncovered fails.
 **Corpus record schema (one for all four kinds; committed).**
 `{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome, read?, holds?,
 fields | unavailable}], class ∈ {D7_LENIENCY, D2_REENCODE_ALLOW, D3_DIVERGENCE, D1_DOM,
-KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, `CONSCRYPT_TBS` (D2: `Cert.tbs` differs from oracle 2's `getTBSCertificate()`), `CONSCRYPT_TIME_OFFSET` (D2: oracle 2 drops a `UTCTime` differential, revision 41), the
+KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, `CONSCRYPT_TBS` (D2: `Cert.tbs` differs from oracle 2's `getTBSCertificate()`), `CONSCRYPT_TIME_OFFSET` (D2: oracle 2 drops a `UTCTime` differential, revision 41), `CONSCRYPT_TIME_JULIAN` (D2: oracle 2 reads a pre-1582 time in the Julian calendar, revision 44), the
 duplicate-extension class, or a named 3c/Firefox class), keyability: {parser, clause, zlint}? (required on every D8-gap entry whatever its class, and on every `KEYABILITY_GAP` record: `parser ∈ {ct, lax, zc}` from oracle 4, `clause` a `KeyabilityClause`, `zlint` the pinned zlint result), justification, added}`. Goldens for 3a/3b/4 are computed at admission
 so the PR replay evaluates D1–D3 and D8 offline, JDK-only. A platform oracle's entry carries `holds` on an oracle-dependent record (`D1_DOM`, `D2_REENCODE_ALLOW`,
 `KEYABILITY_GAP`, the `CONSCRYPT_*` divergences): whether the class holds on that version. Its `version` is the
@@ -3235,7 +3262,7 @@ the pin is a P0; one only at `main` is a P0 for the next release and bumps the p
 filters come from Mozilla's current producer. The sample's gap by clause is published with each release; a new clause,
 or D8-gap entries above 10^-4 of the sample's unexpired entries (precertificates and certificates counted alike),
 needs a recorded decision before the release. This per-release check on fresh entries is separate from the D8 gap's
-one-time re-decision on the #15 seed corpus, which can reopen the D8 decision itself.
+re-decision on the pinned seed corpus (§9.2 D8), which can reopen the D8 decision itself.
 
 **Scope limits, stated.** The oracle set is a version matrix, not a proof; platform parsers drift
 and the platform Conscrypt differs per device. `Revokt.evaluate` over raw bytes is outside the
@@ -3317,7 +3344,7 @@ justified in writing.
      controls. `STRICT` rejects a gap leaf even when it is valid. The gap is measured per release (§9.2 D8 gap). No
      entry of a 200 230-entry CT sample on 2026-10-23 fell outside a strict DER profile, and its 159 270 RFC 6962
      entries showed no K5 type or K8 shape outside the profile (Appendix A); the full K1–K8 gap is first measured on
-     the #15 seed corpus.
+     the pinned seed corpus (revision 44: 6 of 91 345 unexpired leaves, Appendix A).
 
      The profile reads only the signed content of `tbsCertificate`, and the parser accepts every unsigned header form
      the JDK verifies (§9.2), including the indefinite chain the JDK re-encodes and the cleared signature padding,
@@ -3718,6 +3745,19 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   TLS CA I3", all revoked and not trusted), fetched from crt.sh. The CT seed pilot (22 559 leaves, 80 of the 81
   CRLite-enrolled logs; Let's Encrypt Oak2026h2 did not answer `get-sth`) has 19 846 unexpired leaves JDK 21 accepts,
   all in the D1 domain, and no D8-gap entry among them.
+- Revision 44, the CT seed corpus, collected 2026-10-25T23:56:38Z to 2026-10-26T00:22:38Z by revokt-corpus
+  `tools/ct-seed/collect.py` (seed 20261026: five random data tiles of each static-ct-api log, eight random 256-entry
+  `get-entries` batches of each RFC 6962 log, paged until complete): 118 528 entries read and 110 043 distinct
+  certificates as logged, from 80 of the 81 CRLite-enrolled logs (Let's Encrypt Oak2026h2 did not answer `get-sth`).
+  91 345 of them are unexpired and accepted on each matrix JDK, all in the D1 domain; 6 are D8-gap leaves, all issued
+  by eMudhra's "EM DV TLS CA - G3B" for subjects under `Shelikhoo.kkdev.org.invalid`, logged at indices near 2 000 of
+  GoDaddy's Aquamarine2027h2 and Aquamarine2028h2: 4 with a `notBefore` of 0000-01-01 or 0001-01-01 (GeneralizedTime;
+  K6, zlint clean) and 2 with ordinary times outside the profile at EXTENSION (zlint: a SAN `uniformResourceIdentifier`,
+  nameConstraints in a leaf, an invalid TLD, among others). Conscrypt 2.7.0 and 2.8.0 report the four `notBefore` as
+  -62167392000000 (year 0000) and -62135769600000 (year 0001) ms, exactly `java.util.GregorianCalendar`'s lenient hybrid
+  reading, two days before the proleptic Gregorian -62167219200000 and -62135596800000 that the JDK and revokt give. JDK
+  21 reports `id-pkix-ocsp-nocheck` empty on 2 leaves that carry `05 00`, both eMudhra's: a leaf of "EM DV TLS CA -
+  G3B" and an OCSP responder certificate of "emSign Root TLS CA - G1".
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android toolchain fact, verified 2026-10-24: a library built with Kotlin 2.4 needs AGP 8.5.2 or later
   (developer.android.com, "AGP, D8, and R8 versions required for Kotlin versions"), and D8 from AGP 8.8.1 is tested
