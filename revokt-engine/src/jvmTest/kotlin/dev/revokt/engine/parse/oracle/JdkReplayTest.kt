@@ -130,6 +130,46 @@ class JdkReplayTest : PlatformReplayTest(PlatformReplay.jdk, d1Floor = 300, d2Fl
         )
     }
 
+    @Test
+    fun `a Julian time divergence is only the hybrid calendar's reading of a pre-reform time`() {
+        val gen = { t: String -> tlv(0x18, ascii(t)) }
+        // 0001-01-01T00:00:00Z: proleptic Gregorian, as the JDK and revokt read it, and the hybrid calendar's reading.
+        val proleptic = -62_135_596_800_000
+        val julian = -62_135_769_600_000
+        assertTrue(PlatformReplay.julianReading(gen("00010101000000Z"), proleptic, julian, proleptic))
+        assertEquals(
+            false,
+            PlatformReplay.julianReading(gen("00010101000000Z"), proleptic, julian, proleptic + 1),
+            "revokt is not the JDK",
+        )
+        assertEquals(
+            false,
+            PlatformReplay.julianReading(gen("00010101000000Z"), proleptic, julian - 1, proleptic),
+            "another value",
+        )
+        val modern = 1_792_673_130_000 // 2026-10-22T12:45:30Z, the same in both calendars
+        assertEquals(
+            false,
+            PlatformReplay.julianReading(gen("20261022124530Z"), modern, modern + 1, modern),
+            "after the reform",
+        )
+        assertEquals(
+            false,
+            PlatformReplay.julianReading(gen("20261022124530Z"), modern + 1, modern, modern + 1),
+            "revokt and the JDK agreeing on another reading after the reform",
+        )
+        assertEquals(
+            false,
+            PlatformReplay.julianReading(gen("00010101000000Z"), proleptic + 1, julian, proleptic + 1),
+            "revokt not the proleptic reading",
+        )
+        assertEquals(
+            false,
+            PlatformReplay.julianReading(tlv(0x17, ascii("500101000000Z")), -631_152_000_000, 0, -631_152_000_000),
+            "a UTCTime",
+        )
+    }
+
     private companion object {
         /** The inputs read through the platform canon that parse, on every matrix JDK (spec §9.2 revision 39). */
         val FALLBACK_PARSED: Set<String> =

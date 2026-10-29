@@ -144,6 +144,7 @@ class RecordsTest {
         val (external, committed) = merge(existing, computed()).partition { ExternalCorpus.owns(it.path) }
         CorpusRecord.write(files[0], committed)
         CorpusRecord.external?.let { CorpusRecord.write(it.apply { parentFile.mkdirs() }, external) }
+        writeCtSeedGap(File(path).resolveSibling(CT_SEED_GAP))
     }
 
     /** Whether [r]'s class (or divergence) depends on the platform oracles, so that it holds per oracle version. */
@@ -375,6 +376,9 @@ class RecordsTest {
         p.oracle.timeDivergence?.let { d ->
             for (name in p.timeOffsetDropped.keys) add(name, RecordClass.D3_DIVERGENCE, d) { DIVERGENCE.getValue(d) }
         }
+        p.oracle.julianDivergence?.let { d ->
+            for (name in p.julianTimes.keys) add(name, RecordClass.D3_DIVERGENCE, d) { DIVERGENCE.getValue(d) }
+        }
     }
 
     /**
@@ -580,14 +584,31 @@ class RecordsTest {
      * keyability is reconsidered before 0.1), by clause, on the test JDK. Unexpired as of the collection (the ct-logs
      * snapshot's retrieval, `ct-seed/PROVENANCE`). The denominator is the unexpired entries the test JDK accepts; one it
      * rejects has no read, so it can be neither a gap entry nor D1-dom, and counting it would only lower the rate. A CA
-     * certificate logged in CT is in the denominator and never the numerator (the gap counts end entities). It reports
-     * and never fails: the re-decision is evaluated on the full seed corpus (spec §9.2, revision 43).
+     * certificate logged in CT is in the denominator and never the numerator (the gap counts end entities). Recorded per
+     * matrix JDK in [CT_SEED_GAP], which docs/dev/status.md shows; a stale line fails, the threshold itself never does:
+     * the re-decision is the spec's (spec §9.2, revision 43).
      */
     @Test
-    fun `the D8 gap over the CT seed corpus's unexpired leaves is reported`() {
+    fun `the D8 gap over the CT seed corpus's unexpired leaves is recorded`() {
+        val line = ctSeedGapLine() ?: return println("CT seed D8 gap: no CT seed corpus on this run (-Prevokt.corpus)")
+        println("CT seed D8 gap on ${PlatformReplay.jdk.oracle.label}: $line")
+        val committed =
+            javaClass
+                .getResource("/dev/revokt/engine/parse/$CT_SEED_GAP")
+                ?.readText()
+                ?.lines()
+                .orEmpty()
+        assertTrue(line in committed, "$CT_SEED_GAP has no current line for this JDK: run the records writer ($line)")
+    }
+
+    /**
+     * This run's line of [CT_SEED_GAP]: the test JDK's feature release, the unexpired CT seed leaves it accepts, those in
+     * the D1 domain, the gap entries and their clauses; null without a CT seed corpus.
+     */
+    private fun ctSeedGapLine(): String? {
         val p = PlatformReplay.jdk
         val seed = p.accepted.filter { it.name.startsWith(ExternalCorpus.CT_SEED) }
-        if (seed.isEmpty()) return println("CT seed D8 gap: no CT seed corpus on this run (-Prevokt.corpus)")
+        if (seed.isEmpty()) return null
         val unexpired =
             seed.filter { a ->
                 (
@@ -599,13 +620,37 @@ class RecordsTest {
             }
         val inDomain = unexpired.filter { p.outsideDomain(it) == null }
         val gap = inDomain.mapNotNull { gap(p, it) }
-        val rate = if (unexpired.isEmpty()) 0.0 else gap.size.toDouble() / unexpired.size
-        println(
-            "CT seed D8 gap on ${p.oracle.label}: ${gap.size} of ${unexpired.size} unexpired accepted leaves " +
-                "(${inDomain.size} in the D1 domain), rate %.2e against 1e-4; by clause %s".format(
-                    rate,
-                    gap.groupingBy { it.clause }.eachCount().toSortedMap(),
-                ),
+        val clauses =
+            gap
+                .groupingBy { it.clause }
+                .eachCount()
+                .toSortedMap()
+                .toString()
+        return listOf(Runtime.version().feature(), unexpired.size, inDomain.size, gap.size, clauses).joinToString("\t")
+    }
+
+    /** Merges this run's [ctSeedGapLine] into [file], one line per matrix JDK. */
+    private fun writeCtSeedGap(file: File) {
+        val line = ctSeedGapLine() ?: return
+        val jdk = line.substringBefore('\t')
+        val others =
+            file
+                .takeIf { it.isFile }
+                ?.readLines()
+                .orEmpty()
+                .filter { it.isNotBlank() && !it.startsWith("#") && it.substringBefore('\t') != jdk }
+        val header =
+            listOf(
+                "# Unexpired as of ${java.time.Instant.ofEpochMilli(CT_SEED_AS_OF)} (the ct-logs snapshot).",
+                "## Written by RecordsTest's records writer; never edit.",
+            )
+        file.writeText(
+            (
+                header +
+                    (others + line).sortedBy {
+                        it.substringBefore('\t').toInt()
+                    }
+            ).joinToString("\n") + "\n",
         )
     }
 
@@ -681,8 +726,11 @@ class RecordsTest {
 
         const val D7_RULE = "A §9.2 D7 leniency case:"
 
-        /** The CT seed corpus's collection time (`ct-seed/PROVENANCE`, the ct-logs snapshot): 2026-10-25T18:25:31Z. */
-        const val CT_SEED_AS_OF = 1_792_952_731_000L
+        /** The CT seed corpus's collection time (`ct-seed/PROVENANCE`, the ct-logs snapshot): 2026-10-25T23:56:38Z. */
+        const val CT_SEED_AS_OF = 1_792_972_598_000L
+
+        /** The recorded D8 gap over the CT seed corpus, beside records.jsonl. */
+        const val CT_SEED_GAP = "ct-seed-gap.tsv"
 
         const val ISSUER_RULE =
             "An issuer-corpus certificate (§9.2, revisions 42 and 43: D1 and D2 at zero tolerance, and the producer " +
@@ -716,6 +764,9 @@ class RecordsTest {
                 "3A_TBS_LAX" to
                     "x509-parser takes an element with tag number 3 that is not a constructed context-specific [3] " +
                     "as extensions; the JDK and revokt ignore it (3A_TBS_LAX).",
+                "CONSCRYPT_TIME_JULIAN" to
+                    "Conscrypt reads this time, before the 1582 Gregorian reform, in the Julian calendar; revokt " +
+                    "and the JDK read it in the proleptic Gregorian calendar (§9.2 D2, CONSCRYPT_TIME_JULIAN).",
                 "CONSCRYPT_TIME_OFFSET" to
                     "Conscrypt reads this UTCTime's ±hhmm differential as if it were Z; revokt decodes it as the JDK " +
                     "does, so the platform's time differs by exactly the differential (§9.2 D2, CONSCRYPT_TIME_OFFSET).",

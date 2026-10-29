@@ -30,6 +30,7 @@ internal object JavaFields {
     fun compare(
         x509: X509Certificate,
         c: ParsedCertificate,
+        ocspNoCheckEmpty: Boolean = false,
     ): List<Field> {
         val extensions = c.tbs.extensions
         return listOf(
@@ -40,7 +41,11 @@ internal object JavaFields {
             // `getExtensionValue` answers one value per OID, the first where a platform accepts duplicates (Conscrypt).
             field(
                 "extensions",
-                extensions.reversed().associate { name(it) to Oracle3a.hex(it.value.bytes(c.tbsBytes)) },
+                extensions.reversed().associate { e ->
+                    val value = Oracle3a.hex(e.value.bytes(c.tbsBytes))
+                    // The JDK reports id-pkix-ocsp-nocheck empty whatever it carries (spec §9.2 revision 44).
+                    name(e) to if (ocspNoCheckEmpty && e.oidDotted == OCSP_NO_CHECK) "" else value
+                },
             ) {
                 (x509.criticalExtensionOIDs.orEmpty() + x509.nonCriticalExtensionOIDs.orEmpty()).associateWith {
                     unwrap(x509.getExtensionValue(it))
@@ -80,4 +85,7 @@ internal object JavaFields {
     private fun canonical(p: X500Principal): String = p.getName(X500Principal.CANONICAL)
 
     private fun sha(b: ByteArray): String = b.toByteString().sha256().hex()
+
+    /** id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1), whose value is NULL. */
+    private const val OCSP_NO_CHECK = "1.3.6.1.5.5.7.48.1.5"
 }

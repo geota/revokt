@@ -28,6 +28,8 @@ internal object Oracle2 : PlatformOracle {
 
     override val timeDivergence = "CONSCRYPT_TIME_OFFSET"
 
+    override val julianDivergence = "CONSCRYPT_TIME_JULIAN"
+
     @Suppress("TooGenericExceptionCaught") // §9.2: every exception other than CertificateException is a Crash
     override fun run(b: ByteArray): PlatformOracle.Outcome =
         try {

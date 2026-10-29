@@ -195,7 +195,7 @@ internal data class CorpusRecord(
                 .toList()
 
         /** D3 divergence classes that depend on a platform oracle's version (holding per oracle entry, like D1_DOM). */
-        val ORACLE_DIVERGENCES = setOf("CONSCRYPT_TBS", "CONSCRYPT_TIME_OFFSET")
+        val ORACLE_DIVERGENCES = setOf("CONSCRYPT_TBS", "CONSCRYPT_TIME_OFFSET", "CONSCRYPT_TIME_JULIAN")
 
         /**
          * The D3_DIVERGENCE records of [records] (the committed ones by default): divergence class → input paths. A class in

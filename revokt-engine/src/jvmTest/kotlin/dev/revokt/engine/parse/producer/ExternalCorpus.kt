@@ -86,22 +86,33 @@ internal object ExternalCorpus {
     }
 
     /**
-     * The CT seed corpus's leaves (`ct-seed/leaves.tsv.gz`: sha256, log id, index, entry type, base64 DER), named
-     * `ct-seed/<sha256>`; each line's sha256 must be its DER's.
+     * The CT seed corpus's leaves (sha256, log id, index, entry type, base64 DER), named `ct-seed/<sha256>`: the 16
+     * shards `ct-seed/leaves/<0-f>.tsv.gz` by the sha256's first hex digit (#64), or `ct-seed/leaves.tsv.gz` of an older
+     * tag. Each line's sha256 must be its DER's, a shard holds only its digit's leaves, and a leaf appears once.
      */
-    fun ctSeed(dir: File): List<ProducerCorpus.Input> =
-        GZIPInputStream(File(dir, "ct-seed/leaves.tsv.gz").inputStream()).bufferedReader().useLines { lines ->
-            lines
-                .filter { it.isNotBlank() }
-                .map { line ->
-                    val f = line.split('\t')
-                    val der = Base64.getDecoder().decode(f[4])
-                    check(
-                        der.toByteString().sha256().hex() == f[0],
-                    ) { "ct-seed leaf ${f[0]}: its DER hashes otherwise" }
-                    ProducerCorpus.Input(CT_SEED + f[0], der)
-                }.toList()
+    fun ctSeed(dir: File): List<ProducerCorpus.Input> {
+        val shards = File(dir, "ct-seed/leaves")
+        val single = File(dir, "ct-seed/leaves.tsv.gz")
+        val files = shardFiles(shards, single).ifEmpty { listOf(single) }
+        val seen = HashSet<String>()
+        return files.flatMap { file ->
+            val digit = file.name.removeSuffix(".tsv.gz").takeIf { file.parentFile == shards }
+            GZIPInputStream(file.inputStream()).bufferedReader().useLines { lines ->
+                lines
+                    .filter { it.isNotBlank() }
+                    .map { line ->
+                        val f = line.split('\t')
+                        val der = Base64.getDecoder().decode(f[4])
+                        check(
+                            der.toByteString().sha256().hex() == f[0],
+                        ) { "ct-seed leaf ${f[0]}: its DER hashes otherwise" }
+                        check(digit == null || f[0].startsWith(digit)) { "ct-seed leaf ${f[0]} in shard $digit" }
+                        check(seen.add(f[0])) { "ct-seed leaf ${f[0]} twice" }
+                        ProducerCorpus.Input(CT_SEED + f[0], der)
+                    }.toList()
+            }
         }
+    }
 
     /** The DER of every PEM `CERTIFICATE` block in [text] (a CSV field, a PEM bundle, a store file). */
     fun pemBlocks(text: String): List<ByteArray> =
@@ -145,22 +156,53 @@ internal object ExternalCorpus {
         return Base64.getDecoder().decode(lines.subList(1, lines.size - 1).joinToString(""))
     }
 
-    /** The gzipped TSV `replay/<name>.tsv.gz` as key → rest of line, empty without a checkout or before it is recorded. */
+    /**
+     * The goldens `replay/<name>`: the 16 shards `replay/<name>/<0-f>.tsv.gz`, keyed by the first hex digit of the key
+     * (#64), or the single file `replay/<name>.tsv.gz` of an older tag. Key → rest of line; empty without a checkout or
+     * before they are recorded.
+     */
     fun tsv(name: String): Map<String, String> {
-        val file = replay("$name.tsv.gz") ?: return emptyMap()
-        if (!file.isFile) return emptyMap()
-        return GZIPInputStream(file.inputStream()).bufferedReader().useLines { lines ->
-            lines
-                .filter { it.isNotBlank() && !it.startsWith("#") }
-                .associate { line -> line.substringBefore('\t') to line.substringAfter('\t') }
+        val out = HashMap<String, String>()
+        for (file in goldenFiles(name)) {
+            GZIPInputStream(file.inputStream()).bufferedReader().useLines { lines ->
+                val shard = file.name.removeSuffix(".tsv.gz").takeIf { file.parentFile.name == name }
+                lines.filter { it.isNotBlank() && !it.startsWith("#") }.forEach { line ->
+                    val key = line.substringBefore('\t')
+                    check(
+                        shard == null || key.startsWith(shard),
+                    ) { "$name/${file.name}: key $key in another digit's shard" }
+                    check(out.put(key, line.substringAfter('\t')) == null) { "$name: key $key twice" }
+                }
+            }
         }
+        return out
     }
 
-    /** The first line of `replay/<name>.tsv.gz`, or null without a checkout or before it is recorded. */
-    fun header(name: String): String? =
-        replay("$name.tsv.gz")?.takeIf { it.isFile }?.let { f ->
-            GZIPInputStream(f.inputStream()).bufferedReader().use { it.readLine() }
+    /** The first line of `replay/<name>`'s goldens, which every shard must carry, or null before they are recorded. */
+    fun header(name: String): String? {
+        val headers =
+            goldenFiles(name).map { f -> GZIPInputStream(f.inputStream()).bufferedReader().use { it.readLine() } }
+        check(headers.distinct().size <= 1) { "$name: shards with different headers" }
+        return headers.firstOrNull()
+    }
+
+    private fun goldenFiles(name: String): List<File> {
+        val shards = replay(name) ?: return emptyList()
+        val single = File(shards.parentFile, "$name.tsv.gz")
+        return shardFiles(shards, single).ifEmpty { listOfNotNull(single.takeIf { it.isFile }) }
+    }
+
+    /** The 16 shards `<0-f>.tsv.gz` of [shards] when it is a directory, all of them and never beside [single]; else empty. */
+    private fun shardFiles(
+        shards: File,
+        single: File,
+    ): List<File> {
+        if (!shards.isDirectory) return emptyList()
+        check(!single.exists()) { "both $shards and $single: one layout per tag" }
+        return (0 until 16).map { File(shards, "%x.tsv.gz".format(it)) }.onEach {
+            check(it.isFile) { "$it: a shard is missing" }
         }
+    }
 
     /** A file of `replay/`, or null without a checkout. */
     fun replay(name: String): File? = dir?.let { File(it, "replay/$name") }
