@@ -96,9 +96,44 @@ class RootPlugin : Plugin<Project> {
             notCompatibleWithConfigurationCache("resolves configurations from task actions; run with --no-configuration-cache")
         }
 
+        // The base to compare the Rule fixture with: -Prevokt.growabilityBase (CI), else the merge base with origin/main.
+        val explicitBase = providers.gradleProperty("revokt.growabilityBase")
+        val mergeBase =
+            providers.exec {
+                commandLine("git", "merge-base", "HEAD", "origin/main")
+                isIgnoreExitValue = true
+            }.standardOutput.asText.map { it.trim() }
+        val baseRef = explicitBase.orElse(mergeBase.map { it.ifEmpty { "origin/main" } })
+        val verifyGrowability = tasks.register<VerifyRuleGrowabilityTask>("verifyRuleGrowability") {
+            description = "The Rule golden fixture changed only as the growability contract permits (spec §4, #73)."
+            group = "verification"
+            fixture.set(layout.projectDirectory.file(RULE_FIXTURE))
+            this.baseRef.set(baseRef)
+            required.set(explicitBase.isPresent)
+            projectVersion.set(providers.gradleProperty("revokt.version").orElse("0.1.0-SNAPSHOT"))
+            baseCommitExists.set(
+                baseRef.flatMap { ref ->
+                    providers.exec {
+                        commandLine("git", "cat-file", "-e", "$ref^{commit}")
+                        isIgnoreExitValue = true
+                    }.result.map { it.exitValue == 0 }
+                },
+            )
+            baseFixture.set(
+                baseRef.flatMap { ref ->
+                    val show =
+                        providers.exec {
+                            commandLine("git", "show", "$ref:$RULE_FIXTURE")
+                            isIgnoreExitValue = true
+                        }
+                    show.result.zip(show.standardOutput.asText) { r, text -> text.takeIf { r.exitValue == 0 } }
+                },
+            )
+        }
+
         // `base` registers the root `check` lifecycle task that the gates hang off.
         tasks.named("check") {
-            dependsOn(specStatusCheck, verifyHeaders, verifyCorpus, verifyMatrix)
+            dependsOn(specStatusCheck, verifyHeaders, verifyCorpus, verifyMatrix, verifyGrowability)
             // build-logic is an included build; its own tests (TestKit, the detekt rules) are part of the gate.
             dependsOn(gradle.includedBuild("build-logic").task(":convention:check"))
             dependsOn(gradle.includedBuild("build-logic").task(":revokt-detekt-rules:check"))

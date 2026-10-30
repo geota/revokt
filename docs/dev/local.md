@@ -12,6 +12,7 @@ git switch -c feat/42-tbs-parser main
 ./gradlew check                                   # JDK-only, offline; the PR-tier core
 ./gradlew check -Prevokt.ci                       # adds consumers and the purity compile (Android modules from 0.3)
 ./gradlew check -Prevokt.testJdk=17               # run the tests on another installed JDK (the CI matrix)
+./gradlew verifyRuleGrowability                   # the Rule fixture's diff against the merge base with origin/main (§4)
 ./gradlew apiDump                                 # only when the public surface changed; commit the diff
 ./gradlew ktlintFormat                            # formatting is never a review topic
 reuse lint && actionlint                          # headers and workflows

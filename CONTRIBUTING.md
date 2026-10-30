@@ -537,6 +537,9 @@ PGP fingerprint, a Gradle `trusted-key` snippet, `gh attestation verify`).
   contributor reading only this file sees it. Tags `vX.Y.Z` under a tag ruleset (only the release workflow
   creates them). **Backports**: security fixes only, to the latest `0.x` minor; after 1.0, to the latest
   minor of the previous major for 12 months, through `release/*` branches protected like `main`.
+- **The version being developed** is `revokt.version` in `gradle.properties`. Bump its minor in a `chore` PR when the
+  next milestone opens: its `major.minor` is the current minor that `verifyRuleGrowability` holds new `Rule` rows and
+  `ALLOW → REJECT` flips to (§4 growability, #73). The release workflow passes the tag's version instead.
 - **Release workflow** (never by hand): `workflow_dispatch` by a maintainer on `main` → build on the pinned
   toolchain → `apiCheck` and the golden-fixture diff rule (§4 growability) → reproducible-build check → SBOM →
   **`release` environment**, whose required reviewers are both maintainers with "Prevent self-review" on
