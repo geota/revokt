@@ -9,11 +9,11 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
 /**
- * One data generation as a C2SP directory image (spec §3.2): `index.bin` plus exactly the filter files it names, so any
- * C2SP reader accepts it. A `RevocationEngine` receives it whatever its source; [format] is the only
- * engine-specific property. Construction validates the image: `index.bin` must parse, and the names must be exactly
- * `index.bin` and the filters it names. The constructor is internal; tests and fakes build one with the
- * [Builder] (`@RevoktTestingApi`), or from disk with `JvmGenerationFiles.fromDirectory`.
+ * One data generation as a C2SP directory image (spec §3.2): `index.bin` plus exactly the filter files it names, so
+ * any C2SP reader accepts it. A `RevocationEngine` receives it whatever its source; [format] is the only
+ * engine-specific property. Construction validates the image: `index.bin` must parse and must not name itself, and
+ * the names must be exactly `index.bin` and the filters it names. The constructor is internal; tests and fakes build
+ * one with the [Builder] (`@RevoktTestingApi`), or from disk with `JvmGenerationFiles.fromDirectory`.
  */
 public class GenerationFiles internal constructor(
     public val generationId: String,
