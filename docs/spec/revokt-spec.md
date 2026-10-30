@@ -1,10 +1,27 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 46** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-30
+Status: **draft spec / project proposal, revision 47** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-30
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 47 (the `DEFAULT` outcome of the two data rules that never fire there, 2026-10-30)
+- **Decided** (#75, found while implementing #72, the `Rule` model's golden fixture): §8 gave `DEFAULT`'s `STALE`
+  and `UNSIGNED_DATA` cells only as "never fires", while the golden fixture freezes each preset outcome within a
+  major. Both outcomes are `ALLOW`.
+  - **`STALE`:** the spec already implied it. `validate()`'s `STALE_REJECTS_WITHOUT_THRESHOLD` warns when
+    `outcome(STALE) == REJECT` and no dataset has a `rejectStaleAfter`, so a `REJECT` outcome would make plain
+    `DEFAULT` warn on every `validate()`. §8's "`DEFAULT.newBuilder().rule(STALE, REJECT)` alone changes nothing
+    until a `rejectStaleAfter` is set" says the same.
+  - **`UNSIGNED_DATA`:** the maintainer's decision, on the same pattern, one setting for the threshold and another for
+    the outcome. A policy derived from `DEFAULT` that raises `minTrustClass` makes the rule fire and report: it shows
+    in `fired`, in `DataState.rules` and in the status counters, while the verdict stays `Accepted` and §7.3 still
+    installs a lower-class generation as a bootstrap. It rejects only with `rule(UNSIGNED_DATA, REJECT)` as well.
+    `REJECT` would have made raising the floor alone reject on mirror or system-cache data and stop such data
+    installing, so that a fresh install without signed data rejected everything as `NO_DATA`.
+
+  Neither rule fires in plain `DEFAULT`, whatever its outcome, so no verdict of the presets changes.
 
 ### Changes in revision 46 (D7's wording, Firefox's inner OCTET STRING, K6 to K8 kept narrow, 2026-10-30)
 - **Corrected** (#61): D7 called only its SCT-list outcomes normative, yet states required outcomes with other entries
@@ -2584,15 +2601,16 @@ runs the configured policy, emits events, and never throws.**
 | `NOT_ENROLLED` | non-answer | allow | reject (exemptable) | collapsed into not covered | CRLite |
 | `NO_SCTS` | non-answer | allow | reject (exemptable) | allow | CRLite |
 | `NOT_COVERED` | non-answer | allow | allow | Firefox → OCSP; upki allow | CRLite (the coverage gap: a certificate issued after the live filter's coverage `high` is unchecked by every preset; §10) |
-| `STALE` | data quality | never fires (`rejectStaleAfter` null; loud via `DataState.stale` and `RevoktStatus.stale`) | reject at 30 d, after a sync attempt has completed since the seed was installed (persisted gate, bullet below; exemptable) | upki keeps old data; Chrome drops an expired CRLSet; Firefox → OCSP | `DataState`, per dataset |
-| `UNSIGNED_DATA` | data quality | never fires (floor `BUNDLED`) | reject (floor `SIGNED`; M2: `DENYLIST` floor `BUNDLED`; exemptable) | n/a; goal 2 | `DataState`, per dataset: `trustClass` below `minTrustClass` |
+| `STALE` | data quality | allow; never fires (`rejectStaleAfter` null; loud via `DataState.stale` and `RevoktStatus.stale`) | reject at 30 d, after a sync attempt has completed since the seed was installed (persisted gate, bullet below; exemptable) | upki keeps old data; Chrome drops an expired CRLSet; Firefox → OCSP | `DataState`, per dataset |
+| `UNSIGNED_DATA` | data quality | allow; never fires (floor `BUNDLED`) | reject (floor `SIGNED`; M2: `DENYLIST` floor `BUNDLED`; exemptable) | n/a; goal 2 | `DataState`, per dataset: `trustClass` below `minTrustClass` |
 | [M2] `DENYLIST`, `ONECRL`, `CRLSET` | evidence (`ONECRL` exemptable per anchor through `ExemptionContext.path.anchorSha256`, the enterprise-CA case; `CRLSET`, `DENYLIST` not exemptable) | reject | reject | reject | L1/L2 (the 0.4 → 1.0 transition; not subject to the one-minor rule) |
 | [M2] `ISSUER_UNKNOWN_TO_MOZILLA` | non-answer | allow | reject (exemptable) | n/a | preload |
 | [M3] `CT` | evidence | allow | reject (ships `ALLOW` for one minor in `STRICT`) | browsers reject | L4: CT policy verified and not met |
 | [M3] `CT_UNVERIFIED` | non-answer | allow | reject (exemptable; ships `ALLOW` for one minor) | n/a | L4: log list missing, SCTs unverifiable, or the only SCTs delivered outside the certificate (TLS extension, OCSP), which an `X509TrustManager` cannot observe; this is why `CT` ships `ALLOW` in `DEFAULT`. M3 adds `EvaluationRequest.Builder.tlsScts(...)`, a full-SCT type separate from `CrliteSct`, and the path cache keeps the raw extension bytes |
 | [M4] `DISTRUST` | evidence | reject (ships `ALLOW` for one minor in both presets) | reject (same; exemptable per anchor) | reject | L5 |
 
-- **Data rules are per dataset.** `NO_DATA` fires for a dataset in `requiredDatasets` with no
+- **Data rules are per dataset.** In `DEFAULT`, `STALE` and `UNSIGNED_DATA` allow (revision 47): raising a
+  threshold or a floor makes the rule fire and report, and rejecting takes `rule(…, REJECT)` as well. `NO_DATA` fires for a dataset in `requiredDatasets` with no
   generation and `DataState.pending == false` (the start task has passed the seed and system-cache steps; `pending` is false at the end of the start task whether or not a fetching source is configured, with `generationEpoch++` when it clears without a generation, so a seed-only configuration can never sit in `pending`); presets' `requiredDatasets` is `{CRLITE}`. `STALE` fires for a dataset present in the staleness map
   (presets: `CRLITE` only) iff `rejectStaleAfter != null && ageMillis > rejectStaleAfter`;
   `DataState.stale` (the loud flag) is `ageMillis > staleAfter` and never fires a rule.
