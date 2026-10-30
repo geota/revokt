@@ -24,7 +24,8 @@ Certificates.
 
 > [!WARNING]
 > **revokt is not production ready.** Nothing is published to Maven Central, and the API below is a design sketch
-> that may change in any 0.x release; binary compatibility is promised from 1.0. The project is in milestone 0.1, the engine's foundations. The first `Revokt` facade
+> that may change in any 0.x release; binary compatibility is promised from 1.0. The project is in milestone 0.1, the
+> engine's foundations. The first `Revokt` facade
 > lands in 0.2, and the OkHttp, Ktor and Android bindings in 0.3. See the [roadmap](ROADMAP.md) for progress.
 
 ## Why
@@ -83,6 +84,7 @@ flowchart LR
 ```kotlin
 // Gradle: the binding plus a seed for the channel, so SeedSource.bundled() finds a filter on first launch.
 //   implementation("dev.revokt:revokt-okhttp:<version>")
+//   implementation("dev.revokt:revokt-android:<version>")     // AndroidStorage, AndroidPlatformTrust
 //   implementation("dev.revokt:revokt-seed-compat:<date>")
 
 // One instance per storage directory, started when the application starts.
