@@ -5,6 +5,8 @@ package dev.revokt.engine.c2sp
 
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -22,44 +24,50 @@ class C2spIndexUpkiTest {
             javaClass.getResourceAsStream("/dev/revokt/engine/c2sp/$name"),
         ) { "missing $name" }.use { it.readBytes() }
 
-    /** The mirror's filters in the recorded order: name, source path (from the repository root), SHA-256. */
-    private val recorded: List<List<String>> =
-        resource("upki-index.tsv")
-            .decodeToString()
-            .lines()
-            .filter {
-                it.isNotBlank() && !it.startsWith("#")
-            }.map { it.split("\t") }
+    private val corpus =
+        File(checkNotNull(System.getProperty("revokt.clubcardCorpus")) { "revokt.clubcardCorpus not set" })
 
-    /** The repository root, from the test's working directory (the module). */
-    private val root = File("..")
+    /** One mirrored filter as recorded: its mirror name and its bytes, checked against the recorded SHA-256. */
+    private class Filter(
+        val name: String,
+        val bytes: ByteArray,
+    )
 
-    private fun coverage(path: String): Map<okio.ByteString, Window> =
+    private val recorded: List<Filter> =
+        rows(resource("upki-index.tsv")).map { line ->
+            val (name, path, sha256) = line.split("\t")
+            val bytes = File(corpus, path.removePrefix("corpus/clubcard/")).readBytes()
+            assertEquals(sha256, bytes.toByteString().sha256().hex(), "$path changed since the golden was recorded")
+            Filter(name, bytes)
+        }
+
+    private fun rows(tsv: ByteArray): List<String> =
+        tsv.decodeToString().lines().filter {
+            it.isNotBlank() &&
+                !it.startsWith("#")
+        }
+
+    private fun coverage(bytes: ByteArray): Map<ByteString, Window> =
         ClubcardFilters
-            .decode(File(root, path).readBytes())
+            .decode(bytes)
             .universe.logs
-            .map { (log, interval) -> log.bytes to Window(interval.low.value.toULong(), interval.high.value.toULong()) }
-            .toMap()
+            .map { (log, interval) ->
+                log.bytes to Window(interval.low.value.toULong(), interval.high.value.toULong())
+            }.toMap()
 
     @Test
     fun `revokt writes upki's index byte for byte`() {
-        val filters = recorded.map { (name, path, _) -> name to coverage(path) }
+        val filters = recorded.map { it.name to coverage(it.bytes) }
         assertContentEquals(resource("upki-index.bin"), C2spIndex.write(C2spIndex.index(filters)))
     }
 
     @Test
     fun `upki's index reads back to tables consistent with the filters' coverage`() {
         val index = C2spIndex.read(resource("upki-index.bin"))
-        assertEquals(recorded.map { it[0] }, index.filenames)
+        assertEquals(recorded.map { it.name }, index.filenames)
         assertEquals(
             emptyList(),
-            C2spIndex.inconsistencies(
-                index,
-                recorded.associate { (name, path, _) ->
-                    name to
-                        coverage(path)
-                },
-            ),
+            C2spIndex.inconsistencies(index, recorded.associate { it.name to coverage(it.bytes) }),
         )
     }
 }

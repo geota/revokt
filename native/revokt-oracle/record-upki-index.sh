@@ -5,15 +5,20 @@
 # Records the spec §9 "index.bin byte comparison" golden (#86): upki's own `index.bin` for the corpus/clubcard filters.
 # Builds upki-cli at the pinned tag, serves the filters as a local mirror (manifest.json plus the files, on 127.0.0.1),
 # runs `upki fetch` against it, and commits the index.bin upki writes, with its provenance. revokt's C2spIndex writer
-# must reproduce it byte for byte (C2spIndexUpkiTest). Needs Rust, network for the build, and python3 for the local
-# server; the PR tier replays the committed golden and needs none of them. Run from the repository root:
+# must reproduce it byte for byte (C2spIndexUpkiTest). Needs Rust, network for the build, python3 for the local server
+# and curl; the PR tier replays the committed golden and needs none of them. Run from the repository root:
 #   sh native/revokt-oracle/record-upki-index.sh
 set -eu
 root=$(pwd)
 tag=v1.0.1   # rustls/upki, spec §3.2 and Appendix A; #85 moves this pin into gradle/oracle-matrix.properties
 out="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/c2sp"
 work=$(mktemp -d)
-trap 'if [ -n "${server:-}" ]; then kill "$server" 2>/dev/null; wait "$server" 2>/dev/null; fi; rm -rf "$work"' EXIT
+cleanup() {
+  if [ -n "${server:-}" ]; then kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true; fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
 
 cargo install --quiet --locked --git https://github.com/rustls/upki --tag "$tag" upki-cli --root "$work/upki"
 upki="$work/upki/bin/upki"
@@ -39,13 +44,18 @@ while [ $# -gt 0 ]; do
 done
 printf '{"generated_at":1793318400,"comment":"revokt #86 index golden","files":[%s]}\n' "$files" > "$work/mirror/revocation/manifest.json"
 
-port=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
-python3 -I -m http.server "$port" --bind 127.0.0.1 --directory "$work/mirror" >/dev/null 2>&1 &
+# Port 0: the server binds a free port itself and reports it, so no other process can take it in between.
+python3 -I -u -m http.server 0 --bind 127.0.0.1 --directory "$work/mirror" > "$work/server.log" 2>&1 &
 server=$!
+port=""
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  curl -fsS "http://127.0.0.1:$port/revocation/manifest.json" >/dev/null 2>&1 && break
+  kill -0 "$server" 2>/dev/null || { echo "the local mirror server exited:" >&2; cat "$work/server.log" >&2; exit 1; }
+  port=$(sed -n 's/.* port \([0-9][0-9]*\) .*/\1/p' "$work/server.log" | head -n 1)
+  [ -n "$port" ] && curl -fsS "http://127.0.0.1:$port/revocation/manifest.json" >/dev/null 2>&1 && break
+  port=""
   sleep 1
 done
+[ -n "$port" ] || { echo "the local mirror server did not answer" >&2; exit 1; }
 printf 'cache-dir = "%s"\n[revocation]\nfetch-url = "http://127.0.0.1:%s/revocation/"\n' "$work/cache" "$port" > "$work/config.toml"
 "$upki" --config-file "$work/config.toml" fetch
 [ -f "$work/cache/revocation/index.bin" ] || { echo "upki wrote no index.bin" >&2; exit 1; }

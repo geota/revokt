@@ -6,16 +6,21 @@ package dev.revokt.engine.c2sp
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
-/** A malformed `index.bin`: a violated MUST (or the overlap SHOULD) of the C2SP index file format. */
+/** A malformed `index.bin`: a violated MUST (or the overlap SHOULD) of the C2SP index file format, or over revokt's cap. */
 internal class IndexFormatException(
     message: String,
 ) : Exception(message)
 
-/** An inclusive window of SCT timestamps, in milliseconds since the epoch, compared as unsigned 64-bit values. */
+/**
+ * An inclusive window of SCT timestamps, in milliseconds since the epoch, compared as unsigned 64-bit values. A window
+ * whose low is above its high covers nothing.
+ */
 internal data class Window(
     val low: ULong,
     val high: ULong,
 ) {
+    val isEmpty: Boolean get() = low > high
+
     operator fun contains(t: ULong): Boolean = t in low..high
 }
 
@@ -38,6 +43,46 @@ internal class IndexFile(
     override fun hashCode(): Int = 31 * filenames.hashCode() + logs.hashCode()
 }
 
+/** How an index departs from its generation's filters (spec §3.2 selection equivalence). */
+internal sealed interface IndexMismatch {
+    /** A filter of the generation that the index does not name. */
+    data class NotNamed(
+        val filter: String,
+    ) : IndexMismatch
+
+    /** A name in the index that is not one of the generation's filters. */
+    data class UnknownName(
+        val name: String,
+    ) : IndexMismatch
+
+    /** An entry for [filter] and [logId] outside the filter's own window for that log. */
+    data class OutsideWindow(
+        val filter: String,
+        val logId: ByteString,
+        val entry: Window,
+        val window: Window,
+    ) : IndexMismatch
+
+    /** [filter]'s entries for [logId] leave part of its own window uncovered. */
+    data class Gap(
+        val filter: String,
+        val logId: ByteString,
+        val window: Window,
+    ) : IndexMismatch
+
+    /** [filter] covers [logId], and the index has no entry for that pair. */
+    data class MissingEntry(
+        val filter: String,
+        val logId: ByteString,
+    ) : IndexMismatch
+
+    /** An entry for [filter] and [logId], which the filter does not cover. */
+    data class UncoveredLog(
+        val filter: String,
+        val logId: ByteString,
+    ) : IndexMismatch
+}
+
 /**
  * The C2SP revocation index (`index.bin`) at `upki-revocation/v1.0.0` (spec §2 goal 1, §3.2): big-endian integers, a
  * 14-byte header (`upkiidx1`, `uint16` filename count, `uint32` log count), 32-byte zero-padded filenames, 42-byte log
@@ -45,6 +90,9 @@ internal class IndexFile(
  * (`uint16` filter index, `uint64` minimum and maximum timestamps, inclusive).
  */
 internal object C2spIndex {
+    /** The largest index read: spec §6.5's seed `index.bin` cap (1 MiB), applied to every index revokt reads. */
+    const val MAX_BYTES: Int = 1 shl 20
+
     private val MAGIC = "upkiidx1".encodeToByteArray()
     private const val HEADER = 14
     private const val NAME = 32
@@ -57,8 +105,13 @@ internal object C2spIndex {
     fun isFilename(name: String): Boolean =
         name.encodeToByteArray().size in 1..NAME && name != "." && name != ".." && name.all { it in NAME_CHARS }
 
-    /** Parses [bytes], enforcing every MUST of the index file format and the SHOULD against overlapping sections. */
+    /**
+     * Parses [bytes], enforcing every MUST of the index file format, the SHOULD against overlapping sections, and
+     * [MAX_BYTES]. The log directory and every section's bounds are checked before any entry is read, so the entries
+     * allocated never exceed what the file's bytes hold.
+     */
     fun read(bytes: ByteArray): IndexFile {
+        if (bytes.size > MAX_BYTES) fail("index.bin is ${bytes.size} bytes, over the $MAX_BYTES-byte cap")
         if (bytes.size < HEADER) fail("index.bin is ${bytes.size} bytes, shorter than its 14-byte header")
         if (!bytes
                 .copyOfRange(
@@ -75,49 +128,51 @@ internal object C2spIndex {
             fail("index.bin declares $numFilenames filenames and $numLogs logs, more than its ${bytes.size} bytes hold")
         }
         val filenames = readFilenames(bytes, numFilenames)
-        val logs = readLogs(bytes, HEADER + NAME * numFilenames, numLogs.toInt(), tablesEnd.toULong(), numFilenames)
+        val directory = readDirectory(bytes, HEADER + NAME * numFilenames, numLogs.toInt(), tablesEnd.toInt())
+        val logs = LinkedHashMap<ByteString, List<IndexEntry>>()
+        for (d in directory) logs[d.logId] = readEntries(bytes, d, numFilenames)
         return IndexFile(filenames, logs)
     }
 
     private fun fail(message: String): Nothing = throw IndexFormatException(message)
 
+    /** C2SP constrains each name, not their distinctness: upki writes a name twice when its manifest lists it twice. */
     private fun readFilenames(
         bytes: ByteArray,
         count: Int,
-    ): List<String> {
-        val filenames =
-            (0 until count).map { i ->
-                val slot = bytes.copyOfRange(HEADER + NAME * i, HEADER + NAME * (i + 1))
-                val end = slot.indexOf(0).let { if (it < 0) NAME else it }
-                if ((end until NAME).any { slot[it] != 0.toByte() }) {
-                    fail(
-                        "filename $i is not zero-padded after its first zero byte",
-                    )
-                }
-                val name = slot.copyOfRange(0, end).decodeToString()
-                if (!isFilename(
-                        name,
-                    )
-                ) {
-                    fail(
-                        "filename $i ('$name') is not 1 to 32 bytes of A-Z, a-z, 0-9, '-', '.', '_', nor '.' or '..'",
-                    )
-                }
-                name
+    ): List<String> =
+        (0 until count).map { i ->
+            val slot = bytes.copyOfRange(HEADER + NAME * i, HEADER + NAME * (i + 1))
+            val end = slot.indexOf(0).let { if (it < 0) NAME else it }
+            if ((end until NAME).any { slot[it] != 0.toByte() }) {
+                fail(
+                    "filename $i is not zero-padded after its first zero byte",
+                )
             }
-        if (filenames.toSet().size != filenames.size) fail("the filename table names a file twice")
-        return filenames
-    }
+            val name = slot.copyOfRange(0, end).decodeToString()
+            if (!isFilename(
+                    name,
+                )
+            ) {
+                fail("filename $i ('$name') is not 1 to 32 bytes of A-Z, a-z, 0-9, '-', '.', '_', nor '.' or '..'")
+            }
+            name
+        }
 
-    private fun readLogs(
+    private class DirEntry(
+        val logId: ByteString,
+        val start: Int,
+        val count: Int,
+    )
+
+    /** The log directory, sorted and unique, with every non-empty section inside the file after the tables and apart. */
+    private fun readDirectory(
         bytes: ByteArray,
         dirStart: Int,
         count: Int,
-        tablesEnd: ULong,
-        numFilenames: Int,
-    ): Map<ByteString, List<IndexEntry>> {
-        val logs = LinkedHashMap<ByteString, List<IndexEntry>>()
-        val sections = ArrayList<LongRange>()
+        tablesEnd: Int,
+    ): List<DirEntry> {
+        val out = ArrayList<DirEntry>(count)
         var previous: ByteString? = null
         for (i in 0 until count) {
             val at = dirStart + LOG_ENTRY * i
@@ -130,40 +185,42 @@ internal object C2spIndex {
             previous = logId
             val offset = u64(bytes, at + LOG_ID)
             val entries = u16(bytes, at + LOG_ID + 8)
-            // offset is checked against the file size before the sum, so the end cannot overflow.
-            if (offset < tablesEnd || offset > bytes.size.toULong() ||
-                offset + ENTRY.toULong() * entries.toULong() > bytes.size.toULong()
-            ) {
-                fail(
-                    "log ${logId.hex()}'s entry section ($entries entries at offset $offset) is not inside the file after the tables",
-                )
+            if (entries > 0) {
+                // offset is checked against the file size before the sum, so the end cannot overflow.
+                val end =
+                    if (offset >
+                        bytes.size.toULong()
+                    ) {
+                        ULong.MAX_VALUE
+                    } else {
+                        offset + ENTRY.toULong() * entries.toULong()
+                    }
+                if (offset < tablesEnd.toULong() || end > bytes.size.toULong()) {
+                    fail(
+                        "log ${logId.hex()}'s entry section ($entries entries at offset $offset) is not inside the file after the tables",
+                    )
+                }
+            } else if (offset > bytes.size.toULong()) {
+                fail("log ${logId.hex()}'s empty entry section is at offset $offset, past the end of the file")
             }
-            val start = offset.toInt()
-            if (entries > 0) sections += start.toLong() until start.toLong() + ENTRY * entries
-            logs[logId] = readEntries(bytes, start, entries, logId, numFilenames)
+            out += DirEntry(logId, if (entries > 0) offset.toInt() else 0, entries)
         }
-        sections.sortBy { it.first }
+        val sections = out.filter { it.count > 0 }.sortedBy { it.start }
         for ((a, b) in sections.zipWithNext()) {
-            if (b.first <=
-                a.last
-            ) {
-                fail("two logs' entry sections overlap at offset ${b.first}")
-            }
+            if (b.start < a.start + ENTRY * a.count) fail("two logs' entry sections overlap at offset ${b.start}")
         }
-        return logs
+        return out
     }
 
     private fun readEntries(
         bytes: ByteArray,
-        start: Int,
-        count: Int,
-        logId: ByteString,
+        d: DirEntry,
         numFilenames: Int,
     ): List<IndexEntry> =
-        (0 until count).map { k ->
-            val e = start + ENTRY * k
+        (0 until d.count).map { k ->
+            val e = d.start + ENTRY * k
             val filter = u16(bytes, e)
-            if (filter >= numFilenames) fail("log ${logId.hex()} entry $k names filter $filter of $numFilenames")
+            if (filter >= numFilenames) fail("log ${d.logId.hex()} entry $k names filter $filter of $numFilenames")
             IndexEntry(filter, Window(u64(bytes, e + 2), u64(bytes, e + 10)))
         }
 
@@ -238,33 +295,29 @@ internal object C2spIndex {
 
     /**
      * Spec §3.2 selection equivalence for an index revokt did not build: for every log ID and timestamp, the filters the
-     * index names must be exactly the filters whose own coverage contains it. Here that is: the index names exactly the
-     * filters in [coverage], and for each filter and log, the union of its entries equals the filter's own window
-     * (every entry inside it, no gap, nothing for a log the filter does not cover). Returns every mismatch; empty when
-     * the index is consistent.
+     * index names must be exactly the filters whose own coverage contains it. Checked per filter and log: the union of
+     * the filter's entries equals its own window, every entry inside it and no gap. Empty windows, on either side, cover
+     * nothing and need no entry. Two layout rules are stricter than equivalence: the index names exactly the
+     * generation's filters, even one that covers nothing. Returns every mismatch; empty when the index is consistent.
      */
     fun inconsistencies(
         index: IndexFile,
         coverage: Map<String, Map<ByteString, Window>>,
-    ): List<String> {
-        val out = mutableListOf<String>()
+    ): List<IndexMismatch> {
+        val out = mutableListOf<IndexMismatch>()
         val named = index.filenames.toSet()
-        (coverage.keys - named).forEach { out += "filter $it is not named by the index" }
-        (named - coverage.keys).forEach { out += "the index names $it, which is not one of the generation's filters" }
-        val byFilterLog = HashMap<Pair<String, ByteString>, MutableList<Window>>()
+        (coverage.keys - named).forEach { out += IndexMismatch.NotNamed(it) }
+        (named - coverage.keys).forEach { out += IndexMismatch.UnknownName(it) }
+        val byFilterLog = LinkedHashMap<Pair<String, ByteString>, MutableList<Window>>()
         for ((logId, entries) in index.logs) {
-            for (e in entries) {
-                byFilterLog.getOrPut(index.filenames[e.filterIndex] to logId) { mutableListOf() } +=
-                    e.window
+            for (e in entries.filterNot { it.window.isEmpty }) {
+                byFilterLog.getOrPut(index.filenames[e.filterIndex] to logId) { mutableListOf() } += e.window
             }
         }
         for ((name, logs) in coverage.filterKeys { it in named }) {
             for ((logId, window) in logs) out += mismatches(name, logId, window, byFilterLog.remove(name to logId))
         }
-        for ((key, _) in byFilterLog) {
-            out +=
-                "the index has an entry for filter ${key.first}, log ${key.second.hex()}, which the filter does not cover"
-        }
+        for ((key, _) in byFilterLog) out += IndexMismatch.UncoveredLog(key.first, key.second)
         return out
     }
 
@@ -274,26 +327,23 @@ internal object C2spIndex {
         logId: ByteString,
         window: Window,
         windows: List<Window>?,
-    ): List<String> {
-        val where = "filter $name, log ${logId.hex()}"
-        if (windows == null) return listOf("$where: the filter covers the log but the index has no entry for it")
-        val out = mutableListOf<String>()
-        windows.filter { it.low < window.low || it.high > window.high || it.low > it.high }.forEach {
-            out +=
-                "$where: entry [${it.low}, ${it.high}] is not inside the filter's window [${window.low}, ${window.high}]"
-        }
-        if (!coversExactly(windows, window)) {
-            out += "$where: the entries do not cover the filter's window [${window.low}, ${window.high}] without a gap"
-        }
+    ): List<IndexMismatch> {
+        if (window.isEmpty) return windows.orEmpty().map { IndexMismatch.OutsideWindow(name, logId, it, window) }
+        if (windows == null) return listOf(IndexMismatch.MissingEntry(name, logId))
+        val out: MutableList<IndexMismatch> =
+            windows.filter { it.low < window.low || it.high > window.high }.mapTo(mutableListOf()) {
+                IndexMismatch.OutsideWindow(name, logId, it, window)
+            }
+        if (!coversExactly(windows, window)) out += IndexMismatch.Gap(name, logId, window)
         return out
     }
 
-    /** Whether the union of [windows] is exactly [target]: sorted, they start at its low, chain with no gap, and reach its high. */
+    /** Whether the union of [windows], all non-empty, is exactly [target]: they start at its low, chain with no gap, and reach its high. */
     private fun coversExactly(
         windows: List<Window>,
         target: Window,
     ): Boolean {
-        val sorted = windows.filter { it.low <= it.high }.sortedBy { it.low }
+        val sorted = windows.sortedBy { it.low }
         if (sorted.isEmpty() || sorted.first().low != target.low) return false
         var reach = sorted.first().high
         for (w in sorted.drop(1)) {

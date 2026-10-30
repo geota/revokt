@@ -27,6 +27,45 @@ class C2spIndexTest {
 
     private fun built(): ByteArray = C2spIndex.write(C2spIndex.index(filters))
 
+    /** One directory row of [raw]: the log, where its section starts and how many entries it declares. */
+    private class Row(
+        val logId: ByteString,
+        val offset: Long,
+        val count: Int,
+    )
+
+    /** An index laid out by hand: [names], the directory [rows], and [entries] placed at their offsets, [size] bytes long. */
+    private fun raw(
+        names: List<String>,
+        rows: List<Row>,
+        size: Int,
+        entries: Map<Int, List<IndexEntry>> = emptyMap(),
+    ): ByteArray {
+        val out = ByteArray(size)
+        "upkiidx1".encodeToByteArray().copyInto(out)
+        out[8] = (names.size ushr 8).toByte()
+        out[9] = names.size.toByte()
+        for (i in 0 until 4) out[10 + i] = (rows.size ushr (8 * (3 - i))).toByte()
+        names.forEachIndexed { i, n -> n.encodeToByteArray().copyInto(out, 14 + 32 * i) }
+        rows.forEachIndexed { i, r ->
+            val at = 14 + 32 * names.size + 42 * i
+            r.logId.toByteArray().copyInto(out, at)
+            for (k in 0 until 8) out[at + 32 + k] = (r.offset ushr (8 * (7 - k))).toByte()
+            out[at + 40] = (r.count ushr 8).toByte()
+            out[at + 41] = r.count.toByte()
+        }
+        for ((offset, list) in entries) {
+            list.forEachIndexed { k, e ->
+                val at = offset + 18 * k
+                out[at] = (e.filterIndex ushr 8).toByte()
+                out[at + 1] = e.filterIndex.toByte()
+                for (j in 0 until 8) out[at + 2 + j] = (e.window.low shr (8 * (7 - j))).toByte()
+                for (j in 0 until 8) out[at + 10 + j] = (e.window.high shr (8 * (7 - j))).toByte()
+            }
+        }
+        return out
+    }
+
     private fun assertMalformed(
         bytes: ByteArray,
         fragment: String,
@@ -79,14 +118,15 @@ class C2spIndexTest {
     }
 
     @Test
-    fun `the header is checked`() {
+    fun `the header and the cap are checked`() {
         assertMalformed(ByteArray(13), "shorter than its 14-byte header")
         assertMalformed(built().also { it[7] = '0'.code.toByte() }, "magic upkiidx1")
         assertMalformed(built().copyOf(14 + 32), "more than its")
+        assertMalformed("upkiidx1".encodeToByteArray() + ByteArray(C2spIndex.MAX_BYTES), "over the")
     }
 
     @Test
-    fun `filenames are checked`() {
+    fun `filenames are checked one by one, and a name may repeat as upki writes it`() {
         fun withName(name: ByteArray): ByteArray =
             built().also {
                 name.copyInto(it, 14)
@@ -98,15 +138,14 @@ class C2spIndexTest {
         assertMalformed(withName(ByteArray(0)), "is not 1 to 32 bytes")
         assertMalformed(withName("..".encodeToByteArray()), "is not 1 to 32 bytes")
         assertMalformed(withName("a/b".encodeToByteArray()), "is not 1 to 32 bytes")
-        assertMalformed(withName("delta".encodeToByteArray()), "names a file twice")
         assertMalformed(built().also { it[14 + 10] = 'x'.code.toByte() }, "zero-padded")
         assertEquals("A".repeat(32), C2spIndex.read(withName("A".repeat(32).encodeToByteArray())).filenames[0])
+        assertEquals(listOf("delta", "delta"), C2spIndex.read(withName("delta".encodeToByteArray())).filenames)
     }
 
     @Test
-    fun `the log directory must be sorted without duplicates, and sections inside the file and apart`() {
+    fun `the log directory must be sorted without duplicates`() {
         val dir = 14 + 32 * 2
-        // Swap the first two log IDs: unsorted.
         val swapped =
             built().also {
                 val first = it.copyOfRange(dir, dir + 32)
@@ -117,19 +156,71 @@ class C2spIndexTest {
                 )
             }
         assertMalformed(swapped, "not sorted")
-        val duplicate = built().also { it.copyInto(it, dir + 42, dir, dir + 32) }
-        assertMalformed(duplicate, "not sorted")
-        val outside = built().also { it[dir + 32 + 7] = 0x7F }
-        assertMalformed(outside, "not inside the file")
-        val intoTables =
-            built().also {
-                for (i in 0 until 8) it[dir + 32 + i] = 0
-                it[dir + 32 + 7] = 20
+        assertMalformed(built().also { it.copyInto(it, dir + 42, dir, dir + 32) }, "not sorted")
+    }
+
+    @Test
+    fun `a section must lie inside the file, after the tables`() {
+        val tables = 14 + 32 + 42
+        val e = listOf(IndexEntry(0, Window(1u, 2u)))
+        assertMalformed(raw(listOf("f"), listOf(Row(a, 20, 1)), tables + 18, mapOf(tables to e)), "not inside the file")
+        assertMalformed(raw(listOf("f"), listOf(Row(a, tables.toLong() + 1, 1)), tables + 18), "not inside the file")
+        assertMalformed(raw(listOf("f"), listOf(Row(a, Long.MAX_VALUE, 1)), tables + 18), "not inside the file")
+        assertMalformed(raw(listOf("f"), listOf(Row(a, -1, 1)), tables + 18), "not inside the file")
+        assertMalformed(
+            raw(listOf("f"), listOf(Row(a, tables.toLong() + 19, 0)), tables + 18),
+            "past the end of the file",
+        )
+    }
+
+    @Test
+    fun `overlapping sections are rejected before any entry is read`() {
+        // Many logs pointing at one section of many entries: rejected from the directory alone, so it allocates no entries.
+        val logs = 2000
+        val tables = 14 + 32 + 42 * logs
+        val count = 20000 // under the cap, so the overlap, not the size, is what rejects it
+        val rows =
+            (0 until logs).map {
+                Row(
+                    ByteArray(32) { k ->
+                        if (k <
+                            2
+                        ) {
+                            (it ushr (8 * (1 - k))).toByte()
+                        } else {
+                            0
+                        }
+                    }.toByteString(),
+                    tables.toLong(),
+                    count,
+                )
             }
-        assertMalformed(intoTables, "not inside the file")
-        // Point the second log's section at the first's: overlapping.
-        val overlap = built().also { it.copyInto(it, dir + 42 + 32, dir + 32, dir + 40) }
-        assertMalformed(overlap, "overlap")
+        assertMalformed(raw(listOf("f"), rows, tables + 18 * count), "overlap")
+        assertMalformed(
+            built().also {
+                val dir =
+                    14 + 64
+                it.copyInto(it, dir + 42 + 32, dir + 32, dir + 40)
+            },
+            "overlap",
+        )
+    }
+
+    @Test
+    fun `sections out of directory order, with gaps, empty sections and trailing bytes are accepted`() {
+        val tables = 14 + 32 * 2 + 42 * 3
+        val e0 = listOf(IndexEntry(0, Window(1u, 2u)))
+        val e1 = listOf(IndexEntry(1, Window(3u, 4u)), IndexEntry(0, Window(5u, 6u)))
+        val bytes =
+            raw(
+                listOf("f", "g"),
+                listOf(Row(a, tables.toLong() + 100, 1), Row(b, tables.toLong(), 0), Row(c, tables.toLong() + 10, 2)),
+                tables + 300,
+                mapOf(tables + 100 to e0, tables + 10 to e1),
+            )
+        val index = C2spIndex.read(bytes)
+        assertEquals(mapOf(a to e0, b to emptyList(), c to e1), index.logs)
+        assertEquals(index, C2spIndex.read(C2spIndex.write(index)))
     }
 
     @Test
@@ -145,30 +236,63 @@ class C2spIndexTest {
     }
 
     @Test
-    fun `the writer refuses names a reader would reject`() {
+    fun `the writer refuses names a reader would reject, and a name twice`() {
         assertFailsWith<IllegalArgumentException> { C2spIndex.index(listOf("x".repeat(33) to emptyMap())) }
         assertFailsWith<IllegalArgumentException> { C2spIndex.index(listOf("a" to emptyMap(), "a" to emptyMap())) }
     }
 
     @Test
     fun `an index revokt built is consistent with its filters' coverage`() {
-        val index = C2spIndex.read(built())
-        assertEquals(emptyList(), C2spIndex.inconsistencies(index, filters.toMap()))
+        assertEquals(emptyList(), C2spIndex.inconsistencies(C2spIndex.read(built()), filters.toMap()))
     }
 
     @Test
-    fun `split entries that chain without a gap cover a window exactly`() {
-        val split =
-            IndexFile(
-                listOf("f"),
-                linkedMapOf(a to listOf(IndexEntry(0, Window(10u, 14u)), IndexEntry(0, Window(15u, 20u)))),
-            )
-        assertEquals(emptyList(), C2spIndex.inconsistencies(split, mapOf("f" to mapOf(a to Window(10u, 20u)))))
+    fun `split, duplicated and nested entries that cover a window exactly are consistent`() {
+        val cover = mapOf("f" to mapOf(a to Window(10u, ULong.MAX_VALUE)))
+
+        fun index(vararg w: Window) = IndexFile(listOf("f"), linkedMapOf(a to w.map { IndexEntry(0, it) }))
+        assertEquals(
+            emptyList(),
+            C2spIndex.inconsistencies(index(Window(10u, 14u), Window(15u, ULong.MAX_VALUE)), cover),
+        )
+        assertEquals(
+            emptyList(),
+            C2spIndex.inconsistencies(index(Window(10u, ULong.MAX_VALUE), Window(10u, ULong.MAX_VALUE)), cover),
+        )
+        assertEquals(
+            emptyList(),
+            C2spIndex.inconsistencies(index(Window(10u, ULong.MAX_VALUE), Window(20u, 30u)), cover),
+        )
     }
 
     @Test
-    fun `each kind of mismatch is reported`() {
-        val coverage = mapOf("f" to mapOf(a to Window(10u, 20u)))
+    fun `empty windows cover nothing, on either side`() {
+        val inverted = Window(20u, 10u)
+        val cover = mapOf("f" to mapOf(a to inverted))
+        assertEquals(
+            emptyList(),
+            C2spIndex.inconsistencies(
+                IndexFile(
+                    listOf("f"),
+                    linkedMapOf(a to listOf(IndexEntry(0, inverted))),
+                ),
+                cover,
+            ),
+        )
+        assertEquals(emptyList(), C2spIndex.inconsistencies(IndexFile(listOf("f"), emptyMap()), cover))
+        assertEquals(
+            listOf(IndexMismatch.OutsideWindow("f", a, Window(1u, 2u), inverted)),
+            C2spIndex.inconsistencies(
+                IndexFile(listOf("f"), linkedMapOf(a to listOf(IndexEntry(0, Window(1u, 2u))))),
+                cover,
+            ),
+        )
+    }
+
+    @Test
+    fun `each kind of mismatch is reported exactly`() {
+        val w = Window(10u, 20u)
+        val cover = mapOf("f" to mapOf(a to w))
 
         fun index(
             vararg entries: IndexEntry,
@@ -177,48 +301,50 @@ class C2spIndexTest {
             names,
             linkedMapOf(a to entries.toList()),
         )
-        assertTrue(
-            C2spIndex.inconsistencies(index(IndexEntry(0, Window(10u, 21u))), coverage).any { "not inside" in it },
+        assertEquals(
+            listOf(IndexMismatch.OutsideWindow("f", a, Window(10u, 21u), w), IndexMismatch.Gap("f", a, w)),
+            C2spIndex.inconsistencies(index(IndexEntry(0, Window(10u, 21u))), cover),
         )
-        assertTrue(
-            C2spIndex.inconsistencies(index(IndexEntry(0, Window(10u, 19u))), coverage).any {
-                "without a gap" in
-                    it
-            },
+        assertEquals(
+            listOf(IndexMismatch.Gap("f", a, w)),
+            C2spIndex.inconsistencies(index(IndexEntry(0, Window(10u, 19u))), cover),
         )
-        assertTrue(
-            C2spIndex
-                .inconsistencies(
-                    index(IndexEntry(0, Window(10u, 12u)), IndexEntry(0, Window(14u, 20u))),
-                    coverage,
-                ).any {
-                    "without a gap" in
-                        it
-                },
+        assertEquals(
+            listOf(IndexMismatch.Gap("f", a, w)),
+            C2spIndex.inconsistencies(index(IndexEntry(0, Window(10u, 12u)), IndexEntry(0, Window(14u, 20u))), cover),
         )
-        assertTrue(
-            C2spIndex.inconsistencies(IndexFile(listOf("f"), emptyMap()), coverage).any { "no entry for it" in it },
+        assertEquals(
+            listOf(IndexMismatch.MissingEntry("f", a)),
+            C2spIndex.inconsistencies(IndexFile(listOf("f"), emptyMap()), cover),
         )
         val extraLog =
             IndexFile(
                 listOf("f"),
                 linkedMapOf(
-                    a to listOf(IndexEntry(0, Window(10u, 20u))),
+                    a to listOf(IndexEntry(0, w)),
                     b to listOf(IndexEntry(0, Window(1u, 2u))),
                 ),
             )
-        assertTrue(C2spIndex.inconsistencies(extraLog, coverage).any { "does not cover" in it })
-        assertTrue(
-            C2spIndex.inconsistencies(index(IndexEntry(0, Window(10u, 20u)), names = listOf("f", "g")), coverage).any {
-                "not one of the generation's filters" in
-                    it
-            },
+        assertEquals(listOf(IndexMismatch.UncoveredLog("f", b)), C2spIndex.inconsistencies(extraLog, cover))
+        assertEquals(
+            listOf(IndexMismatch.UnknownName("g")),
+            C2spIndex.inconsistencies(index(IndexEntry(0, w), names = listOf("f", "g")), cover),
         )
-        assertTrue(
-            C2spIndex.inconsistencies(index(IndexEntry(0, Window(10u, 20u))), coverage + ("g" to emptyMap())).any {
-                "not named" in
-                    it
-            },
+        assertEquals(
+            listOf(IndexMismatch.NotNamed("g")),
+            C2spIndex.inconsistencies(
+                index(IndexEntry(0, w)),
+                cover + ("g" to emptyMap()),
+            ),
+        )
+        // A filter whose coverage is empty but which has entries.
+        val emptyCoverage = IndexFile(listOf("f"), linkedMapOf(a to listOf(IndexEntry(0, w))))
+        assertEquals(
+            listOf(IndexMismatch.UncoveredLog("f", a)),
+            C2spIndex.inconsistencies(
+                emptyCoverage,
+                mapOf("f" to emptyMap()),
+            ),
         )
     }
 }
