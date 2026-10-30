@@ -20,8 +20,8 @@ Status: **draft spec / project proposal, revision 47** · Target: JVM 17+ and An
     `unsignedData`. The verdict stays `Accepted`, and §7.3 still installs a lower-class generation as a bootstrap.
     The rule rejects only with `rule(UNSIGNED_DATA, REJECT)` as well.
   - **What `REJECT` would have meant:** raising the floor to `SIGNED` alone would reject on mirror or system-cache data
-    and stop §7.3 from installing it. A configuration without a seed, whose only local data is a `c2spCache`, would then fail
-    `validate()` with `NO_DATA_REJECTS_WITHOUT_LOCAL_DATA`, an `ERROR` under `ENFORCE`.
+    and stop §7.3 from installing it. A configuration without a seed, whose only local data is a `c2spCache`, would
+    then fail `validate()` with `NO_DATA_REJECTS_WITHOUT_LOCAL_DATA`, an `ERROR` under `ENFORCE`.
 
   Neither rule fires in plain `DEFAULT`, whatever its outcome, so no verdict of the presets changes.
 - **Added** (§9, `Rule` model tests, 0.2): the `UNSIGNED_DATA` counterpart of the `STALE` test. An instance whose
