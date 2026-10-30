@@ -1,3 +1,23 @@
+public final class dev/revokt/CrliteQueryResult : java/lang/Enum {
+	public static final field ENGINE_ERROR Ldev/revokt/CrliteQueryResult;
+	public static final field NOT_COVERED Ldev/revokt/CrliteQueryResult;
+	public static final field NOT_ENROLLED Ldev/revokt/CrliteQueryResult;
+	public static final field NOT_REVOKED Ldev/revokt/CrliteQueryResult;
+	public static final field NO_DATA Ldev/revokt/CrliteQueryResult;
+	public static final field NO_SCTS Ldev/revokt/CrliteQueryResult;
+	public static final field REVOKED Ldev/revokt/CrliteQueryResult;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/CrliteQueryResult;
+	public static fun values ()[Ldev/revokt/CrliteQueryResult;
+}
+
+public final class dev/revokt/Dataset : java/lang/Enum {
+	public static final field CRLITE Ldev/revokt/Dataset;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Dataset;
+	public static fun values ()[Ldev/revokt/Dataset;
+}
+
 public final class dev/revokt/KeyabilityClause : java/lang/Enum {
 	public static final field EXTENSION Ldev/revokt/KeyabilityClause;
 	public static final field HEADER Ldev/revokt/KeyabilityClause;
@@ -12,6 +32,22 @@ public final class dev/revokt/KeyabilityClause : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/KeyabilityClause;
 }
 
+public final class dev/revokt/Layer : java/lang/Enum {
+	public static final field CRLITE Ldev/revokt/Layer;
+	public static final field PATH Ldev/revokt/Layer;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Layer;
+	public static fun values ()[Ldev/revokt/Layer;
+}
+
+public final class dev/revokt/Outcome : java/lang/Enum {
+	public static final field ALLOW Ldev/revokt/Outcome;
+	public static final field REJECT Ldev/revokt/Outcome;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Outcome;
+	public static fun values ()[Ldev/revokt/Outcome;
+}
+
 public final class dev/revokt/ParseReason : java/lang/Enum {
 	public static final field OVERSIZE Ldev/revokt/ParseReason;
 	public static final field PRODUCER_UNKEYABLE Ldev/revokt/ParseReason;
@@ -19,6 +55,18 @@ public final class dev/revokt/ParseReason : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/ParseReason;
 	public static fun values ()[Ldev/revokt/ParseReason;
+}
+
+public final class dev/revokt/PathStatus : java/lang/Enum {
+	public static final field FOUND Ldev/revokt/PathStatus;
+	public static final field ISSUER_UNVERIFIED Ldev/revokt/PathStatus;
+	public static final field NOT_WALKED Ldev/revokt/PathStatus;
+	public static final field NO_ISSUER Ldev/revokt/PathStatus;
+	public static final field PARSE_FAILED Ldev/revokt/PathStatus;
+	public static final field PATH_BUDGET_EXCEEDED Ldev/revokt/PathStatus;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/PathStatus;
+	public static fun values ()[Ldev/revokt/PathStatus;
 }
 
 public abstract interface annotation class dev/revokt/RevoktInternalApi : java/lang/annotation/Annotation {
@@ -69,5 +117,52 @@ public final class dev/revokt/RevoktLimits {
 }
 
 public abstract interface annotation class dev/revokt/RevoktTestingApi : java/lang/annotation/Annotation {
+}
+
+public final class dev/revokt/Rule : java/lang/Enum {
+	public static final field Companion Ldev/revokt/Rule$Companion;
+	public static final field ENGINE_ERROR Ldev/revokt/Rule;
+	public static final field ISSUER_UNVERIFIED Ldev/revokt/Rule;
+	public static final field NOT_COVERED Ldev/revokt/Rule;
+	public static final field NOT_ENROLLED Ldev/revokt/Rule;
+	public static final field NO_DATA Ldev/revokt/Rule;
+	public static final field NO_ISSUER Ldev/revokt/Rule;
+	public static final field NO_SCTS Ldev/revokt/Rule;
+	public static final field PARSE_FAILED Ldev/revokt/Rule;
+	public static final field PATH_BUDGET_EXCEEDED Ldev/revokt/Rule;
+	public static final field PRECEDENCE Ljava/util/List;
+	public static final field REVOKED Ldev/revokt/Rule;
+	public static final field STALE Ldev/revokt/Rule;
+	public static final field UNSIGNED_DATA Ldev/revokt/Rule;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getExemptable ()Z
+	public final fun getLayer ()Ldev/revokt/Layer;
+	public final fun getRuleClass ()Ldev/revokt/RuleClass;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Rule;
+	public static fun values ()[Ldev/revokt/Rule;
+}
+
+public final class dev/revokt/Rule$Companion {
+}
+
+public final class dev/revokt/RuleClass : java/lang/Enum {
+	public static final field DATA_QUALITY Ldev/revokt/RuleClass;
+	public static final field EVIDENCE Ldev/revokt/RuleClass;
+	public static final field NON_ANSWER Ldev/revokt/RuleClass;
+	public static final field UNEVALUABLE Ldev/revokt/RuleClass;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/RuleClass;
+	public static fun values ()[Ldev/revokt/RuleClass;
+}
+
+public final class dev/revokt/TrustClass : java/lang/Enum {
+	public static final field BUNDLED Ldev/revokt/TrustClass;
+	public static final field MIRROR Ldev/revokt/TrustClass;
+	public static final field SIGNED Ldev/revokt/TrustClass;
+	public static final field SYSTEM Ldev/revokt/TrustClass;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getRank ()I
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/TrustClass;
+	public static fun values ()[Ldev/revokt/TrustClass;
 }
 
