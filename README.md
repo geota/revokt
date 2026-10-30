@@ -1,7 +1,12 @@
 <!-- SPDX-FileCopyrightText: 2026 revokt contributors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# revokt
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/wordmark-dark.svg">
+    <img alt="revokt" src="docs/assets/brand/wordmark.svg" width="320">
+  </picture>
+</h1>
 
 revokt, a Kotlin TLS revocation library, is not affiliated with Revokt (revokt.com).
 
