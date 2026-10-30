@@ -334,23 +334,33 @@ internal object C2spIndex {
             windows.filter { it.low < window.low || it.high > window.high }.mapTo(mutableListOf()) {
                 IndexMismatch.OutsideWindow(name, logId, it, window)
             }
-        if (!coversExactly(windows, window)) out += IndexMismatch.Gap(name, logId, window)
+        if (leavesGap(windows, window)) out += IndexMismatch.Gap(name, logId, window)
         return out
     }
 
-    /** Whether the union of [windows], all non-empty, is exactly [target]: they start at its low, chain with no gap, and reach its high. */
-    private fun coversExactly(
+    /**
+     * Whether [windows], all non-empty, leave part of the non-empty [target] uncovered. Only the parts inside [target]
+     * count: an entry reaching past it is an [IndexMismatch.OutsideWindow], not a gap.
+     */
+    private fun leavesGap(
         windows: List<Window>,
         target: Window,
     ): Boolean {
-        val sorted = windows.sortedBy { it.low }
-        if (sorted.isEmpty() || sorted.first().low != target.low) return false
-        var reach = sorted.first().high
-        for (w in sorted.drop(1)) {
-            if (reach != ULong.MAX_VALUE && w.low > reach + 1u) return false
-            if (w.high > reach) reach = w.high
+        var next = target.low // the first timestamp of the window not yet covered
+        val clipped =
+            windows
+                .map {
+                    Window(
+                        maxOf(it.low, target.low),
+                        minOf(it.high, target.high),
+                    )
+                }.filterNot { it.isEmpty }
+        for (w in clipped.sortedBy { it.low }) {
+            if (w.low > next) return true
+            if (w.high == target.high) return false
+            if (w.high + 1u > next) next = w.high + 1u
         }
-        return reach == target.high
+        return true
     }
 
     private fun u16(

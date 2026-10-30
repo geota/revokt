@@ -9,8 +9,8 @@ import okio.ByteString.Companion.toByteString
 /**
  * Spec §9.1 target "`index.bin` round trip" (#86): the only declared result of a read is an [IndexFile] or an
  * [IndexFormatException]; anything else is a finding. An index that reads is written back and read again to the same
- * tables, and its own selection runs over every log it names. With `JAZZER_FUZZ` unset JUnit replays the committed inputs
- * in `C2spIndexFuzzTestInputs/`.
+ * tables, and its own selection runs over every log it names. `-max_len=1048577`, `C2spIndex.MAX_BYTES` + 1, so the
+ * over-cap rejection is reached. With `JAZZER_FUZZ` unset JUnit replays the committed inputs in `C2spIndexFuzzTestInputs/`.
  */
 class C2spIndexFuzzTest {
     @FuzzTest(maxDuration = "60s")

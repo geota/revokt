@@ -224,6 +224,31 @@ class C2spIndexTest {
     }
 
     @Test
+    fun `an empty section may sit at any offset in the file, even inside the tables`() {
+        val tables = 14 + 32 + 42
+        for (offset in listOf(0L, 20L, tables.toLong(), tables.toLong() + 18)) {
+            assertEquals(
+                mapOf(a to emptyList()),
+                C2spIndex.read(raw(listOf("f"), listOf(Row(a, offset, 0)), tables + 18)).logs,
+                "offset $offset",
+            )
+        }
+    }
+
+    @Test
+    fun `an entry reaching past its window is outside it, not a gap`() {
+        val w = Window(10u, 20u)
+        val index = IndexFile(listOf("f"), linkedMapOf(a to listOf(IndexEntry(0, Window(5u, 25u)))))
+        assertEquals(
+            listOf(IndexMismatch.OutsideWindow("f", a, Window(5u, 25u), w)),
+            C2spIndex.inconsistencies(
+                index,
+                mapOf("f" to mapOf(a to w)),
+            ),
+        )
+    }
+
+    @Test
     fun `an entry naming a filter past the table is malformed`() {
         val sections = 14 + 32 * 2 + 42 * 3
         assertMalformed(
@@ -302,7 +327,7 @@ class C2spIndexTest {
             linkedMapOf(a to entries.toList()),
         )
         assertEquals(
-            listOf(IndexMismatch.OutsideWindow("f", a, Window(10u, 21u), w), IndexMismatch.Gap("f", a, w)),
+            listOf(IndexMismatch.OutsideWindow("f", a, Window(10u, 21u), w)),
             C2spIndex.inconsistencies(index(IndexEntry(0, Window(10u, 21u))), cover),
         )
         assertEquals(
