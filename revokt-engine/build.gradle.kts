@@ -123,6 +123,8 @@ val jvmTestConscryptPrevious =
             }
         classpath = compilation.output.allOutputs + files(withoutConscrypt) + files(conscryptPrevious)
         useJUnitPlatform()
+        // Each takes the corpus heap; side by side they and Gradle's daemon outgrow a 16 GB CI runner (#15: v5's 8 GB).
+        mustRunAfter(tasks.named("jvmTest"))
         filter { for (name in conscryptPreviousTests) includeTestsMatching("*.$name") }
         val results = reports.junitXml.outputLocation
         val classes = conscryptPreviousTests
