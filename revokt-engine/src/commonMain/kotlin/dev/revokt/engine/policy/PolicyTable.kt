@@ -45,9 +45,9 @@ internal object PolicyTable {
     private const val DAY_MILLIS = 24L * 60 * 60 * 1_000
 
     /**
-     * `DEFAULT` rejects only the evidence, the budget and missing data. `STALE` and `UNSIGNED_DATA` never fire in it;
-     * their recorded outcome, `ALLOW`, follows `validate()`'s `STALE_REJECTS_WITHOUT_THRESHOLD` for `STALE`, and
-     * awaits the spec decision in #75 for `UNSIGNED_DATA`.
+     * `DEFAULT` rejects only the evidence, the budget and missing data. `STALE` and `UNSIGNED_DATA` never fire in it,
+     * and allow (spec revision 47): setting a `rejectStaleAfter` or raising `minTrustClass` makes them fire and report,
+     * and rejecting takes `rule(…, REJECT)` as well.
      */
     private fun defaultOutcome(rule: Rule): Outcome =
         when (rule) {
