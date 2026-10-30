@@ -22,8 +22,8 @@ const val RULE_FIXTURE = "revokt-engine/src/jvmTest/resources/dev/revokt/engine/
  * with `ALLOW` in both presets in the minor that introduces it, at the end of its class group; make a preset's
  * one-minor `ALLOW → REJECT` flip, setting that preset's `flippedIn`; turn `exemptable` from false to true; and add a
  * dataset's rows outside the staleness map. Existing rules keep their relative order, which is the precedence. Anything
- * else fails, naming the row and field and saying what to do (#73). The contract holds within a major: a fixture whose
- * rules all predate the current major is not compared.
+ * else fails, naming the row and field and saying what to do (#73). The contract holds within a major: when the base's
+ * `revokt.version` has a lower major than the current one, the fixture is not compared.
  */
 abstract class VerifyRuleGrowabilityTask : DefaultTask() {
     @get:InputFile
@@ -51,6 +51,11 @@ abstract class VerifyRuleGrowabilityTask : DefaultTask() {
     @get:Input
     abstract val projectVersion: Property<String>
 
+    /** `revokt.version` in the base's gradle.properties; absent for a base from before it lived there. */
+    @get:Input
+    @get:Optional
+    abstract val baseVersion: Property<String>
+
     @TaskAction
     fun verify() {
         val outcome =
@@ -58,6 +63,7 @@ abstract class VerifyRuleGrowabilityTask : DefaultTask() {
                 base = baseFixture.orNull,
                 head = fixture.get().asFile.readText(),
                 currentMinor = RuleGrowability.minorOf(projectVersion.get()),
+                baseMinor = baseVersion.orNull?.let(RuleGrowability::minorOf),
                 baseRef = baseRef.get(),
                 required = required.get(),
                 baseCommitExists = baseCommitExists.get(),
@@ -87,7 +93,15 @@ object RuleGrowability {
     }
 
     /** The task's whole decision, including the cases with no base to compare against. */
-    fun decide(base: String?, head: String, currentMinor: String, baseRef: String, required: Boolean, baseCommitExists: Boolean): Outcome {
+    fun decide(
+        base: String?,
+        head: String,
+        currentMinor: String,
+        baseRef: String,
+        required: Boolean,
+        baseCommitExists: Boolean,
+        baseMinor: String? = null,
+    ): Outcome {
         if (base == null) {
             if (required && !baseCommitExists) {
                 return Outcome.Fail(
@@ -97,6 +111,9 @@ object RuleGrowability {
             }
             val why = if (baseCommitExists) "the fixture does not exist there yet, so it is being introduced" else "no base commit"
             return Outcome.Pass("no base fixture at $baseRef ($why); nothing to compare.")
+        }
+        if (baseMinor != null && major(baseMinor) != null && major(currentMinor) != null && major(baseMinor)!! < major(currentMinor)!!) {
+            return Outcome.Pass("the base is on $baseMinor and this is $currentMinor: the contract starts afresh with each major.")
         }
         val found = problems(base, head, currentMinor)
         if (found.isEmpty()) return Outcome.Pass(null)
@@ -110,12 +127,17 @@ object RuleGrowability {
     fun minorOf(version: String): String =
         version.substringBefore("-").split(".").take(2).let { if (it.size == 2) it.joinToString(".") else "${it[0]}.0" }
 
-    private fun majorOf(minor: String): Int = minor.substringBefore(".").toInt()
+    private fun major(minor: String): Int? = minor.substringBefore(".").toIntOrNull()
 
-    private fun minorNumber(minor: String): Int = minor.substringAfter(".").toInt()
+    private fun minorNumber(minor: String): Int? = minor.substringAfter(".", "").toIntOrNull()
+
+    private fun isMinor(value: String?): Boolean = value != null && major(value) != null && minorNumber(value) != null
 
     /** The minor before [minor], or null at a major's first minor, where no rule of the major was introduced earlier. */
-    private fun previous(minor: String): String? = if (minorNumber(minor) == 0) null else "${majorOf(minor)}.${minorNumber(minor) - 1}"
+    private fun previous(minor: String): String? {
+        val m = minorNumber(minor) ?: return null
+        return if (m == 0) null else "${major(minor)}.${m - 1}"
+    }
 
     private class Section(val header: List<String>, val rows: List<Map<String, String>>)
 
@@ -170,10 +192,12 @@ object RuleGrowability {
                     "the columns are frozen within a major: restore $was"
             }
         }
+        if (!isMinor(currentMinor)) out += "the current minor '$currentMinor' is not major.minor: fix revokt.version in gradle.properties"
+        for (row in h.getValue("rules").rows) {
+            if (row.getValue("rule").isBlank()) out += "[rules] has a row with no rule name; name it"
+            if (!isMinor(row["introducedIn"])) out += "rule ${row["rule"]}: introducedIn '${row["introducedIn"]}' is not a minor such as 0.1; fix it"
+        }
         if (out.isNotEmpty()) return out
-        // The contract holds within a major: when every base rule predates the current major, nothing is frozen.
-        val baseRules = b["rules"]?.rows.orEmpty()
-        if (baseRules.isNotEmpty() && baseRules.maxOf { majorOf(it.getValue("introducedIn")) } < majorOf(currentMinor)) return emptyList()
         b["rules"]?.let { rules(it, h.getValue("rules"), currentMinor, out) }
         b["presets"]?.let { keyed("presets", it, h.getValue("presets"), listOf("preset"), out) { _ -> "a preset is never added within a major" } }
         b["datasets"]?.let {
@@ -212,11 +236,12 @@ object RuleGrowability {
             val after = order.drop(index + 1).filter { it in baseRules && baseRules.getValue(it)["class"] == row["class"] }
             if (after.isNotEmpty()) out += "new rule $name: placed before ${after.first()} of its class ${row["class"]}; append it after the last ${row["class"]} rule"
         }
-        val kept = order.filter { it in baseRules }
+        val kept = order.filter { it in baseRules }.distinct()   // a duplicated row is reported once, above
         val was = b.rows.map { it.getValue("rule") }.filter { it in headRules }
         if (kept != was) {
-            val moved = kept.zip(was).first { (k, w) -> k != w }
-            out += "the rules were reordered: ${moved.first} now stands where ${moved.second} stood; existing rules keep their order (the precedence): restore $was"
+            val moved = kept.zip(was).firstOrNull { (k, w) -> k != w }
+            val where = moved?.let { (k, w) -> "$k now stands where $w stood; " }.orEmpty()
+            out += "the rules were reordered: ${where}existing rules keep their order (the precedence): restore $was"
         }
     }
 
@@ -226,7 +251,7 @@ object RuleGrowability {
         }
         // The 0.4 → 1.0 transition (§8, §11): M2's evidence rules may ship REJECT in both presets.
         val m2 =
-            name in M2_TRANSITION && row["class"] == "EVIDENCE" && majorOf(currentMinor) == 0 && minorNumber(currentMinor) >= 4 &&
+            name in M2_TRANSITION && row["class"] == "EVIDENCE" && major(currentMinor) == 0 && (minorNumber(currentMinor) ?: 0) >= 4 &&
                 PRESETS.all { row[it] == "REJECT" }
         for (preset in PRESETS) {
             if (row[preset] != "ALLOW" && !m2) out += "new rule $name: $preset is ${row[preset]}; a new rule ships ALLOW in every preset for one minor: set it to ALLOW"

@@ -111,6 +111,18 @@ class RootPlugin : Plugin<Project> {
             this.baseRef.set(baseRef)
             required.set(explicitBase.isPresent)
             projectVersion.set(providers.gradleProperty("revokt.version").orElse("0.1.0-SNAPSHOT"))
+            baseVersion.set(
+                baseRef.flatMap { ref ->
+                    val show =
+                        providers.exec {
+                            commandLine("git", "show", "$ref:gradle.properties")
+                            isIgnoreExitValue = true
+                        }
+                    show.result.zip(show.standardOutput.asText) { r, text ->
+                        text.takeIf { r.exitValue == 0 }?.lines()?.firstOrNull { it.startsWith("revokt.version=") }?.substringAfter("=")?.trim()
+                    }
+                },
+            )
             baseCommitExists.set(
                 baseRef.flatMap { ref ->
                     providers.exec {

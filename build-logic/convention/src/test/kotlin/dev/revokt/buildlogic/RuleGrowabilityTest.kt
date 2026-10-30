@@ -78,9 +78,30 @@ class RuleGrowabilityTest {
     }
 
     @Test
-    fun `nothing is frozen across a major`() {
+    fun `the contract starts afresh at a new major, judged by the base's version, and holds through the major`() {
         val removed = committed.lines().filterNot { it.startsWith("STALE\t") }.joinToString("\n")
-        assertEquals(emptyList(), problems(removed, minor = "1.0"))
+        val bump = RuleGrowability.decide(committed, removed, "1.0", "abc123", required = true, baseCommitExists = true, baseMinor = "0.9")
+        assertTrue(bump is RuleGrowability.Outcome.Pass && "afresh" in bump.note!!)
+        // Later in 1.x, with a 1.x base, the same removal fails, though every rule was introduced in 0.1.
+        val later = RuleGrowability.decide(committed, removed, "1.3", "abc123", required = true, baseCommitExists = true, baseMinor = "1.2")
+        assertTrue(later is RuleGrowability.Outcome.Fail && "rule STALE was removed" in later.message)
+        // A base from before revokt.version lived in gradle.properties is compared.
+        val unknown = RuleGrowability.decide(committed, removed, "1.0", "abc123", required = true, baseCommitExists = true, baseMinor = null)
+        assertTrue(unknown is RuleGrowability.Outcome.Fail)
+    }
+
+    @Test
+    fun `a duplicated rule row is reported once, and never thrown`() {
+        val last = committed.lines().first { it.startsWith("UNSIGNED_DATA\t") }
+        assertOne(problems(committed.replace(last, "$last\n$last")), "[rules] has the row UNSIGNED_DATA more than once")
+        val stale = committed.lines().first { it.startsWith("STALE\t") }
+        assertOne(problems(committed.replace(stale, "$stale\n$stale")), "[rules] has the row STALE more than once")
+    }
+
+    @Test
+    fun `values that are not minors are reported, not thrown`() {
+        assertOne(problems(withRule(committed, "STALE", "introducedIn" to "x")), "rule STALE: introducedIn 'x' is not a minor")
+        assertOne(problems(committed, minor = "main.0"), "the current minor 'main.0' is not major.minor")
     }
 
     @Test
@@ -155,8 +176,10 @@ class RuleGrowabilityTest {
     @Test
     fun `a renamed or added column is rejected before anything else, naming the columns`() {
         assertOne(problems(committed.replace("\tbasicReason\t", "\treason\t")), "[rules] columns changed", "added [reason]", "removed [basicReason]")
-        val added = committed.replace("signedSourceFailingAfterMillis\n", "signedSourceFailingAfterMillis\textra\n")
-        assertTrue(problems(added).any { "[presets] columns changed" in it || "cells" in it })
+        val added =
+            committed.replace("signedSourceFailingAfterMillis\n", "signedSourceFailingAfterMillis\textra\n")
+                .replace(Regex("(?m)^((?:DEFAULT|STRICT)\tCRLITE\t86400000\t86400000\t86400000)$"), "$1\tx")
+        assertOne(problems(added), "[presets] columns changed", "added [extra]")
     }
 
     @Test
