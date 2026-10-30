@@ -18,6 +18,32 @@ public final class dev/revokt/Dataset : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/Dataset;
 }
 
+public final class dev/revokt/FilterFormat : java/lang/Enum {
+	public static final field V3 Ldev/revokt/FilterFormat;
+	public static final field V4 Ldev/revokt/FilterFormat;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/FilterFormat;
+	public static fun values ()[Ldev/revokt/FilterFormat;
+}
+
+public final class dev/revokt/GenerationFiles {
+	public final fun bytes (Ljava/lang/String;)[B
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDataset ()Ldev/revokt/Dataset;
+	public final fun getFormat ()Ldev/revokt/FilterFormat;
+	public final fun getGenerationId ()Ljava/lang/String;
+	public final fun getNames ()Ljava/util/Set;
+	public final fun getSourceTimestampMillis ()J
+	public final fun getTrustClass ()Ldev/revokt/TrustClass;
+	public fun hashCode ()I
+	public final fun sha256 (Ljava/lang/String;)[B
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/JvmGenerationFiles {
+	public static final field INSTANCE Ldev/revokt/JvmGenerationFiles;
+}
+
 public final class dev/revokt/KeyabilityClause : java/lang/Enum {
 	public static final field EXTENSION Ldev/revokt/KeyabilityClause;
 	public static final field HEADER Ldev/revokt/KeyabilityClause;
