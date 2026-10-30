@@ -52,8 +52,9 @@ tasks.withType<Test>().configureEach {
     jvmArgumentProviders.add(ClubcardCorpus(rootProject.file("corpus/clubcard")))
     corpus?.let {
         jvmArgumentProviders.add(CorpusDir(it, fileTree(it) { exclude(".git", ".git/**") }))
-        // About 63 000 more inputs (x509-limbo, the issuer corpus, the CT seed), their 3a/3b goldens held in memory.
-        maxHeapSize = "6g"
+        // About 178 000 more inputs (x509-limbo, the issuer corpus, the CT seed of revokt-corpus v5), their goldens
+        // held in memory: about 6.7 GB live at the peak, measured locally on JDK 21.
+        maxHeapSize = "8g"
     }
 }
 

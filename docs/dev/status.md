@@ -72,16 +72,16 @@ a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `Candidat
 
 ## D8 gap over the CT seed corpus (spec §9.2)
 
-Unexpired as of 2026-10-25T23:56:38Z (the ct-logs snapshot).
+Unexpired leaves of index issuers as of 2026-10-29T14:02:24Z (the crt.sh top-up's start).
 
-| JDK | unexpired leaves accepted | in the D1 domain | gap | rate | by clause |
+| JDK | unexpired leaves of index issuers accepted | in the D1 domain | gap | rate | by clause |
 |---|---|---|---|---|---|
-| 17 | 91345 | 91345 | 6 | 6.57e-05 | {EXTENSION=2, TIME=4} |
-| 21 | 91345 | 91345 | 6 | 6.57e-05 | {EXTENSION=2, TIME=4} |
-| 25 | 91345 | 91345 | 6 | 6.57e-05 | {EXTENSION=2, TIME=4} |
-| 27 | 91345 | 91345 | 6 | 6.57e-05 | {EXTENSION=2, TIME=4} |
+| 17 | 117603 | 117603 | 0 | 0.00e+00 | {} |
+| 21 | 117603 | 117603 | 0 | 0.00e+00 | {} |
+| 25 | 117603 | 117603 | 0 | 0.00e+00 | {} |
+| 27 | 117603 | 117603 | 0 | 0.00e+00 | {} |
 
-The re-decision threshold is 10^-4 of the unexpired leaves (spec §9.2 D8 gap).
+The re-decision threshold is 10^-4 of the unexpired leaves of index issuers (spec §9.2 D8 gap, revision 45).
 
 ## Totals
 

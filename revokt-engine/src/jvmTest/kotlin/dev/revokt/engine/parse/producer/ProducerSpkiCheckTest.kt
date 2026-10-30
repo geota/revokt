@@ -3,13 +3,10 @@
 
 package dev.revokt.engine.parse.producer
 
-import dev.revokt.clubcard.RevoktInternalApi
-import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.DerNode
 import okio.ByteString.Companion.toByteString
-import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -23,15 +20,7 @@ import kotlin.test.assertTrue
 class ProducerSpkiCheckTest {
     private val issuers = ExternalCorpus.issuer.inputs
 
-    /** Every key of each index of the fixture generation (§6.2, §6.3), read with the clubcard port. */
-    @OptIn(RevoktInternalApi::class)
-    private val indexKeys: Set<String> by lazy {
-        val root = File(checkNotNull(System.getProperty("revokt.clubcardCorpus")) { "revokt.clubcardCorpus not set" })
-        listOf("compat-full/20261017-1-compat.filter", "compat-delta/20261021-1-compat.filter.delta")
-            .flatMap { ClubcardFilters.decode(File(root, it).readBytes()).index.keys }
-            .map { it.hex() }
-            .toSet()
-    }
+    private val indexKeys get() = FixtureIndex.keys
 
     /** Oracle 4's `ct`-path SPKI hash of [input], or null for another path or a rejection. */
     private fun producerKey(input: ProducerCorpus.Input): String? {
