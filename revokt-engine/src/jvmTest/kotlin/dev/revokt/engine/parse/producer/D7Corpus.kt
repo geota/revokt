@@ -18,9 +18,10 @@ import dev.revokt.engine.parse.TestDer.tlvWithLength
 
 /**
  * The D7 leniency corpus of spec §9.2: each case the spec names, the replay inputs that carry it, and revokt's required
- * outcome where the spec states one (the SCT-list outcomes, the envelope re-encodings, the trailing-element rule and
- * the D8-gap examples); for every other case the corpus record is the record. Inputs the replay already holds for
- * another reason are named; the rest are built here as `d7/<name>`. Every case's inputs get a `D7_LENIENCY` record.
+ * outcome where the spec states one, which is normative (revision 46: the SCT-list outcomes, the envelope re-encodings,
+ * the STRUCTURE cases, the trailing-element rule and the D8-gap examples); for every other case the corpus record is
+ * the record. Inputs the replay already holds for another reason are named; the rest are built here as `d7/<name>`.
+ * Every case's inputs get a `D7_LENIENCY` record.
  */
 internal object D7Corpus {
     /** revokt's required outcome: `Parsed` with [scts] SCTs and [keyable], or a [reason]; null fields are not asserted. */
@@ -44,9 +45,10 @@ internal object D7Corpus {
     }
 
     /**
-     * One D7 case. [firefox] marks an SCT case where Firefox's decoder fails the whole list while revokt extracts pairs
-     * (§9.2 D3: version ≠ 0, trailing bytes in the OCTET STRING, an item length error), hand-recorded as a
-     * `FIREFOX_SCT_STRICT` divergence.
+     * One D7 case. [firefox] marks an SCT case where Firefox fails the whole list, or rejects the certificate, while
+     * revokt extracts pairs (§9.2 D3: version ≠ 0, trailing bytes in the OCTET STRING, an item length error; a
+     * non-minimal length on the inner OCTET STRING, bytes after it, or a second SCT extension, on which mozilla::pkix
+     * rejects the certificate, revision 46), hand-recorded as a `FIREFOX_SCT_STRICT` divergence.
      */
     class Case(
         val text: String,
@@ -262,9 +264,11 @@ internal object D7Corpus {
             Case("an empty subject", listOf("d7/empty-subject", "d7/empty-subject-san")),
             Case("duplicate extension OIDs", listOf("d7/duplicate-ski", "d3/sct-two-extensions")),
             Case(
-                "two SCT extensions, an empty list first and a covered SCT second: the union is queried",
+                "two SCT extensions, an empty list first and a covered SCT second: the union is queried; Firefox " +
+                    "rejects the certificate",
                 listOf("d3/sct-two-extensions"),
                 Required.parsed(scts = 1),
+                firefox = true,
             ),
             Case("an unknown critical extension", listOf("boundary/critical-ff")),
             Case(
@@ -286,9 +290,10 @@ internal object D7Corpus {
             Case(
                 "a non-minimal length on the SCT extension's inner OCTET STRING (81 nn with nn < 0x80, 84 00 00 " +
                     "00 nn): Parsed, the list's SCTs extracted, producerKeyable unaffected (the SCT extension is " +
-                    "opaque, K1)",
+                    "opaque, K1); Firefox rejects the certificate",
                 listOf("d3/sct-inner-81", "d7/sct-inner-84"),
                 Required.parsed(scts = 1, keyable = true),
+                firefox = true,
             ),
             Case(
                 "an inner length 0x80 or 0xFF: the list fails",
@@ -388,8 +393,8 @@ internal object D7Corpus {
                 Required.parsed(keyable = false),
             ),
             Case(
-                "a constructed [1] then [3] carrying a non-minimal length: Parsed and outside the profile (K2), " +
-                    "a D8-gap entry because ct-go never visits [3] there and keys it",
+                "a constructed [1] then [3] carrying a non-minimal length: Parsed and outside the profile (K1, and " +
+                    "K2), a D8-gap entry because ct-go never visits [3] there and keys it",
                 listOf("d7/uid-a1-then-ext3-long"),
                 Required.parsed(keyable = false),
             ),
@@ -460,7 +465,7 @@ internal object D7Corpus {
             Case(
                 "a CA-signed TBS whose extensions are followed by a trailing element with a multi-octet tag (9f " +
                     "01 02 05 00), with a definite and with an indefinite TBS header: Parsed, outside the profile " +
-                    "under K2, the same outcome for both",
+                    "(K1, and K2 for the ignored element), the same outcome for both",
                 listOf("d7/trailing-9f01-definite", "d7/trailing-9f01-indefinite"),
                 Required.parsed(keyable = false),
             ),

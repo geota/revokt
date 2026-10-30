@@ -341,7 +341,7 @@ class RecordsTest {
         for ((name, cases) in D7Corpus.byInput) {
             out += Classed(inputs.getValue(name), RecordClass.D7_LENIENCY, null, d7Justification(cases), false)
         }
-        // Firefox's decoder is not an oracle (§9.2 D3): its divergences are hand-recorded on the D7 cases that mark them.
+        // Firefox is not an oracle (§9.2 D3): its divergences are hand-recorded on the D7 cases that mark them.
         for (name in D7Corpus.firefoxInputs) {
             out +=
                 Classed(
@@ -769,7 +769,7 @@ class RecordsTest {
             mapOf(
                 "3A_HEADER_LAX" to
                     "x509-parser yields pairs under an inner identifier other than 0x04 (tag number 4 in another " +
-                    "class or form); §9.2 fails the list, as Firefox and webpki do (3A_HEADER_LAX).",
+                    "class or form); §9.2 fails the list, as webpki does, and Firefox rejects the certificate (3A_HEADER_LAX).",
                 "3A_TBS_LAX" to
                     "x509-parser takes an element with tag number 3 that is not a constructed context-specific [3] " +
                     "as extensions; the JDK and revokt ignore it (3A_TBS_LAX).",
@@ -784,8 +784,9 @@ class RecordsTest {
                     "TBS TLV, so it cannot verify this input (§9.2 D2, CONSCRYPT_TBS).",
                 D7Corpus.FIREFOX to
                     "Firefox's SCT decoder fails the whole list here (a version other than 0, trailing bytes in the " +
-                    "OCTET STRING, or an item length error), where revokt extracts the pairs: the more-checking " +
-                    "direction (§9.2 D3, hand-recorded).",
+                    "OCTET STRING, or an item length error), or mozilla::pkix rejects the certificate (a non-minimal " +
+                    "length on the inner OCTET STRING, bytes after it, or a second SCT extension), where revokt " +
+                    "extracts the pairs: the more-checking direction (§9.2 D3, hand-recorded).",
                 "DUPLICATE_EXTENSION" to
                     "x509-parser reports a duplicate SCT-list extension as an error; revokt takes the union of the " +
                     "extensions' pairs (§9.2 D3).",
