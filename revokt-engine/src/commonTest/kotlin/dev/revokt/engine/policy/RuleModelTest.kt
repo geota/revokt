@@ -5,6 +5,7 @@ package dev.revokt.engine.policy
 
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
+import dev.revokt.Layer
 import dev.revokt.Outcome
 import dev.revokt.ParseReason
 import dev.revokt.PathStatus
@@ -17,7 +18,7 @@ import kotlin.test.assertTrue
 
 /**
  * The [0.1] items of spec §9 "`Rule` model tests", except two held elsewhere: the `BasicReason` map and the model's
- * equality with the golden fixture are jvmTest's ([RuleGoldenTest]), and "the golden growability fixture diff is
+ * equality with the golden fixture are jvmTest's (`RuleGoldenTest`), and "the golden growability fixture diff is
  * additive" is the build's `verifyRuleGrowability` check (#73).
  */
 class RuleModelTest {
@@ -70,9 +71,9 @@ class RuleModelTest {
     }
 
     @Test
-    fun `the empty-path rules are the exemptable path rules that fire on an empty path`() {
+    fun `the empty-path rules are exemptable path rules`() {
         assertEquals(setOf(Rule.ISSUER_UNVERIFIED, Rule.NO_ISSUER), PolicyTable.EMPTY_PATH)
-        assertTrue(PolicyTable.EMPTY_PATH.all { it.exemptable })
+        assertTrue(PolicyTable.EMPTY_PATH.all { it.exemptable && it.layer == Layer.PATH })
     }
 
     @Test

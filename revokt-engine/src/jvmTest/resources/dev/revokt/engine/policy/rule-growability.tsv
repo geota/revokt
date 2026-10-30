@@ -4,9 +4,11 @@
 # The Rule growability golden fixture (spec §4 "Growability contract"; §8 for the presets), edited by hand under
 # the contract. Its diff may only: add a rule with ALLOW in both presets when introducedIn is the current minor;
 # flip a preset's ALLOW to REJECT when introducedIn is the previous minor and that preset's flippedIn is -, setting
-# it; change exemptable from false to true; add a dataset's rows. Existing rules stay a subsequence of the rows'
-# order, which is the precedence. RuleGoldenTest asserts the model equals it, and verifyRuleGrowability (#73)
-# checks the diff. - is null.
+# it; change exemptable from false to true; add a dataset's rows, outside requiredDatasets and the staleness map
+# (both staleness columns -). Existing rules stay a subsequence of the rows' order, which is the precedence. M2's
+# DENYLIST, ONECRL and CRLSET rows are the one exception to the ALLOW rule (the 0.4 -> 1.0 transition).
+# RuleGoldenTest asserts the model equals it, and verifyRuleGrowability (#73) checks the diff. - is null; in
+# staleAfterMillis it means the dataset has no staleness entry.
 
 [rules]
 rule	class	layer	exemptable	emptyPath	basicReason	introducedIn	flippedIn.DEFAULT	flippedIn.STRICT	DEFAULT	STRICT
