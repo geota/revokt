@@ -135,7 +135,13 @@ internal class PlatformReplay(
         x509: X509Certificate,
     ): Accepted {
         val name = input.name
-        val read = oracle.read(name, x509)
+        // A read of the bytes presented is the input itself, so that its canon and parts are held once, not once per
+        // platform (#15: the v5 corpus did not fit the test heap otherwise). Its goldens are keyed by SHA-256, so only
+        // the read's name, which failure messages show, changes.
+        val read =
+            oracle.read(name, x509)?.let {
+                if (!it.name.endsWith(Oracle1.PLATFORM_CANON) && it.der.contentEquals(input.der)) input else it
+            }
         // A missing golden fails here, at acceptance, with its fix; the view itself is rebuilt on access.
         try {
             read?.let { ReferenceView.of(sha(it.der)) }

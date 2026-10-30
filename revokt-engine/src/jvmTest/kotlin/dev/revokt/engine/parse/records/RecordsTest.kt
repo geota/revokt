@@ -16,6 +16,7 @@ import dev.revokt.engine.parse.oracle.PlatformReplay
 import dev.revokt.engine.parse.oracle.ReferenceView
 import dev.revokt.engine.parse.producer.D7Corpus
 import dev.revokt.engine.parse.producer.ExternalCorpus
+import dev.revokt.engine.parse.producer.IndexIssuers
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import dev.revokt.engine.parse.records.CorpusRecord.RecordClass
 import okio.ByteString.Companion.toByteString
@@ -580,13 +581,15 @@ class RecordsTest {
     }
 
     /**
-     * The D8 gap over the CT seed corpus's unexpired leaves (spec §9.2: reported per release; above 10^-4 of them, exact
-     * keyability is reconsidered before 0.1), by clause, on the test JDK. Unexpired as of the collection (the ct-logs
-     * snapshot's retrieval, `ct-seed/PROVENANCE`). The denominator is the unexpired entries the test JDK accepts; one it
-     * rejects has no read, so it can be neither a gap entry nor D1-dom, and counting it would only lower the rate. A CA
-     * certificate logged in CT is in the denominator and never the numerator (the gap counts end entities). Recorded per
-     * matrix JDK in [CT_SEED_GAP], which docs/dev/status.md shows; a stale line fails, the threshold itself never does:
-     * the re-decision is the spec's (spec §9.2, revision 43).
+     * The D8 gap over the CT seed corpus's unexpired leaves of index issuers (spec §9.2: reported per release; above
+     * 10^-4 of them, exact keyability is reconsidered before 0.1), by clause, on the test JDK. Unexpired as of
+     * [CT_SEED_AS_OF], the crt.sh top-up's start; of an index issuer when the test JDK verifies it under a key of the
+     * fixture generation's indexes ([IndexIssuers], revision 45), since the filters hold no revocation of any other
+     * issuer's leaf (`NOT_ENROLLED`, §6.2). The denominator is those entries the test JDK accepts; one it rejects has no
+     * read, so it can be neither a gap entry nor D1-dom, and counting it would only lower the rate. A CA certificate
+     * logged in CT is in the denominator and never the numerator (the gap counts end entities). Recorded per matrix JDK
+     * in [CT_SEED_GAP], which docs/dev/status.md shows; a stale line fails, the threshold itself never does: the
+     * re-decision is the spec's (spec §9.2, revisions 43 and 45).
      */
     @Test
     fun `the D8 gap over the CT seed corpus's unexpired leaves is recorded`() {
@@ -602,22 +605,23 @@ class RecordsTest {
     }
 
     /**
-     * This run's line of [CT_SEED_GAP]: the test JDK's feature release, the unexpired CT seed leaves it accepts, those in
-     * the D1 domain, the gap entries and their clauses; null without a CT seed corpus.
+     * This run's line of [CT_SEED_GAP]: the test JDK's feature release, the unexpired CT seed leaves of index issuers it
+     * accepts, those in the D1 domain, the gap entries and their clauses; null without a CT seed corpus.
      */
     private fun ctSeedGapLine(): String? {
         val p = PlatformReplay.jdk
         val seed = p.accepted.filter { it.name.startsWith(ExternalCorpus.CT_SEED) }
         if (seed.isEmpty()) return null
         val unexpired =
-            seed.filter { a ->
-                (
-                    a.certificate
-                        ?.tbs
-                        ?.validity
-                        ?.notAfterMillis ?: Long.MAX_VALUE
-                ) > CT_SEED_AS_OF
-            }
+            seed
+                .filter { a ->
+                    (
+                        a.certificate
+                            ?.tbs
+                            ?.validity
+                            ?.notAfterMillis ?: Long.MAX_VALUE
+                    ) > CT_SEED_AS_OF
+                }.filter { a -> IndexIssuers.jdk(a.presented)?.let(IndexIssuers::keyOf) != null }
         val inDomain = unexpired.filter { p.outsideDomain(it) == null }
         val gap = inDomain.mapNotNull { gap(p, it) }
         val clauses =
@@ -641,7 +645,9 @@ class RecordsTest {
                 .filter { it.isNotBlank() && !it.startsWith("#") && it.substringBefore('\t') != jdk }
         val header =
             listOf(
-                "# Unexpired as of ${java.time.Instant.ofEpochMilli(CT_SEED_AS_OF)} (the ct-logs snapshot).",
+                "# Unexpired leaves of index issuers as of ${java.time.Instant.ofEpochMilli(
+                    CT_SEED_AS_OF,
+                )} (the crt.sh top-up's start).",
                 "## Written by RecordsTest's records writer; never edit.",
             )
         file.writeText(
@@ -726,8 +732,11 @@ class RecordsTest {
 
         const val D7_RULE = "A §9.2 D7 leniency case:"
 
-        /** The CT seed corpus's collection time (`ct-seed/PROVENANCE`, the ct-logs snapshot): 2026-10-25T23:56:38Z. */
-        const val CT_SEED_AS_OF = 1_792_972_598_000L
+        /**
+         * The CT seed corpus's as-of time, its later collection's start (`ct-seed/crtsh.json`'s `started`, the crt.sh
+         * top-up): 2026-10-29T14:02:24Z. The log sample was read earlier, so its leaves expired in between are left out.
+         */
+        const val CT_SEED_AS_OF = 1_793_282_544_000L
 
         /** The recorded D8 gap over the CT seed corpus, beside records.jsonl. */
         const val CT_SEED_GAP = "ct-seed-gap.tsv"

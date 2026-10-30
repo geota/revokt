@@ -18,12 +18,12 @@ Two kinds (CONTRIBUTING §3):
 
 | Pin | Value |
 |---|---|
-| `revokt-corpus` tag | `v4` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`; `issuer/`, the issuer corpus's snapshots of 2026-10-25; `ct-seed/`, the CT seed corpus (110 043 leaves); and `replay/` (their goldens and records) |
+| `revokt-corpus` tag | `v5` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`; `issuer/`, the issuer corpus's snapshots of 2026-10-25; `ct-seed/`, the CT seed corpus (65 589 log-sample leaves and 71 614 crt.sh leaves, 132 041 of index issuers); and `replay/` (their goldens and records) |
 
 ### The large corpus in the replay
 
 With `-Prevokt.corpus=<checkout>` the build passes the checkout to the tests (`ExternalCorpus` in `revokt-engine`'s
-jvmTest; the tree but its `.git` is a test input, and the test heap is 6 GB). The replay then covers its inputs too:
+jvmTest; the tree but its `.git` is a test input, and the test heap is 8 GB). The replay then covers its inputs too:
 
 - **Inputs**: each distinct certificate of `x509-limbo/limbo.json`'s testcases (trusted, intermediates and peer), named
   `x509-limbo/<sha256>`; one the committed corpus already holds keeps its committed name and goldens.
@@ -36,12 +36,21 @@ jvmTest; the tree but its `.git` is a test input, and the test heap is 6 GB). Th
   (a v1 root has no basicConstraints). `ProducerSpkiCheckTest` is the producer SPKI check: SPKI agreement with oracle
   4's `ct` path over the issuer corpus, and coverage of each index of the fixture generation (`corpus/clubcard`). An
   index key no snapshot covers needs its certificates fetched from CT by SPKI hash and admitted (none so far).
-- **CT seed** (`ct-seed/`): the seed corpus's CT leaves (at least 100 000), from `tools/ct-seed/collect.py` (its
-  `PROVENANCE` and `sample.json` record each log's checkpoint or signed tree head and the tiles and index ranges read),
-  in 16 shards `ct-seed/leaves/<0-f>.tsv.gz` (a tag before `v4` has one `leaves.tsv.gz`), named `ct-seed/<sha256>`. RecordsTest records the
-  D8 gap over its unexpired leaves by clause per matrix JDK in `revokt-engine/.../parse/ct-seed-gap.tsv` (the records
-  writer writes it; a stale line fails), which `specStatus` shows in `docs/dev/status.md`; the 10^-4 re-decision is
-  the spec's.
+- **CT seed** (`ct-seed/`, spec §9.2 revision 45): the seed corpus's CT leaves, named `ct-seed/<sha256>`, in two sets of
+  16 shards `<0-f>.tsv.gz`. `ct-seed/logs/` is the random log sample of `tools/ct-seed/collect.py` (`sample.json` records
+  each log's checkpoint or signed tree head and the tiles and index ranges read) without the CT test traffic that
+  `tools/ct-seed/drop-test-issuers.py` drops. `ct-seed/crtsh/` is the top-up of `tools/ct-seed/topup.py`: for each key
+  of `ct-seed/index-keys.txt` (the fixture generation's index keys), crt.sh's most recently issued unexpired
+  certificates of that issuer that cannot issue certificates, each kept only when its signature verifies under the
+  key, with `crtsh.json` recording every key's crt.sh CAs, counts and the ids kept. A leaf is of an index issuer when
+  the test JDK verifies it under an index key (`IndexIssuers`). `CtSeedTest` checks the key list against
+  `corpus/clubcard`, the top-up against `crtsh.json`, each top-up leaf against §9.2's definition (its kept key by
+  issuer name and signature, valid at the start, issued in the 400 days before it, not a CA, v3, at most 120 per key,
+  no TBSCertificate twice in the seed) on the test JDK, and that the seed holds at least 100 000 leaves of index
+  issuers. A tag before `v5` has one `ct-seed/leaves/` (before `v4`, one
+  `leaves.tsv.gz`), which the replay rejects. RecordsTest records the D8 gap over the unexpired leaves of index issuers
+  by clause per matrix JDK in `revokt-engine/.../parse/ct-seed-gap.tsv` (the records writer writes it; a stale line
+  fails), which `specStatus` shows in `docs/dev/status.md`; the 10^-4 re-decision is the spec's.
 - **Goldens and records** for those inputs, and for the bytes an oracle reads for them, are in `replay/` of the corpus:
   `3a/`, `3b/`, `producer/`, `zlint/` (the committed files' formats, gzipped, in 16 shards `<0-f>.tsv.gz` by the
   key's first hex digit so that no file nears GitHub's 50 MB; a tag before `v4` has one `<name>.tsv.gz`) and

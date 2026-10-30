@@ -1,10 +1,46 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 44** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-29
+Status: **draft spec / project proposal, revision 45** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-29
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 45 (the seed corpus's leaves of every index issuer, 2026-10-29)
+- **Corrected** (#15): revision 44 took the `v4` pin for the 100 000 leaves the D8 re-decision needs. 44 454 of its
+  110 043 leaves are CT test traffic, certificates that log operators and monitors issue to test logs, under four
+  issuer names no root program trusts: Google's "Merge Delay Intermediate 1" (35 447), Geomys's "CT Uptime Test Root"
+  (7 407), "DigiCert CT Monitor" (1 598) and TrustAsia's "TrustAsia DV TLS ECC Test CA G4" (2). Only 60 427 of its
+  leaves verify under the key of an index issuer, those of 201 of the 1 035 index keys, so the re-decision was
+  evaluated on fewer leaves than §9.2 requires, and the seed did not reach most enrolled CAs.
+- **Changed** (#15): the seed corpus's CT leaves are two sets, pinned at revokt-corpus `v5` (§9.2, Appendix A): the log
+  sample of revision 44 without its CT test traffic (65 589 leaves), and a top-up from crt.sh of each index key's most
+  recently issued certificates valid at the top-up's start that cannot issue certificates, at most 120 per key (71 614
+  leaves of 927 keys). 132 041 leaves verify on the test JDK under an index key, of 975 of the 1 035 keys (118 159
+  distinct index keys and serials, since a precertificate and its final certificate count as two; 104 033 among the
+  117 603 unexpired leaves the D8 gap counts). Of the other 60, crt.sh holds no such certificate issued in the last 400
+  days for 54, its query timed out for 5 (the queries of 49 CAs timed out on every try; the log sample covers 44 of
+  their keys), and one key, of Telia's "Telia CA EC QWAC R1", has no crt.sh CA.
+- **Stated**: the top-up trusts nothing crt.sh sends (§9.2). crt.sh's database serves TLS under a certificate that
+  expired on 2026-06-21, so the connection is encrypted but not authenticated; a certificate is kept only when it is one
+  DER Certificate with nothing after it, minimal lengths in the headers checked and a v3 TBSCertificate, whose signature
+  verifies under the key that hashes to the index key, and a TBSCertificate is kept once. An attacker on the path can
+  withhold certificates, which the recorded counts show, but cannot add one its issuer did not sign.
+- **Changed** (§9.2 D8 gap): the gap and its 10^-4 re-decision count only the seed's leaves of index issuers, as the
+  100 000 do: those the test JDK verifies under the key of an issuer-corpus certificate whose SPKI hashes to an index
+  key and whose subject is the leaf's issuer. The filters hold no revocation of any other issuer's leaf, so a gap entry
+  there leaves no revocation unchecked; such leaves stay in the corpus for D1–D3. A gap leaf is
+  `PARSE_FAILED(PRODUCER_UNKEYABLE)` whatever its issuer, since keyability is decided at parse (revision 34); a keyable
+  leaf of such an issuer would be `NOT_ENROLLED`, which `STRICT` also rejects. The two differ only where `NOT_ENROLLED`
+  is exempted, as under `anchorIn` for a private anchor, since `PARSE_FAILED` is not exemptable: revision 34's
+  private-anchor caveat (§10 item 8). Revision 44's 6 gap entries are all of one such issuer: both CCADB records of
+  eMudhra's "EM DV TLS CA - G3B" are revoked and trusted by no root program, and its key is in neither fixture index.
+  Its 4 at TIME are the only K6 entries among the CT leaves, so no CT leaf of an index issuer argues for widening K6
+  (#57).
+- **Recorded**: the D8 gap over the `v5` pin's unexpired leaves of index issuers the matrix JDKs accept (as of the
+  top-up's start) is 0 of 117 603, the same on JDK 17, 21, 25 and 27, all in the D1 domain. With at least 100 000
+  leaves pinned and the gap below 10^-4, exact keyability is not reconsidered (§9.2 D8). The count by clause is
+  recorded per matrix JDK and shown in `docs/dev/status.md`.
 
 ### Changes in revision 44 (the seed corpus's CT leaves pinned, 2026-10-29)
 - **Recorded** (#64, toward #15's seed corpus): the CT seed corpus is pinned at revokt-corpus `v4`, 110 043 distinct
@@ -3098,11 +3134,17 @@ the certificate carries (revision 44). Raw-byte equality is asserted against 3a,
     carries a written justification.
   - A gap entry with no zlint error is a profile defect. It blocks the release until the profile is widened under D8
     or the entry is justified.
-  - The count by clause over the seed corpus's CT leaves is reported in each release's notes and in
-    `docs/dev/status.md`.
-  - **Re-decision**: if gap entries among the seed corpus's unexpired CT leaves exceed 10^-4 of them once at least
-    100 000 leaves are pinned (re-evaluated whenever a later pin changes them), exact keyability is reconsidered in a
-    spec revision before 0.1 ships.
+  - The count by clause over the seed corpus's CT leaves of index issuers is reported in each release's notes and in
+    `docs/dev/status.md`. A leaf is of an index issuer when the test JDK verifies its signature under the key of an
+    issuer-corpus certificate whose SPKI hashes to a key of the fixture generation's indexes and whose subject is the
+    leaf's issuer. The filters hold no revocation of any other issuer's leaf, so a gap entry there leaves no revocation
+    unchecked (revision 45). A gap leaf is `PARSE_FAILED(PRODUCER_UNKEYABLE)` whatever its issuer; a keyable leaf of
+    another issuer would be `NOT_ENROLLED`, which `STRICT` also rejects. The two differ only where `NOT_ENROLLED` is
+    exempted, as under `anchorIn` for a private anchor, since `PARSE_FAILED` is not exemptable; revision 34's caveat for
+    a gap entry under a private anchor (§10 item 8) covers that case.
+  - **Re-decision**: if gap entries among the seed corpus's unexpired CT leaves of index issuers exceed 10^-4 of them
+    once at least 100 000 leaves are pinned (re-evaluated whenever a later pin changes them), exact keyability is
+    reconsidered in a spec revision before 0.1 ships.
 - **D1-raw (informational)**: inputs where `encoded ≠ b`, or `parse(b)` fails while
   `parse(encoded)` succeeds. This is the `EvaluationRequest.presented` raw-DER surface (§4), documented,
   not gated.
@@ -3230,9 +3272,27 @@ revision, with the Conscrypt APEX version recorded beside it; a JDK patch or an 
 fails the run until the records are regenerated. Oracle 1's `read` is the SHA-256 of the bytes revokt reads
 for that version where they differ from the input (the read fallback), recorded with their goldens; a matrix job that
 meets a read without goldens fails as infrastructure until they are recorded, never as a violation. The release review
-mechanically lists entries whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves across all
-enrolled CAs, the `x509-limbo` vectors, the D7 corpus, the issuer corpus) is pinned by a committed SHA-256 manifest
-and a corpus-repository tag.
+mechanically lists entries whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves of the
+enrolled CAs, below; the `x509-limbo` vectors, the D7 corpus, the issuer corpus) is pinned by a committed SHA-256
+manifest and a corpus-repository tag.
+
+**The seed corpus's CT leaves** (revision 45) are two sets. The **log sample** reads random entries of every
+CRLite-enrolled log and drops CT test traffic: the leaves whose issuer Name is one of the test issuers of Appendix A,
+which log operators and monitors use to test logs and no root program trusts. The **crt.sh top-up** adds, for each key
+of the fixture generation's indexes, at most 120 of the most recently issued certificates (issued in the last 400 days)
+of the crt.sh CAs whose public key hashes to that key that are valid at the top-up's start and cannot issue
+certificates; crt.sh holds a precertificate and its final certificate as two. Nothing crt.sh sends is trusted: a
+certificate is kept only when it is one DER Certificate with nothing after it, minimal lengths in the headers checked
+(the Certificate, the TBSCertificate's header, the AlgorithmIdentifier and its OID, the BIT STRING) and a v3
+TBSCertificate, whose signature verifies under that key, and a TBSCertificate already kept, in either set, is not kept
+again, so an attacker on the path can withhold certificates, which the recorded per-key counts show, but not add one. A
+leaf counts for an index key only when the test JDK verifies its signature under the key of an issuer-corpus certificate
+whose SPKI hashes to that index key and whose subject is the leaf's issuer; at least 100 000 such leaves are pinned, a
+precertificate and its final certificate counting as two. The index keys are those of the fixture generation's indexes,
+a stand-in for the live filters' issuers, and are taken again whenever the fixture generation changes. An index key with
+no such certificate in crt.sh, or whose crt.sh query timed out, has none from the top-up, recorded per key with the
+counts of certificates returned, rejected, filtered, duplicated and kept and any CA's timeout; its leaves in the log
+sample still count.
 
 **Generators.** (1) Mutational, Jazzer byte-level, seeded from the pinned seed corpus. (2)
 Structure-aware: a DER grammar generator for `Certificate` mutating at TLV level (length forms, tag
@@ -3344,7 +3404,7 @@ justified in writing.
      controls. `STRICT` rejects a gap leaf even when it is valid. The gap is measured per release (§9.2 D8 gap). No
      entry of a 200 230-entry CT sample on 2026-10-23 fell outside a strict DER profile, and its 159 270 RFC 6962
      entries showed no K5 type or K8 shape outside the profile (Appendix A); the full K1–K8 gap is first measured on
-     the pinned seed corpus (revision 44: 6 of 91 345 unexpired leaves, Appendix A).
+     the pinned seed corpus's leaves of index issuers (revision 45: 0 of 117 603 unexpired leaves, Appendix A).
 
      The profile reads only the signed content of `tbsCertificate`, and the parser accepts every unsigned header form
      the JDK verifies (§9.2), including the indefinite chain the JDK re-encodes and the cleared signature padding,
@@ -3758,6 +3818,27 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   reading, two days before the proleptic Gregorian -62167219200000 and -62135596800000 that the JDK and revokt give. JDK
   21 reports `id-pkix-ocsp-nocheck` empty on 2 leaves that carry `05 00`, both eMudhra's: a leaf of "EM DV TLS CA -
   G3B" and an OCSP responder certificate of "emSign Root TLS CA - G1".
+- Revision 45, the CT seed corpus at revokt-corpus `v5`. The log sample is revision 44's without the leaves whose issuer
+  Name (as DER, by SHA-256) is a CT test issuer, dropped by `tools/ct-seed/drop-test-issuers.py`: C=GB, ST=London,
+  O=Google UK Ltd., OU=Certificate Transparency, CN=Merge Delay Intermediate 1 (`83dafb70…`, 35 447 leaves); O=Geomys,
+  CN=CT Uptime Test Root (`f4097973…`, 7 407); CN=DigiCert CT Monitor, C=US, ST=UT, L=Lehi City, O=DigiCert, Inc.
+  (`8d070279…`, 1 598); C=CN, O=TrustAsia Technologies, Inc., CN=TrustAsia DV TLS ECC Test CA G4 (`11bcaeb7…`, 2, in no
+  CCADB snapshot). 65 589 leaves remain, 60 427 of which JDK 21 verifies under an index key, of 201 keys. The top-up was
+  read from crt.sh's public database (`certwatch`, as `guest`) by `tools/ct-seed/topup.py` from 2026-10-29T14:02:24Z to
+  2026-10-29T23:06:44Z, the end of the last run that queried it (`crtsh.json`'s `finished` is a later run that only
+  rewrote the outputs from the cache; `crtsh-ca.json` is the cache's map of keys to crt.sh CAs): 1 034 of the 1 035
+  index keys hash the public key of a crt.sh CA (1 036 CAs; "Telia CA EC QWAC R1", valid from 2026, has none), 71 629
+  certificates were returned, 0 rejected (structure or signature), 0 filtered (not valid at the start, or a CA), 15
+  duplicates of a TBSCertificate kept, 0 past the cap, and 71 614 kept, for 927 keys. The queries of 49 CAs reached
+  crt.sh's statement timeout on every try, among them CAs that seem to have stopped issuing (Amazon RSA 2048 M03,
+  Cloudflare TLS Issuing RSA CA 1) and some of the largest (Sectigo Public Server Authentication CA DV E36, Encryption
+  Everywhere DV TLS CA - G2); the log sample covers 44 of their 49 keys. JDK 21 verifies 60 427 log-sample leaves under
+  201 index keys and all 71 614 top-up leaves under 927, 132 041 leaves of 975 keys, 118 159 distinct index keys and
+  serials. 117 603 of them are unexpired at the top-up's start and accepted on each matrix JDK (104 033 distinct index
+  keys and serials), all in the D1 domain, with no D8-gap entry; the 6 gap leaves of revision 44 stay in the log sample,
+  outside the count (their issuer is not an index issuer). crt.sh's server certificate (CN=crt.sh, Sectigo) had expired
+  on 2026-06-21, and its `ca.last_not_after` showed no update after 2026-10-24 (both seen on 2026-10-29), so CAs were
+  selected by key, not by recorded activity.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android toolchain fact, verified 2026-10-24: a library built with Kotlin 2.4 needs AGP 8.5.2 or later
   (developer.android.com, "AGP, D8, and R8 versions required for Kotlin versions"), and D8 from AGP 8.8.1 is tested

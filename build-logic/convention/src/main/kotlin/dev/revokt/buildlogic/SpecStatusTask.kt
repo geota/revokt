@@ -129,7 +129,7 @@ abstract class SpecStatusTask : DefaultTask() {
         }
     }
 
-    /** The D8 gap section: per matrix JDK, the unexpired leaves it accepts, those in the D1 domain, the gap and its clauses. */
+    /** The D8 gap section: per matrix JDK, the unexpired leaves of index issuers it accepts, those in the D1 domain, the gap and its clauses. */
     private fun appendGap(sb: StringBuilder, file: File) {
         val lines = file.readLines()
         sb.appendLine("## D8 gap over the CT seed corpus (spec §9.2)")
@@ -137,7 +137,7 @@ abstract class SpecStatusTask : DefaultTask() {
         // `#` lines describe the record; `##` lines are notes for its maintainers only.
         lines.filter { it.startsWith("#") && !it.startsWith("##") }.forEach { sb.appendLine(it.removePrefix("#").trim()) }
         sb.appendLine()
-        sb.appendLine("| JDK | unexpired leaves accepted | in the D1 domain | gap | rate | by clause |")
+        sb.appendLine("| JDK | unexpired leaves of index issuers accepted | in the D1 domain | gap | rate | by clause |")
         sb.appendLine("|---|---|---|---|---|---|")
         for (line in lines.filter { it.isNotBlank() && !it.startsWith("#") }) {
             val (jdk, unexpired, inDomain, gap, clauses) = line.split('\t')
@@ -145,7 +145,7 @@ abstract class SpecStatusTask : DefaultTask() {
             sb.appendLine("| $jdk | $unexpired | $inDomain | $gap | ${"%.2e".format(Locale.ROOT, rate)} | $clauses |")
         }
         sb.appendLine()
-        sb.appendLine("The re-decision threshold is 10^-4 of the unexpired leaves (spec §9.2 D8 gap).")
+        sb.appendLine("The re-decision threshold is 10^-4 of the unexpired leaves of index issuers (spec §9.2 D8 gap, revision 45).")
         sb.appendLine()
     }
 

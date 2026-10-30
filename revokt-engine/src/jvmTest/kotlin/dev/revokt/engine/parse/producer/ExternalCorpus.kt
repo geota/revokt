@@ -86,17 +86,33 @@ internal object ExternalCorpus {
     }
 
     /**
-     * The CT seed corpus's leaves (sha256, log id, index, entry type, base64 DER), named `ct-seed/<sha256>`: the 16
-     * shards `ct-seed/leaves/<0-f>.tsv.gz` by the sha256's first hex digit (#64), or `ct-seed/leaves.tsv.gz` of an older
-     * tag. Each line's sha256 must be its DER's, a shard holds only its digit's leaves, and a leaf appears once.
+     * The CT seed corpus's leaves (sha256, source, index, entry type, base64 DER), named `ct-seed/<sha256>` (spec §9.2,
+     * revision 45): the log sample without CT test traffic, `ct-seed/logs/`, and the crt.sh top-up of every index
+     * issuer, `ct-seed/crtsh/`, each in the 16 shards `<0-f>.tsv.gz` by the sha256's first hex digit. Each line's sha256
+     * must be its DER's, a shard holds only its digit's leaves, and a leaf appears once across both; an older tag's
+     * `ct-seed/leaves` fails.
      */
     fun ctSeed(dir: File): List<ProducerCorpus.Input> {
-        val shards = File(dir, "ct-seed/leaves")
-        val single = File(dir, "ct-seed/leaves.tsv.gz")
-        val files = shardFiles(shards, single).ifEmpty { listOf(single) }
+        val old = listOf(File(dir, "ct-seed/leaves"), File(dir, "ct-seed/leaves.tsv.gz")).filter { it.exists() }
+        check(old.isEmpty()) { "$old: the CT seed layout of a tag before v5" }
         val seen = HashSet<String>()
-        return files.flatMap { file ->
-            val digit = file.name.removeSuffix(".tsv.gz").takeIf { file.parentFile == shards }
+        return CT_SEED_SETS.flatMap { set ->
+            ctSeedLines(dir, set).map { f ->
+                check(seen.add(f[0])) { "ct-seed leaf ${f[0]} twice" }
+                ProducerCorpus.Input(CT_SEED + f[0], Base64.getDecoder().decode(f[4]))
+            }
+        }
+    }
+
+    /** The lines of the CT seed set [set] (`ct-seed/<set>/<0-f>.tsv.gz`) split into fields, checked as [ctSeed] says. */
+    fun ctSeedLines(
+        dir: File,
+        set: String,
+    ): List<List<String>> =
+        (0 until 16).flatMap { i ->
+            val digit = "%x".format(i)
+            val file = File(dir, "ct-seed/$set/$digit.tsv.gz")
+            check(file.isFile) { "$file: a shard is missing" }
             GZIPInputStream(file.inputStream()).bufferedReader().useLines { lines ->
                 lines
                     .filter { it.isNotBlank() }
@@ -106,13 +122,14 @@ internal object ExternalCorpus {
                         check(
                             der.toByteString().sha256().hex() == f[0],
                         ) { "ct-seed leaf ${f[0]}: its DER hashes otherwise" }
-                        check(digit == null || f[0].startsWith(digit)) { "ct-seed leaf ${f[0]} in shard $digit" }
-                        check(seen.add(f[0])) { "ct-seed leaf ${f[0]} twice" }
-                        ProducerCorpus.Input(CT_SEED + f[0], der)
+                        check(f[0].startsWith(digit)) { "ct-seed leaf ${f[0]} in $set shard $digit" }
+                        f
                     }.toList()
             }
         }
-    }
+
+    /** The CT seed corpus's shard sets: the log sample, then the crt.sh top-up. */
+    val CT_SEED_SETS = listOf("logs", "crtsh")
 
     /** The DER of every PEM `CERTIFICATE` block in [text] (a CSV field, a PEM bundle, a store file). */
     fun pemBlocks(text: String): List<ByteArray> =

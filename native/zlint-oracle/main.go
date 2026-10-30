@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -62,8 +63,12 @@ func joined(names []string) string {
 	return strings.Join(names, ",")
 }
 
+// pointer is a Go memory address as fmt prints a pointer field, which zcrypto's asn1 errors embed (the field
+// parameters' tag): it differs on every run, so the oracle writes it as "0x?" (#67).
+var pointer = regexp.MustCompile(`0x[0-9a-f]{8,}`)
+
 func oneLine(err error) string {
-	return strings.NewReplacer("\r", " ", "\n", " ").Replace(err.Error())
+	return pointer.ReplaceAllString(strings.NewReplacer("\r", " ", "\n", " ").Replace(err.Error()), "0x?")
 }
 
 func main() {
