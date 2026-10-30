@@ -19,13 +19,14 @@ Status: **draft spec / project proposal, revision 47** · Target: JVM 17+ and An
     and report it: it shows in `Verdict.rules`, in `DataState.rules` and in the counters `fired[UNSIGNED_DATA]` and
     `unsignedData`. The verdict stays `Accepted`, and §7.3 still installs a lower-class generation as a bootstrap.
     The rule rejects only with `rule(UNSIGNED_DATA, REJECT)` as well.
-  - **What `REJECT` would have meant:** raising the floor alone would reject on mirror or system-cache data and stop
-    §7.3 from installing it. A configuration without a seed, whose only local data is a `c2spCache`, would then fail
+  - **What `REJECT` would have meant:** raising the floor to `SIGNED` alone would reject on mirror or system-cache data
+    and stop §7.3 from installing it. A configuration without a seed, whose only local data is a `c2spCache`, would then fail
     `validate()` with `NO_DATA_REJECTS_WITHOUT_LOCAL_DATA`, an `ERROR` under `ENFORCE`.
 
   Neither rule fires in plain `DEFAULT`, whatever its outcome, so no verdict of the presets changes.
-- **Added** (§9, `Rule` model tests, 0.2): the `UNSIGNED_DATA` counterpart of the `STALE` test. A policy derived
-  from `DEFAULT` with a `SIGNED` floor, no seed and a `c2spCache` installs the cache and accepts with the rule fired.
+- **Added** (§9, `Rule` model tests, 0.2): the `UNSIGNED_DATA` counterpart of the `STALE` test. An instance whose
+  policy is derived from `DEFAULT` with a `SIGNED` floor, with no seed and a `c2spCache` as its only source, installs
+  the cache and accepts with the rule fired.
 
 ### Changes in revision 46 (D7's wording, Firefox's inner OCTET STRING, K6 to K8 kept narrow, 2026-10-30)
 - **Corrected** (#61): D7 called only its SCT-list outcomes normative, yet states required outcomes with other entries
@@ -2827,8 +2828,9 @@ tests; **live checks** are informational.
   `NO_DATA` and `STALE` with a fresh CRLite and a 30-day-old OneCRL generation (M2) fire nothing;
   `DEFAULT.newBuilder().rule(STALE, REJECT)` with 4-day-old data → `Accepted`, `DataState.stale`,
   `rules` empty; the same with `rejectStaleAfter(CRLITE, 3 d)` on a generation that is not `fromSeed` (or, when `fromSeed`, after a sync attempt has completed since the seed install: persisted `datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`) → `Rejected(STALE)`, and with `exempt(STALE, anchorIn(privateCa))` a chain under that anchor → `Accepted` with `Finding.Exempted(STALE)`; a `shadowPolicy = STRICT` under `DEFAULT`/`ENFORCE` with a `NO_SCTS` chain → `Accepted`, `shadowVerdict` is `Rejected(NO_SCTS)`, `shadowWouldRejects[NO_SCTS] == 1`, `rejects` unchanged, one event;
-  `dataStates[CRLITE].rules == {STALE}`; `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)` with no seed and a
-  `c2spCache` → the loader installs the `SYSTEM` generation, and a chain checked against it is `Accepted` with
+  `dataStates[CRLITE].rules == {STALE}`; `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)` with `SeedSource.none()`,
+  an empty store and a `c2spCache` as the only source → the loader installs the `SYSTEM` generation, and a chain it
+  does not list as revoked is `Accepted` with
   `UNSIGNED_DATA` in `Verdict.rules`, `dataStates[CRLITE].rules == {UNSIGNED_DATA}` and `fired[UNSIGNED_DATA]` advanced
   (revision 47); `STRICT` with a `SYSTEM` generation (reached through a runtime `policy` flip from `DEFAULT`, since §7.3 never installs one under `STRICT`) → `Rejected(UNSIGNED_DATA)`
   and, through the loader, the generation is not installed while a `SIGNED` one exists;
