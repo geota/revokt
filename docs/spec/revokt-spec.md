@@ -1,10 +1,32 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 46** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-30
+Status: **draft spec / project proposal, revision 47** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-30
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 47 (the `DEFAULT` outcome of the two data rules that never fire there, 2026-10-30)
+- **Decided** (#75, found while implementing #72, the `Rule` model's golden fixture): §8 gave `DEFAULT`'s `STALE`
+  and `UNSIGNED_DATA` cells only as "never fires", while the golden fixture freezes each preset outcome within a
+  major. Both outcomes are `ALLOW`.
+  - **`STALE`:** the spec already implied it. `validate()`'s `STALE_REJECTS_WITHOUT_THRESHOLD` warns when
+    `outcome(STALE) == REJECT` and no dataset has a `rejectStaleAfter`, so a `REJECT` outcome would make plain
+    `DEFAULT` warn on every `validate()`. §8's "`DEFAULT.newBuilder().rule(STALE, REJECT)` alone changes nothing
+    until a `rejectStaleAfter` is set" says the same.
+  - **`UNSIGNED_DATA`:** the maintainer chose the same pattern, with one setting for the threshold and another for
+    the outcome. A policy derived from `DEFAULT` that raises `minTrustClass` makes the rule fire on lower-class data
+    and report it: it shows in `Verdict.rules`, in `DataState.rules` and in the counters `fired[UNSIGNED_DATA]` and
+    `unsignedData`. The verdict stays `Accepted`, and §7.3 still installs a lower-class generation as a bootstrap.
+    The rule rejects only with `rule(UNSIGNED_DATA, REJECT)` as well.
+  - **What `REJECT` would have meant:** raising the floor to `SIGNED` alone would reject on mirror or system-cache data
+    and stop §7.3 from installing it. A configuration without a seed, whose only local data is a `c2spCache`, would
+    then fail `validate()` with `NO_DATA_REJECTS_WITHOUT_LOCAL_DATA`, an `ERROR` under `ENFORCE`.
+
+  Neither rule fires in plain `DEFAULT`, whatever its outcome, so no verdict of the presets changes.
+- **Added** (§9, `Rule` model tests, 0.2): the `UNSIGNED_DATA` counterpart of the `STALE` test. An instance whose
+  policy is derived from `DEFAULT` with a `SIGNED` floor, with no seed and a `c2spCache` as its only source, installs
+  the cache and accepts with the rule fired.
 
 ### Changes in revision 46 (D7's wording, Firefox's inner OCTET STRING, K6 to K8 kept narrow, 2026-10-30)
 - **Corrected** (#61): D7 called only its SCT-list outcomes normative, yet states required outcomes with other entries
@@ -2584,8 +2606,8 @@ runs the configured policy, emits events, and never throws.**
 | `NOT_ENROLLED` | non-answer | allow | reject (exemptable) | collapsed into not covered | CRLite |
 | `NO_SCTS` | non-answer | allow | reject (exemptable) | allow | CRLite |
 | `NOT_COVERED` | non-answer | allow | allow | Firefox → OCSP; upki allow | CRLite (the coverage gap: a certificate issued after the live filter's coverage `high` is unchecked by every preset; §10) |
-| `STALE` | data quality | never fires (`rejectStaleAfter` null; loud via `DataState.stale` and `RevoktStatus.stale`) | reject at 30 d, after a sync attempt has completed since the seed was installed (persisted gate, bullet below; exemptable) | upki keeps old data; Chrome drops an expired CRLSet; Firefox → OCSP | `DataState`, per dataset |
-| `UNSIGNED_DATA` | data quality | never fires (floor `BUNDLED`) | reject (floor `SIGNED`; M2: `DENYLIST` floor `BUNDLED`; exemptable) | n/a; goal 2 | `DataState`, per dataset: `trustClass` below `minTrustClass` |
+| `STALE` | data quality | allow; never fires (`rejectStaleAfter` null; loud via `DataState.stale` and `RevoktStatus.stale`) | reject at 30 d, after a sync attempt has completed since the seed was installed (persisted gate, bullet below; exemptable) | upki keeps old data; Chrome drops an expired CRLSet; Firefox → OCSP | `DataState`, per dataset |
+| `UNSIGNED_DATA` | data quality | allow; never fires (floor `BUNDLED`) | reject (floor `SIGNED`; M2: `DENYLIST` floor `BUNDLED`; exemptable) | n/a; goal 2 | `DataState`, per dataset: `trustClass` below `minTrustClass` |
 | [M2] `DENYLIST`, `ONECRL`, `CRLSET` | evidence (`ONECRL` exemptable per anchor through `ExemptionContext.path.anchorSha256`, the enterprise-CA case; `CRLSET`, `DENYLIST` not exemptable) | reject | reject | reject | L1/L2 (the 0.4 → 1.0 transition; not subject to the one-minor rule) |
 | [M2] `ISSUER_UNKNOWN_TO_MOZILLA` | non-answer | allow | reject (exemptable) | n/a | preload |
 | [M3] `CT` | evidence | allow | reject (ships `ALLOW` for one minor in `STRICT`) | browsers reject | L4: CT policy verified and not met |
@@ -2597,7 +2619,9 @@ runs the configured policy, emits events, and never throws.**
   (presets: `CRLITE` only) iff `rejectStaleAfter != null && ageMillis > rejectStaleAfter`;
   `DataState.stale` (the loud flag) is `ageMillis > staleAfter` and never fires a rule.
   `UNSIGNED_DATA` fires for a dataset iff `DataState.trustClass` is below `minTrustClass(dataset)`
-  (`DEFAULT`: `BUNDLED` for every dataset; `STRICT`: `SIGNED`, M2 `DENYLIST` `BUNDLED`). `ageMillis = now − sourceTimestampMillis` per the dataset's
+  (`DEFAULT`: `BUNDLED` for every dataset; `STRICT`: `SIGNED`, M2 `DENYLIST` `BUNDLED`). In `DEFAULT`, `STALE` and
+  `UNSIGNED_DATA` allow (revision 47): setting a `rejectStaleAfter` or raising `minTrustClass` makes the rule fire
+  and report, and rejecting takes `rule(…, REJECT)` as well. `ageMillis = now − sourceTimestampMillis` per the dataset's
   `Freshness`. Preset defaults: `CRLITE` `staleAfter` 3 d, `rejectStaleAfter` null in `DEFAULT`, 30 d
   in `STRICT`. **Stated plainly:** `DEFAULT` with stale data is "reject what the stale filter says is
   revoked, allow the rest", with `STALE` never firing; `DEFAULT.newBuilder().rule(STALE, REJECT)`
@@ -2804,7 +2828,11 @@ tests; **live checks** are informational.
   `NO_DATA` and `STALE` with a fresh CRLite and a 30-day-old OneCRL generation (M2) fire nothing;
   `DEFAULT.newBuilder().rule(STALE, REJECT)` with 4-day-old data → `Accepted`, `DataState.stale`,
   `rules` empty; the same with `rejectStaleAfter(CRLITE, 3 d)` on a generation that is not `fromSeed` (or, when `fromSeed`, after a sync attempt has completed since the seed install: persisted `datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`) → `Rejected(STALE)`, and with `exempt(STALE, anchorIn(privateCa))` a chain under that anchor → `Accepted` with `Finding.Exempted(STALE)`; a `shadowPolicy = STRICT` under `DEFAULT`/`ENFORCE` with a `NO_SCTS` chain → `Accepted`, `shadowVerdict` is `Rejected(NO_SCTS)`, `shadowWouldRejects[NO_SCTS] == 1`, `rejects` unchanged, one event;
-  `dataStates[CRLITE].rules == {STALE}`; `STRICT` with a `SYSTEM` generation (reached through a runtime `policy` flip from `DEFAULT`, since §7.3 never installs one under `STRICT`) → `Rejected(UNSIGNED_DATA)`
+  `dataStates[CRLITE].rules == {STALE}`; `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)` with `SeedSource.none()`,
+  an empty store and a `c2spCache` as the only source → the loader installs the `SYSTEM` generation, and a chain it
+  does not list as revoked is `Accepted` with
+  `UNSIGNED_DATA` in `Verdict.rules`, `dataStates[CRLITE].rules == {UNSIGNED_DATA}` and `fired[UNSIGNED_DATA]` advanced
+  (revision 47); `STRICT` with a `SYSTEM` generation (reached through a runtime `policy` flip from `DEFAULT`, since §7.3 never installs one under `STRICT`) → `Rejected(UNSIGNED_DATA)`
   and, through the loader, the generation is not installed while a `SIGNED` one exists;
   `requiredDatasets = {CRLITE}`, no generation after the start task completed (`pending == false`), and a walker that throws → `Rejected(NO_DATA)` with
   `rules == {ENGINE_ERROR, NO_DATA}`; the golden fixture accepts the `ALLOW → REJECT` flip exactly

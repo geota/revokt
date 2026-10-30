@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Rule growability golden fixture (spec §4 "Growability contract"; §8 for the presets), edited by hand under
+# the contract. Its diff may only: add a rule with ALLOW in both presets when introducedIn is the current minor;
+# flip a preset's ALLOW to REJECT when introducedIn is the previous minor and that preset's flippedIn is -, setting
+# it; change exemptable from false to true; add a dataset's rows, outside requiredDatasets and the staleness map
+# (both staleness columns -). Existing rules stay a subsequence of the rows' order, which is the precedence. M2's
+# DENYLIST, ONECRL and CRLSET rows are the one exception to the ALLOW rule (the 0.4 -> 1.0 transition).
+# RuleGoldenTest asserts the model equals it, and verifyRuleGrowability (#73) checks the diff. - is null; in
+# staleAfterMillis it means the dataset has no staleness entry.
+
+[rules]
+rule	class	layer	exemptable	emptyPath	basicReason	introducedIn	flippedIn.DEFAULT	flippedIn.STRICT	DEFAULT	STRICT
+REVOKED	EVIDENCE	CRLITE	false	false	REVOKED	0.1	-	-	REJECT	REJECT
+PATH_BUDGET_EXCEEDED	UNEVALUABLE	PATH	false	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	REJECT	REJECT
+NO_DATA	UNEVALUABLE	-	true	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	REJECT	REJECT
+ENGINE_ERROR	UNEVALUABLE	-	false	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	REJECT
+PARSE_FAILED	UNEVALUABLE	PATH	false	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	REJECT
+ISSUER_UNVERIFIED	UNEVALUABLE	PATH	true	true	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	REJECT
+NO_ISSUER	UNEVALUABLE	PATH	true	true	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	REJECT
+NOT_ENROLLED	NON_ANSWER	CRLITE	true	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	REJECT
+NO_SCTS	NON_ANSWER	CRLITE	true	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	REJECT
+NOT_COVERED	NON_ANSWER	CRLITE	false	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	ALLOW
+STALE	DATA_QUALITY	-	true	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	REJECT
+UNSIGNED_DATA	DATA_QUALITY	-	true	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	REJECT
+
+[presets]
+preset	requiredDatasets	rollbackWindowMillis	clockSkewMillis	signedSourceFailingAfterMillis
+DEFAULT	CRLITE	86400000	86400000	86400000
+STRICT	CRLITE	86400000	86400000	86400000
+
+[datasets]
+preset	dataset	staleAfterMillis	rejectStaleAfterMillis	minTrustClass
+DEFAULT	CRLITE	259200000	-	BUNDLED
+STRICT	CRLITE	259200000	2592000000	SIGNED
