@@ -1,10 +1,55 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 45** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-29
+Status: **draft spec / project proposal, revision 46** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-30
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 46 (D7's wording, Firefox's inner OCTET STRING, K6 to K8 kept narrow, 2026-10-30)
+- **Corrected** (#61): D7 called only its SCT-list outcomes normative, yet states required outcomes with other entries
+  (the envelope re-encodings, the `STRUCTURE` cases, the trailing-element cases, the D8-gap examples), which `D7Test`
+  asserts. Every outcome stated with an entry is now normative too; for an entry without one, the corpus is the record.
+- **Corrected** (#61): two of D7's trailing-element entries named K2 as their clause, but the first clause each fails
+  is K1 (HEADER), as their records show: the trailing element `9f 01 02 05 00` has a multi-octet tag, and the `[3]`
+  after a constructed `[1]` has the header `a3 81 nn`. They now read "(K1, and K2 for the ignored element)" and
+  "(K1, and K2)".
+- **Added** (#61): the Firefox SCT conditions in D3 gain those of mozilla::pkix, checked at Firefox `86136a5`
+  (Appendix A), which reject the certificate, not only the list. For an end-entity certificate, mozilla::pkix requires
+  the SCT extension's `extnValue` to be exactly one DER OCTET STRING, and otherwise fails every path through the
+  certificate; it also rejects any certificate with a second SCT extension, as a duplicate extension. revokt extracts
+  pairs from three such forms, each now a `FIREFOX_SCT_STRICT` record:
+  - a non-minimal length on the inner OCTET STRING (`d3/sct-inner-81`, `d7/sct-inner-84`, new);
+  - bytes after the inner OCTET STRING (`d7/sct-trailing-after-inner`, already one);
+  - two SCT extensions, whose union revokt queries (`d3/sct-two-extensions`, new).
+
+  On the other forms revokt's list fails too and the answer is `NO_SCTS` (§10 item 7, which now says that Firefox
+  rejects these certificates). Those forms are an inner length `0x80` or `0xFF`, a constructed inner OCTET STRING,
+  and an inner identifier other than `0x04`. Whether such a certificate is accepted stays the platform's decision;
+  revokt queries the pairs it extracts, the more-checking direction.
+- **Decided** (#57): K6, K7 and K8 stay narrow. No row is widened for the D8-gap entries with no zlint error, nor for
+  the P-192 key on which zlint gives no verdict (zcrypto cannot parse it), and their written justifications stand:
+
+  | Shape | Entries | Row |
+  |---|---|---|
+  | subjectAltName with a `directoryName`, `uniformResourceIdentifier` or `otherName`, or a dNSName of non-ASCII octets | 9 `x509-limbo` | K8 SAN |
+  | nameConstraints in a leaf | 2 `x509-limbo` | K8 |
+  | authorityInfoAccess with a `dNSName` accessLocation | 2 `x509-limbo` | K8 AIA |
+  | extKeyUsage with no purposes | 1 `x509-limbo` | K8 EKU |
+  | a DSA key | 1 `x509-limbo` | K7 |
+  | an EC key on P-192 (zlint gives no verdict) | 1 `x509-limbo` | K7 |
+  | a GeneralizedTime `notBefore` in year 0000 or 0001 | 4 seed-corpus leaves | K6 |
+
+  Widening a row needs its certificate-transparency-go return-site proof (§9.2, "The table is the proof"), and a
+  wrongly widened row is a false-`REVOKED` P0; a row kept narrow costs only that `DEFAULT` never queries such a leaf
+  and `STRICT` rejects it. Appendix A's re-scan of 159 270 RFC 6962 entries found none of the SAN, AIA or
+  nameConstraints shapes outside the profile, the D8 gap over the seed corpus's leaves of index issuers is 0 of
+  117 603 (revision 45), and the K6 leaves are those of eMudhra's "EM DV TLS CA - G3B", which no root program trusts.
+  The EKU and K7 rows have no CT evidence either way; a gap entry at them among a later pin's CT leaves of index
+  issuers counts toward the 10^-4 re-decision as any other does.
+- **Recorded**: the 24 corpus records whose justifications deferred to #57 now cite this decision, at revokt-corpus
+  `v6`, which differs from `v5` only in `replay/records.jsonl`, `replay/PROVENANCE`, the tool that writes the
+  `x509-limbo` gap justifications, and the manifest.
 
 ### Changes in revision 45 (the seed corpus's leaves of every index issuer, 2026-10-29)
 - **Corrected** (#15): revision 44 took the `v4` pin for the 100 000 leaves the D8 re-decision needs. 44 454 of its
@@ -2865,7 +2910,7 @@ pairs `(logId, timestamp)` as the **union** over every extension with OID `1.3.6
 whose list parses under the SCT-list rule here. The rule follows `x509-parser` 0.18.1's `parse_ct_signed_certificate_timestamp_list` (oracle 3a; Appendix A pins it) except at the inner identifier.
 
 - **Inner header.** The extension value must begin with the identifier octet `0x04` (universal, primitive `OCTET STRING`) and a definite length. The length is either short form, or long form `0x81`–`0xFE` followed by that many length octets, with leading zero octets allowed and the value below 2^64 and not past the end of the extension value; `0x80` and `0xFF` fail the list.
-- **Divergence from 3a.** 3a also accepts tag number 4 in any class and in multi-octet form (asn1-rs checks the tag number only). That wider acceptance is the recorded D3 divergence class `3A_HEADER_LAX`. D2 expects no pairs from such an extension, so revokt yielding none is still asserted, never skipped. Firefox and webpki yield none either.
+- **Divergence from 3a.** 3a also accepts tag number 4 in any class and in multi-octet form (asn1-rs checks the tag number only). That wider acceptance is the recorded D3 divergence class `3A_HEADER_LAX`. D2 expects no pairs from such an extension, so revokt yielding none is still asserted, never skipped. webpki yields none either, and Firefox rejects the certificate (D3, revision 46).
 - **Items.** The inner content begins with a `u16` list length that must fit the content. Items are read only within that declared region. Each is a `u16`-prefixed item, whose length must fit the region, of: any version byte, 32-byte log id, u64 timestamp, `u16`-prefixed extensions, hash and signature algorithm bytes, `u16`-prefixed signature (a zero-length signature is accepted).
 - **Ignored bytes.** Bytes after the inner `OCTET STRING`, after the declared region and inside an item after its signature are ignored and never parsed as items.
 - **Partial lists.** The list keeps every item before the first item that fails to parse; a later item of length 0 ends the list like any failing item. It fails when its first item fails, which includes an empty list and a first item of length 0. A list that fails contributes nothing.
@@ -3133,7 +3178,9 @@ the certificate carries (revision 44). Raw-byte equality is asserted against 3a,
   - The PR replay fails on a gap entry in the committed corpora that is not in the recorded baseline, until its record
     carries a written justification.
   - A gap entry with no zlint error is a profile defect. It blocks the release until the profile is widened under D8
-    or the entry is justified.
+    or the entry is justified. Revision 46 keeps K6, K7 and K8 narrow for those found so far (#57): the lint-clean
+    `x509-limbo` entries at SAN, AIA, nameConstraints, extKeyUsage and K7 (and the P-192 key, which zcrypto cannot
+    parse), and the seed corpus's year-0000 and 0001 times; their written justifications stand.
   - The count by clause over the seed corpus's CT leaves of index issuers is reported in each release's notes and in
     `docs/dev/status.md`. A leaf is of an index issuer when the test JDK verifies its signature under the key of an
     issuer-corpus certificate whose SPKI hashes to a key of the fixture generation's indexes and whose subject is the
@@ -3169,18 +3216,21 @@ the certificate carries (revision 44). Raw-byte equality is asserted against 3a,
   rejects or for which no platform canon can be built, is a gate metric and must be zero on the committed corpora.
 - **D3 SCT classification**: mapping from 3a: no extension → `NO_SCTS`; `ParseError` → `NO_SCTS`
   (an empty list is a `ParseError`; `x509-parser` 0.18.1 never returns `Ok([])`); `Ok(list)` → pair-set equality (D2), with the per-extension ∅ expectation for an inner identifier other than `0x04` (`3A_HEADER_LAX`); 3a's duplicate-extension error →
-  the union rule, recorded as a divergence class. Firefox's decoder (fails the whole list on
-  version ≠ 0, trailing bytes in the OCTET STRING, per-item length errors) and 3c's errors are
-  recorded as divergence entries, never gate failures: every such divergence is in the
-  more-checking direction (revokt queries where Firefox or the `rustls-upki` verifier would not). Firefox's
-  decoder is not an oracle and is not run in CI; its stricter behaviour is argued here, and its divergences are hand-recorded
+  the union rule, recorded as a divergence class. Firefox's divergences and 3c's errors are
+  recorded as divergence entries, never gate failures. Firefox's decoder fails the whole list on version ≠ 0, trailing
+  bytes in the OCTET STRING and per-item length errors; mozilla::pkix rejects the certificate itself where an
+  end-entity certificate's SCT `extnValue` is not exactly one DER OCTET STRING (a non-minimal length on the inner
+  OCTET STRING, or bytes after it) and where it carries a second SCT extension (revision 46). A divergence is recorded
+  where revokt extracts pairs, so every recorded one is in the more-checking direction (revokt queries where Firefox
+  or the `rustls-upki` verifier would not); where revokt's list fails as well, §10 item 7 applies. Firefox is not an
+  oracle and is not run in CI; its stricter behaviour is argued here, and its divergences are hand-recorded
   `D3_DIVERGENCE` entries (record schema) in the D7 corpus. A 3c error where revokt yields pairs is recorded, never a gate failure. A 3c pair that
   revokt does not yield blocks the release until a spec revision resolves it; revokt follows §9.2, never 3c. A
   further class, also against 3a only, is `3A_TBS_LAX`: 3a takes as extensions an element with tag number 3 that is not
   a constructed context-specific `[3]` (`x509-parser` checks the tag number only), which the JDK and revokt do not, so
   D2's reference for that certificate's extension table and SCT pairs is the §9.2 read (∅), asserted, not skipped. A
   separate class, against 3a only, is `3A_HEADER_LAX`: 3a yields pairs under an inner identifier other than
-  `0x04`; Firefox, webpki and revokt do not; that is equivalent to issuing without SCTs. For a key outside the filter's universe
+  `0x04`; webpki and revokt do not, and Firefox rejects the certificate. revokt's reading is equivalent to issuing without SCTs. For a key outside the filter's universe
   a query answers arbitrarily. That is the M1 unverified-SCT residual (§10 item 7), unchanged by revision 33,
   because every pair set revision 33 newly accepts is also produced by some well-formed list.
 - **D4 strictness bound (informational)**: revokt `Parsed` while every oracle rejects; the platform
@@ -3193,13 +3243,14 @@ the certificate carries (revision 44). Raw-byte equality is asserted against 3a,
   length, also re-slice `b` when the TBS header is definite; `parse(encoded_i,v)` has the same status and fields as
   `parse(b)` whenever both are `Parsed`, for oracle 1 and for oracle 2 on the uber artifact and on the platform tier.
 - **D7 leniency corpus**: a committed corpus of real-world oddities, each entry carrying the
-  recorded outcome of every oracle version and revokt's required outcome (the SCT-list outcomes named below follow from the rule above and are
-  normative; for every other entry no outcome is asserted in this text and the corpus is the record): negative serial, serial over 20 bytes, serial with leading
+  recorded outcome of every oracle version and revokt's required outcome (the SCT-list outcomes named below, which
+  follow from the rule above, and every outcome stated with an entry are normative; for an entry with no stated
+  outcome the corpus is the record): negative serial, serial over 20 bytes, serial with leading
   zeros, TBS/outer algorithm mismatch (NULL vs absent), `GeneralizedTime` with fractional seconds,
   `UTCTime` used for a date in 2050 or later, PrintableString/UTF8String/TeletexString/BMPString
   names, an empty subject, duplicate extension OIDs, **two SCT extensions** (empty list first,
-  covered SCT second → union queries), an unknown critical extension, an SCT list whose declared
-  length is longer than its content (the list fails) or shorter (the items that fit extracted), a malformed first SCT followed by valid ones (the list fails), a non-minimal length on the SCT extension's inner OCTET STRING, `81 nn` with nn < 0x80 and `84 00 00 00 nn` (required outcome: `Parsed`, the list's SCTs extracted, `producerKeyable` unaffected because the SCT extension is opaque to the profile, K1), an inner length `0x80` or `0xFF` (the list fails), an inner identifier other than `0x04` that is tag number 4 (for example `0x44`, `1F 04`; `3A_HEADER_LAX`: no pairs), a constructed inner OCTET STRING (the list fails), a non-zero SCT version (extracted), a truncated last SCT (the items before it extracted), trailing bytes after the inner OCTET STRING, after the declared list region and inside an SCT after its signature (ignored), an SCT hidden in ignored bytes (never extracted), a zero-length signature (extracted),
+  covered SCT second → union queries), on which Firefox rejects the certificate (`FIREFOX_SCT_STRICT`), an unknown critical extension, an SCT list whose declared
+  length is longer than its content (the list fails) or shorter (the items that fit extracted), a malformed first SCT followed by valid ones (the list fails), a non-minimal length on the SCT extension's inner OCTET STRING, `81 nn` with nn < 0x80 and `84 00 00 00 nn` (required outcome: `Parsed`, the list's SCTs extracted, `producerKeyable` unaffected because the SCT extension is opaque to the profile, K1), on which Firefox rejects the certificate (`FIREFOX_SCT_STRICT`), an inner length `0x80` or `0xFF` (the list fails), an inner identifier other than `0x04` that is tag number 4 (for example `0x44`, `1F 04`; `3A_HEADER_LAX`: no pairs), a constructed inner OCTET STRING (the list fails), a non-zero SCT version (extracted), a truncated last SCT (the items before it extracted), trailing bytes after the inner OCTET STRING (on which Firefox rejects the certificate), after the declared list region and inside an SCT after its signature (ignored), an SCT hidden in ignored bytes (never extracted), a zero-length signature (extracted),
   an inner identifier that is not tag number 4, such as `0x30` (the list fails in revokt and 3a alike, not `3A_HEADER_LAX`),
   the trailing-element cases of the §9.2 rule (bytes after `[3]`; an element between `subjectPublicKeyInfo` and `[3]`,
   dropping the extensions; `[2]` before `[1]` and `[1]` twice, dropping them; constructed `[1]`/`[2]`; a primitive
@@ -3210,7 +3261,7 @@ the certificate carries (revision 44). Raw-byte equality is asserted against 3a,
   bytes after the Extensions SEQUENCE inside `[3]` and after `extnValue`, ignored; anything after the INTEGER
   inside `[0]`, `STRUCTURE`, with the flattening case whose producer SPKI differs; a zero-length primitive `[3]`
   (`83 00`), `Parsed` and outside the profile; a constructed `[1]` then `[3]` carrying a non-minimal length, `Parsed`
-  and outside the profile (K2), a D8-gap entry because ct-go never visits `[3]` there and keys it), the
+  and outside the profile (K1, and K2), a D8-gap entry because ct-go never visits `[3]` there and keys it), the
   more-lenient-than-JDK cases (a v1 or v2 certificate carrying elements its version does not allow; unique-id content
   that is not BIT STRING content), times with an offset (on a `UTCTime`, a `CONSCRYPT_TIME_OFFSET` record against oracle
   2; on a `GeneralizedTime`, oracle 2 rejects), without seconds and with a day past the month's end
@@ -3230,7 +3281,7 @@ the certificate carries (revision 44). Raw-byte equality is asserted against 3a,
   (`03 80 <content> 00 00`, whether or not its content reads as a chain of minimal TLVs), which JDK 17 and later
   reject; each `STRUCTURE`); and a CA-signed TBS whose extensions are followed by a trailing element with a
   multi-octet tag (`9f 01 02 05 00`), presented with a definite and with an indefinite TBS header (`Parsed`, outside
-  the profile under K2, the same outcome for both); and the D8-gap examples (a serial with non-minimal INTEGER
+  the profile (K1, and K2 for the ignored element), the same outcome for both); and the D8-gap examples (a serial with non-minimal INTEGER
   content, a keyUsage or basicConstraints value only zcrypto accepts, a `UTCTime` without seconds; each `Parsed` and
   outside the profile).
 
@@ -3384,9 +3435,12 @@ justified in writing.
   7. **Decided (revision 11): kept; revision 33 narrows the Firefox match.** A certificate issued without
      embedded SCTs, or whose every SCT list fails under §9.2 (for example an empty list, a first item that fails, an inner identifier other than `0x04`; §9.2 states every case), yields `NO_SCTS`, which allows in `DEFAULT`: an issuance-time
      opt-out from checking. Firefox skips CRLite without usable SCT timestamps and falls to OCSP, which
-     revokt does not do; `STRICT` rejects; the `rustls-upki` verifier rejects a malformed list (§3.2
+     revokt does not do. Firefox rejects the certificate outright where the SCT extension's `extnValue` is not exactly
+     one DER OCTET STRING, as with an inner identifier other than `0x04` (revision 46). `STRICT` rejects; the `rustls-upki` verifier rejects a malformed list (§3.2
      divergence). A list §9.2 accepts in part, which Firefox and webpki fail whole, is queried, so `STRICT`
-     then sees the CRLite answer, not `NO_SCTS`. SCTs are not verified in M1: a forged covered SCT on a key
+     then sees the CRLite answer, not `NO_SCTS`. A list in an inner OCTET STRING with a non-minimal length, or followed
+     by bytes in `extnValue`, is also queried, and so are two SCT extensions; Firefox rejects such a certificate
+     (revision 46). SCTs are not verified in M1: a forged covered SCT on a key
      outside a filter's universe gets an arbitrary answer, a residual that predates revision 33.
   8. **Decided (revision 11): kept; revision 34 widens `PRODUCER_UNKEYABLE`.** `PARSE_FAILED` on the leaf allows in
      `DEFAULT`, so a leaf encoding the platform accepts and the Kotlin parser rejects is unchecked. The subscriber
@@ -3839,6 +3893,16 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   outside the count (their issuer is not an index issuer). crt.sh's server certificate (CN=crt.sh, Sectigo) had expired
   on 2026-06-21, and its `ca.last_not_after` showed no update after 2026-10-24 (both seen on 2026-10-29), so CAs were
   selected by key, not by recorded activity.
+- Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
+  2026-10-30: `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` reads the SCT extension's
+  `extnValue` with `der::ExpectTagAndGetValueAtEnd(extnValue, der::OCTET_STRING, …)`, which requires the tag `0x04`
+  and then `der::End` (`include/pkix/pkixder.h`, lines 234 to 248), so nothing may follow the OCTET STRING;
+  `pkixder.cpp` `ReadTagAndGetValue` rejects a high tag number, a non-minimal length (`81 nn` with nn < 128, `82`
+  below 256) and every other length form (`0x80`, `0x83` and above), minimal or not, as `ERROR_BAD_DER`;
+  `pkixbuild.cpp` (lines 218 to 229), for a `MustBeEndEntity` certificate, records a failure of that extraction as
+  one where "all paths through it will fail" and stops building. `pkixcert.cpp` `BackCert::RememberExtension` (lines
+  295 to 303) rejects a second SCT extension, as any duplicate extension it understands, with
+  `ERROR_EXTENSION_VALUE_INVALID`.
 - Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
 - Android toolchain fact, verified 2026-10-24: a library built with Kotlin 2.4 needs AGP 8.5.2 or later
   (developer.android.com, "AGP, D8, and R8 versions required for Kotlin versions"), and D8 from AGP 8.8.1 is tested

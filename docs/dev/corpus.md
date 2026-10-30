@@ -18,7 +18,7 @@ Two kinds (CONTRIBUTING §3):
 
 | Pin | Value |
 |---|---|
-| `revokt-corpus` tag | `v5` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`; `issuer/`, the issuer corpus's snapshots of 2026-10-25; `ct-seed/`, the CT seed corpus (65 589 log-sample leaves and 71 614 crt.sh leaves, 132 041 of index issuers); and `replay/` (their goldens and records) |
+| `revokt-corpus` tag | `v6` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`; `issuer/`, the issuer corpus's snapshots of 2026-10-25; `ct-seed/`, the CT seed corpus (65 589 log-sample leaves and 71 614 crt.sh leaves, 132 041 of index issuers); and `replay/` (their goldens and records) |
 
 ### The large corpus in the replay
 
@@ -105,11 +105,12 @@ and requires the committed records to equal it, field for field:
 - **D7**: the cases already held for another reason (boundary, variants, envelope, `d3/`, `unsigned/`, `fuzz/`) are named,
   the rest are built on a valid key as `d7/<name>`. A D7 input in the D8 gap keeps its keyability and the gap's rule:
   where that yields none (no zlint error), the record needs a justification written by hand, as any gap entry does.
-  The D7 SCT cases where Firefox's decoder fails the whole list while revokt extracts pairs (§9.2 D3) also get a
-  hand-recorded `D3_DIVERGENCE` record, class `FIREFOX_SCT_STRICT`, which no oracle observes.
+  The D7 SCT cases where Firefox fails the whole list, or mozilla::pkix rejects the certificate, while revokt extracts
+  pairs (§9.2 D3) also get a hand-recorded `D3_DIVERGENCE` record, class `FIREFOX_SCT_STRICT`, which no oracle
+  observes.
 - The large corpus's records are in its `replay/records.jsonl`. Its D8-gap entries with no zlint verdict (zcrypto cannot
-  parse them) or no zlint error carry justifications written per entry from the form that fails the clause; whether
-  to widen K7 or K8 for the lint-clean ones is #57.
+  parse them) or no zlint error carry justifications written per entry from the form that fails the clause; spec
+  revision 46 keeps K6, K7 and K8 narrow for the lint-clean ones (#57).
 
 Regenerate with `native/producer-oracle/record-goldens.sh` after `native/revokt-oracle/record-goldens.sh` (with
 `REVOKT_CORPUS=<revokt-corpus working tree>` for both when the large corpus's data must change too). It runs the
