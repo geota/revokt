@@ -192,6 +192,14 @@ class RuleGrowabilityTest {
     }
 
     @Test
+    fun `a head without a section or with a renamed key column is reported, not thrown`() {
+        val noRules = committed.substringAfter("[presets]").let { "[presets]$it" }
+        assertOne(problems(noRules), "the [rules] section is missing")
+        assertOne(problems(committed.replace("rule\tclass\t", "name\tclass\t")), "[rules] columns changed", "removed [rule]")
+        assertOne(problems(committed.replace("\tintroducedIn\t", "\tintroduced\t")), "[rules] columns changed")
+    }
+
+    @Test
     fun `a base without a section compares the sections it has`() {
         val noDatasets = committed.substringBefore("[datasets]")
         assertEquals(emptyList(), problems(committed, base = noDatasets))

@@ -119,7 +119,7 @@ class RootPlugin : Plugin<Project> {
                             isIgnoreExitValue = true
                         }
                     show.result.zip(show.standardOutput.asText) { r, text ->
-                        text.takeIf { r.exitValue == 0 }?.lines()?.firstOrNull { it.startsWith("revokt.version=") }?.substringAfter("=")?.trim()
+                        text.takeIf { r.exitValue == 0 }?.let { java.util.Properties().apply { load(it.reader()) }.getProperty("revokt.version") }
                     }
                 },
             )

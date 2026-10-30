@@ -192,9 +192,10 @@ object RuleGrowability {
                     "the columns are frozen within a major: restore $was"
             }
         }
+        if (out.isNotEmpty()) return out
         if (!isMinor(currentMinor)) out += "the current minor '$currentMinor' is not major.minor: fix revokt.version in gradle.properties"
         for (row in h.getValue("rules").rows) {
-            if (row.getValue("rule").isBlank()) out += "[rules] has a row with no rule name; name it"
+            if (row["rule"].isNullOrBlank()) out += "[rules] has a row with no rule name; name it"
             if (!isMinor(row["introducedIn"])) out += "rule ${row["rule"]}: introducedIn '${row["introducedIn"]}' is not a minor such as 0.1; fix it"
         }
         if (out.isNotEmpty()) return out
