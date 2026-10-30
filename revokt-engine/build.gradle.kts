@@ -58,21 +58,27 @@ tasks.withType<Test>().configureEach {
     }
 }
 
-// Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of the parser package of at least 90 % over
-// the committed replay (jvmTest), part of `check`. The floor may only be raised.
+// Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of each parser package of at least 90 % over
+// the committed tests (jvmTest), part of `check`: the certificate parser and the C2SP index reader (#86). The floors may
+// only be raised.
 kover {
     currentProject {
         createVariant("parser") { add("jvm") }
+        createVariant("c2sp") { add("jvm") }
     }
     reports {
         variant("parser") {
             filters { includes { packages("dev.revokt.engine.parse") } }
             verify { rule("parser package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
         }
+        variant("c2sp") {
+            filters { includes { packages("dev.revokt.engine.c2sp") } }
+            verify { rule("c2sp package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
+        }
     }
 }
 
-tasks.named("check") { dependsOn("koverVerifyParser") }
+tasks.named("check") { dependsOn("koverVerifyParser", "koverVerifyC2sp") }
 
 class ClubcardCorpus(
     @get:InputDirectory @get:PathSensitive(PathSensitivity.RELATIVE) val dir: File,

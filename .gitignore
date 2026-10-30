@@ -17,3 +17,6 @@ node_modules/
 gradle/verification-keyring.gpg
 __pycache__/
 *.pyc
+
+# Jazzer writes its generated corpus next to the module when fuzzing locally (JAZZER_FUZZ=1).
+.cifuzz-corpus/

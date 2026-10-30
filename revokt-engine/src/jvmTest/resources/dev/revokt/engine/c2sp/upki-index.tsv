@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+# upki-index.bin: written by rustls/upki v1.0.1's `upki fetch` (native/revokt-oracle/record-upki-index.sh) from a local
+# mirror of these filters, in this order. Columns: mirror filename, source, SHA-256.
+full-v3	corpus/clubcard/compat-full/20261017-1-compat.filter	84754db048341a3df406a0b65bdd3528e2fa2f89ed2ccdaa078b69da3c04f316
+delta-v3	corpus/clubcard/compat-delta/20261021-1-compat.filter.delta	98ad92e45efabebc14e651ac77ba5880ac388acdfba27c4923e06efdf9f93a87
+delta-v4	corpus/clubcard/compat-delta/20261021-1-compat.filter.delta.v4	e7dbf5816a222b13f8ada75221db5df192414bab7fbb606b4d5e0a2bf47717ae
+synthetic-v3	corpus/clubcard/synthetic/synthetic.v3.filter	54e34310d898f7c857e315c0ad63351252739c4784327091914a75aa5141fbbb
