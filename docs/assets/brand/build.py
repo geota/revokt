@@ -55,15 +55,18 @@ def pixel_r():
     return cols, on, red
 
 
-def mark(cols, on, red, ink, hit, gap, ground=None, units=8):
-    """The pixel r centred on a units × units grid of whole cells; gap is the inset per cell side, 0 for pixel-exact."""
+def mark(cols, on, red, ink, hit, gap, ground=None, units=8, square=False):
+    """The pixel r on a units × units grid, centred (half-cell offsets where the grid's parity differs, so it is
+    pixel-exact at 2, 4 and 6 px per unit); gap is the inset per cell side, 0 for pixel-exact. A ground is a rounded
+    tile, or a full square for platforms that apply their own mask."""
     ox, oy = (units - cols) / 2, (units - ROWS) / 2
     rects = []
     for c, r in on:
         fill = hit if (c, r) == red else ink
         rects.append(f'<rect x="{ox + c + gap:g}" y="{oy + r + gap:g}" width="{1 - 2 * gap:g}" height="{1 - 2 * gap:g}" '
                      f'rx="{gap * 1.2:g}" fill="{fill}"/>')
-    bg = f'<rect width="{units}" height="{units}" rx="{units * 0.22:g}" fill="{ground}"/>' if ground else ""
+    rx = 0 if square else units * 0.22
+    bg = f'<rect width="{units}" height="{units}" rx="{rx:g}" fill="{ground}"/>' if ground else ""
     return (f'{HEADER}<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {units} {units}">'
             f'<title>revokt</title>{bg}{"".join(rects)}</svg>\n')
 
@@ -109,17 +112,18 @@ def wordmark_body(ink, hit, x=10, baseline=48, size=52):
     for i, (ch, d) in enumerate(glyphs):
         opacity = f' fill-opacity="{KT_OPACITY}"' if i >= 4 else ""
         paths.append(f'<path d="{d}" fill="{ink}"{opacity}/>')
-    k = size / 52   # the strike was drawn for a 52-unit em with the word at x = 10, baseline 48
-    def p(px, py):
-        return f"{x + (px - 10) * k:.2f} {baseline + (py - 48) * k:.2f}"
-    strike = (f'<path d="M{p(3, 40)} C {p(60, 35.5)}, {p(140, 31)}, {p(213, 25.5)}" stroke="{hit}" '
-              f'stroke-width="{4.2 * k:.2f}" stroke-linecap="round" fill="none" opacity=".82" filter="url(#pencil)"/>')
+    # The strike was drawn for a 52-unit em with the word at x = 10, baseline 48. It is drawn in those units inside a
+    # scaled group, so the pencil filter's wobble and grain scale with it.
+    k = size / 52
+    strike = (f'<g transform="translate({x - 10 * k:.2f} {baseline - 48 * k:.2f}) scale({k:g})">'
+              f'<path d="M3 40 C 60 35.5, 140 31, 213 25.5" stroke="{hit}" stroke-width="4.2" stroke-linecap="round" '
+              f'fill="none" opacity=".82" filter="url(#pencil)"/></g>')
     return "".join(paths) + strike, end
 
 
 def wordmark(ink, hit):
     body, end = wordmark_body(ink, hit)
-    w = round(end + 18)
+    w = round(end + 21)   # room for the strike's round cap and its wobble
     return (f'{HEADER}<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} 70" width="{w * 2}" height="140">'
             f"<title>revokt</title><defs>{PENCIL}</defs>{body}</svg>\n")
 
@@ -148,6 +152,7 @@ cols, on, red = pixel_r()
 write("mark.svg", mark(cols, on, red, INK, HIT, gap=0.06))
 write("mark-dark.svg", mark(cols, on, red, INK_DARK, HIT_DARK, gap=0.06))
 write("mark-tile.svg", mark(cols, on, red, INK_DARK, HIT_DARK, gap=0.06, ground=GROUND_DARK))
+write("mark-square.svg", mark(cols, on, red, INK_DARK, HIT_DARK, gap=0.06, ground=GROUND_DARK, square=True))
 write("mark-pixel.svg", mark(cols, on, red, INK, HIT, gap=0))
 write("favicon.svg", favicon_svg(cols, on, red))
 write("wordmark.svg", wordmark(INK, HIT))
