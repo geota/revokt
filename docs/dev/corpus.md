@@ -44,8 +44,10 @@ jvmTest; the tree but its `.git` is a test input, and the test heap is 8 GB). Th
   certificates of that issuer that cannot issue certificates, each kept only when its signature verifies under the
   key, with `crtsh.json` recording every key's crt.sh CAs, counts and the ids kept. A leaf is of an index issuer when
   the test JDK verifies it under an index key (`IndexIssuers`). `CtSeedTest` checks the key list against
-  `corpus/clubcard`, the top-up against `crtsh.json` and its signatures again on the test JDK, and that the seed holds
-  at least 100 000 leaves of index issuers. A tag before `v5` has one `ct-seed/leaves/` (before `v4`, one
+  `corpus/clubcard`, the top-up against `crtsh.json`, each top-up leaf against §9.2's definition (its kept key by
+  issuer name and signature, valid at the start, issued in the 400 days before it, not a CA, v3, at most 120 per key,
+  no TBSCertificate twice in the seed) on the test JDK, and that the seed holds at least 100 000 leaves of index
+  issuers. A tag before `v5` has one `ct-seed/leaves/` (before `v4`, one
   `leaves.tsv.gz`), which the replay rejects. RecordsTest records the D8 gap over the unexpired leaves of index issuers
   by clause per matrix JDK in `revokt-engine/.../parse/ct-seed-gap.tsv` (the records writer writes it; a stale line
   fails), which `specStatus` shows in `docs/dev/status.md`; the 10^-4 re-decision is the spec's.
