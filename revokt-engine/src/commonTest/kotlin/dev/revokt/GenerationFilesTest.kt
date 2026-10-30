@@ -4,6 +4,8 @@
 package dev.revokt
 
 import dev.revokt.engine.c2sp.C2spIndex
+import dev.revokt.engine.c2sp.IndexEntry
+import dev.revokt.engine.c2sp.IndexFile
 import dev.revokt.engine.c2sp.Window
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
@@ -78,13 +80,48 @@ class GenerationFilesTest {
         assertTrue("[delta]" in message(builder(mapOf("index.bin" to index, "full" to full))))
         assertTrue("[stray]" in message(builder().file("stray", byteArrayOf(0))))
         assertTrue("malformed" in message(builder().file("index.bin", byteArrayOf(1, 2))))
-        assertTrue("index.bin" in message(builder(mapOf("full" to full, "delta" to delta))))
+        assertTrue("has no index.bin" in message(builder(mapOf("full" to full, "delta" to delta))))
+        val selfNamed = C2spIndex.write(C2spIndex.index(listOf("index.bin" to mapOf(logId to Window(1u, 5u)))))
+        assertTrue("names itself" in message(builder(mapOf("index.bin" to selfNamed))))
+    }
+
+    @Test
+    fun `names is read-only`() {
+        val g = builder().build()
+        assertFailsWith<UnsupportedOperationException> { (g.names as MutableSet<String>).remove("full") }
+        assertContentEquals(full, g.bytes("full"))
+    }
+
+    @Test
+    fun `an index that names a file twice holds it once`() {
+        val twice =
+            C2spIndex.write(
+                IndexFile(
+                    listOf("full", "full"),
+                    linkedMapOf(logId to listOf(IndexEntry(0, Window(1u, 5u)), IndexEntry(1, Window(1u, 5u)))),
+                ),
+            )
+        assertEquals(setOf("index.bin", "full"), builder(mapOf("index.bin" to twice, "full" to full)).build().names)
     }
 
     @Test
     fun `every required field must be set`() {
-        assertFailsWith<IllegalArgumentException> { GenerationFiles.Builder().build() }
-        assertFailsWith<IllegalArgumentException> { builder().generationId("").build() }
+        fun missing(
+            field: String,
+            b: GenerationFiles.Builder,
+        ) {
+            val e = assertFailsWith<IllegalArgumentException> { b.build() }
+            assertTrue(field in e.message!!, "${e.message}")
+        }
+        val files = mapOf("index.bin" to index, "full" to full, "delta" to delta)
+
+        fun bare(): GenerationFiles.Builder =
+            GenerationFiles.Builder().also { b -> files.forEach { (n, v) -> b.file(n, v) } }
+        missing("generationId", bare().trustClass(TrustClass.SIGNED).format(FilterFormat.V3).sourceTimestampMillis(1))
+        missing("trustClass", bare().generationId("g").format(FilterFormat.V3).sourceTimestampMillis(1))
+        missing("format", bare().generationId("g").trustClass(TrustClass.SIGNED).sourceTimestampMillis(1))
+        missing("sourceTimestampMillis", bare().generationId("g").trustClass(TrustClass.SIGNED).format(FilterFormat.V3))
+        missing("generationId", builder().generationId(""))
     }
 
     @Test
@@ -95,6 +132,15 @@ class GenerationFilesTest {
         assertEquals(g, g.newBuilder().build())
         assertNotEquals(g, g.newBuilder().format(FilterFormat.V4).build())
         assertNotEquals(g, g.newBuilder().file("full", byteArrayOf(9)).build())
-        assertTrue("names=[delta, full, index.bin]" in g.toString())
+        assertTrue("files=[delta:" in g.toString())
+        assertNotEquals(
+            g.toString(),
+            g
+                .newBuilder()
+                .file("full", byteArrayOf(9))
+                .build()
+                .toString(),
+            "toString shows content",
+        )
     }
 }

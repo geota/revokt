@@ -25,21 +25,22 @@ public class GenerationFiles internal constructor(
 ) {
     private val files: Map<String, ByteArray> = files.mapValues { it.value.copyOf() }
 
-    /** The SHA-256 of each file's content, computed once, at construction. */
-    private val hashes: Map<String, ByteString> = this.files.mapValues { it.value.toByteString().sha256() }
-
     init {
-        require(generationId.isNotEmpty()) { "a generation needs a generationId" }
-        val index = requireNotNull(this.files[INDEX]) { "a C2SP generation image has an $INDEX" }
+        require(generationId.isNotEmpty()) { "generationId is empty" }
+        val index = requireNotNull(this.files[INDEX]) { "the generation has no $INDEX" }
         val named = filenamesIn(index)
+        require(INDEX !in named) { "$INDEX names itself as a filter" }
         val missing = named - this.files.keys
         val extra = this.files.keys - named - INDEX
         require(missing.isEmpty()) { "$INDEX names ${missing.sorted()}, which the generation does not hold" }
         require(extra.isEmpty()) { "the generation holds ${extra.sorted()}, which $INDEX does not name" }
     }
 
-    /** `index.bin` and the filter files it names. */
-    public val names: Set<String> = this.files.keys
+    /** The SHA-256 of each file's content, computed once, after the image is validated. */
+    private val hashes: Map<String, ByteString> = this.files.mapValues { it.value.toByteString().sha256() }
+
+    /** `index.bin` and the filter files it names; read-only. */
+    public val names: Set<String> = buildSet { addAll(this@GenerationFiles.files.keys) }
 
     /** A fresh copy of [name]'s content. */
     public fun bytes(name: String): ByteArray =
@@ -60,7 +61,7 @@ public class GenerationFiles internal constructor(
             .sourceTimestampMillis(sourceTimestampMillis)
             .also { b -> files.forEach { (name, bytes) -> b.file(name, bytes) } }
 
-    /** Equal when every field and every file's content are. */
+    /** Equal when every field is and every file's content is, compared by SHA-256. */
     override fun equals(other: Any?): Boolean =
         other is GenerationFiles &&
             generationId == other.generationId &&
@@ -75,7 +76,8 @@ public class GenerationFiles internal constructor(
 
     override fun toString(): String =
         "GenerationFiles(generationId=$generationId, dataset=$dataset, trustClass=$trustClass, format=$format, " +
-            "names=${names.sorted()}, sourceTimestampMillis=$sourceTimestampMillis)"
+            "files=${names.sorted().map { "$it:${hashes.getValue(it).hex().take(HASH_PREFIX)}" }}, " +
+            "sourceTimestampMillis=$sourceTimestampMillis)"
 
     /** Builds a [GenerationFiles] for tests and fakes; [build] validates the image as the constructor does. */
     @RevoktTestingApi
@@ -116,13 +118,14 @@ public class GenerationFiles internal constructor(
 
     internal companion object {
         private const val INDEX = "index.bin"
+        private const val HASH_PREFIX = 12
 
         /** The filter names [index] lists; a malformed index is an [IllegalArgumentException]. */
         fun filenamesIn(index: ByteArray): Set<String> =
             try {
                 C2spIndex.read(index).filenames.toSet()
             } catch (e: IndexFormatException) {
-                throw IllegalArgumentException("$INDEX is malformed: ${e.message}", e)
+                throw IllegalArgumentException("malformed $INDEX: ${e.message}", e)
             }
     }
 }
