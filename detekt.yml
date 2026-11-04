@@ -17,7 +17,7 @@ revokt:
     active: true
     excludes: ['**/test/**', '**/jvmTest/**', '**/commonTest/**']
     allowedClasses:
-      - 'dev.revokt.engine.KotlinRevocationEngine'
+      - 'dev.revokt.KotlinRevocationEngine'
       - 'dev.revokt.jsse.JvmPlatformTrust'
       - 'dev.revokt.android.AndroidPlatformTrust'
       - 'dev.revokt.verify.JcaSignatureVerifier'
