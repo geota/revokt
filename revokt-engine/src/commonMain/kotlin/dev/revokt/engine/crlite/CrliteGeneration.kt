@@ -5,7 +5,6 @@ package dev.revokt.engine.crlite
 
 import dev.revokt.CrliteQuery
 import dev.revokt.CrliteQueryResult
-import dev.revokt.FilterFormat
 import dev.revokt.GenerationFiles
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
@@ -13,7 +12,6 @@ import dev.revokt.clubcard.api.ClubcardFormatException
 import dev.revokt.clubcard.port.CrliteClubcard
 import dev.revokt.clubcard.port.CrliteKey
 import dev.revokt.clubcard.port.CrliteStatus
-import dev.revokt.clubcard.port.Encoding
 import dev.revokt.clubcard.port.IssuerSpkiHash
 import dev.revokt.clubcard.port.LogId
 import dev.revokt.clubcard.port.LogTimestamp
@@ -28,7 +26,11 @@ internal class CrliteGeneration private constructor(
     val generationId: String,
     private val filters: List<CrliteClubcard>,
 ) {
-    /** The latest coverage `high` of any filter (unsigned), or null when no filter covers any log. */
+    /**
+     * The latest coverage `high` of any filter, compared unsigned, or null when no filter covers any log. A `high` past
+     * [Long.MAX_VALUE] (an open-ended window, up to `u64::MAX`) is clamped to [Long.MAX_VALUE], so the value never reads
+     * as a date before 1970.
+     */
     val coverageEndMillis: Long? =
         filters
             .flatMap { f ->
@@ -36,6 +38,7 @@ internal class CrliteGeneration private constructor(
                     .map { it.high }
             }.maxOrNull()
             ?.value
+            ?.let { if (it < 0) Long.MAX_VALUE else it }
 
     /**
      * The §6.2 aggregate over the filters that cover one of [q]'s SCTs (C2SP step 3): none covering, `NOT_COVERED`; any
@@ -68,25 +71,15 @@ internal class CrliteGeneration private constructor(
         private const val INDEX = "index.bin"
 
         /**
-         * Decodes every filter of [files]. Throws [IllegalArgumentException] when a filter's encoding is not the
-         * generation's format (the engine never transcodes) or a filter does not decode under spec §6.3. The seam carries
-         * [dev.revokt.Dataset.CRLITE] only (§3.2), the one dataset today.
+         * Decodes every filter of [files], each by the encoding its 2-byte prefix names (spec §6.3), whatever the
+         * generation's declared format. Throws [IllegalArgumentException] when a filter does not decode under §6.3. The
+         * seam carries [dev.revokt.Dataset.CRLITE] only (§3.2), the one dataset today.
          */
         fun decode(files: GenerationFiles): CrliteGeneration {
-            val expected =
-                when (files.format) {
-                    FilterFormat.V3 -> Encoding.V3
-                    FilterFormat.V4 -> Encoding.V4
-                }
             val filters =
                 files.names.filter { it != INDEX }.sorted().map { name ->
-                    val bytes = files.bytes(name)
                     try {
-                        val encoding = ClubcardFilters.encodingOf(bytes)
-                        require(encoding == expected) {
-                            "filter $name is encoded as $encoding, but the generation is ${files.format}"
-                        }
-                        ClubcardFilters.decode(bytes)
+                        ClubcardFilters.decode(files.bytes(name))
                     } catch (e: ClubcardFormatException) {
                         throw IllegalArgumentException("filter $name is malformed: ${e.message}", e)
                     }

@@ -81,6 +81,22 @@ class CrliteQueryTest {
     }
 
     @Test
+    fun `the order of the SCTs does not matter to equality, their multiplicity does`() {
+        val two = query().newBuilder().sct(sct(2)).build()
+        val swapped =
+            CrliteQuery
+                .Builder()
+                .issuerSpkiHash(issuer)
+                .serial(byteArrayOf(0, 1))
+                .sct(sct(2))
+                .sct(sct())
+                .build()
+        assertEquals(two, swapped)
+        assertEquals(two.hashCode(), swapped.hashCode())
+        assertNotEquals(two, two.newBuilder().sct(sct(2)).build())
+    }
+
+    @Test
     fun `equality, hashCode and toString are by content`() {
         assertEquals(sct(), sct())
         assertEquals(sct().hashCode(), sct().hashCode())

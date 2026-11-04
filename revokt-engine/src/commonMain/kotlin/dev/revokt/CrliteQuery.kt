@@ -9,7 +9,7 @@ import okio.ByteString.Companion.toByteString
 /**
  * The only engine input (spec §3.2, §6.1), extracted by revokt's parser from the path-verified leaf and issuer, so an
  * engine swap cannot change what is looked up. Growable: a field added in a minor does not break engines. A value
- * type: equality is by content, and the order of [scts] is significant to equality only.
+ * type: equality is by content, and, as for the query itself, the order of [scts] is not significant.
  */
 @OptIn(RevoktTestingApi::class)
 public class CrliteQuery private constructor(
@@ -55,9 +55,12 @@ public class CrliteQuery private constructor(
         other is CrliteQuery &&
             issuerHash == other.issuerHash &&
             serialBytes == other.serialBytes &&
-            scts == other.scts
+            sctCounts == other.sctCounts
 
-    override fun hashCode(): Int = listOf(issuerHash, serialBytes, scts).hashCode()
+    // Order-insensitive: the same SCTs in another order are the same query (§3.2).
+    override fun hashCode(): Int = listOf(issuerHash, serialBytes, sctCounts).hashCode()
+
+    private val sctCounts: Map<CrliteSct, Int> get() = scts.groupingBy { it }.eachCount()
 
     override fun toString(): String =
         "CrliteQuery(issuerSpkiHash=${issuerHash.hex()}, serial=${serialBytes.hex()}, scts=$scts)"

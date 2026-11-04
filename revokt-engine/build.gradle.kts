@@ -10,6 +10,9 @@ plugins {
 }
 
 kotlin {
+    // The engine's AtomicInt32 is an internal expect class (Beta in Kotlin 2.4), in place of the experimental
+    // kotlin.concurrent.atomics on the query path.
+    compilerOptions { freeCompilerArgs.add("-Xexpect-actual-classes") }
     sourceSets {
         commonMain.dependencies {
             implementation(project(":revokt-clubcard"))
@@ -77,8 +80,13 @@ kover {
             verify { rule("c2sp package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
         }
         variant("crlite") {
-            filters { includes { packages("dev.revokt.engine.crlite") } }
-            verify { rule("crlite package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
+            filters {
+                includes {
+                    packages("dev.revokt.engine.crlite")
+                    classes("dev.revokt.KotlinRevocationEngine", "dev.revokt.KotlinRevocationEngine$*")
+                }
+            }
+            verify { rule("crlite package and engine branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
         }
     }
 }
