@@ -10,6 +10,9 @@ plugins {
 }
 
 kotlin {
+    // The engine's AtomicInt32 is an internal expect class (Beta in Kotlin 2.4), in place of the experimental
+    // kotlin.concurrent.atomics on the query path.
+    compilerOptions { freeCompilerArgs.add("-Xexpect-actual-classes") }
     sourceSets {
         commonMain.dependencies {
             implementation(project(":revokt-clubcard"))
@@ -59,12 +62,13 @@ tasks.withType<Test>().configureEach {
 }
 
 // Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of each parser package of at least 90 % over
-// the committed tests (jvmTest), part of `check`: the certificate parser and the C2SP index reader (#86). The floors may
+// the committed tests (jvmTest), part of `check`: the certificate parser, the C2SP index reader (#86) and the CRLite generation (#90). The floors may
 // only be raised.
 kover {
     currentProject {
         createVariant("parser") { add("jvm") }
         createVariant("c2sp") { add("jvm") }
+        createVariant("crlite") { add("jvm") }
     }
     reports {
         variant("parser") {
@@ -75,10 +79,19 @@ kover {
             filters { includes { packages("dev.revokt.engine.c2sp") } }
             verify { rule("c2sp package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
         }
+        variant("crlite") {
+            filters {
+                includes {
+                    packages("dev.revokt.engine.crlite")
+                    classes("dev.revokt.KotlinRevocationEngine", "dev.revokt.KotlinRevocationEngine$*")
+                }
+            }
+            verify { rule("crlite package and engine branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
+        }
     }
 }
 
-tasks.named("check") { dependsOn("koverVerifyParser", "koverVerifyC2sp") }
+tasks.named("check") { dependsOn("koverVerifyParser", "koverVerifyC2sp", "koverVerifyCrlite") }
 
 class ClubcardCorpus(
     @get:InputDirectory @get:PathSensitive(PathSensitivity.RELATIVE) val dir: File,

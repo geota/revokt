@@ -3,8 +3,8 @@
 
 package dev.revokt.engine.c2sp
 
+import dev.revokt.ClubcardCorpus
 import dev.revokt.clubcard.RevoktInternalApi
-import dev.revokt.clubcard.api.ClubcardFilters
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.io.File
@@ -47,17 +47,9 @@ class C2spIndexUpkiTest {
                 !it.startsWith("#")
         }
 
-    private fun coverage(bytes: ByteArray): Map<ByteString, Window> =
-        ClubcardFilters
-            .decode(bytes)
-            .universe.logs
-            .map { (log, interval) ->
-                log.bytes to Window(interval.low.value.toULong(), interval.high.value.toULong())
-            }.toMap()
-
     @Test
     fun `revokt writes upki's index byte for byte`() {
-        val filters = recorded.map { it.name to coverage(it.bytes) }
+        val filters = recorded.map { it.name to ClubcardCorpus.coverage(it.bytes) }
         assertContentEquals(resource("upki-index.bin"), C2spIndex.write(C2spIndex.index(filters)))
     }
 
@@ -67,7 +59,7 @@ class C2spIndexUpkiTest {
         assertEquals(recorded.map { it.name }, index.filenames)
         assertEquals(
             emptyList(),
-            C2spIndex.inconsistencies(index, recorded.associate { it.name to coverage(it.bytes) }),
+            C2spIndex.inconsistencies(index, recorded.associate { it.name to ClubcardCorpus.coverage(it.bytes) }),
         )
     }
 }

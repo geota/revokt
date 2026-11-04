@@ -10,7 +10,9 @@
 #   sh native/revokt-oracle/record-upki-index.sh
 set -eu
 root=$(pwd)
-tag=v1.0.1   # rustls/upki, spec §3.2 and Appendix A; #85 moves this pin into gradle/oracle-matrix.properties
+# The rustls/upki tag: the matrix's upki pin (spec §3.2 and Appendix A; the nightly upki-release job tracks it).
+tag=$(sed -n 's/^upki[[:space:]]*[=:][[:space:]]*//p' gradle/oracle-matrix.properties | tr -d ' ' | tail -n 1)
+printf '%s\n' "$tag" | grep -qxE 'v[0-9]+\.[0-9]+\.[0-9]+' || { echo "no upki pin (vX.Y.Z) in gradle/oracle-matrix.properties" >&2; exit 1; }
 out="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/c2sp"
 work=$(mktemp -d)
 cleanup() {
