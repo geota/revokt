@@ -1,10 +1,46 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 47** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-10-30
+Status: **draft spec / project proposal, revision 48** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-04
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 48 (every unrelated leaf issuer collected, and the C2SP index rules for every source, 2026-11-04)
+- **Decided** (#98, found while reviewing #91's reference walker; the maintainer chose reading B): at the leaf, §5.1's
+  unrelated loop now also runs regardless of `foundHere` when **no related path** exists there, as it already did
+  under a custom canonicaliser.
+  - **Before:** with no related path at the leaf, the loop stopped at the first unrelated path. If two unrelated
+    presented certificates both verified the leaf and reached an anchor, only the first one's key was collected.
+    `leafKeys` then depended on the presented order, against P4. It differed from the §9.1 reference walker, against
+    P2. The second key was never evaluated, against §10's "every terminating leaf-issuer key is evaluated and
+    `REVOKED` wins".
+  - **Now:** the pseudocode keeps `relatedPath` (whether a related candidate's path exists at the node) and breaks
+    out of the unrelated loop only when a path exists and the node is not the leaf, or the leaf has a related path
+    and no custom canonicaliser. The cost stays within `presented − 1`, the bound the custom-canonicaliser case
+    already has. P6 is unchanged: on the default delegates an honest issuer is related, so an honest world always has
+    a related path.
+  - **A refinement of #98's text:** #98 keyed reading B on "no related candidate". The condition is "no related
+    path", so that a related decoy which verifies the leaf but leads nowhere cannot restore the order dependence.
+    This is exactly the §9.1 reference walker's "unrelated presented certificates only when no related path exists",
+    and it is what #91's reference implements.
+  - **Fixtures:** the termination rule and §9.1's reference-walker sentence say the same. A walker-harness fixture,
+    (aj), covers two unrelated anchored issuers in either order, with and without an unanchored related decoy.
+- **Changed** (§6.5, #87): `index.bin` names a generation's files by their Remote Settings attachment filenames, but
+  §6.3 admits attachment names of up to 64 characters and C2SP only 1 to 32 bytes. A 33-character name (today's
+  31-character names with a three-digit daily index) would have made the index writer throw.
+  - **The rule:** a name over 32 bytes is replaced in `index.bin` by its first 15 characters, `-` and 16 hex
+    characters of its SHA-256. `meta.json` already maps each name to its blob.
+  - **Collisions:** two attachments that map to one name fail the generation with `INDEX_INCONSISTENT`.
+  - **Seeds:** `buildIndex` follows the same rule. No seed has been published, so no `seedFormat` changes.
+- **Changed** (§3.2, #86): the 1 MiB cap §6.5 gives a seed's `index.bin` now applies to every `index.bin` the engine
+  reads, checked before parsing, with the same outcome as an inconsistent index. #86's reader already enforces it
+  for every source. It bounds the reader's allocation; real indexes are far smaller (the corpus golden is 8 KB).
+- **Clarified** (§11, the 0.1 row): it lists `SymVerifier`, the reference walker and the chain generator once, not
+  twice, and it names canonical JSON beside the JSON tree, as #92 implements it. The content-signature payload
+  builder is 0.2.
+- **Not changed:** historical changelog entries keep the names of their time. For example, revision 27's
+  `GenerationFiles.fromDirectory` became §3.2's `JvmGenerationFiles.fromDirectory` later.
 
 ### Changes in revision 47 (the `DEFAULT` outcome of the two data rules that never fire there, 2026-10-30)
 - **Decided** (#75, found while implementing #72, the `Rule` model's golden fixture): §8 gave `DEFAULT`'s `STALE`
@@ -1304,7 +1340,9 @@ ends, overlapping windows allowed), the set of filters the `index.bin` log direc
 (log id, timestamp) must equal the set of referenced filters whose own coverage map contains it, i.e. every
 directory entry lies within its filter's window and every filter's window is exactly covered by its entries;
 a mismatch is `SyncOutcome.FAILED` with `INDEX_INCONSISTENT` (stage `INDEX`; `SEED_UNREADABLE` for a seed,
-`STORE_UNREADABLE` for a system cache) and nothing is installed. This is what makes the Kotlin engine's
+`STORE_UNREADABLE` for a system cache) and nothing is installed. **Every `index.bin` the engine reads, whatever its
+source, is at most 1 MiB, checked before it is parsed** (the seed's cap, §6.5, applied to every source, revision 48),
+with the same outcome as a mismatch. This is what makes the Kotlin engine's
 coverage-driven filter selection (§6.2, every filter consulted by its own coverage) equal to C2SP's
 `index.bin`-driven selection (upki binary-searches the log directory and loads only the filters it names)
 on every generation the suite admits; how `upki-mirror` writes overlapping windows and how `Index::check`
@@ -1972,13 +2010,16 @@ delegates canonicalisation to the platform; on both default delegates every hone
 therefore related, and the misclassification residue is confined to custom delegates whose name
 equality differs from `X500Principal`'s. **Unrelated candidates are the presented certificates not
 related to the child**, are explored only while no path exists through the node (checked before
-every candidate), and are not capped; **at the leaf, when `CandidateIndex.customCanonicaliser` is set
-(`platformTrust` is not one of the two shipped final classes, or the delegate is not `platformTrust.defaultDelegate()`; §3), the unrelated loop runs regardless of `foundHere`** (cost bounded by
-`presented − 1`, so P6 holds on the default delegates), otherwise an honest issuer misclassified as
-unrelated could be hidden by a related decoy path (§10 residual 1). Store certificates are never unrelated candidates.
+every candidate), and are not capped; **at the leaf, the unrelated loop runs regardless of `foundHere` when
+`CandidateIndex.customCanonicaliser` is set** (`platformTrust` is not one of the two shipped final classes, or the delegate is not `platformTrust.defaultDelegate()`; §3), otherwise an honest issuer misclassified as
+unrelated could be hidden by a related decoy path (§10 residual 1), **and when no related path exists at the leaf**
+(revision 48, #98: every unrelated certificate that verifies the leaf and terminates is then collected, so `leafKeys`
+does not depend on the presented order and every such key is evaluated); in both cases the cost is bounded by
+`presented − 1`, so P6 holds on the default delegates, where an honest issuer is always related. Store certificates are never unrelated candidates.
 
 *Termination rule.* At the leaf, every related candidate is explored, so every distinct key that
-verifies the leaf and terminates is collected; below the leaf, the first sound path through a node
+verifies the leaf and terminates is collected, and so is every unrelated one when no related path exists there;
+below the leaf, the first sound path through a node
 suffices in M1 (M2 re-walks exhaustively when a layer hits, under the re-walk rule of step 8: fresh
 budgets, shared memo, never demoting the first walk's `Found`). **Any limit exceeded at any node
 aborts the whole walk with `Budget`**; only `MAX_DEPTH` is a local dead end. `Found` is returned
@@ -2070,7 +2111,8 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
             related++; if (isLeaf) relatedExploredAtLeaf++
             explore(cand, isRelated = true)?.let { return it }
         }
-        for (cand in index.unrelated(presented, child, seen)) { if (foundHere && !(isLeaf && index.customCanonicaliser)) break; if (isLeaf) unrelatedExploredAtLeaf++; explore(cand, isRelated = false)?.let { return it } }   // stops as soon as a path exists, except at the leaf under a custom canonicaliser (deferral rule)
+        val relatedPath = foundHere                                                     // a path through a related candidate exists at this node
+        for (cand in index.unrelated(presented, child, seen)) { if (foundHere && !(isLeaf && (index.customCanonicaliser || !relatedPath))) break; if (isLeaf) unrelatedExploredAtLeaf++; explore(cand, isRelated = false)?.let { return it } }   // stops as soon as a path exists, except at the leaf under a custom canonicaliser (deferral rule) or with no related path (every unrelated issuer is collected, revision 48)
         return null
     }
 
@@ -2397,7 +2439,7 @@ Detect the encoding from the 2-byte prefix `[version, reserved0 = 0]`:
   evicts a `MIRROR` or `SYSTEM` one.
 
 **Hardening**: every length and offset checked before allocation with an explicit allocation budget
-per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (today's attachment names are 31 characters; a three-digit daily index must not fail the rule) and never a reserved name (`meta.json`, `records.json`, `current`, `updater.json`, `store.version`, `.lock`); downloads capped at `min(attachment.size, MAX_FILTER_BYTES)` for signed bodies and at the per-kind fixed cap for unsigned bodies (§5.1 limits).
+per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (today's attachment names are 31 characters; a three-digit daily index must not fail the rule; a name longer than C2SP's 32 bytes is renamed in `index.bin`, §6.5) and never a reserved name (`meta.json`, `records.json`, `current`, `updater.json`, `store.version`, `.lock`); downloads capped at `min(attachment.size, MAX_FILTER_BYTES)` for signed bodies and at the per-kind fixed cap for unsigned bodies (§5.1 limits).
 
 ### 6.4 Filter storage
 `LongArray` columns padded with one zero word in an immutable `Generation`. No mmap.
@@ -2415,8 +2457,11 @@ are a fixed 2 s.
 ### 6.5 Store, persistence and seeds
 
 **Layout over `RevoktStorage`'s key space** (each generation is materialisable into a C2SP directory
-image; `index.bin` names files by their Remote Settings attachment filename and `meta.json` maps each
-name to its blob). Path segments for dataset and channel are lowercase enum names; persisted enum
+image; `index.bin` names each file by its Remote Settings attachment filename when that is a C2SP filename (1 to 32
+bytes of `[A-Za-z0-9._-]`), otherwise by the attachment filename's first 15 characters, `-` and the first 16
+lowercase hex characters of the filename's SHA-256, 32 characters in all (revision 48: §6.3 admits attachment names of
+up to 64 characters, C2SP up to 32); two attachments that map to one name fail the generation with
+`INDEX_INCONSISTENT`; `meta.json` maps each name to its blob). Path segments for dataset and channel are lowercase enum names; persisted enum
 values are names, never ordinals:
 - `store.version`: integer, `1` in 0.3, read before anything else; an empty store is initialised
   silently by the owner (never by a read-only instance); a non-empty store with a missing or **lower** version is treated as empty and rebuilt
@@ -2811,7 +2856,10 @@ tests; **live checks** are informational.
   of distinct RSA duplicate-signature keys each verifying the leaf and recursing into a
   32-certificate dead-end subtree → `Budget(VERIFICATION_BUDGET)`, `verifications = 256`; (ai) a
   17-certificate honest path (16 non-terminal plus the anchor) → `Found`; an 18-certificate one →
-  dead end. Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
+  dead end; (aj) **walker-harness only** (revision 48, #98): no honest issuer presented, two unrelated presented
+  certificates whose keys both verify the leaf and are each certified by a snapshot anchor, in either order, with and
+  without a related candidate ahead that verifies the leaf but is unanchored → `Found`, `leafKeys` = both keys in every
+  case, and `rule = REVOKED` when the CRLite stub revokes the second one. Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
   (z) has a related candidate that verifies but is unanchored; stuffing fixtures present their junk.
 - **Trust-manager invariants**: never accept what the platform rejected (the 3-arg overload's null-host retry only after a socket or engine overload accepted the chain and host); under `DEFAULT` never
   reject on a step-2 failure alone except `PATH_BUDGET_EXCEEDED`; at most one event per (connection, verdict-cache TTL window) on Android
@@ -2872,7 +2920,7 @@ honest certificates, `DropIntermediate`) and **attacker mutations** (`Recover(ch
 in `ok`, optionally `CertifiedBy(anchor)`; `SameKeyDecoy`; `CrossCertToNonAnchor`; `Stuff(n ≤ 300,
 related)`; `SelfSignedNonAnchor`; `Loop`; `Permute`; `Duplicate`; `DepthPad`, junk certificates off the honest path that never lengthen it, so P3 is not tripped by a dead end). **Oracle**: a
 **relation-aware, uncapped reference walker** (at every node: related candidates, plus unrelated
-presented certificates only when no related path exists; depth ≤ `MAX_DEPTH`; no other limits; the fuzzer runs both walkers with the platform canonicaliser, so the leaf-level custom-canonicaliser clause is inert for P2/P6 and is covered by the walker-harness fixtures instead) →
+presented certificates only when no related path exists, at the leaf collecting every unrelated issuer's key as §5.1 does; depth ≤ `MAX_DEPTH`; no other limits; the fuzzer runs both walkers with the platform canonicaliser, so the leaf-level custom-canonicaliser clause is inert for P2/P6 and is covered by the walker-harness fixtures instead) →
 `refKeys`; a CRLite stub mapping the honest key to `REVOKED` in half the runs and every other key to `NOT_ENROLLED` (so `rules` is predictable under `Recover(CertifiedBy)`); a fake
 `PathBuilderFallback` equal to the reference. Properties:
 - **P1 soundness**: every returned path's links are in `ok` and not unsupported; terminal bytes in the snapshot.
@@ -3574,7 +3622,7 @@ APIs outside the promise, the growability contract in §4.
 
 | Release | Scope | Estimate |
 |---|---|---|
-| 0.1 | engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8 (gated direction; D8 gap reported)); JSON tree; clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; the §9.1 chain generator, `SymVerifier` and the reference walker (the walker fuzzer itself is 0.2, with the walker); oracle CI | 5 weeks |
+| 0.1 | engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3; the walker fuzzer itself is 0.2, with the walker); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8 (gated direction; D8 gap reported)); JSON tree and canonical JSON (§7.1; the content-signature payload builder is 0.2); clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; oracle CI | 5 weeks |
 | 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists); candidate index and walker per §5.1, PKIX fallback on both platforms, the §9.2 read fallback in the JVM binding, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3); **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation; CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
 | 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2; caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `status()` and `state`; Android instrumented suite including the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (revision 38's Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
 
