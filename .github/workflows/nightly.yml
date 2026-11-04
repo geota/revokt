@@ -148,13 +148,16 @@ jobs:
           commit=$(pin upki-revocation.commit)
           printf '%s\n' "$upki" | grep -qxE "$semver" || problem "no upki pin (vX.Y.Z) in gradle/oracle-matrix.properties"
           printf '%s\n' "$spec" | grep -qxE "$semver" || problem "no upki-revocation pin (vX.Y.Z) in gradle/oracle-matrix.properties"
-          printf '%s\n' "$commit" | grep -qxE '[0-9a-f]{40}' || problem "no upki-revocation.commit pin (40 hex) in gradle/oracle-matrix.properties"
+          commit_ok=0
+          if printf '%s\n' "$commit" | grep -qxE '[0-9a-f]{40}'; then commit_ok=1; else problem "no upki-revocation.commit pin (40 hex) in gradle/oracle-matrix.properties"; fi
 
           # "<published_at> <tag>" per stable release; ISO 8601 UTC times order as strings.
           releases=$(gh api --paginate repos/rustls/upki/releases --jq '.[] | select(.prerelease or .draft | not) | "\(.published_at) \(.tag_name)"')
           pinned_at=$(printf '%s\n' "$releases" | awk -v t="$upki" '$2 == t { print $1 }')
           if [ -z "$pinned_at" ]; then
             problem "upki=$upki in gradle/oracle-matrix.properties is not a published rustls/upki release"
+          elif ! printf '%s\n' "$pinned_at" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'; then
+            problem "rustls/upki $upki has no publish date ('$pinned_at'): the releases after it cannot be checked for an unrecognised tag scheme"
           else
             while read -r tag; do
               problem "rustls/upki released $tag in an unrecognised tag scheme: update the upki-release check"
@@ -166,13 +169,13 @@ jobs:
           tags=$(gh api --paginate repos/C2SP/C2SP/git/matching-refs/tags/upki-revocation/ --jq '.[] | "\(.ref | ltrimstr("refs/tags/upki-revocation/")) \(.object.type) \(.object.sha)"')
           while read -r tag; do
             problem "C2SP tagged upki-revocation/$tag in an unrecognised tag scheme: update the upki-release check"
-          done < <(printf '%s\n' "$tags" | cut -d' ' -f1 | { grep -vxE "$semver(-rc[.0-9]*)?" || true; })
+          done < <(printf '%s\n' "$tags" | awk 'NF { print $1 }' | { grep -vxE "$semver(-rc[.0-9]*)?" || true; })
           read -r _ type sha < <(printf '%s\n' "$tags" | awk -v t="$spec" '$1 == t') || true
           if [ -z "${sha:-}" ]; then
             problem "upki-revocation=$spec in gradle/oracle-matrix.properties is not a C2SP upki-revocation/* tag"
           else
             if [ "$type" = tag ]; then sha=$(gh api "repos/C2SP/C2SP/git/tags/$sha" --jq .object.sha); fi
-            if [ -n "$commit" ] && [ "$sha" != "$commit" ]; then
+            if [ "$commit_ok" = 1 ] && [ "$sha" != "$commit" ]; then
               problem "C2SP re-pointed upki-revocation/$spec at $sha, the pin is $commit: the spec text changed under the same version; re-verify it (a spec change) and roll upki-revocation.commit"
             fi
           fi
