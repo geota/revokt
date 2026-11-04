@@ -2582,8 +2582,8 @@ Remote Settings data, asserted on named fixtures (a committed CRLite-shaped chan
 Remote Settings changeset in the corpus tier) (revision 48: a tree with one object per value cannot hold 4·len on
 every input, `[1.5,…]` alone needing about 6·len, and a bound needs a constant term); DER ≤ 2·len; asserted in the §9.1
 replay by `com.sun.management.ThreadMXBean.getThreadAllocatedBytes` deltas (HotSpot), after one warm-up decode, on the same thread,
-of a fixed small document that contains every value kind (for example `{"a":[0,-1.5e3,18446744073709551616,"é😀\u00e9\ud83d\ude00",true,false,null,{}]}`, covering exponents, negative and beyond-`Long` numbers, multi-byte UTF-8 and `\u` escapes with a surrogate pair), so that
-per-process class loading does not count; every buffer a decoder keeps across calls counts toward its budget. The
+of a fixed small document that contains every value kind (for example `{"a":[0,-1.5e3,18446744073709551616,"é😀\u00e9\ud83d\ude00",true,false,null,{}]}`, covering exponents, negative and beyond-`Long` numbers, multi-byte UTF-8 and `\u` escapes with a surrogate pair), and of one fixed rejected input such as `[`
+(the error path loads its own classes), so that per-process class loading does not count; every buffer a decoder keeps across calls counts toward its budget. The
 transient worst case is therefore about 20 × `MAX_JSON_BYTES` (80 MiB at the default cap) for a changeset, which is
 decoded before its signature can be checked (the signature is over the canonical form of the decoded records) and is
 accepted: every loader task catches `Throwable`, an `OutOfMemoryError` included (above); a seed's `records.json` is verified as raw bytes
