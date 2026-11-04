@@ -57,43 +57,176 @@ internal data class JsonDouble(
     }
 }
 
-internal data class JsonArray(
-    val items: List<JsonValue>,
+/**
+ * An array; [items] is a read-only view. A one-item array holds its item directly, so nesting costs one small object
+ * per level (spec §6.5's allocation budget).
+ */
+internal class JsonArray private constructor(
+    private val array: Array<JsonValue>,
+    private val single: JsonValue?,
 ) : JsonValue {
+    constructor(items: List<JsonValue>) : this(
+        if (items.size ==
+            1
+        ) {
+            NONE
+        } else {
+            items.toTypedArray()
+        },
+        items.singleOrNull(),
+    )
+
+    val items: List<JsonValue> get() = if (single != null) listOf(single) else array.asList()
+
+    val size: Int get() = if (single != null) 1 else array.size
+
+    operator fun get(index: Int): JsonValue = if (single != null && index == 0) single else array[index]
+
+    override fun equals(other: Any?): Boolean = other is JsonArray && items == other.items
+
+    override fun hashCode(): Int = items.hashCode()
+
+    override fun toString(): String = "JsonArray($items)"
+
     companion object {
-        val EMPTY = JsonArray(emptyList())
+        private val NONE = emptyArray<JsonValue>()
+
+        val EMPTY = JsonArray(NONE, null)
+
+        /** Takes [array], of two or more items, as is: the parser's exact-size copy, which nothing else holds. */
+        internal fun owning(array: Array<JsonValue>): JsonArray = JsonArray(array, null)
+
+        /** The one-item array of [item]. */
+        internal fun of(item: JsonValue): JsonArray = JsonArray(NONE, item)
     }
 }
 
-/** An object, its [members] iterating in code point order of the keys (spec §7.1), keys distinct by construction. */
+/**
+ * An object: keys distinct and in code point order (spec §7.1), held as sorted parallel arrays, looked up by binary
+ * search.
+ */
 internal class JsonObject private constructor(
-    val members: Map<String, JsonValue>,
+    private val keyArray: Array<String>,
+    private val valueArray: Array<JsonValue>,
 ) : JsonValue {
-    operator fun get(key: String): JsonValue? = members[key]
+    /** The keys in code point order, a read-only view. */
+    val keys: List<String> get() = keyArray.asList()
 
-    override fun equals(other: Any?): Boolean = other is JsonObject && members == other.members
+    val size: Int get() = keyArray.size
 
-    override fun hashCode(): Int = members.hashCode()
+    operator fun get(key: String): JsonValue? {
+        var low = 0
+        var high = keyArray.size - 1
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            val c = compareCodePoints(keyArray[mid], key)
+            when {
+                c < 0 -> low = mid + 1
+                c > 0 -> high = mid - 1
+                else -> return valueArray[mid]
+            }
+        }
+        return null
+    }
 
-    override fun toString(): String = "JsonObject($members)"
+    /** The key of the [i]th member in key order. */
+    fun keyAt(i: Int): String = keyArray[i]
+
+    /** The value of the [i]th member in key order. */
+    fun valueAt(i: Int): JsonValue = valueArray[i]
+
+    override fun equals(other: Any?): Boolean =
+        other is JsonObject && keyArray.contentEquals(other.keyArray) && valueArray.contentEquals(other.valueArray)
+
+    override fun hashCode(): Int = 31 * keyArray.contentHashCode() + valueArray.contentHashCode()
+
+    override fun toString(): String =
+        keyArray.indices.joinToString(", ", "JsonObject({", "})") { "${keyArray[it]}=${valueArray[it]}" }
 
     companion object {
-        val EMPTY = JsonObject(emptyMap())
+        val EMPTY = JsonObject(emptyArray(), emptyArray())
 
         /** The object of [entries] in code point order of the keys, or null when two entries share a key. */
-        fun ofOrNull(entries: List<Pair<String, JsonValue>>): JsonObject? {
-            if (entries.isEmpty()) return EMPTY
-            val sorted = entries.sortedWith { a, b -> compareCodePoints(a.first, b.first) }
-            val members = LinkedHashMap<String, JsonValue>(sorted.size * 4 / 3 + 1)
-            for (i in sorted.indices) {
-                if (i > 0 && sorted[i - 1].first == sorted[i].first) return null
-                members[sorted[i].first] = sorted[i].second
-            }
-            return JsonObject(members)
-        }
+        fun ofOrNull(entries: List<Pair<String, JsonValue>>): JsonObject? =
+            owningOrNull(Array(entries.size) { entries[it].first }, Array(entries.size) { entries[it].second })
 
         fun of(vararg entries: Pair<String, JsonValue>): JsonObject =
             requireNotNull(ofOrNull(entries.asList())) { "two members share a key" }
+
+        /**
+         * Sorts [keys] and [values] together in place, a stable merge sort by code point, and takes both as is; null
+         * when two keys are equal. The arrays must be the caller's own.
+         */
+        internal fun owningOrNull(
+            keys: Array<String>,
+            values: Array<JsonValue>,
+        ): JsonObject? {
+            if (keys.isEmpty()) return EMPTY
+            sort(keys, values)
+            for (i in 1 until keys.size) if (keys[i - 1] == keys[i]) return null
+            return JsonObject(keys, values)
+        }
+
+        /** Insertion sort up to 16 members, else a bottom-up merge sort through one pair of scratch arrays. */
+        private fun sort(
+            keys: Array<String>,
+            values: Array<JsonValue>,
+        ) {
+            val n = keys.size
+            if (n <= 16) {
+                for (i in 1 until n) {
+                    val k = keys[i]
+                    val v = values[i]
+                    var j = i - 1
+                    while (j >= 0 && compareCodePoints(keys[j], k) > 0) {
+                        keys[j + 1] = keys[j]
+                        values[j + 1] = values[j]
+                        j--
+                    }
+                    keys[j + 1] = k
+                    values[j + 1] = v
+                }
+                return
+            }
+            var srcK = keys
+            var srcV = values
+            var dstK = keys.copyOf()
+            var dstV = values.copyOf()
+            var width = 1
+            while (width < n) {
+                var low = 0
+                while (low < n) {
+                    merge(srcK, srcV, dstK, dstV, low, minOf(low + width, n), minOf(low + 2 * width, n))
+                    low += 2 * width
+                }
+                srcK = dstK.also { dstK = srcK }
+                srcV = dstV.also { dstV = srcV }
+                width *= 2
+            }
+            if (srcK !== keys) {
+                srcK.copyInto(keys)
+                srcV.copyInto(values)
+            }
+        }
+
+        private fun merge(
+            srcK: Array<String>,
+            srcV: Array<JsonValue>,
+            dstK: Array<String>,
+            dstV: Array<JsonValue>,
+            low: Int,
+            mid: Int,
+            high: Int,
+        ) {
+            var a = low
+            var b = mid
+            for (o in low until high) {
+                val fromA = b >= high || (a < mid && compareCodePoints(srcK[a], srcK[b]) <= 0)
+                val from = if (fromA) a++ else b++
+                dstK[o] = srcK[from]
+                dstV[o] = srcV[from]
+            }
+        }
 
         /**
          * Orders [a] and [b] by Unicode code point, which is UTF-8 byte order (`canonical_json` sorts Rust `String`s).

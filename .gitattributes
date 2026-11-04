@@ -1,7 +1,7 @@
 # Fixture data must hash identically on every OS (CONTRIBUTING §3 "Toolchain").
 corpus/** -text
 **/src/test/resources/** -text
-revokt-engine/src/jvmTest/resources/dev/revokt/engine/json/** -text
+**/src/*Test/resources/** -text
 *.bin binary
 *.zip binary
 *.filter binary

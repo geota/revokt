@@ -16,7 +16,8 @@ name = "revokt-oracle"
 path = "src/main.rs"
 
 [dependencies]
-# The clubcard oracle (spec §9, the 0.1 "clubcard port" issue). upki and x509-parser follow with the 0.1 oracle issue. Exact pins: the oracle decides what revokt must agree with, so a version bump is a `spec` change.
+# The clubcard oracle (spec §9, the 0.1 "clubcard port" issue); upki follows with the 0.1 oracle issue. Exact pins:
+# the oracle decides what revokt must agree with, so a version bump is a `spec` change.
 clubcard-crlite = { version = "=0.6.2", features = ["builder", "bincode", "sha2"] }
 clubcard = { version = "=0.3.4", features = ["builder"] }
 # Already a dependency of clubcard-crlite; used only to write the ct-logs.json the builder reads.
@@ -27,6 +28,7 @@ asn1-rs = "=0.7.2"
 nom = "=7.1.3"
 # The canonical JSON oracle (spec §7.1, §9; Appendix A pins canonical_json 0.7.0, mozilla-services/canonicaljson-rs).
 canonical_json = "=0.7.0"
-# Already a dependency of clubcard-crlite and canonical_json, whose to_string takes a serde_json::Value. float_roundtrip
-# reads a decimal as the nearest double, as revokt does; canonical_json's output rules do not depend on it.
-serde_json = { version = "1", features = ["float_roundtrip"] }
+# Already a dependency of clubcard-crlite and canonical_json, whose to_string takes a serde_json::Value. Pinned: its
+# serializer splits the strings canonical_json escapes and its parser reads the numbers. float_roundtrip reads a
+# decimal as the nearest double, as revokt does; canonical_json's output rules do not depend on it.
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }

@@ -11,6 +11,9 @@ package dev.revokt.engine.json
  * back to Dragon whenever Grisu cannot guarantee the shortest nearest digits, which Dragon always produces.
  */
 internal object ShortestDouble {
+    /** Rust's `Big32x40`: 1280 bits hold every intermediate of a double's shortest digits. */
+    private const val LIMBS = 40
+
     fun exponential(v: Double): String {
         require(v.isFinite()) { "not finite: $v" }
         val bits = v.toRawBits()
@@ -35,7 +38,8 @@ internal object ShortestDouble {
             // Subnormal: neighbours (m - 2, e) and (m + 2, e), integer_decode having doubled m.
             field == 0 -> dragon(m, 1L, 1L, e, inclusive)
 
-            // The smallest normal: the neighbour below is half as far.
+            // A normal power of two (zero fraction: Rust compares with the smallest normal's mantissa, 2^52, which every
+            // power of two shares): the neighbour below is half as far.
             m == 1L shl 52 -> dragon(m shl 2, 1L, 2L, e - 2, inclusive)
 
             else -> dragon(m shl 1, 1L, 1L, e - 1, inclusive)
@@ -79,18 +83,36 @@ internal object ShortestDouble {
         dExp: Int,
         val inclusive: Boolean,
     ) {
-        val mant = Big(dMant)
-        val minus = Big(dMinus)
-        val plus = Big(dPlus)
-        val scale = Big(1)
-        val sum = Big(0)
+        val mant = Big.of(dMant, LIMBS)
+        val minus = Big.of(dMinus, LIMBS)
+        val plus = Big.of(dPlus, LIMBS)
+        val scale = Big.of(1, LIMBS)
+        val sum = Big.of(0, LIMBS)
         var k = estimateScalingFactor(dMant + dPlus, dExp)
         private val bounds = listOf(mant, minus, plus)
 
         init {
             if (dExp < 0) scale.mulPow2(-dExp) else bounds.forEach { it.mulPow2(dExp) }
-            if (k >= 0) scale.mulPow10(k) else bounds.forEach { it.mulPow10(-k) }
+            if (k >= 0) scale.mulPow10(k) else timesPow10(-k, dMant, dMinus, dPlus)
             if (below(scale, sum.setSum(mant, plus))) k++ else timesTen()
+        }
+
+        /**
+         * mant, minus and plus times 10^[n], with the power computed once (k < 0 only for values below 1, where dExp
+         * is negative and the three still hold dMant, dMinus and dPlus); the mantissa, below 2^55, in two parts below 2^31.
+         */
+        private fun timesPow10(
+            n: Int,
+            dMant: Long,
+            dMinus: Long,
+            dPlus: Long,
+        ) {
+            minus.set(1).mulPow10(n)
+            plus.set(minus).mulSmall(dPlus.toInt())
+            mant.set(minus).mulSmall((dMant and 0x7FFF_FFFF).toInt())
+            sum.set(minus).mulSmall((dMant ushr 31).toInt()).mulPow2(31)
+            mant.setSum(mant, sum)
+            minus.mulSmall(dMinus.toInt())
         }
 
         /** 8, 4, 2 and 1 × scale, for [nextDigit]. */
@@ -140,100 +162,5 @@ internal object ShortestDouble {
     ): Int {
         val nbits = 64 - (mant - 1).countLeadingZeroBits()
         return (((nbits + exp).toLong() * 1_292_913_986L) shr 32).toInt()
-    }
-
-    /** An unsigned integer of [SIZE] 32-bit limbs, little-endian, as Rust's `Big32x40`; overflow is an error. */
-    private class Big private constructor(
-        private val limbs: IntArray,
-    ) : Comparable<Big> {
-        constructor(v: Long) : this(IntArray(SIZE)) {
-            limbs[0] = v.toInt()
-            limbs[1] = (v ushr 32).toInt()
-        }
-
-        fun copy(): Big = Big(limbs.copyOf())
-
-        /** Multiplies by [m], below 2^31, so each limb product and carry fits a [Long]. */
-        fun mulSmall(m: Int): Big {
-            var carry = 0L
-            for (i in 0 until SIZE) {
-                val p = (limbs[i].toLong() and MASK) * m + carry
-                limbs[i] = p.toInt()
-                carry = p ushr 32
-            }
-            check(carry == 0L) { "bignum overflow" }
-            return this
-        }
-
-        fun mulPow10(n: Int): Big {
-            var left = n
-            while (left >= 9) {
-                mulSmall(1_000_000_000)
-                left -= 9
-            }
-            return mulSmall(POW10[left])
-        }
-
-        fun mulPow2(n: Int): Big {
-            val words = n ushr 5
-            val shift = n and 31
-            check(bitLength() + n <= SIZE * 32) { "bignum overflow" }
-            for (i in SIZE - 1 downTo 0) {
-                val hi = if (i - words >= 0) limbs[i - words] else 0
-                val lo = if (i - words - 1 >= 0) limbs[i - words - 1] else 0
-                limbs[i] = if (shift == 0) hi else (hi shl shift) or (lo ushr (32 - shift))
-            }
-            return this
-        }
-
-        /** Sets this to [a] + [b]. */
-        fun setSum(
-            a: Big,
-            b: Big,
-        ): Big {
-            var carry = 0L
-            for (i in 0 until SIZE) {
-                val s = (a.limbs[i].toLong() and MASK) + (b.limbs[i].toLong() and MASK) + carry
-                limbs[i] = s.toInt()
-                carry = s ushr 32
-            }
-            check(carry == 0L) { "bignum overflow" }
-            return this
-        }
-
-        /** Subtracts [other], at most this. */
-        fun sub(other: Big) {
-            var borrow = 0L
-            for (i in 0 until SIZE) {
-                val d = (limbs[i].toLong() and MASK) - (other.limbs[i].toLong() and MASK) - borrow
-                limbs[i] = d.toInt()
-                borrow = if (d < 0) 1L else 0L
-            }
-            check(borrow == 0L) { "bignum underflow" }
-        }
-
-        private fun bitLength(): Int {
-            for (i in SIZE - 1 downTo 0) {
-                if (limbs[i] != 0) return i * 32 + 32 - limbs[i].countLeadingZeroBits()
-            }
-            return 0
-        }
-
-        override fun compareTo(other: Big): Int {
-            for (i in SIZE - 1 downTo 0) {
-                if (limbs[i] !=
-                    other.limbs[i]
-                ) {
-                    return (limbs[i].toLong() and MASK).compareTo(other.limbs[i].toLong() and MASK)
-                }
-            }
-            return 0
-        }
-
-        companion object {
-            const val SIZE = 40
-            const val MASK = 0xFFFF_FFFFL
-            val POW10 = intArrayOf(1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000)
-        }
     }
 }

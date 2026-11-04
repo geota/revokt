@@ -6,6 +6,9 @@ package dev.revokt.engine.json
 import dev.revokt.engine.parse.producer.ExternalCorpus
 import okio.ByteString.Companion.toByteString
 import java.io.File
+import java.security.KeyFactory
+import java.security.Signature
+import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -124,5 +127,28 @@ class CanonicalJsonOracleTest {
         val dir = ExternalCorpus.dir ?: return println("canonical JSON: no large corpus on this run (-Prevokt.corpus)")
         val file = "issuer/mozilla-intermediates/changeset.json"
         checkChangeset(file, File(dir, file).readBytes())
+    }
+
+    /**
+     * Mozilla's own signature over the corpus changeset verifies against `Content-Signature:\0` plus revokt's canonical
+     * payload (spec §7.1): the bytes revokt builds are the bytes Mozilla signed. It proves the bytes, not the chain: the
+     * key is `metadata.signature.public_key`, which is unsigned metadata, not a key from the validated x5u chain.
+     */
+    @Test
+    fun `Mozilla's signature over the corpus changeset verifies over revokt's payload`() {
+        val dir =
+            ExternalCorpus.dir ?: return println("content signature: no large corpus on this run (-Prevokt.corpus)")
+        val tree = Json.parse(File(dir, "issuer/mozilla-intermediates/changeset.json").readBytes()) as JsonObject
+        val signature = (tree["metadata"] as JsonObject)["signature"] as JsonObject
+        val key =
+            KeyFactory
+                .getInstance("EC")
+                .generatePublic(
+                    X509EncodedKeySpec(Base64.getDecoder().decode((signature["public_key"] as JsonString).value)),
+                )
+        val verifier = Signature.getInstance("SHA384withECDSAinP1363Format")
+        verifier.initVerify(key)
+        verifier.update("Content-Signature:\u0000".encodeToByteArray() + CanonicalJson.write(payload(tree)))
+        assertTrue(verifier.verify(Base64.getUrlDecoder().decode((signature["signature"] as JsonString).value)))
     }
 }

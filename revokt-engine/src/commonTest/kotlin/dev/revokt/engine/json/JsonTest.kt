@@ -104,7 +104,7 @@ class JsonTest {
         rejects(JsonError.DUPLICATE_KEY, "{\"a\":1,\"a\":1}")
         rejects(JsonError.DUPLICATE_KEY, "{\"a\":1,\"b\":2,\"\\u0061\":3}")
         rejects(JsonError.DUPLICATE_KEY, "[{\"x\":{\"\":1,\"\":2}}]")
-        assertEquals(2, (parse("{\"a\":1,\"A\":1}") as JsonObject).members.size)
+        assertEquals(2, (parse("{\"a\":1,\"A\":1}") as JsonObject).size)
     }
 
     @Test
@@ -113,7 +113,7 @@ class JsonTest {
             parse(
                 "{\"b\":1,\"\\uE000\":2,\"\\uD83D\\uDE00\":3,\"a\":4,\"ab\":5,\"\":6,\"\\u00e9\":7}",
             ) as JsonObject
-        assertEquals(listOf("", "a", "ab", "b", "é", "\uE000", "\uD83D\uDE00"), obj.members.keys.toList())
+        assertEquals(listOf("", "a", "ab", "b", "é", "\uE000", "\uD83D\uDE00"), obj.keys)
         assertTrue(JsonObject.compareCodePoints("\uFFFF", "\uD800\uDC00") < 0)
         assertTrue(JsonObject.compareCodePoints("\uD800\uDC01", "\uD800\uDC00") > 0)
         assertEquals(0, JsonObject.compareCodePoints("x", "x"))

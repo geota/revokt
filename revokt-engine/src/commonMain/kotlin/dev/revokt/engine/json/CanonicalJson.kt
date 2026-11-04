@@ -41,22 +41,20 @@ internal object CanonicalJson {
 
             is JsonArray -> {
                 out.append('[')
-                value.items.forEachIndexed { i, item ->
+                for (i in 0 until value.size) {
                     if (i > 0) out.append(',')
-                    write(item, out)
+                    write(value[i], out)
                 }
                 out.append(']')
             }
 
             is JsonObject -> {
                 out.append('{')
-                var first = true
-                for ((key, member) in value.members) {
-                    if (!first) out.append(',')
-                    first = false
-                    quote(key, out)
+                for (i in 0 until value.size) {
+                    if (i > 0) out.append(',')
+                    quote(value.keyAt(i), out)
                     out.append(':')
-                    write(member, out)
+                    write(value.valueAt(i), out)
                 }
                 out.append('}')
             }

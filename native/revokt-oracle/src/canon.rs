@@ -212,6 +212,13 @@ mod tests {
     }
 
     #[test]
+    fn numbers_are_parsed_values_not_their_text() {
+        // serde_json's arbitrary_precision feature (enabled anywhere in the workspace) would keep each number's text,
+        // and canonical_json would then write `1.0` and `1e2` verbatim instead of its own forms.
+        assert_eq!(ok("[1.0, 1e2, 0.10, -0]"), "[1E0,1E2,1E-1,-0E0]");
+    }
+
+    #[test]
     fn the_payload_drops_tombstones_and_sorts_by_id() {
         let changeset = json!({"timestamp": 12, "changes": [
             {"id": "b", "last_modified": 12},
