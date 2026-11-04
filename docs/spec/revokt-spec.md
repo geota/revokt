@@ -56,8 +56,9 @@ Status: **draft spec / project proposal, revision 48** · Target: JVM 17+ and An
   - **The new budget:** `20·len + 64 KiB` on any input, asserted on every fuzz and replay input, and `4·len + 64 KiB`
     on Remote Settings data, asserted on named fixtures: a committed CRLite-shaped changeset, and the pinned corpus's
     real changeset.
-  - **Measurement protocol:** after one warm-up decode of `{}` on the same thread. Every buffer a decoder keeps across
-    calls counts, so a cached buffer cannot hide allocation.
+  - **Measurement protocol:** after one warm-up decode, on the same thread, of a fixed small document that contains
+    every value kind. Per-process class loading therefore does not count, and the warm-up never decodes the measured
+    input itself. Every buffer a decoder keeps across calls counts, so a cached buffer cannot hide allocation.
   - **The worst case is stated and accepted.** A changeset can cost about 20 × `MAX_JSON_BYTES` (80 MiB at the default
     cap), because it is decoded before its signature can be checked. A seed's `records.json` is now verified as raw
     bytes before it is decoded: the signature and the x5u chain to the pinned root, every check except validity
@@ -2580,8 +2581,9 @@ entries × 128 B; JSON ≤ 20·len + 64 KiB on any input, asserted on every fuzz
 Remote Settings data, asserted on named fixtures (a committed CRLite-shaped changeset, and the pinned corpus's real
 Remote Settings changeset in the corpus tier) (revision 48: a tree with one object per value cannot hold 4·len on
 every input, `[1.5,…]` alone needing about 6·len, and a bound needs a constant term); DER ≤ 2·len; asserted in the §9.1
-replay by `com.sun.management.ThreadMXBean.getThreadAllocatedBytes` deltas (HotSpot), after one warm-up decode of the
-fixed input `{}` on the same thread, with every buffer a decoder keeps across calls counted toward its budget. The
+replay by `com.sun.management.ThreadMXBean.getThreadAllocatedBytes` deltas (HotSpot), after one warm-up decode, on the same thread,
+of a fixed small document that contains every value kind (for example `{"a":[0,1.5,"é",true,null,{}]}`), so that
+per-process class loading does not count; every buffer a decoder keeps across calls counts toward its budget. The
 transient worst case is therefore about 20 × `MAX_JSON_BYTES` (80 MiB at the default cap) for a changeset, which is
 decoded before its signature can be checked (the signature is over the canonical form of the decoded records) and is
 accepted: every loader task catches `Throwable`, an `OutOfMemoryError` included (above); a seed's `records.json` is verified as raw bytes
