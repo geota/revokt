@@ -7,7 +7,8 @@ package dev.revokt
  * The signature seam the path walker verifies every link through (spec §3, "Verifier contract"). The engine never hands
  * it a non-X.509 encoding and always passes the signed TBS `signature` field. An implementation classifies by its
  * startup probe: an OID in [unsupportedOids] (the signature, key or curve OID) is [VerifyResult.UNSUPPORTED]; any
- * other failure is [VerifyResult.INVALID]. A throw is treated as `INVALID` by the walk, which never throws.
+ * other failure is [VerifyResult.INVALID]. The walk never throws: it treats a throw from [verify] as `INVALID` and
+ * records a `Finding.VerifierError` (spec §5.1, §3).
  */
 public interface SignatureVerifier {
     /**

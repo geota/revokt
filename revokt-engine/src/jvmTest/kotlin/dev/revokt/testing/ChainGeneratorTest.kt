@@ -3,15 +3,17 @@
 
 package dev.revokt.testing
 
+import dev.revokt.VerifyResult
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
+import dev.revokt.engine.parse.Keyability
+import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.TestDer
 import okio.ByteString.Companion.toByteString
 import java.io.ByteArrayInputStream
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import javax.security.auth.x500.X500Principal
-import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -23,7 +25,7 @@ import kotlin.test.fail
 /** The §9.1 chain generator: deterministic per seed, the honest world's shape, and DER every parser accepts. */
 class ChainGeneratorTest {
     private fun mutations(seed: Long): List<Mutation> =
-        Random(seed xor 0x5eed).let { r -> List(r.nextInt(0, 6)) { Mutation.random(r) } }
+        SplitMix64(seed xor 0x5eed).let { r -> List(r.nextInt(0, 6)) { Mutation.random(r) } }
 
     /** One instance of every mutation kind, with selectors from [seed]. */
     private fun everyKind(seed: Long): List<Mutation> {
@@ -49,6 +51,12 @@ class ChainGeneratorTest {
 
     private fun CertSpec.isSupported(): Boolean =
         key.keyOid == SymOids.KEY && key.curveOid == null && sigOid == SymOids.SIGNATURE
+
+    /** An unsupported key or curve OID: the probe rejects every link through this certificate's key. */
+    private fun CertSpec.probedKey(): Boolean = key.keyOid in SymOids.UNSUPPORTED || key.curveOid in SymOids.UNSUPPORTED
+
+    private fun parsed(der: ByteArray): ParsedCertificate =
+        (CertificateParser.parse(der) as CertificateParse.Parsed).certificate
 
     private fun World.fingerprint(): List<Any> =
         listOf(
@@ -79,6 +87,7 @@ class ChainGeneratorTest {
     fun `honest worlds hold 1 to 200 anchors, depth 0 to 9 and cross-signs only between snapshot roots`() {
         val depths = HashSet<Int>()
         var withUnsupported = 0
+        var selfSignatureOnly = 0
         var crossSigned = 0
         var maxAnchors = 0
         for (seed in 0L until 400) {
@@ -98,7 +107,8 @@ class ChainGeneratorTest {
             val honestAnchor = model.anchors[model.honestAnchor]
             assertEquals(honestAnchor, model.honestPath.last())
             assertTrue(honestAnchor.isSupported(), "seed $seed: the honest anchor's OIDs are supported")
-            if (!model.anchors.all { it.isSupported() }) withUnsupported++
+            if (model.anchors.any { it.probedKey() }) withUnsupported++
+            if (model.anchors.any { !it.probedKey() && !it.isSupported() }) selfSignatureOnly++
             val anchorKeys = model.anchors.map { it.key }.toSet()
             for (extra in model.presented.filter { it !in model.honestPath }) {
                 crossSigned++
@@ -110,7 +120,8 @@ class ChainGeneratorTest {
         }
         assertEquals((0..ChainGenerator.MAX_GENERATED_DEPTH).toSet(), depths)
         assertTrue(maxAnchors > 190, "large snapshots occur: $maxAnchors")
-        assertTrue(withUnsupported > 300, "most large snapshots hold an unsupported anchor: $withUnsupported")
+        assertTrue(withUnsupported > 300, "most snapshots hold an anchor with an unsupported key: $withUnsupported")
+        assertTrue(selfSignatureOnly > 200, "anchors with only an unsupported self-signature occur: $selfSignatureOnly")
         assertTrue(crossSigned > 40, "cross-signs occur: $crossSigned")
     }
 
@@ -184,5 +195,111 @@ class ChainGeneratorTest {
         val dropped = ChainGenerator.generate(9, listOf(DropIntermediate(0), Stuff(0, related = true)), depth = 0)
         assertEquals(honest.fingerprint(), dropped.fingerprint())
         assertEquals(emptyList(), dropped.mutations)
+    }
+
+    @Test
+    fun `seeded worlds are the recorded bytes`() {
+        // A change to the generator, SplitMix64 or the DER writer moves this hash; one that keeps it keeps every world.
+        val digest = okio.Buffer()
+        for (seed in listOf(0L, 1L, 91L)) {
+            val world = ChainGenerator.generate(seed, everyKind(seed) + mutations(seed))
+            (world.presented + world.anchors).forEach { digest.write(it) }
+            digest.writeUtf8(world.mutations.toString())
+        }
+        assertEquals(GOLDEN, digest.sha256().hex())
+    }
+
+    @Test
+    fun `every generated leaf is inside the keyability profile`() {
+        for (seed in 0L until 60) {
+            for (m in listOf(emptyList(), mutations(seed), everyKind(seed))) {
+                val world = ChainGenerator.generate(seed, m)
+                val leaf = parsed(world.presented[0])
+                assertEquals(null, Keyability.firstFailing(leaf), "seed $seed $m")
+                assertEquals(SymOids.ED25519, SymVerifier.spkiOids(leaf.rawSpki()).single())
+            }
+        }
+    }
+
+    @Test
+    fun `every presented certificate that verifies the leaf is related to it`() {
+        var verifying = 0
+        for (seed in 0L until 200) {
+            val world =
+                ChainGenerator.generate(
+                    seed,
+                    mutations(seed) + everyKind(seed).filter { it is AttackerMutation },
+                )
+            val verifier = world.verifier()
+            val leaf = parsed(world.presented[0])
+            for (der in world.presented.drop(1)) {
+                val c = parsed(der)
+                val verified =
+                    verifier.verify(
+                        leaf.tbs.signature.bytes(leaf.tbsBytes),
+                        c.rawSpki(),
+                        leaf.tbsBytes,
+                        leaf.envelope.signature,
+                    )
+                if (verified != VerifyResult.VERIFIED) continue
+                verifying++
+                assertTrue(related(c, leaf), "seed $seed ${world.mutations}: serial ${c.rawSerial().toList()}")
+            }
+        }
+        assertTrue(verifying > 400, "$verifying verifying certificates")
+    }
+
+    /** Spec §5.1's relatedness: raw or canonical subject equal to the child's issuer, or SKI equal to its AKI. */
+    private fun related(
+        candidate: ParsedCertificate,
+        child: ParsedCertificate,
+    ): Boolean {
+        val canonical = { der: ByteArray -> X500Principal(der).getName(X500Principal.CANONICAL) }
+        val ski = candidate.fields.ski?.bytes(candidate.tbsBytes)
+        val aki = child.fields.akiKeyId?.bytes(child.tbsBytes)
+        return candidate.rawSubject().contentEquals(child.rawIssuer()) ||
+            canonical(candidate.rawSubject()) == canonical(child.rawIssuer()) ||
+            (ski != null && aki != null && ski.contentEquals(aki))
+    }
+
+    @Test
+    fun `a re-issued certificate keeps its recovered key, and world mutations come first`() {
+        for (seed in 0L until 40) {
+            val anchor = ChainGenerator.honest(seed).honestAnchor
+            for (m in listOf(NameEncoding(0), AlgMismatch(0))) {
+                // Model order: the attacker recovered a key, then the leaf was re-issued; the link moves with it.
+                val model = ChainGenerator.honest(seed)
+                model.apply(Recover(0, anchor))
+                model.apply(m)
+                val key = model.render().recoveredKeys.single()
+                assertTrue(model.honestPath[0].id to KeyId.of(model.presented[1].key.spki) in model.render().ok)
+                assertEquals(key, model.presented[1].key.hex)
+                // generate() applies the world mutation first whatever the list order.
+                val a = ChainGenerator.generate(seed, listOf(Recover(0, anchor), m))
+                val b = ChainGenerator.generate(seed, listOf(m, Recover(0, anchor)))
+                assertEquals(a.fingerprint(), b.fingerprint(), "seed $seed $m")
+                assertEquals(listOf(m, Recover(0, anchor)), a.mutations)
+            }
+        }
+    }
+
+    @Test
+    fun `SplitMix64 is the published sequence and its shuffle a permutation`() {
+        // The first outputs of Vigna's splitmix64.c for seed 1234567 (as unsigned: 6457827717110365317,
+        // 3203168211198807973, 9817491932198370423).
+        val rng = SplitMix64(1234567)
+        assertEquals(
+            listOf(6457827717110365317L, 3203168211198807973L, -8629252141511181193L),
+            List(3) { rng.nextLong() },
+        )
+        val list = (0 until 50).toList()
+        val shuffled = SplitMix64(7).shuffled(list)
+        assertEquals(list, shuffled.sorted())
+        assertNotEquals(list, shuffled)
+        assertEquals(shuffled, SplitMix64(7).shuffled(list))
+    }
+
+    private companion object {
+        const val GOLDEN = "3614f57e7b46c2e1662d1b1b198261da70205848b78f3e60e3e792c02c2a3167"
     }
 }

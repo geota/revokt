@@ -4,14 +4,13 @@
 package dev.revokt.testing
 
 import dev.revokt.RevoktLimits
-import kotlin.random.Random
 
 /**
  * One §9.1 mutation of a [WorldModel]: named (its class), with every free choice an explicit selector, so a mutation
  * list is the whole structured input. A selector picks from a list modulo its size, so any `Int` is valid. A mutation
  * that does not apply to a world (for example [DropIntermediate] at depth 0) leaves it unchanged and returns false.
  * Attacker certificates are inserted right after the leaf, ahead of every honest issuer the server sends; [Permute]
- * reorders them.
+ * reorders them. [ChainGenerator.generate] applies every [WorldMutation] before any [AttackerMutation].
  */
 internal sealed interface Mutation {
     /** Applies this mutation; false when it does not apply and the world is unchanged. */
@@ -20,7 +19,7 @@ internal sealed interface Mutation {
     val name: String get() = this::class.simpleName.orEmpty()
 
     companion object {
-        private val kinds: List<(Random) -> Mutation> =
+        private val kinds: List<(SplitMix64) -> Mutation> =
             listOf(
                 { r -> NameEncoding(r.nextInt()) },
                 { r -> AlgMismatch(r.nextInt()) },
@@ -38,7 +37,7 @@ internal sealed interface Mutation {
             )
 
         /** A random mutation drawn from [rng], every kind equally likely. */
-        fun random(rng: Random): Mutation = kinds[rng.nextInt(kinds.size)](rng)
+        fun random(rng: SplitMix64): Mutation = kinds[rng.nextInt(kinds.size)](rng)
     }
 }
 
@@ -222,13 +221,13 @@ internal data class Loop(
     }
 }
 
-/** Shuffles every presented certificate after the leaf with [seed]; the leaf stays first. */
+/** Shuffles every presented certificate after the leaf (Fisher–Yates over [SplitMix64] from [seed]); the leaf stays. */
 internal data class Permute(
     val seed: Long,
 ) : AttackerMutation {
     override fun applyTo(model: WorldModel): Boolean {
         val tail = model.presented.subList(1, model.presented.size)
-        val shuffled = tail.shuffled(Random(seed))
+        val shuffled = SplitMix64(seed).shuffled(tail)
         if (shuffled == tail) return false
         tail.clear()
         tail.addAll(shuffled)

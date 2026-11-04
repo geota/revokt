@@ -19,34 +19,34 @@ class SymVerifierTest {
 
     private fun ParsedCertificate.sigAlg(): ByteArray = tbs.signature.bytes(tbsBytes)
 
-    private fun oids(
-        c: ParsedCertificate,
-        spki: ByteArray,
-    ): List<String> = listOfNotNull(SymVerifier.algorithmOid(c.sigAlg())?.first) + SymVerifier.spkiOids(spki)
-
     @Test
     fun `verifies exactly the links in ok`() {
-        val mutations = listOf(Recover(0, 0), Loop(1), SameKeyDecoy(0), Stuff(5, related = true))
-        val world = ChainGenerator.generate(7, mutations, depth = 3, anchors = 12)
+        val mutations = listOf(UnsupportedOwnSig(1), Recover(0, 0), Loop(1), SameKeyDecoy(0), Stuff(5, related = true))
+        val world = ChainGenerator.generate(7, mutations, depth = 3, anchors = 40)
         val verifier = world.verifier()
-        val certs = world.certificates.map(::parsed)
-        val keys = certs.map { it.rawSpki() }.distinctBy { KeyId.of(it) }
-        var verified = 0
-        // Every certificate the world issued under every key it holds: each link of ok, and every other pair.
-        for (c in certs) {
-            for (k in keys) {
+        val keys = world.specs.map { it.key }.distinct()
+        val counts = HashMap<VerifyResult, Int>()
+        // Every certificate the world issued under every key it holds: each link of ok, and every other pair. The
+        // expected answer comes from the model (the OIDs each certificate and key were built with), not from the DER.
+        for (spec in world.specs) {
+            val c = parsed(spec.der)
+            for (key in keys) {
+                val probed =
+                    spec.sigOid in world.unsupported || key.keyOid in world.unsupported ||
+                        key.curveOid in world.unsupported
                 val expected =
                     when {
-                        oids(c, k).any { it in world.unsupported } -> VerifyResult.UNSUPPORTED
-                        CertId.of(c.tbsBytes) to KeyId.of(k) in world.ok -> VerifyResult.VERIFIED
+                        probed -> VerifyResult.UNSUPPORTED
+                        spec.id to key.id in world.ok -> VerifyResult.VERIFIED
                         else -> VerifyResult.INVALID
                     }
-                val actual = verifier.verify(c.sigAlg(), k, c.tbsBytes, c.envelope.signature)
-                assertEquals(expected, actual, "serial ${c.rawSerial().toList()}")
-                if (actual == VerifyResult.VERIFIED) verified++
+                val actual = verifier.verify(c.sigAlg(), key.spki, c.tbsBytes, c.envelope.signature)
+                assertEquals(expected, actual, "serial ${spec.serial} under key ${key.ordinal}")
+                counts.merge(actual, 1, Int::plus)
             }
         }
-        assertTrue(verified > world.presented.size, "$verified links verified")
+        assertTrue(counts.getValue(VerifyResult.VERIFIED) > world.presented.size, "$counts")
+        assertTrue(counts.getValue(VerifyResult.UNSUPPORTED) > keys.size, "$counts")
     }
 
     @Test

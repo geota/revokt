@@ -7,7 +7,6 @@ import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.TestDer
 import okio.ByteString.Companion.toByteString
 import java.math.BigInteger
-import kotlin.random.Random
 
 /**
  * The private-arc OIDs of the §9.1 generator (under the test arc `1.3.6.1.4.1.99999` the parser tests already use).
@@ -21,13 +20,17 @@ internal object SymOids {
     const val UNSUPPORTED_SIGNATURE: String = "1.3.6.1.4.1.99999.91.12"
     const val UNSUPPORTED_CURVE: String = "1.3.6.1.4.1.99999.91.13"
 
+    /** `id-Ed25519` (RFC 8410), the leaf's key: §9.2's keyability profile (K7) admits it, so a leaf is queryable. */
+    const val ED25519: String = "1.3.101.112"
+
     val UNSUPPORTED: Set<String> = setOf(UNSUPPORTED_KEY, UNSUPPORTED_SIGNATURE, UNSUPPORTED_CURVE)
 }
 
 /**
  * A symbolic key: its SPKI is [keyOid] (with [curveOid] as the parameters when set) and a BIT STRING holding the key's
  * identity, the world seed and the key's [ordinal] (spec §9.1: the generator writes the key id into the SPKI BIT
- * STRING), so distinct keys have distinct SPKIs and `KeyId = SHA-256(spki)` tells them apart.
+ * STRING), so distinct keys have distinct SPKIs and `KeyId = SHA-256(spki)` tells them apart. A [SymOids.ED25519] key
+ * holds 32 octets instead, SHA-256 of that identity, with absent parameters: a well-formed RFC 8410 SPKI.
  */
 internal data class SymKey(
     val worldSeed: Long,
@@ -38,9 +41,10 @@ internal data class SymKey(
     val spki: ByteArray by lazy {
         val seedOctets = ByteArray(8) { (worldSeed ushr (56 - 8 * it)).toByte() }
         val identity = seedOctets + ByteArray(4) { (ordinal ushr (24 - 8 * it)).toByte() }
+        val bits = if (keyOid == SymOids.ED25519) identity.toByteString().sha256().toByteArray() else identity
         TestDer.seq(
             TestDer.seq(TestDer.oid(keyOid), curveOid?.let { TestDer.oid(it) } ?: ByteArray(0)),
-            TestDer.tlv(0x03, byteArrayOf(0) + identity),
+            TestDer.tlv(0x03, byteArrayOf(0) + bits),
         )
     }
 
@@ -126,7 +130,7 @@ internal data class CertSpec(
  * A rendered world: the [presented] chain (leaf first), the anchor snapshot ([anchors]), the verifier's [ok] links and
  * [unsupported] OIDs, and the honest answer: [honestKey], the lowercase-hex SPKI hash of the honest leaf issuer.
  * [recoveredKeys] lists, in mutation order, the key each recovered-key mutation added to [ok]; [certificates] is every
- * distinct certificate the world issued, presented or not.
+ * distinct certificate the world issued, presented or not, and [specs] the same certificates as the model built them.
  */
 internal class World(
     val depth: Int,
@@ -136,9 +140,11 @@ internal class World(
     val honestKey: String,
     val honestAnchor: Int,
     val recoveredKeys: List<String>,
-    val certificates: List<ByteArray>,
+    val specs: List<CertSpec>,
     val mutations: List<Mutation>,
 ) {
+    val certificates: List<ByteArray> get() = specs.map { it.der }
+
     /** The probe's OIDs, the same in every world. */
     val unsupported: Set<String> get() = SymOids.UNSUPPORTED
 
@@ -190,13 +196,17 @@ internal class WorldModel(
         sigOid: String = SymOids.SIGNATURE,
     ): CertSpec = CertSpec(++serials, subject, issuer, key, signer, keyIdentifiers, sigOid).also { issued += it }
 
-    /** Replaces every occurrence of [old] by [new] (a re-issue: same serial, key and signer). */
+    /**
+     * Replaces every occurrence of [old] by [new] (a re-issue: same serial, key and signer). A key recovered for [old]
+     * is recovered for [new] too: the mutation models a world in which the attacker recovered it from that signature.
+     */
     fun replace(
         old: CertSpec,
         new: CertSpec,
     ) {
         issued += new
         for (list in listOf(anchors, honestPath, presented)) list.replaceAll { if (it == old) new else it }
+        recovered.replaceAll { (child, key) -> (if (child == old) new else child) to key }
     }
 
     /** Inserts [specs] right after the leaf, in order, ahead of every honest issuer the server sends. */
@@ -224,24 +234,35 @@ internal class WorldModel(
             honestKey = honestPath[1].key.hex,
             honestAnchor = honestAnchor,
             recoveredKeys = recovered.map { it.second.hex },
-            certificates = issued.distinct().map { it.der },
+            specs = issued.distinct(),
             mutations = applied.toList(),
         )
     }
 }
 
 /**
- * The §9.1 chain generator. [honest] builds an honest world from a seed: 1–200 anchors with distinct names, about a
- * quarter of the others with an unsupported key, curve or signature OID (never the honest anchor); a chain of depth
- * 0–9 (the number of intermediates) under the honest anchor; certificates with or without SKI/AKI (one choice per
- * world); the honest anchor itself presented in a quarter of the worlds, and in another quarter a cross-certificate of
- * it issued by another supported snapshot root (cross-signs are only ever between snapshot roots). [generate] applies
- * [Mutation]s in order. A world is a function of the seed and the mutation list alone (a seeded [Random] is a fixed
- * algorithm).
+ * The §9.1 chain generator. [honest] builds an honest world from a seed:
+ * - 1–200 anchors with distinct names. Of the others than the honest one, about one in six has an unsupported key OID
+ *   and one in six an unsupported curve OID, so the probe rejects every link through it; one in twelve has only an
+ *   unsupported self-signature OID, which never matters (an anchor's self-signature is never verified) and stands for
+ *   the SHA-1 self-signed roots of real stores.
+ * - A chain of depth 0–9 (the number of intermediates) under the honest anchor. Intermediates and anchors carry
+ *   [SymOids.KEY] keys; the leaf, whose key signs nothing, carries an [SymOids.ED25519] key, so it passes §9.2's
+ *   keyability profile and the engine queries it (spec §9.1's private-arc key OID is for the keys that sign).
+ * - Certificates with or without SKI/AKI (one choice per world).
+ * - The honest anchor itself presented in a quarter of the worlds, and in another quarter a cross-certificate of it
+ *   issued by another supported snapshot root (cross-signs are only ever between snapshot roots).
+ *
+ * [generate] applies the world mutations first and then the attacker mutations, each group in list order (spec §9.1:
+ * an honest world, then world mutations, then attacker mutations). A world is a function of the seed and the mutation
+ * list alone: every choice comes from [SplitMix64], a fixed algorithm, never from `kotlin.random`.
  */
 internal object ChainGenerator {
     const val MAX_ANCHORS: Int = 200
     const val MAX_GENERATED_DEPTH: Int = 9
+
+    /** The first anchor kind with every OID supported; kinds below it are the unsupported anchors. */
+    private const val SUPPORTED = 5
 
     /**
      * An honest world for [seed]. [depth] and [anchors] override the seed's choices (a test can ask for a chain deeper
@@ -252,7 +273,7 @@ internal object ChainGenerator {
         depth: Int? = null,
         anchors: Int? = null,
     ): WorldModel {
-        val rng = Random(seed)
+        val rng = SplitMix64(seed)
         val anchorCount = anchors ?: rng.nextInt(1, MAX_ANCHORS + 1)
         val chainDepth = depth ?: rng.nextInt(0, MAX_GENERATED_DEPTH + 1)
         require(anchorCount >= 1) { "a world has at least one anchor" }
@@ -261,15 +282,15 @@ internal object ChainGenerator {
         val honestIndex = rng.nextInt(anchorCount)
         val supported = ArrayList<Int>()
         for (i in 0 until anchorCount) {
-            val kind = if (i == honestIndex) 3 else rng.nextInt(12)
+            val kind = if (i == honestIndex) SUPPORTED else rng.nextInt(12)
             val key =
                 when (kind) {
-                    0 -> model.freshKey(keyOid = SymOids.UNSUPPORTED_KEY)
-                    1 -> model.freshKey(curveOid = SymOids.UNSUPPORTED_CURVE)
+                    0, 1 -> model.freshKey(keyOid = SymOids.UNSUPPORTED_KEY)
+                    2, 3 -> model.freshKey(curveOid = SymOids.UNSUPPORTED_CURVE)
                     else -> model.freshKey()
                 }
-            val sigOid = if (kind == 2) SymOids.UNSUPPORTED_SIGNATURE else SymOids.SIGNATURE
-            if (kind > 2) supported += i
+            val sigOid = if (kind == 4) SymOids.UNSUPPORTED_SIGNATURE else SymOids.SIGNATURE
+            if (kind >= SUPPORTED) supported += i
             val name = model.freshName("Root")
             model.anchors += model.issue(name, name, key, key, sigOid)
         }
@@ -282,7 +303,7 @@ internal object ChainGenerator {
             parent = model.issue(model.freshName("Intermediate"), parent.subject, key, parent.key)
             path.add(0, parent)
         }
-        val leaf = model.issue(SymName("leaf.example"), parent.subject, model.freshKey(), parent.key)
+        val leaf = model.issue(SymName("leaf.example"), parent.subject, model.freshKey(SymOids.ED25519), parent.key)
         model.honestPath += listOf(leaf) + path + root
         model.presented += listOf(leaf) + path
         when (rng.nextInt(4)) {
@@ -300,11 +321,58 @@ internal object ChainGenerator {
         return model
     }
 
-    /** The honest world for [seed] with [mutations] applied in order, rendered. */
+    /** The honest world for [seed] with [mutations] applied, world mutations first, rendered. */
     fun generate(
         seed: Long,
         mutations: List<Mutation> = emptyList(),
         depth: Int? = null,
         anchors: Int? = null,
-    ): World = honest(seed, depth, anchors).also { model -> mutations.forEach { model.apply(it) } }.render()
+    ): World {
+        val model = honest(seed, depth, anchors)
+        mutations.sortedBy { it !is WorldMutation }.forEach { model.apply(it) }
+        return model.render()
+    }
+}
+
+/**
+ * SplitMix64 (Steele, Lea and Flood, 2014): the generator's only source of choices, written out so a seed names the
+ * same world on every Kotlin and JDK version (`kotlin.random`'s algorithms are not part of its contract).
+ */
+internal class SplitMix64(
+    seed: Long,
+) {
+    private var state = seed
+
+    fun nextLong(): Long {
+        state += -0x61c8864680b583ebL
+        var z = state
+        z = (z xor (z ushr 30)) * -0x40a7b892e31b1a47L
+        z = (z xor (z ushr 27)) * -0x6b2fb644ecceee15L
+        return z xor (z ushr 31)
+    }
+
+    /** A value in `[0, bound)`; the modulo bias is far below anything a test can observe. */
+    fun nextInt(bound: Int): Int {
+        require(bound > 0) { "bound must be positive" }
+        return (nextLong() ushr 1).rem(bound.toLong()).toInt()
+    }
+
+    fun nextInt(
+        from: Int,
+        until: Int,
+    ): Int = from + nextInt(until - from)
+
+    fun nextInt(): Int = (nextLong() ushr 32).toInt()
+
+    fun nextBoolean(): Boolean = nextLong() < 0
+
+    /** [list] in a Fisher–Yates order drawn from this generator. */
+    fun <T> shuffled(list: List<T>): List<T> {
+        val out = list.toMutableList()
+        for (i in out.lastIndex downTo 1) {
+            val j = nextInt(i + 1)
+            out[i] = out[j].also { out[j] = out[i] }
+        }
+        return out
+    }
 }

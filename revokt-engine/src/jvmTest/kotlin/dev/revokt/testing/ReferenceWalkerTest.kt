@@ -4,6 +4,9 @@
 package dev.revokt.testing
 
 import dev.revokt.RevoktLimits
+import dev.revokt.SignatureVerifier
+import dev.revokt.VerifyResult
+import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -182,6 +185,44 @@ class ReferenceWalkerTest {
             assertEquals(emptySet(), world.walk { error("canonicaliser failed") }, "seed $seed")
             val honest = ChainGenerator.generate(seed, depth = 0)
             assertEquals(setOf(honest.honestKey), honest.walk { null }, "seed $seed: raw bytes still match")
+        }
+    }
+
+    @Test
+    fun `a recovered key survives a world mutation of its certificate`() {
+        for (seed in seeds) {
+            val anchor = ChainGenerator.honest(seed).honestAnchor
+            val world = ChainGenerator.generate(seed, listOf(Recover(0, anchor), NameEncoding(0)))
+            assertEquals(setOf(world.honestKey, world.recoveredKeys.single()), world.walk(), "seed $seed")
+        }
+    }
+
+    @Test
+    fun `a throwing verifier is a link not verified, never a throw`() {
+        for (seed in seeds) {
+            val world = ChainGenerator.generate(seed, listOf(Stuff(10, related = true)))
+            val honest = ChainGenerator.honest(seed).honestPath.map { it.key.spki.toByteString() }
+
+            fun throwingOn(throws: (ByteArray) -> Boolean) =
+                object : SignatureVerifier by world.verifier() {
+                    override fun verify(
+                        sigAlg: ByteArray,
+                        spki: ByteArray,
+                        message: ByteArray,
+                        signature: ByteArray,
+                    ): VerifyResult {
+                        check(!throws(spki)) { "verifier failed" }
+                        return world.verifier().verify(sigAlg, spki, message, signature)
+                    }
+                }
+            val onJunk = throwingOn { it.toByteString() !in honest }
+            assertEquals(
+                setOf(world.honestKey),
+                ReferenceWalker(world.anchors, onJunk).walk(world.presented),
+                "seed $seed",
+            )
+            val onHonest = throwingOn { it.toByteString() == honest[1] }
+            assertEquals(emptySet(), ReferenceWalker(world.anchors, onHonest).walk(world.presented), "seed $seed")
         }
     }
 }

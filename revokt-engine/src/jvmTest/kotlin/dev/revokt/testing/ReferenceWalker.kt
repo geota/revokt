@@ -34,11 +34,17 @@ import javax.security.auth.x500.X500Principal
  *   one within the depth bound exactly when the shortest one is within it. The walker therefore computes each
  *   reachable certificate's distance to an anchor in the graph without the leaf instead of enumerating paths: the
  *   same answer, in polynomial time on stuffed chains.
+ * - A link is verified only when [verifier] answers `VERIFIED`; a throw counts as not verified, as §5.1 treats a
+ *   verifier throw as `INVALID` "for any verifier" (P7 runs a throwing verifier).
  * - Exact-byte duplicates are one certificate. A certificate revokt's parser rejects is no candidate; an unparseable
  *   leaf has no keys. A leaf that is an anchor by bytes returns its own key (decision step 2).
  *
  * Key families (§5.1 `CandidateIndex.related()`) only order candidates, so they do not change the result and are not
  * modelled.
+ *
+ * [canonicalSubject] exists for relatedness tests only. §5.1's leaf rule for a custom canonicaliser (the unrelated
+ * loop runs at the leaf regardless of a found path) is not modelled: the fuzzer runs both walkers with the platform
+ * canonicaliser (§9.1), and that clause is covered by the walker-harness fixtures.
  */
 internal class ReferenceWalker(
     anchors: List<ByteArray>,
@@ -88,7 +94,12 @@ internal class ReferenceWalker(
             candidate: Node,
         ): Boolean =
             memo.getOrPut(child.bytesHash to candidate.spkiHash) {
-                verifier.verify(child.tbsSigAlg, candidate.spki, child.tbs, child.signature) == VerifyResult.VERIFIED
+                try {
+                    verifier.verify(child.tbsSigAlg, candidate.spki, child.tbs, child.signature) ==
+                        VerifyResult.VERIFIED
+                } catch (_: Exception) {
+                    false
+                }
             }
 
         private fun issuers(child: Node): List<Node> =
