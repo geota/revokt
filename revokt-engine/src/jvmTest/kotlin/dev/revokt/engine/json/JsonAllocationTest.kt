@@ -23,7 +23,8 @@ class JsonAllocationTest {
 
     /**
      * The §6.5 warm-up: one decode of the fixed document [WARM_UP], which holds every value kind, and one rejected
-     * input, since the error path loads classes of its own; per-process class loading then does not count.
+     * input, since the error path loads classes of its own (the error enum, the message's string concatenation);
+     * per-process class loading then does not count.
      */
     @BeforeTest
     fun warmUp() {
@@ -140,6 +141,7 @@ class JsonAllocationTest {
     }
 
     private companion object {
-        const val WARM_UP = "{\"a\":[0,1.5,\"é\",true,null,{}]}"
+        /** §6.5's example: exponents, negative and beyond-`Long` numbers, multi-byte UTF-8, `\u` escapes with a pair. */
+        const val WARM_UP = "{\"a\":[0,-1.5e3,18446744073709551616,\"é😀\\u00e9\\ud83d\\ude00\",true,false,null,{}]}"
     }
 }
