@@ -1,0 +1,81 @@
+{
+  "metadata": {
+    "bucket": "security-state",
+    "id": "cert-revocations",
+    "last_modified": 1792587631204,
+    "displayFields": [
+      "channel",
+      "incremental",
+      "effectiveTimestamp"
+    ],
+    "description": "A synthetic changeset in the shape of security-state/cert-revocations (revokt #92).\nNot served by Mozilla.",
+    "signature": {
+      "mode": "p384ecdsa",
+      "x5u": "https://example.invalid/synthetic.chain",
+      "signature": "synthetic, not a signature"
+    }
+  },
+  "timestamp": 1792587631204,
+  "changes": [
+    {
+      "schema": 1792587600000,
+      "parent": "5cc04cc0-2229-4273-bdd3-be095a8f0468",
+      "channel": "compat",
+      "incremental": true,
+      "attachment": {
+        "hash": "98ad92e45efabebc14e651ac77ba5880ac388acdfba27c4923e06efdf9f93a87",
+        "size": 119712,
+        "filename": "20261021-1-compat.filter.delta",
+        "location": "security-state-staging/cert-revocations/20261021154711--dc62e538-927e-4179-ac2b-02f4d7ce8361--b74a26a7-9e67-46c3-9099-62e3bb65b35d.delta",
+        "mimetype": "application/octet-stream"
+      },
+      "effectiveTimestamp": 1792587524000,
+      "filter_expression": "env.version|versionCompare('128.0a1') >= 0",
+      "id": "dc62e538-927e-4179-ac2b-02f4d7ce8361",
+      "last_modified": 1792587631204
+    },
+    {
+      "id": "0d3a8a3e-7b0e-4f7e-9f64-1f0c2b5a9e11",
+      "last_modified": 1792587631100,
+      "deleted": true
+    },
+    {
+      "schema": 1792241700000,
+      "channel": "compat",
+      "incremental": false,
+      "attachment": {
+        "hash": "84754db048341a3df406a0b65bdd3528e2fa2f89ed2ccdaa078b69da3c04f316",
+        "size": 1574015,
+        "filename": "20261017-1-compat.filter",
+        "location": "security-state-staging/cert-revocations/20261017154830--5cc04cc0-2229-4273-bdd3-be095a8f0468--88b81362-120b-46af-8bdc-3aa52cea3441.filter",
+        "mimetype": "application/octet-stream"
+      },
+      "effectiveTimestamp": 1792241654000,
+      "filter_expression": "env.version|versionCompare('128.0a1') >= 0",
+      "id": "5cc04cc0-2229-4273-bdd3-be095a8f0468",
+      "last_modified": 1792241710000
+    },
+    {
+      "schema": 1792241700000,
+      "channel": "default",
+      "incremental": false,
+      "attachment": {
+        "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 0,
+        "filename": "synthetic.filter",
+        "location": "security-state-staging/cert-revocations/synthetic.filter",
+        "mimetype": "application/octet-stream"
+      },
+      "effectiveTimestamp": 1792241654000,
+      "filter_expression": "",
+      "details": {
+        "note": "Synthetic record: é✓😀 \"quoted\" back\\slash\ttab",
+        "ratio": 0.1,
+        "big": 18446744073709551615,
+        "neg": -1.5e-07
+      },
+      "id": "a1b2c3d4-0000-4000-8000-000000000000",
+      "last_modified": 1792241709999
+    }
+  ]
+}

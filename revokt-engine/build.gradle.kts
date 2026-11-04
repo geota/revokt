@@ -59,12 +59,13 @@ tasks.withType<Test>().configureEach {
 }
 
 // Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of each parser package of at least 90 % over
-// the committed tests (jvmTest), part of `check`: the certificate parser and the C2SP index reader (#86). The floors may
-// only be raised.
+// the committed tests (jvmTest), part of `check`: the certificate parser, the C2SP index reader (#86) and the JSON
+// tokenizer and canonical JSON (#92). The floors may only be raised.
 kover {
     currentProject {
         createVariant("parser") { add("jvm") }
         createVariant("c2sp") { add("jvm") }
+        createVariant("json") { add("jvm") }
     }
     reports {
         variant("parser") {
@@ -75,10 +76,14 @@ kover {
             filters { includes { packages("dev.revokt.engine.c2sp") } }
             verify { rule("c2sp package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
         }
+        variant("json") {
+            filters { includes { packages("dev.revokt.engine.json") } }
+            verify { rule("json package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
+        }
     }
 }
 
-tasks.named("check") { dependsOn("koverVerifyParser", "koverVerifyC2sp") }
+tasks.named("check") { dependsOn("koverVerifyParser", "koverVerifyC2sp", "koverVerifyJson") }
 
 class ClubcardCorpus(
     @get:InputDirectory @get:PathSensitive(PathSensitivity.RELATIVE) val dir: File,

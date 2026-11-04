@@ -12,11 +12,15 @@
 //! revokt-oracle goldens <filter> <queries.tsv> <out.tsv>
 //! revokt-oracle x509            (oracle 3a over a pipe; see x509.rs)
 //! revokt-oracle locate          (oracle 3b over a pipe; see locate.rs)
+//! revokt-oracle canonical-json  (canonical_json over a pipe; see canon.rs)
+//! revokt-oracle signed-payload <changeset.json> <out>
+//! revokt-oracle gen-numbers <count> <seed>
 //! ```
 //!
 //! Query line: `issuer_spki_hash_hex \t serial_hex \t scts \t expected`, where `scts` is a comma-separated list of
 //! `log_id_hex:timestamp` (empty allowed) and `expected` is one of `Good`, `Revoked`, `NotCovered`, `NotEnrolled`.
 
+mod canon;
 mod locate;
 mod walk;
 mod x509;
@@ -382,7 +386,14 @@ fn run(args: &[String]) -> Result<(), String> {
         [cmd, filter, queries, out] if cmd == "goldens" => goldens(filter, queries, out),
         [cmd] if cmd == "x509" => x509::run(),
         [cmd] if cmd == "locate" => locate::run(),
-        _ => Err("usage: revokt-oracle inspect <filter> | transcode <filter> <out.v4> | build-synthetic <outdir> | gen-queries <filter> <count> <seed> <out.tsv> | goldens <filter> <queries.tsv> <out.tsv> | x509 | locate".into()),
+        [cmd] if cmd == "canonical-json" => canon::run(),
+        [cmd, input, output] if cmd == "signed-payload" => canon::signed_payload(input, output),
+        [cmd, count, seed] if cmd == "gen-numbers" => {
+            let count: usize = count.parse().map_err(|e| format!("count: {e}"))?;
+            let seed: u64 = seed.parse().map_err(|e| format!("seed: {e}"))?;
+            canon::gen_numbers(count, seed)
+        }
+        _ => Err("usage: revokt-oracle inspect <filter> | transcode <filter> <out.v4> | build-synthetic <outdir> | gen-queries <filter> <count> <seed> <out.tsv> | goldens <filter> <queries.tsv> <out.tsv> | x509 | locate | canonical-json | signed-payload <changeset.json> <out> | gen-numbers <count> <seed>".into()),
     }
 }
 
