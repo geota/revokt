@@ -3,8 +3,8 @@
 
 # Roadmap
 
-**Current focus**: 0.1, the `Rule` model (#72, #73), then the `index.bin` reader and writer with `GenerationFiles`
-(CONTRIBUTING §2).
+**Current focus**: 0.1's last three items, in parallel: `RevocationEngine` and the Kotlin engine (#90), the walker's
+test infrastructure (#91), and JSON with canonical JSON (#92) (CONTRIBUTING §2).
 
 > [!WARNING]
 > revokt is pre-release and not production ready. Nothing is published yet, and the public API may change in any
@@ -43,12 +43,12 @@ independent implementations before anything is built on them. Nothing in 0.1 che
 | ✅ | Certificate parser with the differential oracle | A strict DER parser for the fields revocation needs. Every certificate in the corpora is read by revokt and by the JDK, Conscrypt, Rust's `x509-parser`, a TLV locator and the certificate parsing of Mozilla's producer, and a disagreement that could change an answer fails the build unless it is recorded with a written justification | #9–#15 and their parts |
 | ✅ | Leniency, issuer and CT seed corpora | x509-limbo, 10 347 CA certificates, 132 041 real CT leaves and a hand-built corpus of oddities, pinned in [revokt-corpus](https://github.com/geota/revokt-corpus) | #14, #15, #64 |
 | ✅ | Oracle CI | The replay runs on every PR on JDK 17, 21, 25 and 27. A nightly job replays D1 on the next JDK's early-access build and fails when a newer Conscrypt is released, until it is admitted | #13, #55, #56 |
-| 🚧 | `Rule` model and golden fixture | Every outcome is a named rule; the `DEFAULT` and `STRICT` presets; a committed fixture whose CI diff only allows the changes the compatibility contract permits | #72, #73 |
-| 🚧 | `Rule → BasicReason` map | Which `CertPathValidatorException` reason each rejection carries, so a missing-data rejection is never mistaken for a revocation | #72 |
-| ⏳ | C2SP `index.bin` reader and writer, `GenerationFiles` | The on-disk layout of a filter generation, shared with rustls/upki | |
-| ⏳ | `RevocationEngine` and the Kotlin engine | The seam a revocation engine plugs into, and the default engine over the `clubcard` port | |
-| ⏳ | `SymVerifier`, the §9.1 chain generator, the reference walker | Test infrastructure for 0.2's path walker: a fake signature scheme, a generator of adversarial chains and a slow but obviously correct walker to compare against | |
-| ⏳ | JSON tree and canonical JSON | The JSON reader the Mozilla feed and its content signatures need | |
+| ✅ | `Rule` model and golden fixture | Every outcome is a named rule; the `DEFAULT` and `STRICT` presets; a committed fixture whose CI diff only allows the changes the compatibility contract permits | #72, #73 |
+| ✅ | `Rule → BasicReason` map | Which `CertPathValidatorException` reason each rejection carries, so a missing-data rejection is never mistaken for a revocation | #72 |
+| ✅ | C2SP `index.bin` reader and writer, `GenerationFiles` | The on-disk layout of a filter generation, shared with rustls/upki, byte-identical to upki 1.0.1's writer | #86, #87 |
+| 🚧 | `RevocationEngine` and the Kotlin engine | The seam a revocation engine plugs into, and the default engine over the `clubcard` port | #90 |
+| 🚧 | `SymVerifier`, the §9.1 chain generator, the reference walker | Test infrastructure for 0.2's path walker: a fake signature scheme, a generator of adversarial chains and a slow but obviously correct walker to compare against | #91 |
+| 🚧 | JSON tree and canonical JSON | The JSON reader the Mozilla feed and its content signatures need | #92 |
 
 ## 0.2: a working engine
 

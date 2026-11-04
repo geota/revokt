@@ -120,8 +120,9 @@ behind it.
 |---|---|---|
 | ✅ | Strict DER/TBS certificate parser, tested differentially against independent oracles | 0.1 |
 | ✅ | Port of Mozilla's `clubcard` CRLite filter decoder, v3 and v4 encodings | 0.1 |
-| 🚧 | Rule model, the two presets' tables and the growability contract (the public policy builder is 0.2) | 0.1 |
-| ⏳ | `RevocationEngine`, the C2SP `index.bin` reader and writer, JSON and canonical JSON | 0.1 |
+| ✅ | Rule model, the two presets' tables and the growability contract (the public policy builder is 0.2) | 0.1 |
+| ✅ | The C2SP `index.bin` reader and writer, and `GenerationFiles` | 0.1 |
+| 🚧 | `RevocationEngine` and the Kotlin engine, JSON and canonical JSON, the walker's test infrastructure | 0.1 |
 | ⏳ | Path walker, Mozilla Remote Settings with content-signature verification, in-memory updater | 0.2 |
 | ⏳ | Durable store, OkHttp and Ktor bindings, Android support, WorkManager sync | 0.3 |
 | ⏳ | Intermediate preloading, OneCRL, Chrome CRLSets | M2 (0.4 → 1.0) |
