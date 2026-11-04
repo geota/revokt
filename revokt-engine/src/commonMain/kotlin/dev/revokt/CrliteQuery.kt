@@ -39,6 +39,9 @@ public class CrliteQuery private constructor(
      */
     public val scts: List<CrliteSct> = buildList { addAll(builder.scts) }
 
+    /** The SCTs as a multiset, computed once: equality ignores their order (§3.2) but counts duplicates. */
+    private val sctCounts: Map<CrliteSct, Int> = scts.groupingBy { it }.eachCount()
+
     internal val issuerSpkiHashBytes: ByteString get() = issuerHash
 
     internal val serialByteString: ByteString get() = serialBytes
@@ -59,8 +62,6 @@ public class CrliteQuery private constructor(
 
     // Order-insensitive: the same SCTs in another order are the same query (§3.2).
     override fun hashCode(): Int = listOf(issuerHash, serialBytes, sctCounts).hashCode()
-
-    private val sctCounts: Map<CrliteSct, Int> get() = scts.groupingBy { it }.eachCount()
 
     override fun toString(): String =
         "CrliteQuery(issuerSpkiHash=${issuerHash.hex()}, serial=${serialBytes.hex()}, scts=$scts)"

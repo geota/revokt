@@ -296,6 +296,13 @@ class KotlinRevocationEngineTest {
     }
 
     @Test
+    fun `a throwing hook in the test seam is an engine error, not a throw`() {
+        val engine = KotlinRevocationEngine(0) { error("hook") }
+        engine.install(ClubcardCorpus.generation("g", FilterFormat.V3, v3Full))
+        assertEquals(CrliteQueryResult.ENGINE_ERROR, engine.query(anyQuery))
+    }
+
+    @Test
     fun `formats is read-only and names v3 and v4 only`() {
         val formats = KotlinRevocationEngine().formats
         assertEquals(setOf(FilterFormat.V3, FilterFormat.V4), formats)

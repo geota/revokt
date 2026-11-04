@@ -18,6 +18,9 @@ import kotlin.concurrent.Volatile
  * [prepare] throws [IllegalArgumentException] on a corrupt generation or a format outside [formats], and
  * [IllegalStateException] after [close]; [activate] throws [IllegalArgumentException] for a prepared generation from
  * another engine, and [IllegalStateException] after [close] or for one already activated or discarded.
+ *
+ * The internal constructor is the tests' seam (a drain limit, and a hook run before evaluation). It is public in
+ * bytecode, so Java can reach it; the hook runs inside evaluation's catch, so even then [query] never throws.
  */
 public class KotlinRevocationEngine internal constructor(
     private val drainMillis: Long,
@@ -50,9 +53,10 @@ public class KotlinRevocationEngine internal constructor(
 
     override val coverageEndMillis: Long? get() = live?.coverageEndMillis
 
-    // Every FilterFormat today is in formats, so no format check is needed here (§3.2: other formats are never offered).
     override fun prepare(generation: GenerationFiles): PreparedGeneration {
         check(!closing) { "the engine is closed" }
+        // §3.2: other formats are never offered; refuse one anyway, since the enum is growable and formats is not.
+        require(generation.format in formats) { "the engine does not read ${generation.format}" }
         return Prepared(this, CrliteGeneration.decode(generation))
     }
 
@@ -67,6 +71,8 @@ public class KotlinRevocationEngine internal constructor(
                 "${prepared.generationId} $why"
             }
             live = prepared.generation
+            // Admitted before close() but stalled past its drain limit: close() has already dropped the generation.
+            if (closed) live = null
         } finally {
             leave()
         }
@@ -92,10 +98,8 @@ public class KotlinRevocationEngine internal constructor(
         q: CrliteQuery,
     ): CrliteQueryResult {
         if (entered and CLOSING != 0) return CrliteQueryResult.ENGINE_ERROR
-        val generation = live ?: return CrliteQueryResult.NO_DATA
-        beforeEvaluate?.invoke()
-        val result = evaluate(generation, q)
-        // A query still running when close() stopped waiting answers ENGINE_ERROR (spec §3.2).
+        val result = live?.let { evaluate(it, q, beforeEvaluate) } ?: CrliteQueryResult.NO_DATA
+        // A query still running when close() stopped waiting answers ENGINE_ERROR, whatever it found (spec §3.2).
         return if (closed) CrliteQueryResult.ENGINE_ERROR else result
     }
 
@@ -131,7 +135,7 @@ public class KotlinRevocationEngine internal constructor(
         override val generationId: String get() = generation.generationId
 
         override fun query(q: CrliteQuery): CrliteQueryResult =
-            if (state.get() == DISCARDED) CrliteQueryResult.ENGINE_ERROR else evaluate(generation, q)
+            if (state.get() == DISCARDED) CrliteQueryResult.ENGINE_ERROR else evaluate(generation, q, null)
 
         /** Discards an unactivated generation; a no-op once it is active. */
         override fun close() {
@@ -151,13 +155,18 @@ public class KotlinRevocationEngine internal constructor(
         /** A bit above any realistic number of concurrent queries. */
         private const val CLOSING = 1 shl 30
 
-        /** The aggregate, mapped so a throw from a filter is [CrliteQueryResult.ENGINE_ERROR]: query never throws. */
+        /**
+         * The aggregate, mapped so a throw from a filter (or from the test seam's [hook]) is
+         * [CrliteQueryResult.ENGINE_ERROR]: query never throws.
+         */
         @Suppress("TooGenericExceptionCaught") // The contract is "never throws"; any failure is an engine error.
         fun evaluate(
             generation: CrliteGeneration,
             q: CrliteQuery,
+            hook: (() -> Unit)?,
         ): CrliteQueryResult =
             try {
+                hook?.invoke()
                 generation.query(q)
             } catch (ignored: RuntimeException) {
                 CrliteQueryResult.ENGINE_ERROR
