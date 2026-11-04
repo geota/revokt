@@ -233,6 +233,11 @@ public final class dev/revokt/RuleClass : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/RuleClass;
 }
 
+public abstract interface class dev/revokt/SignatureVerifier {
+	public abstract fun unsupportedOids ()Ljava/util/Set;
+	public abstract fun verify ([B[B[B[B)Ldev/revokt/VerifyResult;
+}
+
 public final class dev/revokt/TrustClass : java/lang/Enum {
 	public static final field BUNDLED Ldev/revokt/TrustClass;
 	public static final field MIRROR Ldev/revokt/TrustClass;
@@ -242,5 +247,14 @@ public final class dev/revokt/TrustClass : java/lang/Enum {
 	public final fun getRank ()I
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/TrustClass;
 	public static fun values ()[Ldev/revokt/TrustClass;
+}
+
+public final class dev/revokt/VerifyResult : java/lang/Enum {
+	public static final field INVALID Ldev/revokt/VerifyResult;
+	public static final field UNSUPPORTED Ldev/revokt/VerifyResult;
+	public static final field VERIFIED Ldev/revokt/VerifyResult;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/VerifyResult;
+	public static fun values ()[Ldev/revokt/VerifyResult;
 }
 
