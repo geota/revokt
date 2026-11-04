@@ -167,6 +167,9 @@ internal class DecimalDouble {
             DoubleArray(23).also { p ->
                 p[0] = 1.0
                 for (i in 1 until p.size) p[i] = p[i - 1] * 10.0
+                // Double.fromBits goes through Double's companion object; touching it with this class keeps the first
+                // number off the fast path from loading that class inside a measured parse (spec §6.5).
+                check(Double.fromBits(0L) == 0.0)
             }
 
         /**

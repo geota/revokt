@@ -59,7 +59,8 @@ internal class JsonParseException(
  * [DecimalDouble], never by the platform's `String.toDouble()`.
  *
  * Allocation (spec §6.5, #99): at most 4·len + 64 KiB on Remote Settings–shaped input (a changeset or `records.json`)
- * and 20·len + 64 KiB on any input, measured after one warm-up decode of `{}` on the same thread. Nothing is retained
+ * and 20·len + 64 KiB on any input, measured after one warm-up decode, on the same thread, of a fixed small document
+ * holding every value kind, so that per-process class loading does not count. Nothing is retained
  * across calls but constants (the empty values, `true`, `false`, `null`): every buffer and table belongs to one parse
  * and counts toward that parse. So containers collect their members on one scratch stack per parse and are
  * copied out at exact size, objects are sorted parallel arrays, a one-item array holds its item, the integers 0 to 1023
@@ -69,23 +70,6 @@ internal class JsonParseException(
 internal object Json {
     /** serde_json's recursion limit: it rejects the 128th nested container, so the oracle and revokt agree on depth. */
     const val MAX_DEPTH: Int = 127
-
-    /** One document through every path of the parser, and one rejection: see the `init` block. */
-    private val PRELOAD =
-        "{\"a\":[1,-1,18446744073709551615,0.5,1.5e300,4.9e-324,\"\u00e9\\n\\u00e9\",true,false,null,{}]," +
-            "\"b\":{\"c\":[[]]}}"
-
-    init {
-        // Spec §6.5 measures a parse's allocation after one warm-up decode of `{}`. Loading and initialising the
-        // classes a document reaches is a one-time cost of the process, not of a parse, so it is done here, when the
-        // first decode (that warm-up) initialises this object.
-        Parser(PRELOAD.encodeToByteArray()).document()
-        try {
-            Parser(byteArrayOf('['.code.toByte())).document()
-        } catch (_: JsonParseException) {
-            // The rejection path's classes are loaded too.
-        }
-    }
 
     fun parse(
         bytes: ByteArray,
@@ -301,7 +285,7 @@ private class Parser(
         return when {
             !negative && magnitude < SMALL_INTEGERS.toULong() -> small(magnitude.toInt())
             !negative -> JsonInteger(false, magnitude)
-            magnitude in 1uL..(1uL shl 63) -> JsonInteger(true, magnitude)
+            JsonInteger.isNegativeMagnitude(magnitude) -> JsonInteger(true, magnitude)
             else -> null
         }
     }

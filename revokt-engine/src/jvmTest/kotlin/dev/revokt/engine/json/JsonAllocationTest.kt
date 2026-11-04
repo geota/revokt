@@ -14,16 +14,25 @@ import kotlin.test.assertTrue
 
 /**
  * Spec §6.5's allocation budget for JSON (#99): at most 4·len + 64 KiB on Remote Settings data and at most
- * 20·len + 64 KiB on any input, measured with HotSpot's per-thread allocation counter after one warm-up decode of the
- * fixed input `{}` on the same thread. The parser retains nothing across calls but constants, so each measured parse
- * carries every buffer it uses.
+ * 20·len + 64 KiB on any input, measured with HotSpot's per-thread allocation counter after one warm-up decode, on the
+ * same thread, of a fixed small document holding every value kind ([warmUp]). The parser retains nothing across calls
+ * but constants, so each measured parse carries every buffer it uses.
  */
 class JsonAllocationTest {
     private val threads = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
 
+    /**
+     * The §6.5 warm-up: one decode of the fixed document [WARM_UP], which holds every value kind, and one rejected
+     * input, since the error path loads classes of its own; per-process class loading then does not count.
+     */
     @BeforeTest
     fun warmUp() {
-        Json.parse("{}".encodeToByteArray())
+        Json.parse(WARM_UP.encodeToByteArray())
+        try {
+            Json.parse("[".encodeToByteArray())
+        } catch (_: JsonParseException) {
+            // Expected: the rejection only loads the error path.
+        }
     }
 
     /** The bytes one parse of [input] allocates, a rejected input included. */
@@ -128,5 +137,9 @@ class JsonAllocationTest {
         )
         within(20, "a string of é", ("\"" + "é".repeat(1 shl 19) + "\"").encodeToByteArray())
         within(20, "a 1 MiB decimal", ("0." + "1".repeat((1 shl 20) - 2)).encodeToByteArray())
+    }
+
+    private companion object {
+        const val WARM_UP = "{\"a\":[0,1.5,\"é\",true,null,{}]}"
     }
 }

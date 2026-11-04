@@ -31,7 +31,7 @@ internal data class JsonInteger(
     val magnitude: ULong,
 ) : JsonValue {
     init {
-        require(!negative || magnitude in 1uL..(1uL shl 63)) { "a negative integer's magnitude is 1 to 2^63" }
+        require(!negative || isNegativeMagnitude(magnitude)) { "a negative integer's magnitude is 1 to 2^63" }
     }
 
     /** The value when it fits a [Long], else null. */
@@ -43,6 +43,12 @@ internal data class JsonInteger(
         }
 
     companion object {
+        /**
+         * Whether [magnitude] is 1 to 2^63, by signed comparisons: an unsigned range test would load `kotlin.UnsignedKt`
+         * on the first negative number.
+         */
+        fun isNegativeMagnitude(magnitude: ULong): Boolean = magnitude.toLong().let { it > 0 || it == Long.MIN_VALUE }
+
         fun of(value: Long): JsonInteger =
             if (value < 0) JsonInteger(true, value.toULong().inv() + 1uL) else JsonInteger(false, value.toULong())
     }
@@ -245,6 +251,8 @@ internal class JsonObject private constructor(
             return a.length - b.length
         }
 
-        private fun rank(c: Char): Int = if (c.isSurrogate()) c.code + 0x2800 else c.code
+        // A range test on the code, not Char.isSurrogate(), so that sorting loads no further stdlib class (spec §6.5's
+        // measurement counts every class a parse loads after the warm-up document).
+        private fun rank(c: Char): Int = if (c.code in 0xD800..0xDFFF) c.code + 0x2800 else c.code
     }
 }
