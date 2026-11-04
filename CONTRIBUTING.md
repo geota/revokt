@@ -404,6 +404,10 @@ every required check in Appendix B passes**.
 - The EA replay (spec §9.2, revision 40): D1 over the committed corpus on the matrix's JDK early-access release, and a
   check that no Conscrypt release is newer than the matrix's current one (a newer one is admitted under §3 and rolled
   into `gradle/oracle-matrix.properties`; no unverified Conscrypt artifact is resolved in CI).
+- The upki-release check (spec §3.2, Appendix A): fails when `rustls/upki` has a GitHub release (pre-releases excluded)
+  or C2SP an `upki-revocation/*` tag newer than the `upki` and `upki-revocation` pins in
+  `gradle/oracle-matrix.properties`. Admitting one is a `spec` change: re-verify the Appendix A facts, roll the pin and
+  re-run the cross-engine suite (0.2+).
 - Fuzzing: ClusterFuzzLite batch matrix, one job per §9.1 target, `base-builder-jvm` pinned by digest, the
   coverage cron and the corpus storage token configured, corpus merged back weekly; a crash is uploaded as a
   SARIF artifact and a workflow step files the `security` issue (ClusterFuzzLite does not file issues itself).
@@ -476,7 +480,7 @@ approvals per section 5 · threads resolved · squash-merged by auto-merge. Done
 | Workflow hygiene | actionlint; SHA-pinned actions; no `pull_request_target` checkout; `cache-read-only` off `main`; no cache in release/repro jobs | PR job; review | yes |
 | Coverage | Kover floors; `coverage-main` comparison script | `check`; PR job | yes |
 | Spec inventory and ratchets | `specStatus` (stale `docs/dev/status.md` or a decreased fixture count fails) | `check` | yes |
-| §9.2 version matrix | `gradle/oracle-matrix.properties`; `verifyOracleMatrix` (CI and the nightly match it); `jvmTestConscryptPrevious`; the nightly EA replay and Conscrypt-release check | `check`; nightly | yes; for a release |
+| §9.2 version matrix | `gradle/oracle-matrix.properties`; `verifyOracleMatrix` (CI and the nightly match it); `jvmTestConscryptPrevious`; the nightly EA replay, Conscrypt-release and upki-release checks | `check`; nightly | yes; for a release |
 | Independent review in the solo phase | PR-lint requires the `Independent review` comment (ADR-0005) | PR | yes while solo |
 | Fuzzing | Jazzer regression on PRs; ClusterFuzzLite nightly; OSS-Fuzz once admitted | `check`; nightly | nightly blocks release |
 | Oracles, cross-engine suite, emulator matrix, minified build | nightly jobs; `run/android` label | nightly | release |

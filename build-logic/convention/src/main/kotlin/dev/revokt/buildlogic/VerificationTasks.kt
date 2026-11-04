@@ -242,8 +242,8 @@ abstract class ResolveAndLockAllTask : DefaultTask() {
 
 /**
  * The §9.2 version matrix is one file (`gradle/oracle-matrix.properties`, CONTRIBUTING §6): the CI `check` matrix runs
- * exactly its JDKs, the nightly replays its EA JDK, its Conscrypt keys are the catalog versions the build wires, and the
- * roll rule holds.
+ * exactly its JDKs, the nightly replays its EA JDK, its Conscrypt keys are the catalog versions the build wires, the
+ * roll rule holds, and the nightly's upki-release job reads the upki and upki-revocation pins from it (spec §3.2).
  */
 abstract class VerifyOracleMatrixTask : DefaultTask() {
     @get:InputFile
@@ -296,6 +296,22 @@ abstract class VerifyOracleMatrixTask : DefaultTask() {
         val missing = conscrypt - keys
         if (missing.isNotEmpty()) out += "$missing are not gradle/libs.versions.toml versions: add them to the catalog"
         if (conscrypt != WIRED_CONSCRYPT) out += "the matrix's Conscrypt keys are $conscrypt, the build wires $WIRED_CONSCRYPT (jvmTest, jvmTestConscryptPrevious in revokt-engine/build.gradle.kts): change both together"
+        for ((key, names) in UPKI_PINS) {
+            val pin = props.getProperty(key)?.trim().orEmpty()
+            if (!Regex("""v\d+\.\d+\.\d+""").matches(pin)) out += "the matrix's $key pin '$pin' is not a vX.Y.Z tag: pin $names (spec §3.2, Appendix A)"
+        }
+        val upkiJob = section(nightlyText, Regex("""^  upki-release:\s*$"""), Regex("""^  [A-Za-z0-9_-]+:\s*$"""))
+        if (upkiJob.isBlank()) {
+            out += "nightly.yml has no upki-release job: add it (it fails on a rustls/upki release or C2SP upki-revocation tag newer than the pins)"
+        } else {
+            if ("gradle/oracle-matrix.properties" !in upkiJob) out += "nightly.yml's upki-release does not read gradle/oracle-matrix.properties: read the pins from it"
+            for (key in UPKI_PINS.keys) {
+                if (!Regex("""\bpin $key(?![\w-])""").containsMatchIn(upkiJob)) out += "nightly.yml's upki-release does not read the $key pin (no `pin $key`): read it from the matrix"
+            }
+            val script = upkiJob.lines().filterNot { Regex("""^\s*(- )?uses:""").containsMatchIn(it) }.joinToString("\n")
+            val literals = Regex("""(?<![\w.])v\d+\.\d+\.\d+(?![\w.])""").findAll(script).map { it.value }.toSet()
+            if (literals.isNotEmpty()) out += "nightly.yml's upki-release names $literals outside its action pins: the pins live only in the matrix, read them from it"
+        }
         return out
     }
 
@@ -314,5 +330,11 @@ abstract class VerifyOracleMatrixTask : DefaultTask() {
     private companion object {
         /** The catalog keys revokt-engine/build.gradle.kts wires (jvmTest, jvmTestConscryptPrevious); change both together. */
         val WIRED_CONSCRYPT = listOf("conscrypt", "conscrypt-previous")
+
+        /** The second engine's pins (spec §3.2, Appendix A), each with what it pins; the nightly's upki-release reads them. */
+        val UPKI_PINS = linkedMapOf(
+            "upki" to "the rustls/upki git tag of its latest GitHub release",
+            "upki-revocation" to "the C2SP upki-revocation/* tag the C2SP reader conforms to",
+        )
     }
 }
