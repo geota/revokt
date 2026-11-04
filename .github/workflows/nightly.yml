@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Nightly (CONTRIBUTING §6): the native oracle job, the EA replay, fuzzing, the Android matrix and the minified-build
-# tests. Each job is added with its milestone; today the native build skeleton, the purity compile, the EA replay and
-# the Conscrypt-release check run. Never a PR gate.
+# tests. Each job is added with its milestone; today the native build skeleton, the purity compile, the EA replay, the
+# Conscrypt-release check and the upki-release check run. Never a PR gate.
 name: nightly
 
 on:
@@ -106,6 +106,81 @@ jobs:
             echo "::error::Conscrypt $newest is released and the matrix's current is $current: admit it (CONTRIBUTING §3) and roll gradle/oracle-matrix.properties"
             exit 1
           fi
+
+  upki-release:
+    name: upki release (the newest upki and upki-revocation are the pinned ones)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Spec §3.2 and Appendix A: the upki engine and the C2SP reader are verified against one rustls/upki release and
+      # one C2SP upki-revocation tag at one commit, all pinned in gradle/oracle-matrix.properties (verifyOracleMatrix
+      # keeps this job reading them). A newer release fails this until it is admitted, which is a spec change. Only
+      # vX.Y.Z tags are compared; pre-releases, -rc tags and patches of an older line do not count, and a stable release
+      # or tag in another scheme fails as one this check does not understand. A pin that is not published fails too, as
+      # does a pinned tag that C2SP moved to another commit. Every problem is reported before the job fails.
+      - name: the newest upki release and upki-revocation tag are the pinned ones
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pin() { sed -n "s/^$1[[:space:]]*[=:][[:space:]]*//p" gradle/oracle-matrix.properties | tr -d ' ' | tail -n 1; }
+          semver='v[0-9]+\.[0-9]+\.[0-9]+'
+          failed=0
+          problem() { echo "::error::$*"; failed=1; }
+          # The highest vX.Y.Z of the lines on stdin, without its v.
+          highest() { { grep -xE "$semver" || true; } | sed 's/^v//' | sort -V | tail -n 1; }
+          stale() {
+            local name=$1 key=$2 pinned=$3 latest=$4
+            printf '%s\n' "$pinned" | grep -qxE "$semver" || return 0
+            if [ -z "$latest" ]; then problem "cannot read the $name versions"; return; fi
+            if [ "$(printf '%s\n' "${pinned#v}" "$latest" | sort -V | tail -n 1)" != "${pinned#v}" ]; then
+              problem "$name v$latest is released and the pin is $pinned: admit it (a spec change: re-verify spec Appendix A, roll $key in gradle/oracle-matrix.properties, re-record the index golden with native/revokt-oracle/record-upki-index.sh, re-run the cross-engine suite)"
+            fi
+          }
+          upki=$(pin upki)
+          spec=$(pin upki-revocation)
+          commit=$(pin upki-revocation.commit)
+          printf '%s\n' "$upki" | grep -qxE "$semver" || problem "no upki pin (vX.Y.Z) in gradle/oracle-matrix.properties"
+          printf '%s\n' "$spec" | grep -qxE "$semver" || problem "no upki-revocation pin (vX.Y.Z) in gradle/oracle-matrix.properties"
+          commit_ok=0
+          if printf '%s\n' "$commit" | grep -qxE '[0-9a-f]{40}'; then commit_ok=1; else problem "no upki-revocation.commit pin (40 hex) in gradle/oracle-matrix.properties"; fi
+
+          # "<published_at> <tag>" per stable release; ISO 8601 UTC times order as strings.
+          releases=$(gh api --paginate repos/rustls/upki/releases --jq '.[] | select(.prerelease or .draft | not) | "\(.published_at) \(.tag_name)"')
+          pinned_at=$(printf '%s\n' "$releases" | awk -v t="$upki" '$2 == t { print $1 }')
+          if [ -z "$pinned_at" ]; then
+            problem "upki=$upki in gradle/oracle-matrix.properties is not a published rustls/upki release"
+          elif ! printf '%s\n' "$pinned_at" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'; then
+            problem "rustls/upki $upki has no publish date ('$pinned_at'): the releases after it cannot be checked for an unrecognised tag scheme"
+          else
+            while read -r tag; do
+              problem "rustls/upki released $tag in an unrecognised tag scheme: update the upki-release check"
+            done < <(printf '%s\n' "$releases" | awk -v at="$pinned_at" '$1 > at { print $2 }' | { grep -vxE "$semver" || true; })
+          fi
+          stale "rustls/upki" upki "$upki" "$(printf '%s\n' "$releases" | cut -d' ' -f2 | highest)"
+
+          # "<name> <object type> <object sha>" per upki-revocation/<name> tag.
+          tags=$(gh api --paginate repos/C2SP/C2SP/git/matching-refs/tags/upki-revocation/ --jq '.[] | "\(.ref | ltrimstr("refs/tags/upki-revocation/")) \(.object.type) \(.object.sha)"')
+          while read -r tag; do
+            problem "C2SP tagged upki-revocation/$tag in an unrecognised tag scheme: update the upki-release check"
+          done < <(printf '%s\n' "$tags" | awk 'NF { print $1 }' | { grep -vxE "$semver(-rc[.0-9]*)?" || true; })
+          read -r _ type sha < <(printf '%s\n' "$tags" | awk -v t="$spec" '$1 == t') || true
+          if [ -z "${sha:-}" ]; then
+            problem "upki-revocation=$spec in gradle/oracle-matrix.properties is not a C2SP upki-revocation/* tag"
+          else
+            if [ "$type" = tag ]; then sha=$(gh api "repos/C2SP/C2SP/git/tags/$sha" --jq .object.sha); fi
+            if [ "$commit_ok" = 1 ] && [ "$sha" != "$commit" ]; then
+              problem "C2SP re-pointed upki-revocation/$spec at $sha, the pin is $commit: the spec text changed under the same version; re-verify it (a spec change) and roll upki-revocation.commit"
+            fi
+          fi
+          stale "C2SP upki-revocation" upki-revocation "$spec" "$(printf '%s\n' "$tags" | cut -d' ' -f1 | highest)"
+          exit "$failed"
 
   android:
     name: android (emulator matrix; from 0.3)
