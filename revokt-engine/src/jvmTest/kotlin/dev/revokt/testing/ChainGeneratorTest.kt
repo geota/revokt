@@ -199,14 +199,25 @@ class ChainGeneratorTest {
 
     @Test
     fun `seeded worlds are the recorded bytes`() {
-        // A change to the generator, SplitMix64 or the DER writer moves this hash; one that keeps it keeps every world.
-        val digest = okio.Buffer()
-        for (seed in listOf(0L, 1L, 91L)) {
-            val world = ChainGenerator.generate(seed, everyKind(seed) + mutations(seed))
-            (world.presented + world.anchors).forEach { digest.write(it) }
-            digest.writeUtf8(world.mutations.toString())
-        }
-        assertEquals(GOLDEN, digest.sha256().hex())
+        // A change to the generator, SplitMix64, the DER writer or the link bookkeeping moves a hash; one that keeps
+        // them keeps every world.
+        val actual =
+            GOLDEN.keys.associateWith { seed ->
+                val world = ChainGenerator.generate(seed, everyKind(seed) + mutations(seed))
+                val digest = okio.Buffer()
+                (world.presented + world.anchors).forEach { digest.write(it) }
+                world.ok
+                    .map { (c, k) -> c.sha256.hex() + k.sha256.hex() }
+                    .sorted()
+                    .forEach { digest.writeUtf8(it) }
+                digest.writeUtf8(world.mutations.toString())
+                digest.sha256().hex()
+            }
+        assertEquals(
+            GOLDEN,
+            actual,
+            "one hash per seed; regenerate deliberately: this invalidates any committed walker corpus",
+        )
     }
 
     @Test
@@ -300,6 +311,11 @@ class ChainGeneratorTest {
     }
 
     private companion object {
-        const val GOLDEN = "3614f57e7b46c2e1662d1b1b198261da70205848b78f3e60e3e792c02c2a3167"
+        val GOLDEN: Map<Long, String> =
+            mapOf(
+                0L to "a5f80151f58df6bb93e864fafa673be4fa7a2b721484d4965bd19ad932487ec9",
+                1L to "9e13adfefbd929a11f1ef3001f303059d53fa1a016349a6be0cee1628092ae5c",
+                91L to "158157131c215aa5da2ba36640f48f80de99c1a8b1c2b5c958c2e72dd8fae5e2",
+            )
     }
 }

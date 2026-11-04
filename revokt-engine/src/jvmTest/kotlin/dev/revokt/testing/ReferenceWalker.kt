@@ -35,7 +35,8 @@ import javax.security.auth.x500.X500Principal
  *   reachable certificate's distance to an anchor in the graph without the leaf instead of enumerating paths: the
  *   same answer, in polynomial time on stuffed chains.
  * - A link is verified only when [verifier] answers `VERIFIED`; a throw counts as not verified, as §5.1 treats a
- *   verifier throw as `INVALID` "for any verifier" (P7 runs a throwing verifier).
+ *   verifier throw as `INVALID` "for any verifier" (P7 runs a throwing verifier). It catches [Exception], never an
+ *   [Error], and must match what the 0.2 walker treats as a verifier throw.
  * - Exact-byte duplicates are one certificate. A certificate revokt's parser rejects is no candidate; an unparseable
  *   leaf has no keys. A leaf that is an anchor by bytes returns its own key (decision step 2).
  *

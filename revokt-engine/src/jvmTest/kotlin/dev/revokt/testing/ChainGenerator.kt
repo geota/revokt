@@ -129,8 +129,9 @@ internal data class CertSpec(
 /**
  * A rendered world: the [presented] chain (leaf first), the anchor snapshot ([anchors]), the verifier's [ok] links and
  * [unsupported] OIDs, and the honest answer: [honestKey], the lowercase-hex SPKI hash of the honest leaf issuer.
- * [recoveredKeys] lists, in mutation order, the key each recovered-key mutation added to [ok]; [certificates] is every
- * distinct certificate the world issued, presented or not, and [specs] the same certificates as the model built them.
+ * [recoveredKeys] lists, in applied order (world mutations first), the key each recovered-key mutation added to [ok];
+ * [mutations] lists the mutations that changed the world, in the same order; [certificates] is every distinct
+ * certificate the world issued, presented or not, and [specs] the same certificates as the model built them.
  */
 internal class World(
     val depth: Int,
@@ -242,10 +243,10 @@ internal class WorldModel(
 
 /**
  * The §9.1 chain generator. [honest] builds an honest world from a seed:
- * - 1–200 anchors with distinct names. Of the others than the honest one, about one in six has an unsupported key OID
- *   and one in six an unsupported curve OID, so the probe rejects every link through it; one in twelve has only an
- *   unsupported self-signature OID, which never matters (an anchor's self-signature is never verified) and stands for
- *   the SHA-1 self-signed roots of real stores.
+ * - 1–200 anchors with distinct names. Of the anchors other than the honest one, about one in six has an unsupported
+ *   key OID and one in six an unsupported curve OID, so the probe rejects every link through it; one in twelve has
+ *   only an unsupported self-signature OID, which never matters (an anchor's self-signature is never verified) and
+ *   stands for the SHA-1 self-signed roots of real stores.
  * - A chain of depth 0–9 (the number of intermediates) under the honest anchor. Intermediates and anchors carry
  *   [SymOids.KEY] keys; the leaf, whose key signs nothing, carries an [SymOids.ED25519] key, so it passes §9.2's
  *   keyability profile and the engine queries it (spec §9.1's private-arc key OID is for the keys that sign).
@@ -254,8 +255,10 @@ internal class WorldModel(
  *   issued by another supported snapshot root (cross-signs are only ever between snapshot roots).
  *
  * [generate] applies the world mutations first and then the attacker mutations, each group in list order (spec §9.1:
- * an honest world, then world mutations, then attacker mutations). A world is a function of the seed and the mutation
- * list alone: every choice comes from [SplitMix64], a fixed algorithm, never from `kotlin.random`.
+ * an honest world, then world mutations, then attacker mutations). So a recovered certificate always copies its
+ * child's issuer bytes as presented and is raw-related to it; one related only by canonical name (a child re-encoded
+ * after the recovery) is no longer generated. A world is a function of the seed and the mutation list alone: every
+ * choice comes from [SplitMix64], a fixed algorithm, never from `kotlin.random`.
  */
 internal object ChainGenerator {
     const val MAX_ANCHORS: Int = 200
