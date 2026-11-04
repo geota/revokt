@@ -12,4 +12,4 @@ publish.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-# upki (git tag v1.0.1, spec §3.2): added by the 0.2 cross-engine issue, at the `upki` pin of gradle/oracle-matrix.properties.
+# upki (spec §3.2): added by the 0.2 cross-engine issue, at the git tag of the `upki` pin in gradle/oracle-matrix.properties.

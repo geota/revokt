@@ -11,8 +11,8 @@
 set -eu
 root=$(pwd)
 # The rustls/upki tag: the matrix's upki pin (spec §3.2 and Appendix A; the nightly upki-release job tracks it).
-tag=$(sed -n 's/^upki[[:space:]]*[=:][[:space:]]*//p' gradle/oracle-matrix.properties | tr -d ' ')
-case $tag in v[0-9]*) ;; *) echo "no upki pin in gradle/oracle-matrix.properties" >&2; exit 1 ;; esac
+tag=$(sed -n 's/^upki[[:space:]]*[=:][[:space:]]*//p' gradle/oracle-matrix.properties | tr -d ' ' | tail -n 1)
+printf '%s\n' "$tag" | grep -qxE 'v[0-9]+\.[0-9]+\.[0-9]+' || { echo "no upki pin (vX.Y.Z) in gradle/oracle-matrix.properties" >&2; exit 1; }
 out="$root/revokt-engine/src/jvmTest/resources/dev/revokt/engine/c2sp"
 work=$(mktemp -d)
 cleanup() {

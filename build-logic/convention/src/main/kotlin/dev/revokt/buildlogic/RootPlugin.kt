@@ -83,6 +83,7 @@ class RootPlugin : Plugin<Project> {
             ci.set(layout.projectDirectory.file(".github/workflows/ci.yml"))
             nightly.set(layout.projectDirectory.file(".github/workflows/nightly.yml"))
             catalog.set(layout.projectDirectory.file("gradle/libs.versions.toml"))
+            upkiIndex.set(layout.projectDirectory.file("revokt-engine/src/jvmTest/resources/dev/revokt/engine/c2sp/upki-index.tsv"))
         }
         tasks.register<WriteCorpusManifestTask>("writeCorpusManifest") {
             description = "Regenerates corpus/manifest.sha256; only in a PR that admits corpus entries (docs/dev/corpus.md)."

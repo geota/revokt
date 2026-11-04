@@ -406,8 +406,10 @@ every required check in Appendix B passes**.
   into `gradle/oracle-matrix.properties`; no unverified Conscrypt artifact is resolved in CI).
 - The upki-release check (spec §3.2, Appendix A): fails when `rustls/upki` has a GitHub release (pre-releases excluded)
   or C2SP an `upki-revocation/*` tag newer than the `upki` and `upki-revocation` pins in
-  `gradle/oracle-matrix.properties`. Admitting one is a `spec` change: re-verify the Appendix A facts, roll the pin and
-  re-run the cross-engine suite (0.2+).
+  `gradle/oracle-matrix.properties`, or when the pinned tag no longer points at `upki-revocation.commit`. Admitting one
+  is a `spec` change: re-verify the Appendix A facts, roll the pin, re-record the index golden
+  (`native/revokt-oracle/record-upki-index.sh`; `verifyOracleMatrix` checks it names the pin) and re-run the
+  cross-engine suite (0.2+).
 - Fuzzing: ClusterFuzzLite batch matrix, one job per §9.1 target, `base-builder-jvm` pinned by digest, the
   coverage cron and the corpus storage token configured, corpus merged back weekly; a crash is uploaded as a
   SARIF artifact and a workflow step files the `security` issue (ClusterFuzzLite does not file issues itself).

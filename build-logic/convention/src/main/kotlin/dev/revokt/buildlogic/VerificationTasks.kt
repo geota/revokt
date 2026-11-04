@@ -243,7 +243,8 @@ abstract class ResolveAndLockAllTask : DefaultTask() {
 /**
  * The §9.2 version matrix is one file (`gradle/oracle-matrix.properties`, CONTRIBUTING §6): the CI `check` matrix runs
  * exactly its JDKs, the nightly replays its EA JDK, its Conscrypt keys are the catalog versions the build wires, the
- * roll rule holds, and the nightly's upki-release job reads the upki and upki-revocation pins from it (spec §3.2).
+ * roll rule holds, the nightly's upki-release job reads the upki pins from it (spec §3.2), and the committed upki index
+ * golden was recorded at the upki pin.
  */
 abstract class VerifyOracleMatrixTask : DefaultTask() {
     @get:InputFile
@@ -262,18 +263,29 @@ abstract class VerifyOracleMatrixTask : DefaultTask() {
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val catalog: RegularFileProperty
 
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val upkiIndex: RegularFileProperty
+
     @TaskAction
     fun verify() {
-        val found = problems(matrix.get().asFile.readText(), ci.get().asFile.readText(), nightly.get().asFile.readText(), catalog.get().asFile.readText())
+        val found = problems(
+            matrix.get().asFile.readText(),
+            ci.get().asFile.readText(),
+            nightly.get().asFile.readText(),
+            catalog.get().asFile.readText(),
+            upkiIndex.get().asFile.readText(),
+        )
         if (found.isNotEmpty()) fail("verifyOracleMatrix:\n" + found.joinToString("\n") { "  - $it" })
     }
 
-    /** Every way the four files disagree, each with what to change. */
+    /** Every way the five files disagree, each with what to change. */
     internal fun problems(
         matrixText: String,
         ciText: String,
         nightlyText: String,
         catalogText: String,
+        upkiIndexText: String,
     ): List<String> {
         val props = java.util.Properties().apply { load(matrixText.reader()) }
         fun list(key: String) = props.getProperty(key)?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
@@ -296,17 +308,22 @@ abstract class VerifyOracleMatrixTask : DefaultTask() {
         val missing = conscrypt - keys
         if (missing.isNotEmpty()) out += "$missing are not gradle/libs.versions.toml versions: add them to the catalog"
         if (conscrypt != WIRED_CONSCRYPT) out += "the matrix's Conscrypt keys are $conscrypt, the build wires $WIRED_CONSCRYPT (jvmTest, jvmTestConscryptPrevious in revokt-engine/build.gradle.kts): change both together"
-        for ((key, names) in UPKI_PINS) {
-            val pin = props.getProperty(key)?.trim().orEmpty()
-            if (!Regex("""v\d+\.\d+\.\d+""").matches(pin)) out += "the matrix's $key pin '$pin' is not a vX.Y.Z tag: pin $names (spec §3.2, Appendix A)"
+        for (pin in UPKI_PINS) {
+            val value = props.getProperty(pin.key)?.trim().orEmpty()
+            if (!pin.shape.matches(value)) out += "the matrix's ${pin.key} pin '$value' is not ${pin.shapeName}: pin ${pin.what} (spec §3.2, Appendix A)"
         }
+        val upki = props.getProperty("upki")?.trim().orEmpty()
+        val recorded = Regex("""written by rustls/upki ([^\s']+)'s""").find(upkiIndexText)?.groupValues?.get(1)
+        if (recorded != upki) out += "upki-index.tsv records rustls/upki ${recorded ?: "(no provenance line)"}, the upki pin is '$upki': re-record the index golden (sh native/revokt-oracle/record-upki-index.sh)"
         val upkiJob = section(nightlyText, Regex("""^  upki-release:\s*$"""), Regex("""^  [A-Za-z0-9_-]+:\s*$"""))
         if (upkiJob.isBlank()) {
             out += "nightly.yml has no upki-release job: add it (it fails on a rustls/upki release or C2SP upki-revocation tag newer than the pins)"
         } else {
-            if ("gradle/oracle-matrix.properties" !in upkiJob) out += "nightly.yml's upki-release does not read gradle/oracle-matrix.properties: read the pins from it"
-            for (key in UPKI_PINS.keys) {
-                if (!Regex("""\bpin $key(?![\w-])""").containsMatchIn(upkiJob)) out += "nightly.yml's upki-release does not read the $key pin (no `pin $key`): read it from the matrix"
+            // The pin() definition itself, not a comment or an error message that names the file.
+            val reader = Regex("""^\s*pin\(\)\s*\{[^#\n]*\sgradle/oracle-matrix\.properties(?![\w.-])""", RegexOption.MULTILINE)
+            if (!reader.containsMatchIn(upkiJob)) out += "nightly.yml's upki-release has no pin() that reads gradle/oracle-matrix.properties: read the pins from it"
+            for (key in UPKI_PINS.map { it.key }) {
+                if (!Regex("""\bpin ${Regex.escape(key)}(?![\w.-])""").containsMatchIn(upkiJob)) out += "nightly.yml's upki-release does not read the $key pin (no `pin $key`): read it from the matrix"
             }
             val script = upkiJob.lines().filterNot { Regex("""^\s*(- )?uses:""").containsMatchIn(it) }.joinToString("\n")
             val literals = Regex("""(?<![\w.])v\d+\.\d+\.\d+(?![\w.])""").findAll(script).map { it.value }.toSet()
@@ -331,10 +348,19 @@ abstract class VerifyOracleMatrixTask : DefaultTask() {
         /** The catalog keys revokt-engine/build.gradle.kts wires (jvmTest, jvmTestConscryptPrevious); change both together. */
         val WIRED_CONSCRYPT = listOf("conscrypt", "conscrypt-previous")
 
-        /** The second engine's pins (spec §3.2, Appendix A), each with what it pins; the nightly's upki-release reads them. */
-        val UPKI_PINS = linkedMapOf(
-            "upki" to "the rustls/upki git tag of its latest GitHub release",
-            "upki-revocation" to "the C2SP upki-revocation/* tag the C2SP reader conforms to",
+        /** The second engine's pins (spec §3.2, Appendix A); the nightly's upki-release reads them. */
+        val UPKI_PINS = listOf(
+            UpkiPin("upki", Regex("""v\d+\.\d+\.\d+"""), "a vX.Y.Z tag", "the rustls/upki git tag of its latest GitHub release"),
+            UpkiPin("upki-revocation", Regex("""v\d+\.\d+\.\d+"""), "a vX.Y.Z tag", "the C2SP upki-revocation/* tag the C2SP reader conforms to"),
+            UpkiPin("upki-revocation.commit", Regex("""[0-9a-f]{40}"""), "a 40-hex commit", "the commit that upki-revocation tag points at"),
+        )
+
+        /** A pin of gradle/oracle-matrix.properties: its [key], the [shape] its value must match ([shapeName]) and [what] it pins. */
+        class UpkiPin(
+            val key: String,
+            val shape: Regex,
+            val shapeName: String,
+            val what: String,
         )
     }
 }
