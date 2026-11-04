@@ -9,10 +9,10 @@ package dev.revokt.engine.json
  * reused across the numbers of one parse (spec §6.5's allocation budget). Short decimals take Clinger's fast path.
  *
  * The decimal is `D × 10^E` with `D` its first [MAX_DIGITS] significant digits; any non-zero digit beyond them only
- * makes the value larger than `D × 10^E` by less than a unit in its last digit, which no double's rounding boundary
- * can lie inside (a midpoint between two doubles has at most 768 significant digits), so it is a sticky bit. With `value = P / Q`, `P = D × 10^max(E, 0)`
- * and `Q = 10^max(-E, 0)`, the quotient `floor(P × 2^k / Q)` for the right `k` (long division, [Big.divRem]) holds the
- * 53-bit mantissa, its next bit and, with the remainder, every bit below.
+ * makes the value larger than `D × 10^E` by less than a unit in its last digit, which no double's rounding boundary can
+ * lie inside (a midpoint between two doubles has at most 768 significant digits), so it is a sticky bit. With `value =
+ * P / Q`, `P = D × 10^max(E, 0)` and `Q = 10^max(-E, 0)`, the quotient `floor(P × 2^k / Q)` for the right `k` (long
+ * division, [Big.divRem]) holds the 53-bit mantissa, its next bit and, with the remainder, every bit below.
  */
 internal class DecimalDouble {
     private val p = Big.of(0, LIMBS)
@@ -23,7 +23,9 @@ internal class DecimalDouble {
     private var point = 0
     private var first = 0
 
-    /** The decimal number in `[from, to)` of [b]: valid JSON number syntax without the sign. Infinite when too large. */
+    /**
+     * The decimal number in `[from, to)` of [b]: valid JSON number syntax without the sign. Infinite when too large.
+     */
     fun parse(
         b: ByteArray,
         from: Int,
@@ -173,9 +175,9 @@ internal class DecimalDouble {
             }
 
         /**
-         * The 768 significant digits that decide every double's rounding: a midpoint between two doubles has at most 768
-         * (the one below the smallest normal has exactly 768), so none lies strictly inside the gap a dropped non-zero
-         * digit leaves.
+         * The 768 significant digits that decide every double's rounding: a midpoint between two doubles has at most
+         * 768 (the one below the smallest normal has exactly 768), so none lies strictly inside the gap a dropped
+         * non-zero digit leaves.
          */
         const val MAX_DIGITS = 768
 

@@ -38,8 +38,8 @@ internal object ShortestDouble {
             // Subnormal: neighbours (m - 2, e) and (m + 2, e), integer_decode having doubled m.
             field == 0 -> dragon(m, 1L, 1L, e, inclusive)
 
-            // A normal power of two (zero fraction: Rust compares with the smallest normal's mantissa, 2^52, which every
-            // power of two shares): the neighbour below is half as far.
+            // A normal power of two (zero fraction: Rust compares with the smallest normal's mantissa, 2^52, which
+            // every power of two shares): the neighbour below is half as far.
             m == 1L shl 52 -> dragon(m shl 2, 1L, 2L, e - 2, inclusive)
 
             else -> dragon(m shl 1, 1L, 1L, e - 1, inclusive)
@@ -98,8 +98,9 @@ internal object ShortestDouble {
         }
 
         /**
-         * mant, minus and plus times 10^[n], with the power computed once (k < 0 only for values below 1, where dExp
-         * is negative and the three still hold dMant, dMinus and dPlus); the mantissa, below 2^55, in two parts below 2^31.
+         * mant, minus and plus times 10^[n], with the power computed once (k < 0 only for values below 1, where dExp is
+         * negative and the three still hold dMant, dMinus and dPlus); the mantissa, below 2^55, in two parts below
+         * 2^31.
          */
         private fun timesPow10(
             n: Int,
@@ -127,7 +128,10 @@ internal object ShortestDouble {
         fun timesTen() = bounds.forEach { it.mulSmall(10) }
     }
 
-    /** `div_rem_upto_16`: the digit `floor(mant / scale)`, leaving the remainder in [mant]; [multiples] is 8, 4, 2, 1 × scale. */
+    /**
+     * `div_rem_upto_16`: the digit `floor(mant / scale)`, leaving the remainder in [mant]; [multiples] is 8, 4, 2, 1 ×
+     * scale.
+     */
     private fun nextDigit(
         mant: Big,
         multiples: List<Big>,

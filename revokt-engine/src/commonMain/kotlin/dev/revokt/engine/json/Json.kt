@@ -37,7 +37,10 @@ internal enum class JsonError {
     /** An unescaped byte below 0x20 inside a string. */
     CONTROL_CHARACTER,
 
-    /** A string byte sequence that is not well-formed UTF-8 (RFC 3629: no overlong forms, surrogates or values above U+10FFFF). */
+    /**
+     * A string byte sequence that is not well-formed UTF-8 (RFC 3629: no overlong forms, surrogates or values above
+     * U+10FFFF).
+     */
     INVALID_UTF8,
 
     /** An object with two members of the same key after unescaping (spec §7.1). */
@@ -45,8 +48,8 @@ internal enum class JsonError {
 }
 
 /**
- * A rejected JSON text: [error] at byte [offset]. The only exception [Json.parse] throws. The message is built only when
- * read, so a rejection allocates no string (spec §6.5's budget covers rejected inputs too).
+ * A rejected JSON text: [error] at byte [offset]. The only exception [Json.parse] throws. The message is built only
+ * when read, so a rejection allocates no string (spec §6.5's budget covers rejected inputs too).
  */
 internal class JsonParseException(
     val error: JsonError,
@@ -401,7 +404,9 @@ private class Strings(
         return unit
     }
 
-    /** Validates the multi-byte UTF-8 sequence led by [lead] at [at] (RFC 3629 table 3-7); returns the index after it. */
+    /**
+     * Validates the multi-byte UTF-8 sequence led by [lead] at [at] (RFC 3629 table 3-7); returns the index after it.
+     */
     private fun utf8(
         lead: Int,
         at: Int,
@@ -556,8 +561,8 @@ private fun hexDigit(c: Int): Int =
 
 /**
  * A UTF-8 lead byte's continuation count (bits 0–7) and the first continuation byte's range, low (bits 8–15) and high
- * (bits 16–23), per RFC 3629 table 3-7: no overlong form, no surrogate, nothing above U+10FFFF; every later continuation
- * byte is 0x80 to 0xBF. -1 for a byte that cannot lead.
+ * (bits 16–23), per RFC 3629 table 3-7: no overlong form, no surrogate, nothing above U+10FFFF; every later
+ * continuation byte is 0x80 to 0xBF. -1 for a byte that cannot lead.
  */
 private fun utf8Lead(lead: Int): Int =
     when (lead) {

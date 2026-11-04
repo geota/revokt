@@ -81,7 +81,8 @@ class JsonAllocationTest {
             within(20, "canonical-json $name", Base64.getDecoder().decode(input), report = false)
         }
         println(
-            "JSON allocation: ${inputs.size} fuzz inputs and ${vectors.size} canonical-json vectors within 20·len + 64 KiB",
+            "JSON allocation: ${inputs.size} fuzz inputs and ${vectors.size} canonical-json vectors " +
+                "within 20·len + 64 KiB",
         )
     }
 

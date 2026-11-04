@@ -7,9 +7,9 @@ import java.lang.management.ManagementFactory
 
 /**
  * Spec §6.5's JSON allocation budget (#99) and its measurement protocol, shared by [JsonAllocationTest] and
- * [JsonFuzzTest]: HotSpot's per-thread allocation counter, after one warm-up decode on the same thread of §6.5's example
- * document and of one rejected input (the error path loads classes of its own: the error enum, the message's string
- * concatenation), so that per-process class loading does not count.
+ * [JsonFuzzTest]: HotSpot's per-thread allocation counter, after one warm-up decode on the same thread of §6.5's
+ * example document and of one rejected input (the error path loads classes of its own: the error enum, the message's
+ * string concatenation), so that per-process class loading does not count.
  */
 internal object JsonBudget {
     /** §6.5's example: exponents, negative and beyond-`Long` numbers, multi-byte UTF-8, `\u` escapes with a pair. */

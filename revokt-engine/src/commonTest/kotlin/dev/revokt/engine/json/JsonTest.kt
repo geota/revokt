@@ -9,7 +9,9 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** The JSON conformance set of #92 (spec §7.1 "JSON"): what the engine's parser accepts, and what it rejects and why. */
+/**
+ * The JSON conformance set of #92 (spec §7.1 "JSON"): what the engine's parser accepts, and what it rejects and why.
+ */
 class JsonTest {
     private fun parse(text: String): JsonValue = Json.parse(text.encodeToByteArray())
 

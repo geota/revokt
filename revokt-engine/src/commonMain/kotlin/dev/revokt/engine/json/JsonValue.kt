@@ -44,8 +44,8 @@ internal data class JsonInteger(
 
     companion object {
         /**
-         * Whether [magnitude] is 1 to 2^63, by signed comparisons: an unsigned range test would load `kotlin.UnsignedKt`
-         * on the first negative number.
+         * Whether [magnitude] is 1 to 2^63, by signed comparisons: an unsigned range test would load
+         * `kotlin.UnsignedKt` on the first negative number.
          */
         fun isNegativeMagnitude(magnitude: ULong): Boolean = magnitude.toLong().let { it > 0 || it == Long.MIN_VALUE }
 

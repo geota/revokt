@@ -131,8 +131,8 @@ class CanonicalJsonOracleTest {
 
     /**
      * Mozilla's own signature over the corpus changeset verifies against `Content-Signature:\0` plus revokt's canonical
-     * payload (spec §7.1): the bytes revokt builds are the bytes Mozilla signed. It proves the bytes, not the chain: the
-     * key is `metadata.signature.public_key`, which is unsigned metadata, not a key from the validated x5u chain.
+     * payload (spec §7.1): the bytes revokt builds are the bytes Mozilla signed. It proves the bytes, not the chain:
+     * the key is `metadata.signature.public_key`, which is unsigned metadata, not a key from the validated x5u chain.
      */
     @Test
     fun `Mozilla's signature over the corpus changeset verifies over revokt's payload`() {
