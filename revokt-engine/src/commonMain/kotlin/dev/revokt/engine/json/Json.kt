@@ -62,9 +62,10 @@ internal class JsonParseException(
  * and 20·len + 64 KiB on any input, measured after one warm-up decode, on the same thread, of a fixed small document
  * holding every value kind, so that per-process class loading does not count. Nothing is retained
  * across calls but constants (the empty values, `true`, `false`, `null`): every buffer and table belongs to one parse
- * and counts toward that parse. So containers collect their members on one scratch stack per parse and are
+ * and counts toward that parse. The bounds assume compressed oops (4-byte references), the HotSpot default below a
+ * 32 GiB heap. So containers collect their members on one scratch stack per parse and are
  * copied out at exact size, objects are sorted parallel arrays, a one-item array holds its item, the integers 0 to 1023
- * and short escape-free strings are shared within a parse, and decimals are converted without a `String`, in buffers
+ * and short strings are shared within a parse, and decimals are converted without a `String`, in buffers
  * reused across the parse.
  */
 internal object Json {
@@ -297,14 +298,15 @@ private const val SMALL_INTEGERS = 1024
 private fun isDigit(c: Byte): Boolean = c in '0'.code.toByte()..'9'.code.toByte()
 
 /**
- * The strings of one parse: each is validated in one pass and decoded once. Escape-free strings of at most
- * [SHARED_BYTES] bytes are shared within the parse ([SharedValues]), so repeated keys and values cost one copy.
+ * The strings of one parse: each is validated in one pass and decoded once. Strings of at most [SHARED_BYTES] raw
+ * bytes, escaped or not, are shared within the parse ([SharedValues]), so repeated keys and values cost one copy.
  */
 private class Strings(
     private val b: ByteArray,
 ) {
     private val table = SharedValues(b)
     private var escaped = false
+    private var chars = CharArray(0)
 
     private fun fail(
         error: JsonError,
@@ -335,20 +337,26 @@ private class Strings(
         end: Int,
     ): JsonString =
         when {
-            escaped -> JsonString(unescape(start, end))
             end == start -> EMPTY
-            end - start > SHARED_BYTES -> JsonString(b.decodeToString(start, end))
+            end - start > SHARED_BYTES -> JsonString(decode(start, end))
             else -> share(start, end - start)
         }
 
+    /** Short strings, escaped or not, are shared by their raw bytes: the same bytes decode to the same string. */
     private fun share(
         start: Int,
         length: Int,
     ): JsonString {
         val slot = table.slot(start, length)
+        if (slot < 0) return JsonString(decode(start, start + length))
         return table[slot] as JsonString?
-            ?: JsonString(b.decodeToString(start, start + length)).also { table.put(slot, start, length, it) }
+            ?: JsonString(decode(start, start + length)).also { table.put(slot, start, length, it) }
     }
+
+    private fun decode(
+        start: Int,
+        end: Int,
+    ): String = if (escaped) unescape(start, end) else b.decodeToString(start, end)
 
     /** Validates the escape whose backslash is at [at]; returns the index after it. */
     private fun escape(at: Int): Int {
@@ -406,12 +414,16 @@ private class Strings(
         return at + count + 1
     }
 
-    /** Decodes the validated content `[start, end)`, which holds an escape, into at most one UTF-16 unit per byte. */
+    /**
+     * Decodes the validated content `[start, end)`, which holds an escape, into at most one UTF-16 unit per byte, in
+     * one buffer the parse reuses for every escaped string.
+     */
     private fun unescape(
         start: Int,
         end: Int,
     ): String {
-        val out = CharArray(end - start)
+        if (chars.size < end - start) chars = CharArray(maxOf(end - start, chars.size * 2))
+        val out = chars
         var n = 0
         var i = start
         while (i < end) {
@@ -474,7 +486,10 @@ private class SharedValues(
     private var values = arrayOfNulls<JsonValue>(0)
     private var count = 0
 
-    /** The slot holding the bytes `[start, start + length)`, or the free slot where they belong. */
+    /**
+     * The slot holding the bytes `[start, start + length)`, or the free slot where they belong; -1, not shared, after
+     * [MAX_PROBES] occupied slots, so crafted colliding strings cannot make a parse quadratic.
+     */
     fun slot(
         start: Int,
         length: Int,
@@ -487,7 +502,9 @@ private class SharedValues(
         var h = -0x7ee3623b
         for (i in start until start + length) h = (h xor b[i].toInt()) * 0x01000193
         var slot = (h xor (h ushr 16)) and (SLOTS - 1)
+        var probes = 0
         while (values[slot] != null && !(lengths[slot] == length && sameBytes(starts[slot], start, length))) {
+            if (++probes == MAX_PROBES) return -1
             slot = (slot + 1) and (SLOTS - 1)
         }
         return slot
@@ -520,6 +537,7 @@ private class SharedValues(
 
     companion object {
         const val SLOTS = 1024
+        const val MAX_PROBES = 16
     }
 }
 

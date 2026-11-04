@@ -4,9 +4,11 @@
 package dev.revokt.engine.json
 
 import java.math.BigDecimal
+import java.math.BigInteger
 import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /**
  * The parser's decimal reading against the JDK's `Double.parseDouble` (correctly rounded, half to even) and against
@@ -76,5 +78,15 @@ class DecimalDoubleTest {
             val padded = (if ('.' in plain) plain else "$plain.") + "0".repeat(maxOf(0, 820 - significant)) + "1"
             same(Math.nextUp(v), padded)
         }
+    }
+
+    @Test
+    fun `the tie above the largest double overflows, and anything below it is the largest double`() {
+        // 2^1024 - 2^970 lies halfway between Double.MAX_VALUE (odd mantissa) and 2^1024: ties to even round it up.
+        val tie = BigInteger.ONE.shiftLeft(1024) - BigInteger.ONE.shiftLeft(970)
+        val e = assertFailsWith<JsonParseException> { Json.parse(tie.toString().encodeToByteArray()) }
+        assertEquals(JsonError.NUMBER_OUT_OF_RANGE, e.error)
+        same(Double.MAX_VALUE, (tie - BigInteger.ONE).toString() + "." + "9".repeat(1000))
+        same(Double.MAX_VALUE, (tie - BigInteger.ONE).toString())
     }
 }

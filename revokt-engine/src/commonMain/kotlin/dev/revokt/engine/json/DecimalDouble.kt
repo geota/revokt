@@ -10,7 +10,7 @@ package dev.revokt.engine.json
  *
  * The decimal is `D × 10^E` with `D` its first [MAX_DIGITS] significant digits; any non-zero digit beyond them only
  * makes the value larger than `D × 10^E` by less than a unit in its last digit, which no double's rounding boundary
- * can lie inside (768 digits decide every double), so it is a sticky bit. With `value = P / Q`, `P = D × 10^max(E, 0)`
+ * can lie inside (a midpoint between two doubles has at most 768 significant digits), so it is a sticky bit. With `value = P / Q`, `P = D × 10^max(E, 0)`
  * and `Q = 10^max(-E, 0)`, the quotient `floor(P × 2^k / Q)` for the right `k` (long division, [Big.divRem]) holds the
  * 53-bit mantissa, its next bit and, with the remainder, every bit below.
  */
@@ -173,8 +173,9 @@ internal class DecimalDouble {
             }
 
         /**
-         * The 768 significant digits that decide every double's rounding: a midpoint between two doubles has at most 767,
-         * so none lies strictly inside the gap a dropped non-zero digit leaves.
+         * The 768 significant digits that decide every double's rounding: a midpoint between two doubles has at most 768
+         * (the one below the smallest normal has exactly 768), so none lies strictly inside the gap a dropped non-zero
+         * digit leaves.
          */
         const val MAX_DIGITS = 768
 

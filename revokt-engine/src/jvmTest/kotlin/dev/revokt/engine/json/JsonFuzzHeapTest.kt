@@ -37,8 +37,8 @@ class JsonFuzzHeapTest {
 
 /** The forked JVM of [JsonFuzzHeapTest]: exits non-zero on any finding or an input slower than [LIMIT_MILLIS]. */
 object JsonFuzzHeapMain {
-    /** Three times the harness's `-timeout=10`; the slowest shape takes under 3 s on the maintainer's machine. */
-    private const val LIMIT_MILLIS = 30_000L
+    /** The harness's `-timeout=10`; the slowest shape takes under 2 s on the maintainer's machine. */
+    private const val LIMIT_MILLIS = 10_000L
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -51,6 +51,12 @@ object JsonFuzzHeapMain {
             "5e-324",
             "1.7976931348623157e308",
             "4.9406564584124654e-324",
+            "1.5",
+            "1e-300",
+            "-1",
+            "{\"a\":{\"b\":[1]}}",
+            "\"\\n\"",
+            "{\"\\n\":0}",
         )) {
             val input =
                 generateSequence {

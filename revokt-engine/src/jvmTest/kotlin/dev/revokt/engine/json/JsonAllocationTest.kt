@@ -5,7 +5,6 @@ package dev.revokt.engine.json
 
 import dev.revokt.engine.parse.producer.ExternalCorpus
 import java.io.File
-import java.lang.management.ManagementFactory
 import java.util.Base64
 import java.util.Random
 import kotlin.test.BeforeTest
@@ -14,38 +13,26 @@ import kotlin.test.assertTrue
 
 /**
  * Spec §6.5's allocation budget for JSON (#99): at most 4·len + 64 KiB on Remote Settings data and at most
- * 20·len + 64 KiB on any input, measured with HotSpot's per-thread allocation counter after one warm-up decode, on the
- * same thread, of a fixed small document holding every value kind ([warmUp]). The parser retains nothing across calls
- * but constants, so each measured parse carries every buffer it uses.
+ * 20·len + 64 KiB on any input, measured as [JsonBudget] states. The parser retains nothing across calls but
+ * constants, so each measured parse carries every buffer it uses.
  */
 class JsonAllocationTest {
-    private val threads = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
-
-    /**
-     * The §6.5 warm-up: one decode of the fixed document [WARM_UP], which holds every value kind, and one rejected
-     * input, since the error path loads classes of its own (the error enum, the message's string concatenation);
-     * per-process class loading then does not count.
-     */
     @BeforeTest
     fun warmUp() {
-        Json.parse(WARM_UP.encodeToByteArray())
-        try {
-            Json.parse("[".encodeToByteArray())
-        } catch (_: JsonParseException) {
-            // Expected: the rejection only loads the error path.
-        }
+        assertTrue(JsonBudget.supported, "spec §6.5 measures with HotSpot's per-thread allocation counter")
+        JsonBudget.warmUp()
     }
 
     /** The bytes one parse of [input] allocates, a rejected input included. */
-    private fun allocated(input: ByteArray): Long {
-        val before = threads.currentThreadAllocatedBytes
-        try {
-            Json.parse(input, maxBytes = Long.MAX_VALUE)
-        } catch (_: JsonParseException) {
-            // A rejection is a result; its allocation counts as well.
-        }
-        return threads.currentThreadAllocatedBytes - before
-    }
+    private fun allocated(input: ByteArray): Long =
+        JsonBudget
+            .allocated {
+                try {
+                    Json.parse(input, maxBytes = Long.MAX_VALUE)
+                } catch (_: JsonParseException) {
+                    // A rejection is a result; its allocation counts as well.
+                }
+            }.second
 
     private fun within(
         factor: Int,
@@ -59,7 +46,7 @@ class JsonAllocationTest {
                 "JSON allocation: $name, ${input.size} bytes, %.2f·len".format(bytes.toDouble() / input.size),
             )
         }
-        assertTrue(bytes <= factor.toLong() * input.size + 64 * 1024, "$name allocated $bytes bytes for ${input.size}")
+        assertTrue(bytes <= JsonBudget.bound(factor, input.size), "$name allocated $bytes bytes for ${input.size}")
     }
 
     private fun resource(name: String): ByteArray =
@@ -109,6 +96,11 @@ class JsonAllocationTest {
             "5e-324",
             "1.7976931348623157e308",
             "{\"a\":{\"b\":[1]}}",
+            "\"\\n\"",
+            "\"\\\"\"",
+            "\"\\\\\"",
+            "\"\\t\"",
+            "{\"\\n\":0}",
         )) {
             within(20, item.take(16), array(item))
         }
@@ -138,10 +130,5 @@ class JsonAllocationTest {
         )
         within(20, "a string of é", ("\"" + "é".repeat(1 shl 19) + "\"").encodeToByteArray())
         within(20, "a 1 MiB decimal", ("0." + "1".repeat((1 shl 20) - 2)).encodeToByteArray())
-    }
-
-    private companion object {
-        /** §6.5's example: exponents, negative and beyond-`Long` numbers, multi-byte UTF-8, `\u` escapes with a pair. */
-        const val WARM_UP = "{\"a\":[0,-1.5e3,18446744073709551616,\"é😀\\u00e9\\ud83d\\ude00\",true,false,null,{}]}"
     }
 }

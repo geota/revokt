@@ -158,6 +158,9 @@ class CanonicalJsonTest {
         check("-1.5", "-1.5E0")
         check("12345e-1", "1.2345E3")
         check("[1.0,-2,3E2]", "[1E0,-2,3E2]")
+        // A tie between two shortest candidates: Rust's Dragon rounds up, where JDK 19+ Double.toString rounds to even.
+        check("1497898211722073.25", "1.4978982117220733E15")
+        check("1125899906842624.75", "1.1258999068426248E15")
     }
 
     @Test
