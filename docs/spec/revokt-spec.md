@@ -6,7 +6,7 @@ Status: **draft spec / project proposal, revision 48** · Target: JVM 17+ and An
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
 
-### Changes in revision 48 (every unrelated leaf issuer collected, and the C2SP index rules for every source, 2026-11-04)
+### Changes in revision 48 (every unrelated leaf issuer collected, the C2SP index rules for every source, and the JSON allocation budget, 2026-11-04)
 - **Decided** (#98, found while reviewing #91's reference walker; the maintainer chose reading B): at the leaf, §5.1's
   unrelated loop now also runs regardless of `foundHere` when **no related path** exists there, as it already did
   under a custom canonicaliser.
@@ -36,6 +36,17 @@ Status: **draft spec / project proposal, revision 48** · Target: JVM 17+ and An
 - **Changed** (§3.2, #86): the 1 MiB cap §6.5 gives a seed's `index.bin` now applies to every `index.bin` the engine
   reads, checked before parsing, with the same outcome as an inconsistent index. #86's reader already enforces it
   for every source. It bounds the reader's allocation; real indexes are far smaller (the corpus golden is 8 KB).
+- **Changed** (§6.5, #97's review): the JSON allocation budget was `4·len`, with no constant term and no measurement
+  protocol.
+  - **Why it changes:** a tree with one object per value cannot meet `4·len` on every input. `[1.5,…]` needs a 24 B
+    number per 4 input bytes. A 1-byte input fails on the parser object alone, and the first decode in a JVM
+    allocates several MB of class initialisation.
+  - **The new budget:** `4·len + 64 KiB` on Remote Settings–shaped input (a changeset or `records.json`), and
+    `20·len + 64 KiB` on any input. Both are measured after one warm-up decode.
+  - **Measured:** #97 measured a real Remote Settings changeset at about 3·len once the per-member and per-container
+    copies are gone. The worst adversarial shape measured was about 17·len. A 4 MiB input at the §9.1 harness's
+    `-Xmx256m` then no longer exhausts the heap.
+  - **Unchanged:** the filter and DER budgets.
 - **Clarified** (§11, the 0.1 row): it lists `SymVerifier`, the reference walker and the chain generator once, not
   twice, and it names canonical JSON beside the JSON tree, as #92 implements it. The content-signature payload
   builder is 0.2.
@@ -2537,8 +2548,11 @@ the lock `start()` holds; readers re-read the pointer once on a missing key. Ins
 ≤ 3× resident + one body; decoded immutable filters are shared across generations by
 `GenerationFiles.sha256(name)`; decoding uses bulk
 `ByteBuffer.asLongBuffer().get(LongArray)`. Allocation budgets per decoder: filter ≤ len + 1 MiB +
-entries × 128 B; JSON ≤ 4·len; DER ≤ 2·len; asserted in the §9.1 replay by
-`com.sun.management.ThreadMXBean.getThreadAllocatedBytes` deltas (HotSpot).
+entries × 128 B; JSON ≤ 4·len + 64 KiB on Remote Settings–shaped input (a changeset or `records.json`) and ≤ 20·len +
+64 KiB on any input (revision 48: a tree with one object per value cannot hold 4·len on every input, for example
+`[1.5,…]`, and a bound needs a constant term); DER ≤ 2·len; asserted in the §9.1 replay by
+`com.sun.management.ThreadMXBean.getThreadAllocatedBytes` deltas (HotSpot), measured after one warm-up decode so
+that class initialisation and JIT state do not count.
 
 **Seed archive** (`revokt-seed-<channel>`, weekly; **shipped by default**: `SeedSource.bundled()`, the builder default, resolves `/revokt/seed-<channel>.zip` from that artifact on the classpath, and the OkHttp and Android quickstarts declare the dependency; decision, revision 23): a zip with `seed.json` {`seedFormat`, `channel`,
 `dataset`, `filterFormat`, `recordsLastModified`, `engineFloor`}, `records.json` (byte-for-byte the canonical-JSON signed payload `{"data": records sorted by id, tombstones removed, "last_modified": "<ts>"}`, so the seed verifier hashes the file unchanged; the `<ts>` inside it, verified, is the seed's timestamp for every rule below, the unsigned `seed.json.recordsLastModified` being a hint for the header read only), `signature` (the `signature` field as served: the 128-character base64url text encoding 96 raw r‖s bytes), `x5u.pem` (the x5u body as served, leaf first), `attachments/<name>`, `index.bin` (produced by one engine function `buildIndex(records, channel)` with entries ordered by `(effectiveTimestamp, record id)`, full before deltas; its output bytes are frozen per `seedFormat`, a change bumps `seedFormat`, which is what makes the load-time byte compare valid across minors; the weekly job calls that function from the oldest supported minor). **Entry caps, enforced while inflating** (zip-declared sizes are untrusted; `fromResource`/`fromPath`/`of` accept any file, and the sole-seed `ENFORCE` path inflates inside `start()`, where an `OutOfMemoryError` would crash-loop an app): `records.json` ≤ `MAX_JSON_BYTES`, `x5u.pem` ≤ `MAX_X5U_BYTES`, each attachment ≤ `min(signed size, MAX_FILTER_BYTES)`, `index.bin` ≤ 1 MiB, `seed.json` ≤ 64 KiB; over any cap → `SEED_UNREADABLE` (§10 supply chain). Engine rules: `seedFormat` or
