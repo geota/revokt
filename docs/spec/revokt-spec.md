@@ -17,9 +17,12 @@ Status: **draft spec / project proposal, revision 48** · Target: JVM 17+ and An
     `REVOKED` wins".
   - **Now:** the pseudocode keeps `relatedPath` (whether a related candidate's path exists at the node) and breaks
     out of the unrelated loop only when a path exists and the node is not the leaf, or the leaf has a related path
-    and no custom canonicaliser. The cost stays within `presented − 1`, the bound the custom-canonicaliser case
-    already has. P6 is unchanged: on the default delegates an honest issuer is related, so an honest world always has
-    a related path.
+    and no custom canonicaliser.
+    - `unrelatedExploredAtLeaf` stays at most `presented − 1`, the bound the custom-canonicaliser case already has.
+      Each subtree stays under `MAX_VERIFICATIONS` and `MAX_EXPLORED`.
+    - P6 is unchanged: on the default delegates an honest issuer is related, so an honest world always has a related
+      path.
+    - §10's issuer-identity bullet now states exactly which leaf-issuer keys are evaluated.
   - **A refinement of #98's text:** #98 keyed reading B on "no related candidate". The condition is "no related
     path", so that a related decoy which verifies the leaf but leads nowhere cannot restore the order dependence.
     This is exactly the §9.1 reference walker's "unrelated presented certificates only when no related path exists",
@@ -29,13 +32,22 @@ Status: **draft spec / project proposal, revision 48** · Target: JVM 17+ and An
 - **Changed** (§6.5, #87): `index.bin` names a generation's files by their Remote Settings attachment filenames, but
   §6.3 admits attachment names of up to 64 characters and C2SP only 1 to 32 bytes. A 33-character name (today's
   31-character names with a three-digit daily index) would have made the index writer throw.
-  - **The rule:** a name over 32 bytes is replaced in `index.bin` by its first 15 characters, `-` and 16 hex
-    characters of its SHA-256. `meta.json` already maps each name to its blob.
-  - **Collisions:** two attachments that map to one name fail the generation with `INDEX_INCONSISTENT`.
+  - **The rule:** a name over 32 bytes becomes its first 15 characters, `-` and 16 hex characters of the SHA-256 of
+    its ASCII bytes. That derived name is the file's name everywhere in the generation: `index.bin`,
+    `GenerationFiles.names`, the directory and `meta.json`. The attachment filename stays only in the signed records.
+  - **Collisions:** two attachments that map to one name fail the generation before any body is fetched (stage
+    `INDEX`, `INDEX_INCONSISTENT`; `SEED_UNREADABLE` for a seed).
   - **Seeds:** `buildIndex` follows the same rule. No seed has been published, so no `seedFormat` changes.
-- **Changed** (§3.2, #86): the 1 MiB cap §6.5 gives a seed's `index.bin` now applies to every `index.bin` the engine
-  reads, checked before parsing, with the same outcome as an inconsistent index. #86's reader already enforces it
-  for every source. It bounds the reader's allocation; real indexes are far smaller (the corpus golden is 8 KB).
+  - **Related edits:** the CRLite schema check now names `attachment.filename`, and `index.bin` joins §6.3's reserved
+    names, since a filter of that name cannot sit beside the index.
+  - **New data-path fixtures:** a 33- and a 64-character name, and a colliding pair.
+- **Changed** (§3.2, #86): the 1 MiB cap §6.5 gives a seed's `index.bin` now applies to every `index.bin` revokt's
+  loader reads, including a mirror's fetch, checked before parsing.
+  - **Outcome:** the same as an inconsistent index. A stored generation over the cap is a failed load in the §6.5
+    recovery chain.
+  - **Already enforced:** #86's reader applies the cap to every source.
+  - **Effect:** it bounds the parse and the fetch. Real indexes are far smaller (the corpus golden is 8 KB).
+  - **Fixture:** a 1 MiB + 1 mirror `index.bin`.
 - **Changed** (§6.5, #97's review): the JSON allocation budget was `4·len`, with no constant term and no measurement
   protocol.
   - **Why it changes:** a tree with one object per value cannot meet `4·len` on every input. `[1.5,…]` needs a 24 B
@@ -1351,9 +1363,11 @@ ends, overlapping windows allowed), the set of filters the `index.bin` log direc
 (log id, timestamp) must equal the set of referenced filters whose own coverage map contains it, i.e. every
 directory entry lies within its filter's window and every filter's window is exactly covered by its entries;
 a mismatch is `SyncOutcome.FAILED` with `INDEX_INCONSISTENT` (stage `INDEX`; `SEED_UNREADABLE` for a seed,
-`STORE_UNREADABLE` for a system cache) and nothing is installed. **Every `index.bin` the engine reads, whatever its
-source, is at most 1 MiB, checked before it is parsed** (the seed's cap, §6.5, applied to every source, revision 48),
-with the same outcome as a mismatch. This is what makes the Kotlin engine's
+`STORE_UNREADABLE` for a system cache) and nothing is installed. **Every `index.bin` revokt's loader reads, whatever its
+source, is at most 1 MiB, checked before it is parsed, and a mirror's `index.bin` fetch is capped there too** (the
+seed's cap, §6.5, applied to every source, revision 48; an injected engine's own reads are its concern), with the
+same outcome as a mismatch; a stored generation whose `index.bin` is over the cap is a failed load in the §6.5
+recovery chain (`STORE_UNREADABLE`). This is what makes the Kotlin engine's
 coverage-driven filter selection (§6.2, every filter consulted by its own coverage) equal to C2SP's
 `index.bin`-driven selection (upki binary-searches the log directory and loads only the filters it names)
 on every generation the suite admits; how `upki-mirror` writes overlapping windows and how `Index::check`
@@ -1743,7 +1757,7 @@ remaining a subsequence.
   header is read synchronously).
 - `NOT_STARTED` is not a warning: a trust manager or `sslContext()` obtained before `start()` runs step 1 only until `start()` and counts `unevaluated[NOT_STARTED]` (creating trust managers before `start()` is the recommended main-thread pattern, so it cannot be a stuck alert).
 - R `CHANNEL_UNSET`: no `channel` configured while a CRLite source (a seed included) is. R `PLATFORM_TRUST_MISMATCH`: Android runtime with a non-Android `platformTrust`. R `STORAGE_UNSET`: `AndroidPlatformTrust` with no explicit `storage` (§3).
-- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
+- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2, and §6.5's index-name collision), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
 
 ## 5. Trust manager [M1]
 
@@ -1770,7 +1784,7 @@ remaining a subsequence.
 | `EVENT_RING_CAPACITY` / `REJECTED_QUEUE_CAPACITY` | 64 / 4,096 | |
 | `MAX_TRUST_MANAGERS` | 16 | live instances per `Revokt`, builder-overridable in both directions, ≥ 1 (`limits { maxTrustManagers }`); live referents are counted through `WeakReference`, and before the cap throws every entry whose referent has cleared is evicted regardless of `ReferenceQueue` delivery, so a rebuilt client's dropped instance never counts |
 | `MAX_CERT_BYTES` | 262144 | per-certificate DER size (measured max over the seed corpus with margin), of `getEncoded()` before any parse and again of the bytes read (§5.3, §9.2); a larger certificate is a dropped candidate (`candidatesDropped`; leaf: `PARSE_FAILED(OVERSIZE)`); §9.2 fuzzes to the cap + 1 and asserts the over-cap behaviour |
-| `MAX_FILTER_BYTES`, `MAX_JSON_BYTES`, `MAX_X5U_BYTES` | 16 MiB, 4 MiB, 64 KiB | caps for **unsigned** bodies (mirror and system-cache files, the changeset JSON itself, x5u); for a `SIGNED` attachment the cap is `min(attachment.size, MAX_FILTER_BYTES)` (hash and size both verified; a signed record declaring more is `SyncOutcome.FAILED` with `CAP_NEAR_LIMIT` (stage `ATTACHMENT`) and advances nothing: a 16 MiB freeze is recoverable by raising the cap, a crash loop from one bad signed record is not); enforced while inflating; bodies are fetched, verified and written **one at a time**, so heap peak is one body plus its decode |
+| `MAX_FILTER_BYTES`, `MAX_JSON_BYTES`, `MAX_X5U_BYTES` | 16 MiB, 4 MiB, 64 KiB | caps for **unsigned** bodies (mirror and system-cache files, the changeset JSON itself, x5u; a mirror's `index.bin` is capped at 1 MiB, §3.2); for a `SIGNED` attachment the cap is `min(attachment.size, MAX_FILTER_BYTES)` (hash and size both verified; a signed record declaring more is `SyncOutcome.FAILED` with `CAP_NEAR_LIMIT` (stage `ATTACHMENT`) and advances nothing: a 16 MiB freeze is recoverable by raising the cap, a crash loop from one bad signed record is not); enforced while inflating; bodies are fetched, verified and written **one at a time**, so heap peak is one body plus its decode |
 | `MAX_MANIFEST_ENTRIES`, `MAX_CHANGESET_RECORDS`, `MAX_SYNC_BYTES` | 32, 256, 128 MiB | manifest cap over C2SP attachments to fetch; record cap per changeset after channel filtering; per-sync total bounds bandwidth and disk; a manifest or changeset over its cap is rejected before any body fetch |
 | `READONLY_POLL_INTERVAL` | 60 s | a read-only instance's pointer re-read and lock retry |
 | `MAX_BACKOFF` | 24 h | cap on honoured `Backoff`/`Retry-After` and on persisted `backoffUntilMillis`; computed failure backoff ≤ the 6 h poll interval |
@@ -2022,15 +2036,16 @@ therefore related, and the misclassification residue is confined to custom deleg
 equality differs from `X500Principal`'s. **Unrelated candidates are the presented certificates not
 related to the child**, are explored only while no path exists through the node (checked before
 every candidate), and are not capped; **at the leaf, the unrelated loop runs regardless of `foundHere` when
-`CandidateIndex.customCanonicaliser` is set** (`platformTrust` is not one of the two shipped final classes, or the delegate is not `platformTrust.defaultDelegate()`; §3), otherwise an honest issuer misclassified as
-unrelated could be hidden by a related decoy path (§10 residual 1), **and when no related path exists at the leaf**
-(revision 48, #98: every unrelated certificate that verifies the leaf and terminates is then collected, so `leafKeys`
-does not depend on the presented order and every such key is evaluated); in both cases the cost is bounded by
-`presented − 1`, so P6 holds on the default delegates, where an honest issuer is always related. Store certificates are never unrelated candidates.
+`CandidateIndex.customCanonicaliser` is set** (`platformTrust` is not one of the two shipped final classes, or the delegate is not `platformTrust.defaultDelegate()`; §3). Otherwise an honest issuer misclassified as
+unrelated could be hidden by a related decoy path (§10 residual 1). **It also runs regardless of `foundHere` when no
+related path exists at the leaf** (revision 48, #98): every unrelated certificate that verifies the leaf and terminates
+is then collected, so `leafKeys` does not depend on the presented order and every such key is evaluated. In both
+cases `unrelatedExploredAtLeaf ≤ presented − 1`, each subtree stays under `MAX_VERIFICATIONS` and `MAX_EXPLORED`, and
+P6 holds on the default delegates, where an honest issuer is always related. Store certificates are never unrelated candidates.
 
-*Termination rule.* At the leaf, every related candidate is explored, so every distinct key that
-verifies the leaf and terminates is collected, and so is every unrelated one when no related path exists there;
-below the leaf, the first sound path through a node
+*Termination rule.* At the leaf, every related candidate is explored, so every related key that verifies the leaf
+and terminates is collected; every unrelated one is too when no related path exists there or under a custom
+canonicaliser; below the leaf, the first sound path through a node
 suffices in M1 (M2 re-walks exhaustively when a layer hits, under the re-walk rule of step 8: fresh
 budgets, shared memo, never demoting the first walk's `Found`). **Any limit exceeded at any node
 aborts the whole walk with `Budget`**; only `MAX_DEPTH` is a local dead end. `Found` is returned
@@ -2450,7 +2465,7 @@ Detect the encoding from the 2-byte prefix `[version, reserved0 = 0]`:
   evicts a `MIRROR` or `SYSTEM` one.
 
 **Hardening**: every length and offset checked before allocation with an explicit allocation budget
-per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (today's attachment names are 31 characters; a three-digit daily index must not fail the rule; a name longer than C2SP's 32 bytes is renamed in `index.bin`, §6.5) and never a reserved name (`meta.json`, `records.json`, `current`, `updater.json`, `store.version`, `.lock`); downloads capped at `min(attachment.size, MAX_FILTER_BYTES)` for signed bodies and at the per-kind fixed cap for unsigned bodies (§5.1 limits).
+per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (today's attachment names are 31 characters; a three-digit daily index must not fail the rule; a name longer than C2SP's 32 bytes is renamed in `index.bin`, §6.5) and never a reserved name (`index.bin`, `meta.json`, `records.json`, `current`, `updater.json`, `store.version`, `.lock`; `index.bin` added in revision 48, since a filter of that name cannot sit beside the index in a C2SP image); downloads capped at `min(attachment.size, MAX_FILTER_BYTES)` for signed bodies and at the per-kind fixed cap for unsigned bodies (§5.1 limits).
 
 ### 6.4 Filter storage
 `LongArray` columns padded with one zero word in an immutable `Generation`. No mmap.
@@ -2468,11 +2483,16 @@ are a fixed 2 s.
 ### 6.5 Store, persistence and seeds
 
 **Layout over `RevoktStorage`'s key space** (each generation is materialisable into a C2SP directory
-image; `index.bin` names each file by its Remote Settings attachment filename when that is a C2SP filename (1 to 32
-bytes of `[A-Za-z0-9._-]`), otherwise by the attachment filename's first 15 characters, `-` and the first 16
-lowercase hex characters of the filename's SHA-256, 32 characters in all (revision 48: §6.3 admits attachment names of
-up to 64 characters, C2SP up to 32); two attachments that map to one name fail the generation with
-`INDEX_INCONSISTENT`; `meta.json` maps each name to its blob). Path segments for dataset and channel are lowercase enum names; persisted enum
+image). **A file's name in a generation** (revision 48) is derived from its §6.3-validated Remote Settings
+`attachment.filename`: the filename itself when it is at most 32 bytes (a C2SP filename: 1 to 32 bytes of
+`[A-Za-z0-9._-]`), otherwise its first 15 characters, `-` and the first 16 lowercase hex characters of the SHA-256 of
+the filename's ASCII bytes (not `attachment.hash`), 32 characters in all, since §6.3 admits names of up to 64
+characters and C2SP up to 32. That name is the file's name everywhere in a generation: `index.bin`,
+`GenerationFiles.names`, the generation directory and `meta.json`. The attachment filename appears only in the signed
+records (`records.json`); a seed's `attachments/<name>` keeps the attachment filename and is mapped by this rule at
+load. Two attachments that map to one name fail the generation before any body is fetched: `SyncOutcome.FAILED` with
+`INDEX_INCONSISTENT`, stage `INDEX`, and `SEED_UNREADABLE` for a seed (`buildIndex` refuses it). `meta.json` maps each
+name to its blob. Path segments for dataset and channel are lowercase enum names; persisted enum
 values are names, never ordinals:
 - `store.version`: integer, `1` in 0.3, read before anything else; an empty store is initialised
   silently by the owner (never by a read-only instance); a non-empty store with a missing or **lower** version is treated as empty and rebuilt
@@ -2581,7 +2601,7 @@ state (`"Content-Signature:\0"` + canonical JSON of `{"data": records sorted by 
 "last_modified": "<ts>"}`; merge `_since` tombstones first; reset-and-retry once; canonical JSON per `canonical_json` 0.7.0 number and escape rules, pinned by the §9 differential test; the `signature` field is base64url of raw r‖s, converted to DER for `SHA384withECDSA`). **The signed
 payload does not bind the collection id**, and every security-state collection shares a signer, so
 before any state change every record is schema-validated for the requested collection (CRLite:
-`channel`, `incremental`, `attachment.{hash,size,location}`, `effectiveTimestamp`, `parent`; M2
+`channel`, `incremental`, `attachment.{filename,hash,size,location}` (the filename under §6.3's rule), `effectiveTimestamp`, `parent`; M2
 schemas likewise); a verified changeset whose records fail validation is `SyncOutcome.FAILED` with
 `SYNC_SCHEMA_REJECTED` (stage `SCHEMA`), counts as a feed failure, and advances nothing. Redirects are never followed. **JSON**: the
 engine's own tree and tokenizer; duplicate keys and unpaired surrogates rejected; keys sorted by code
@@ -2734,14 +2754,14 @@ tests; **live checks** are informational.
   PEM chains from CT (where `rust-query-crlite` takes SCTs from `x509-parser`, its pair set gets the same
   per-extension ∅ expectation as D2 for an inner identifier other than `0x04`, and the §9.2 read for a primitive
   `[3]`; a chain whose leaf `x509-parser` rejects is counted and excluded, not compared; the 0.1 oracle issue verifies its SCT
-  path); the 10⁶-key comparison as a second tier; `index.bin` byte comparison;
+  path); the 10⁶-key comparison as a second tier; `index.bin` byte comparison (against `upki`'s `Index::write` over the same filters and file names, which revokt's writer reproduces; #86's golden);
   canonical JSON against `canonical_json`.
 - **Cross-engine suite** (0.2): chain corpus × generations against both `RevocationEngine`s under
   the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
   disagreement fails the job.
 - **Content-signature fixtures** with mutations; incremental fixtures; a seed with an expired signer
-  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a mirror generation whose `index.bin` names a log window absent from the filter's coverage → `FAILED`, `INDEX_INCONSISTENT`; signature
+  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a mirror generation whose `index.bin` names a log window absent from the filter's coverage → `FAILED`, `INDEX_INCONSISTENT`; a mirror `index.bin` of 1 MiB + 1 byte → `FAILED`, `INDEX_INCONSISTENT`, before it is parsed (revision 48); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; signature
   over records with a tombstone merged vs not merged.
 - **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items are 0.2 gates; those items and (c), (e), (f), (h) need the store, mirror or lifecycle machine and are 0.3 gates): (a) changeset older than the watermark beyond the window →
   `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
@@ -2870,10 +2890,11 @@ tests; **live checks** are informational.
   of distinct RSA duplicate-signature keys each verifying the leaf and recursing into a
   32-certificate dead-end subtree → `Budget(VERIFICATION_BUDGET)`, `verifications = 256`; (ai) a
   17-certificate honest path (16 non-terminal plus the anchor) → `Found`; an 18-certificate one →
-  dead end; (aj) **walker-harness only** (revision 48, #98): no honest issuer presented, two unrelated presented
-  certificates whose keys both verify the leaf and are each certified by a snapshot anchor, in either order, with and
-  without a related candidate ahead that verifies the leaf but is unanchored → `Found`, `leafKeys` = both keys in every
-  case, and `rule = REVOKED` when the CRLite stub revokes the second one. Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
+  dead end; (aj) **walker-harness only, platform canonicaliser** (revision 48, #98): no related path at the leaf (the
+  leaf's issuer neither presented nor in the snapshot); two unrelated presented certificates U1 and U2 whose keys both
+  verify the leaf, each certified by a snapshot anchor, in both orders, with and without a related candidate ahead that
+  verifies the leaf but is unanchored → `Found`, `leafKeys = {U1, U2}` and `unrelatedExploredAtLeaf = 2` in every
+  case; with the CRLite stub revoking U2 only, `rule = REVOKED` in both orders. Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
   (z) has a related candidate that verifies but is unanchored; stuffing fixtures present their junk.
 - **Trust-manager invariants**: never accept what the platform rejected (the 3-arg overload's null-host retry only after a socket or engine overload accepted the chain and host); under `DEFAULT` never
   reject on a step-2 failure alone except `PATH_BUDGET_EXCEEDED`; at most one event per (connection, verdict-cache TTL window) on Android
@@ -3485,7 +3506,8 @@ justified in writing.
 - **Issuer identity is pinned by a path of `VERIFIED` links to a known anchor by bytes.** No
   candidate is excluded for a shared property; deferral is by the candidate's own relation, which the
   server cannot forge for a real certificate; related candidates at the leaf are fully explored or
-  the result is not an allow; every terminating leaf-issuer key is evaluated and `REVOKED` wins;
+  the result is not an allow; every terminating related leaf-issuer key, and every unrelated one when the leaf has no
+related path or the delegate has a custom canonicaliser, is evaluated, and `REVOKED` wins;
   any exhaustion anywhere rejects.
 - **Residual risks recorded from the sixth and seventh review rounds:**
   1. On a custom delegate whose name equality differs from `X500Principal`'s, an honest issuer may
