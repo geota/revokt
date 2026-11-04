@@ -60,7 +60,9 @@ Status: **draft spec / project proposal, revision 48** · Target: JVM 17+ and An
     calls counts, so a cached buffer cannot hide allocation.
   - **The worst case is stated and accepted.** A changeset can cost about 20 × `MAX_JSON_BYTES` (80 MiB at the default
     cap), because it is decoded before its signature can be checked. A seed's `records.json` is now verified as raw
-    bytes before it is decoded, so `start()` decodes only Mozilla-signed JSON.
+    bytes before it is decoded: the signature and the x5u chain to the pinned root, every check except validity
+    periods, pass first. Validity periods are then checked at the decoded `<ts>` (§7.2), so `start()` decodes only
+    JSON signed under Mozilla's root.
   - **Measured:** #97 measured a real Remote Settings changeset at about 3·len once the per-member and per-container
     copies are gone. The worst adversarial shape measured was about 17·len. A 4 MiB input at the §9.1 harness's
     `-Xmx256m` then no longer exhausts the heap.
@@ -2583,7 +2585,9 @@ fixed input `{}` on the same thread, with every buffer a decoder keeps across ca
 transient worst case is therefore about 20 × `MAX_JSON_BYTES` (80 MiB at the default cap) for a changeset, which is
 decoded before its signature can be checked (the signature is over the canonical form of the decoded records) and is
 accepted: every loader task catches `Throwable`, an `OutOfMemoryError` included (above); a seed's `records.json` is verified as raw bytes
-(the seed verifier hashes the file unchanged) **before** it is decoded, so only Mozilla-signed JSON is decoded inside
+(the seed verifier hashes the file unchanged) **before** it is decoded: the signature over the file and the x5u chain to
+the pinned content-signature root (signatures, names and every check except validity periods) pass first, and validity
+periods are then checked at the decoded `<ts>` (§7.2), so only JSON signed under Mozilla's root is decoded inside
 `start()`. The budgets are measured on HotSpot only; ART is not asserted.
 
 **Seed archive** (`revokt-seed-<channel>`, weekly; **shipped by default**: `SeedSource.bundled()`, the builder default, resolves `/revokt/seed-<channel>.zip` from that artifact on the classpath, and the OkHttp and Android quickstarts declare the dependency; decision, revision 23): a zip with `seed.json` {`seedFormat`, `channel`,
