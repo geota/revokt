@@ -4,9 +4,7 @@
 package dev.revokt
 
 import dev.revokt.clubcard.RevoktInternalApi
-import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.engine.c2sp.C2spIndex
-import dev.revokt.engine.c2sp.Window
 import okio.ByteString.Companion.toByteString
 import java.io.File
 import java.nio.file.Files
@@ -116,12 +114,7 @@ class JvmGenerationFilesTest {
     @Test
     fun `the v3 corpus indexed by revokt's writer round trips from disk and through newBuilder`() {
         val v3 = filters.filterKeys { it.endsWith("-v3") }
-        val coverage =
-            v3.map { (name, bytes) ->
-                val logs = ClubcardFilters.decode(bytes).universe.logs
-                name to
-                    logs.map { (log, w) -> log.bytes to Window(w.low.value.toULong(), w.high.value.toULong()) }.toMap()
-            }
+        val coverage = v3.map { (name, bytes) -> name to ClubcardCorpus.coverage(bytes) }
         val index = C2spIndex.write(C2spIndex.index(coverage))
         val fromDisk = withImage(index, v3, ::read)
         val built =

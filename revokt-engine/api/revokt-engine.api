@@ -1,3 +1,13 @@
+public final class dev/revokt/CrliteQuery {
+	public synthetic fun <init> (Ldev/revokt/CrliteQuery$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIssuerSpkiHash ()[B
+	public final fun getScts ()Ljava/util/List;
+	public final fun getSerial ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/revokt/CrliteQueryResult : java/lang/Enum {
 	public static final field ENGINE_ERROR Ldev/revokt/CrliteQueryResult;
 	public static final field NOT_COVERED Ldev/revokt/CrliteQueryResult;
@@ -9,6 +19,15 @@ public final class dev/revokt/CrliteQueryResult : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/CrliteQueryResult;
 	public static fun values ()[Ldev/revokt/CrliteQueryResult;
+}
+
+public final class dev/revokt/CrliteSct {
+	public synthetic fun <init> (Ldev/revokt/CrliteSct$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLogId ()[B
+	public final fun getTimestampMillis ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class dev/revokt/Dataset : java/lang/Enum {
@@ -58,6 +77,19 @@ public final class dev/revokt/KeyabilityClause : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/KeyabilityClause;
 }
 
+public final class dev/revokt/KotlinRevocationEngine : dev/revokt/RevocationEngine {
+	public fun <init> ()V
+	public fun activate (Ldev/revokt/PreparedGeneration;)V
+	public fun clear ()V
+	public fun close ()V
+	public fun getCoverageEndMillis ()Ljava/lang/Long;
+	public fun getFormats ()Ljava/util/Set;
+	public fun install (Ldev/revokt/GenerationFiles;)Ljava/lang/String;
+	public fun prepare (Ldev/revokt/GenerationFiles;)Ldev/revokt/PreparedGeneration;
+	public fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/revokt/Layer : java/lang/Enum {
 	public static final field CRLITE Ldev/revokt/Layer;
 	public static final field PATH Ldev/revokt/Layer;
@@ -93,6 +125,26 @@ public final class dev/revokt/PathStatus : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/PathStatus;
 	public static fun values ()[Ldev/revokt/PathStatus;
+}
+
+public abstract interface class dev/revokt/PreparedGeneration : java/lang/AutoCloseable {
+	public abstract fun getGenerationId ()Ljava/lang/String;
+	public abstract fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
+}
+
+public abstract interface class dev/revokt/RevocationEngine : java/lang/AutoCloseable {
+	public abstract fun activate (Ldev/revokt/PreparedGeneration;)V
+	public fun clear ()V
+	public abstract fun getCoverageEndMillis ()Ljava/lang/Long;
+	public abstract fun getFormats ()Ljava/util/Set;
+	public fun install (Ldev/revokt/GenerationFiles;)Ljava/lang/String;
+	public abstract fun prepare (Ldev/revokt/GenerationFiles;)Ldev/revokt/PreparedGeneration;
+	public abstract fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
+}
+
+public final class dev/revokt/RevocationEngine$DefaultImpls {
+	public static fun clear (Ldev/revokt/RevocationEngine;)V
+	public static fun install (Ldev/revokt/RevocationEngine;Ldev/revokt/GenerationFiles;)Ljava/lang/String;
 }
 
 public abstract interface annotation class dev/revokt/RevoktInternalApi : java/lang/annotation/Annotation {
