@@ -44,11 +44,16 @@ internal enum class JsonError {
     DUPLICATE_KEY,
 }
 
-/** A rejected JSON text: [error] at byte [offset]. The only exception [Json.parse] throws. */
+/**
+ * A rejected JSON text: [error] at byte [offset]. The only exception [Json.parse] throws. The message is built only when
+ * read, so a rejection allocates no string (spec §6.5's budget covers rejected inputs too).
+ */
 internal class JsonParseException(
     val error: JsonError,
     val offset: Int,
-) : Exception("$error at byte $offset")
+) : Exception() {
+    override val message: String get() = error.name + " at byte " + offset
+}
 
 /**
  * The engine's JSON tokenizer and parser (spec §7.1 "JSON"): RFC 8259 over UTF-8 bytes, rejecting duplicate keys and
