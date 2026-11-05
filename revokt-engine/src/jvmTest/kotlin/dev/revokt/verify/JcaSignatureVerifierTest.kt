@@ -225,6 +225,58 @@ class JcaSignatureVerifierTest {
     }
 
     @Test
+    fun `verifier a padded OID arc is INVALID, as the JDK rejects it`() {
+        val rsa = rsa()
+        val signature = sign("SHA256withRSA", rsa.private)
+        val padded =
+            TestDer.seq(
+                TestDer.tlv(0x06, TestDer.bytes(0x2a, 0x86, 0x48, 0x80, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b)),
+                NULL,
+            )
+        assertTrue(
+            runCatching {
+                java.security.AlgorithmParameters
+                    .getInstance("RSASSA-PSS")
+                    .init(TestDer.seq(TestDer.tlv(0xa0, padded)))
+            }.isFailure,
+            "the JDK's ObjectIdentifier rejects the padded arc",
+        )
+        assertEquals(INVALID, verifier.verify(padded, rsa.public.encoded, MESSAGE, signature))
+        assertEquals(VERIFIED, verifier.verify(algId(SHA256_RSA, NULL), rsa.public.encoded, MESSAGE, signature))
+    }
+
+    @Test
+    fun `verifier an unsupported OID outside its own role is INVALID`() {
+        val garbage = TestDer.bytes(1, 2, 3)
+        val ed = generate("Ed25519")
+        assertTrue(P224 in verifier.unsupportedOids() && BRAINPOOL_P256 in verifier.unsupportedOids())
+        // A curve OID in the signature position.
+        assertEquals(INVALID, verifier.verify(algId(P224), ed.public.encoded, MESSAGE, garbage))
+        assertEquals(
+            INVALID,
+            verifier.verify(algId(BRAINPOOL_P256), ed.public.encoded, MESSAGE, garbage),
+        )
+        // A curve OID as the parameters of a key other than id-ecPublicKey: no probe entry in that role, so the JDK's
+        // KeyFactory decides (it reads the key and ignores the parameters, so the verifier answers as the JDK does).
+        val edBits = ed.public.encoded.copyOfRange(ed.public.encoded.size - 32, ed.public.encoded.size)
+        val signature = sign("Ed25519", ed.private)
+        val withCurve = spki(algId(ED25519, TestDer.oid(BRAINPOOL_P256)), edBits)
+        val jdk =
+            runCatching {
+                val key =
+                    java.security.KeyFactory
+                        .getInstance(
+                            "Ed25519",
+                        ).generatePublic(java.security.spec.X509EncodedKeySpec(withCurve))
+                jdkVerifies("Ed25519", key, signature)
+            }.getOrDefault(false)
+        assertEquals(if (jdk) VERIFIED else INVALID, verifier.verify(algId(ED25519), withCurve, MESSAGE, signature))
+        // A curve OID as the key OID.
+        assertEquals(INVALID, verifier.verify(algId(ED25519), spki(algId(BRAINPOOL_P256), edBits), MESSAGE, signature))
+        assertEquals(VERIFIED, verifier.verify(algId(ED25519), spki(algId(ED25519), edBits), MESSAGE, signature))
+    }
+
+    @Test
     fun `verifier key-OID gaps are INVALID`() {
         val ec = JcaFixtures.ec("secp256r1")
         val signature = sign("SHA256withECDSA", ec.private)

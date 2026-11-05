@@ -125,6 +125,71 @@ class JcaVerifierProvidersTest {
     }
 
     @Test
+    fun `verifier a provider's non-fatal Error is INVALID plus VerifierError`() {
+        // Spec §5.5: every throwable but a VirtualMachineError (other than StackOverflowError) is caught.
+        for (error in listOf(AssertionError("provider assertion"), NoClassDefFoundError("provider/Missing"))) {
+            val v = JcaSignatureVerifier(edProvider(onVerify = { throw error }))
+            val thrown =
+                runCatching {
+                    v.verify(
+                        algId(ED25519),
+                        ed.public.encoded,
+                        MESSAGE,
+                        edSignature,
+                    )
+                }.exceptionOrNull()
+            assertSame(error, thrown, "an Error is not wrapped")
+            val classified = v.verifyClassified(algId(ED25519), ed.public.encoded, MESSAGE, edSignature)
+            assertEquals(INVALID, classified.result)
+            assertEquals(error.message, classified.error)
+        }
+    }
+
+    @Test
+    fun `verifier a provider whose services fail to link while probed has them unsupported`() {
+        val linkage =
+            TestProvider("linkage")
+                .signature("Ed25519") { throw NoClassDefFoundError("provider/Ed25519Spi") }
+                .keyFactory("Ed25519") { throw UnsatisfiedLinkError("no native library") }
+                .signature(
+                    "SHA256withRSA",
+                ) { DelegatingSignature(Signature.getInstance("SHA256withRSA", "SunRsaSign")) }
+                .keyFactory("RSA") { DelegatingKeyFactory(KeyFactory.getInstance("RSA", "SunRsaSign")) }
+        val v = JcaSignatureVerifier(linkage)
+        assertTrue(ED25519 in v.unsupportedOids())
+        assertEquals(UNSUPPORTED, v.verify(algId(ED25519), ed.public.encoded, MESSAGE, edSignature))
+        val rsa = JcaFixtures.rsa()
+        assertEquals(
+            VERIFIED,
+            v.verify(algId(SHA256_RSA, NULL), rsa.public.encoded, MESSAGE, sign("SHA256withRSA", rsa.private)),
+        )
+        // A fatal error while probing is not swallowed (§5.5).
+        val fatal = TestProvider("fatal").signature("Ed25519") { throw OutOfMemoryError("probe") }
+        assertFailsWith<OutOfMemoryError> { JcaSignatureVerifier(fatal) }
+    }
+
+    @Test
+    fun `verifier a composite OID needs the provider's KeyFactory too`() {
+        val signatureOnly =
+            TestProvider("composite-signature-only").signature(COMPOSITE_MLDSA44_ED25519) {
+                AcceptingSignature()
+            }
+        val v = JcaSignatureVerifier(signatureOnly)
+        assertTrue(COMPOSITE_MLDSA44_ED25519 in v.unsupportedOids())
+        val compositeSpki = spki(algId(COMPOSITE_MLDSA44_ED25519), TestDer.bytes(1, 2, 3))
+        assertEquals(UNSUPPORTED, v.verify(algId(COMPOSITE_MLDSA44_ED25519), compositeSpki, MESSAGE, TestDer.bytes(1)))
+    }
+
+    @Test
+    fun `verifier an unsupported key OID in the signature position is INVALID`() {
+        // SunEC alone has no RSA KeyFactory: rsaEncryption is unsupported as a key, and is no signature OID.
+        val sunEc = JcaSignatureVerifier(Security.getProvider("SunEC"))
+        assertTrue(JcaFixtures.RSA_KEY in sunEc.unsupportedOids())
+        assertEquals(INVALID, sunEc.verify(algId(JcaFixtures.RSA_KEY, NULL), ed.public.encoded, MESSAGE, edSignature))
+        assertEquals(UNSUPPORTED, sunEc.verify(algId(ED25519), JcaFixtures.rsa().public.encoded, MESSAGE, edSignature))
+    }
+
+    @Test
     fun `verifier a provider that throws while probed has nothing supported`() {
         val broken =
             TestProvider("broken")
@@ -347,5 +412,48 @@ class JcaVerifierProvidersTest {
                 TestDer.bytes(1),
             ),
         )
+    }
+
+    @Test
+    fun `verifier PQ algorithms under Conscrypt`() {
+        // Conscrypt 2.7.0 and 2.8.0 register ML-DSA-44/65/87, SLH-DSA-SHA2-128s and the composite ML-DSA-44 with Ed25519.
+        val provider = Conscrypt.newProvider()
+        val conscrypt = JcaSignatureVerifier(provider)
+        val unsupported = conscrypt.unsupportedOids()
+        val pq =
+            listOf(
+                ML_DSA_44 to "ML-DSA-44",
+                JcaFixtures.ML_DSA_65 to "ML-DSA-65",
+                JcaFixtures.ML_DSA_87 to "ML-DSA-87",
+                JcaFixtures.SLH_DSA_SHA2_128S to "SLH-DSA-SHA2-128s",
+                COMPOSITE_MLDSA44_ED25519 to COMPOSITE_MLDSA44_ED25519,
+            )
+        for ((oid, name) in pq) {
+            assertFalse(oid in unsupported, name)
+            val pair =
+                java.security.KeyPairGenerator
+                    .getInstance(name, provider)
+                    .generateKeyPair()
+            assertEquals(
+                oid,
+                dev.revokt.engine.parse.VerifierInput
+                    .spkiAlgorithm(pair.public.encoded)
+                    ?.oid,
+                "$name SPKI",
+            )
+            val s = Signature.getInstance(name, provider)
+            s.initSign(pair.private)
+            s.update(MESSAGE)
+            val signature = s.sign()
+            assertEquals(VERIFIED, conscrypt.verify(algId(oid), pair.public.encoded, MESSAGE, signature), name)
+            assertEquals(INVALID, conscrypt.verify(algId(oid), pair.public.encoded, MESSAGE, flip(signature)), name)
+            assertEquals(INVALID, conscrypt.verify(algId(oid), pair.public.encoded, flip(MESSAGE, 0), signature), name)
+            // The JDK's providers: ML-DSA where Appendix A says the JDK ships it; no SLH-DSA, no composite.
+            val jdk = JcaSignatureVerifier().verify(algId(oid), pair.public.encoded, MESSAGE, signature)
+            val jdkHas = name.startsWith("ML-DSA") && JdkFacts.shipsMlDsa()
+            assertEquals(if (jdkHas) VERIFIED else UNSUPPORTED, jdk, "$name on the JDK")
+        }
+        // The other SLH-DSA sets are not Conscrypt's.
+        assertTrue("2.16.840.1.101.3.4.3.21" in unsupported)
     }
 }

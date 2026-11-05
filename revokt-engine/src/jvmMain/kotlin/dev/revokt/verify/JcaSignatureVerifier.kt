@@ -5,10 +5,13 @@ package dev.revokt.verify
 
 import dev.revokt.SignatureVerifier
 import dev.revokt.VerifyResult
+import dev.revokt.engine.parse.AlgorithmId
 import dev.revokt.engine.parse.VerifierInput
 import dev.revokt.engine.walker.LruMap
+import dev.revokt.engine.walker.isFatal
 import dev.revokt.verify.JcaAlgorithms.CURVES
 import dev.revokt.verify.JcaAlgorithms.ECDSA_ONE_ONE
+import dev.revokt.verify.JcaAlgorithms.EC_PUBLIC_KEY
 import dev.revokt.verify.JcaAlgorithms.KEYS
 import dev.revokt.verify.JcaAlgorithms.KEY_CACHE_ENTRIES
 import dev.revokt.verify.JcaAlgorithms.SIGNATURES
@@ -41,8 +44,9 @@ import java.util.Collections
  *   only a provider owning it verifies it); a curve needs an encoded key on it that the provider's `KeyFactory` decodes
  *   and its ECDSA `Signature` runs over.
  * - [verify] classifies by the probe, never by a server-chosen exception: a signature, key or curve OID in
- *   [unsupportedOids] is [VerifyResult.UNSUPPORTED]. Everything else that fails is [VerifyResult.INVALID]: an input
- *   that is not an `AlgorithmIdentifier` or an SPKI, an OID outside the tables, a key that cannot have made the
+ *   [unsupportedOids], each in its own role, is [VerifyResult.UNSUPPORTED]. Everything else that fails is
+ *   [VerifyResult.INVALID]: an input that is not an `AlgorithmIdentifier` or an SPKI (an OID arc padded with `0x80`
+ *   included), an OID outside the tables, a key that cannot have made the
  *   signature (an `id-RSASSA-PSS` key signs PSS only, RFC 4055 §1.2), parameters other than absent or NULL outside
  *   PSS, PSS parameters other than SHA-2 hashes, trailer field 1 and a salt length some key has room for, and any
  *   `GeneralSecurityException`. A `RuntimeException` from the provider propagates, wrapped in a [ProviderException],
@@ -72,9 +76,7 @@ public class JcaSignatureVerifier
         ): VerifyResult {
             val algorithm = VerifierInput.algorithm(sigAlg) ?: return VerifyResult.INVALID
             val key = VerifierInput.spkiAlgorithm(spki) ?: return VerifyResult.INVALID
-            if (algorithm.oid in unsupported || key.oid in unsupported || key.parametersOid in unsupported) {
-                return VerifyResult.UNSUPPORTED
-            }
+            if (unsupportedIn(algorithm, key)) return VerifyResult.UNSUPPORTED
             val scheme = SIGNATURES[algorithm.oid]?.takeIf { it.accepts(key) } ?: return VerifyResult.INVALID
             val keyFactory = KEYS[key.oid] ?: return VerifyResult.INVALID
             val pss =
@@ -125,7 +127,20 @@ public class JcaSignatureVerifier
         private fun keyFactory(name: String): KeyFactory =
             if (provider == null) KeyFactory.getInstance(name) else KeyFactory.getInstance(name, provider)
 
-        /** The startup probe; any throw but a JVM error marks the OID unsupported. */
+        /**
+         * Whether a probe-unsupported OID sits in its own role: the signature OID among the signature OIDs, the key OID
+         * among the key OIDs, and an `id-ecPublicKey` key's curve among the curves. A curve OID in the `sigAlg`, or an
+         * OID parameter on any other key, is no table entry in that role, so it is `INVALID`, never `UNSUPPORTED`.
+         */
+        private fun unsupportedIn(
+            algorithm: AlgorithmId,
+            key: AlgorithmId,
+        ): Boolean =
+            (algorithm.oid in unsupported && algorithm.oid in SIGNATURES) ||
+                (key.oid in unsupported && key.oid in KEYS) ||
+                (key.oid == EC_PUBLIC_KEY && key.parametersOid in unsupported && key.parametersOid in CURVES)
+
+        /** The startup probe; any throw but a fatal error (spec §5.5) marks the OID unsupported. */
         private fun probe(): Set<String> {
             val out = LinkedHashSet<String>()
             for ((oid, scheme) in SIGNATURES) if (!probes { signature(scheme.jcaName) }) out += oid
@@ -152,11 +167,12 @@ public class JcaSignatureVerifier
             return !verifier.verify(ECDSA_ONE_ONE)
         }
 
-        @Suppress("TooGenericExceptionCaught") // a probe failure of any kind is "unsupported"; JVM errors still escape
+        @Suppress("TooGenericExceptionCaught") // §5.5's rule: a provider's LinkageError is "unsupported", not a crash
         private fun probes(block: () -> Any): Boolean =
             try {
                 block() != false
-            } catch (_: Exception) {
+            } catch (t: Throwable) {
+                if (isFatal(t)) throw t
                 false
             }
     }

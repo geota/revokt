@@ -103,11 +103,31 @@ internal object VerifierInput {
         r: DerReader,
     ): AlgorithmId? {
         val fields = r.child(r.read(SEQUENCE, HeaderSite.TBS_SIGNATURE))
-        val oid = Oid.dotted(der, fields.read(OBJECT_IDENTIFIER, HeaderSite.TBS_SIGNATURE).content) ?: return null
+        val oid = minimalOid(der, fields.read(OBJECT_IDENTIFIER, HeaderSite.TBS_SIGNATURE).content) ?: return null
         val parameters = if (fields.hasMore()) fields.readAny(HeaderSite.TBS_SIGNATURE) else null
         fields.requireEnd("AlgorithmIdentifier")
-        val parametersOid = parameters?.takeIf { it.tag == OBJECT_IDENTIFIER }?.let { Oid.dotted(der, it.content) }
+        val parametersOid =
+            if (parameters?.tag == OBJECT_IDENTIFIER) minimalOid(der, parameters.content) ?: return null else null
         return AlgorithmId(oid, parameters?.let { it.tlv.bytes(der) }, parametersOid)
+    }
+
+    /**
+     * The dotted OID at [content], or null when it does not decode or an arc has a leading `0x80` octet. Stricter than
+     * the certificate parser's lenient [Oid.dotted] (spec §9.2): the JDK's `ObjectIdentifier` rejects a padded arc, so
+     * a padded `sha256WithRSAEncryption` must not verify here as the real one, and the PSS reader stays no more lenient
+     * than the JDK's decoder (the §9.1 target's differential).
+     */
+    private fun minimalOid(
+        der: ByteArray,
+        content: Span,
+    ): String? {
+        var arcStart = true
+        for (i in content.start until content.end) {
+            val b = der[i].toInt() and 0xff
+            if (arcStart && b == 0x80) return null
+            arcStart = b and 0x80 == 0
+        }
+        return Oid.dotted(der, content)
     }
 
     /** A `HashAlgorithm`: an `AlgorithmIdentifier` with absent or NULL parameters; its OID. */
