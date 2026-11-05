@@ -48,9 +48,10 @@ import java.util.Collections
  *   [VerifyResult.INVALID]: an input that is not an `AlgorithmIdentifier` or an SPKI (an OID arc padded with `0x80`
  *   included), an OID outside the tables, a key that cannot have made the
  *   signature (an `id-RSASSA-PSS` key signs PSS only, RFC 4055 §1.2), parameters other than absent or NULL outside
- *   PSS, PSS parameters other than SHA-2 hashes, trailer field 1 and a salt length some key has room for, and any
- *   `GeneralSecurityException`. A `RuntimeException` from the provider propagates, wrapped in a [ProviderException],
- *   so the caller records it as `INVALID` plus `Finding.VerifierError` (spec §5.1 decision list; [verifyClassified]).
+ *   PSS, PSS parameters other than SHA-2 message and MGF1 hashes, trailer field 1 and a salt length some key has room
+ *   for (spec revision 51, pending), and any `GeneralSecurityException`. A `RuntimeException` from the provider
+ *   propagates, wrapped in a [ProviderException], so the caller records it as `INVALID` plus `Finding.VerifierError`
+ *   (spec §5.1 decision list; [verifyClassified]).
  * - `KeyFactory` is selected by the SPKI key OID; `Signature` and `KeyFactory` are created per call. Parsed keys are
  *   cached by SPKI SHA-256 in an LRU of [KEY_CACHE_ENTRIES] that holds only keys whose verification was `VERIFIED`, so
  *   a presented junk key (server-chosen) never takes an entry; [cachedKeyCount] is its entry count.

@@ -41,7 +41,10 @@ internal object JcaAlgorithms {
     /** DER `SEQUENCE { INTEGER 1, INTEGER 1 }`, the probe's ECDSA signature. */
     val ECDSA_ONE_ONE = byteArrayOf(0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01)
 
-    /** The PSS hashes: the SHA-2 family, as JCA names (spec §3: PKCS#1 is SHA-2 only; PSS follows). */
+    /**
+     * The PSS message and MGF1 hashes: the SHA-2 family, as JCA names. SHA-1, and so all-DEFAULT parameters, are
+     * `INVALID` (spec revision 51, pending: the maintainer's decision on #156).
+     */
     val SHA2: Map<String, String> =
         mapOf(
             "$NIST_HASH.4" to "SHA-224",
