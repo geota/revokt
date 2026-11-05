@@ -19,22 +19,32 @@ Status: **draft spec / project proposal, revision 50** · Target: JVM 17+ and An
     `VerifierError("fallback disabled")` and `VerifierError("fallback")`. But `VerifierError.oid` is the signature
     algorithm whose verification failed, and these three carried no algorithm.
   - **Now:** `VerifierError` is a verifier or algorithm failure only, both fields non-null. Step 6 reports exactly
-    one `FallbackNotUsed` when the walk ended `NotFound` or `Budget` and no fallback path was evaluated: `SKIPPED`
+    one `FallbackNotUsed` when the step-5 walk ended `NotFound` or `Budget` and no fallback path was evaluated: `SKIPPED`
     above `FALLBACK_MAX_PRESENTED` with the fallback enabled, `DISABLED` under `pkixFallback(false)` and the
     walker-only harness's disabled path, `FAILED` when the fallback ran and gave no path. It is named "not used"
-    because a `FAILED` fallback did run.
+    because a `FAILED` fallback did run. A chain cut at step 3 (`MAX_PRESENTED`, `PARSE_FAILED`) never reaches the
+    walk and carries none.
   - **`FAILED`** is a `build` that returned null or threw. A `jdk.certpath.disabledAlgorithms` rejection and a
-    provider that diverges from the delegate, which the contract already reported, are two such failures. A throw
-    is a failed fallback, never an engine error. Before, the other failed runs had no finding. They now have one,
-    since the JDK's builder reports them alike (below).
+    provider that diverges from the delegate, which the contract already reported, are two such failures. Before,
+    the other failed runs had no finding. They now have one, since the JDK's builder reports them alike (below).
+  - **A throwing `build`** (the maintainer's choice, "`FAILED`, not cached"): before, a throw was unspecified and
+    reached the catch boundary as `ENGINE_ERROR`. Now step 6 catches it as a failed fallback, `FallbackNotUsed(FAILED)`,
+    and rethrows every `VirtualMachineError` except `StackOverflowError`, as §5.5's catch boundary does. A result
+    produced by a throw is not path-cached, so a transient error is not remembered; a null return is cached as
+    before.
+    - **Status effect:** a throw on a `Budget` walk is `PATH_BUDGET_EXCEEDED` instead of `ENGINE_ERROR`, so it
+      rejects under `DEFAULT` too. A throw on a `NotFound` walk is `NO_ISSUER` (`PLATFORM_ONLY` on a trust-manager
+      binding) or `ISSUER_UNVERIFIED` instead of `ENGINE_ERROR`; under `STRICT` it still rejects, but as
+      `NO_ISSUER`, which is exemptable.
+    - **`PathBuilderFallback`'s declaration** says that a throw counts as a failed build.
   - **No message string:** every build failure of the JDK's `SunCertPathBuilder` carries the same text, "unable to
     find valid certification path to requested target" (checked in JDK 21's source). Other builders' texts differ,
     and consumers match on codes, never on messages. The reason is the triage value, and it fits the path cache.
   - **Path cache:** an entry keeps the reason, so a hit reports the finding the miss did.
   - **`RevoktStatus.verifierErrors`** counts `VerifierError` findings only; `FallbackNotUsed` has no counter.
-  - **Fixtures:** the walker-fixture header states the rule for every row, and (ad) and (af) disabled now expect
-    `FallbackNotUsed(DISABLED)`. Revision 49's entry below uses the new names where it states the current rule;
-    older entries stay as written.
+  - **Fixtures:** the walker-fixture header states the rule for every row and names the step-3 cuts that carry none.
+    (ad) and (af) disabled now expect `FallbackNotUsed(DISABLED)`, and (ae) `FallbackNotUsed(FAILED)`. Revision 49's
+    entry below names the new finding once, in its rule bullet; its fixture text and older entries stay as written.
 
 ### Changes in revision 49 (0.2's scope, step 6 without the fallback, the engine name, the AMO SPKI pin, 2026-11-05)
 - **Retagged** (§9, §11; the maintainer's decisions on the 0.2 plan): four groups of items tagged or listed for 0.2
@@ -78,9 +88,9 @@ Status: **draft spec / project proposal, revision 50** · Target: JVM 17+ and An
     applies where step 1 does not run (the walker-only harness and `Evaluator.evaluate`), as fixture (af) already
     expected on every platform path.
   - **Fixtures:** a row whose outcome depends on the fallback states its disabled expectation. (ad) disabled →
-    `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `FallbackNotUsed(DISABLED)`, and the honest key absent
+    `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `VerifierError("fallback disabled")`, and the honest key absent
     because only the fallback reaches it, so `rule = PATH_BUDGET_EXCEEDED`. (af) disabled → `PATH_BUDGET_EXCEEDED`
-    with `FallbackNotUsed(DISABLED)`.
+    with `VerifierError("fallback disabled")`.
 - **Added** (§3.2, §4, §5.5): `RevocationEngine` gains `val name: String`, defaulting to the class's simple name, or
   `"anonymous"` when the class has none. The Kotlin engine returns `"kotlin"` and the upki engine `"upki"`.
   `Finding.EngineError.engineName` is that name whenever `producer == ENGINE`, so it is never null there. Before, a
@@ -1344,7 +1354,7 @@ interface SignatureVerifier {
     fun unsupportedOids(): Set<String>                      // startup probe over the signature, key and curve OID tables
 }
 enum class VerifyResult { VERIFIED, INVALID, UNSUPPORTED }   // closed
-interface PathBuilderFallback { fun build(chainDer: List<ByteArray>, anchors: AnchorSnapshot, nowMillis: Long): List<ByteArray>? }   // leaf first, trust anchor's certificate appended last
+interface PathBuilderFallback { fun build(chainDer: List<ByteArray>, anchors: AnchorSnapshot, nowMillis: Long): List<ByteArray>? }   // leaf first, trust anchor's certificate appended last; null = no path; a throw counts as a failed build: FallbackNotUsed(FAILED), not path-cached, every VirtualMachineError except StackOverflowError rethrown (§5.1 decision step 6, revision 50)
 internal expect fun canonicalSubject(nameDer: ByteArray): String?     // JVM/Android: X500Principal(der).getName(CANONICAL), null on a construction failure; linuxX64 gate: an empty actual stub returning null (the gate only compiles); the public seam is PlatformTrust.canonicalSubject
 class StoreLockedException @JvmOverloads constructor(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 enum class NewerLayout { IN_MEMORY, REBUILD }   // growable; what a store whose `store.version` is higher than this engine's gets (§6.5)
@@ -1636,7 +1646,7 @@ enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable
 enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; keyabilityClause != null ⇔ parseReason == PRODUCER_UNKEYABLE
 enum class TerminalKind { ANCHOR /* M2: PRELOAD */ }   // growable; the reported path's terminal (§5.1 invariant)
 enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
-enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and threw, returned null, or diverged from the delegate */ }   // growable; why decision step 6 evaluated no fallback path (§5.1, revision 50)
+enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and found no path: build returned null or threw; a thrown result is not path-cached */ }   // growable; why decision step 6 evaluated no fallback path (§5.1, revision 50)
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
 enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
 enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
@@ -1905,7 +1915,7 @@ checkServerTrusted(chain, authType, socket|engine|host|none)
      index = trustManager.candidateIndex (the one @Volatile read of the anchor snapshot per handshake; its id is anchorSnapshotId; decision step 1 uses this reference and performs no read of its own)
      verdictCache[(chainHash, host', gen.epoch, anchorSnapshotId, policyEpoch, shadowPolicyEpoch)]?.let { return apply(it) }   // no parse, no event; counters (evaluations, fired, exempted, rejects/wouldRejects, shadowWouldRejects, per-dataset and per-reason maps) advance exactly as on a miss; verdictCacheHits++; the Android 3-arg overload still calls the extension for its return value
      pathKey = (chainHash, anchorSnapshotId, host' if step 4 would run on this platform and host' != null)
-     walk = pathCache[pathKey] ?: decide(chain, index).also { cache unless decide threw }               // decide = decision steps 1–6 only (the path result; no CRLite query, so the path cache is valid across installs)
+     walk = pathCache[pathKey] ?: decide(chain, index).also { cache unless decide threw or step 6's build threw }               // decide = decision steps 1–6 only (the path result; no CRLite query, so the path cache is valid across installs)
   3. verdict = evaluate(walk, gen, policy)                                                            // decision steps 7–8; the enforced catch boundary closes here: the verdict is final before any event work
   3a. shadowVerdict = evaluate(walk, gen, shadowPolicy) under its own boundary (the §5.5 catch rule) when set, skipped (null) when verdict carries EngineError(BOUNDARY)   // after the enforced boundary closed: a throw yields a shadow Verdict carrying Finding.EngineError(BOUNDARY) and never touches `verdict`; verdictCache.put(verdict, shadowVerdict) unless `verdict` is ENGINE_ERROR, with shadowVerdict stored as null when it is a shadow-only ENGINE_ERROR (never cached, counted once on this miss); counters (`rejects`/`wouldRejects`/`fired`/`exempted`, per-dataset and per-reason maps from `verdict`; `shadowWouldRejects` from `shadowVerdict`) are applied by `apply()` here, after 3a, never inside `evaluate`. Runs on every trust-manager path and in `Revokt.evaluate` (which shares the registry caches); `Evaluator.evaluate` evaluates the enforced policy only, `shadowVerdict` null
   3b. emit event (verdict-cache misses only): each listener's drain submission (executor.execute) runs under its own try/catch; a throw (RejectedExecutionException after shutdown, or any Throwable other than a VirtualMachineError except StackOverflowError, as §5.5) counts listenerFailures, removes that listener and clears its cursor; the ring entry is untouched, so droppedEvents/droppedRejectedEvents are unaffected; nothing here changes the verdict or step 4
@@ -1942,8 +1952,10 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    with and without a `<domain-config>`, it does not establish availability.
 5. `walk = reconstruct(presented, index)`; `Found` → step 7.
 6. `fallback = pathBuilder.build(presented, anchors, now)` if the fallback is enabled and `presented.size ≤ FALLBACK_MAX_PRESENTED`,
-   cached under the path key; a `build` that returns null or throws is a **failed** fallback (a throw is caught here,
-   never an engine error):
+   cached under the path key; a `build` that returns null or throws is a **failed** fallback. A throw is caught here
+   and is never an engine error, except that every `VirtualMachineError` other than `StackOverflowError` is rethrown,
+   as at §5.5's catch boundary. A result produced by a throw is **not** path-cached, so a transient error is not
+   remembered; a null return is (the maintainer's choice, revision 50):
    - walk `NotFound` and the fallback finds a path → `Found([fallback], usedFallback = true)`.
    - walk `NotFound`, the fallback was **skipped** (chain too long) and the platform accepted in
      step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
@@ -2314,7 +2326,8 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   server park `PATH_CACHE_ENTRIES × MAX_PRESENTED_BYTES` in the cache); on a hit the `Finding.Path` is
   the stored one with `cacheHit = true` and `anchorSnapshotId` from the key, step 7 runs without
   re-parsing, and an exemption's `PresentedChain` is rebuilt from the live `chain` argument of that
-  call; `PLATFORM` results are keyed with the host; nothing is cached when `decide` threw. The
+  call; `PLATFORM` results are keyed with the host; nothing is cached when `decide` threw or step 6's `build` threw
+  (revision 50). The
   verdict cache key includes `generationEpoch` (internal; a `Long` incremented on any install and whenever a dataset leaves `pending` without a generation at the end of the start task, so a verdict cached as a pending-allow is never served once `NO_DATA` should fire), `policyEpoch` and `shadowPolicyEpoch` (the §4 setters) and
   the anchor snapshot id. Events are emitted only on verdict-cache misses. On a walker reason of
   `NO_CANDIDATE` or `UNANCHORED` (read before any `PLATFORM_ONLY` promotion) a rate-limited
@@ -2969,10 +2982,11 @@ tests; **live checks** are informational.
   relation to the honest chain`, on every platform path (JVM walker, JVM walker with the fallback
   disabled in the walker-only harness, Android CT-gap path, Android plain delegate, `Revokt.evaluate`; a row whose
   outcome depends on the fallback states its fallback-disabled expectation, decision step 6, revision 49; every row
-  whose walk ends `NotFound` or `Budget` with `usedFallback = false` asserts exactly one `FallbackNotUsed` with step
-  6's reason, revision 50: `DISABLED` on the disabled path, where a row's "fallback skipped" is
+  whose step-5 walk ends `NotFound` or `Budget` with `usedFallback = false` asserts exactly one `FallbackNotUsed` with
+  step 6's reason, revision 50: `DISABLED` on the disabled path, where a row's "fallback skipped" is
   `FallbackNotUsed(DISABLED)`; else `SKIPPED` above `FALLBACK_MAX_PRESENTED`, as in a row's "fallback skipped"; else
-  `FAILED`):
+  `FAILED`. A row cut at step 3 never walks and carries none: the `PARSE_FAILED` leaf, the 70-certificate chain, and
+  the rows over `MAX_PRESENTED` on every trust-manager path and `Revokt.evaluate`, as the step-3 note below says):
   (a) random-key fake issuer; (b) ECDSA-recovered second key; (c) RSA duplicate-signature key;
   (d) recovered-key fake with an unsupported own signature, terminating at a real anchor; (e) 8, 16
   and 63 distinct-key related junk ahead of the real one → `Found`, verdict equals honest; (f)
@@ -2995,7 +3009,7 @@ tests; **live checks** are informational.
   signature OID mismatch → `Found` with the finding, and a NULL-vs-absent pair → `Found` with no finding;
   **(s1)** (o) plus 62 related junk ahead of the honest key (64 related in total) → `Found`, `pathsFound = 2`,
   `REVOKED`; **(s2)** (o) plus 63 junk (65 related) → `Budget(RELATED_BUDGET)`, `Rejected` with `rule ∈ {REVOKED,
-  PATH_BUDGET_EXCEEDED}`, and `REVOKED ⇔ honestKey ∈ issuerSpkiSha256s`; **(t)** (o) plus 80 junk → same expectation as (s2); **(i), (s2), (t) and (y) present more than `MAX_PRESENTED` certificates and are walker-harness only; on every trust-manager path and `Revokt.evaluate` they are cut at step 3: `Budget(EXPLORATION_BUDGET)`, `endDepth = 0`, `PATH_BUDGET_EXCEEDED`, no CRLite query, as (ag) asserts**;
+  PATH_BUDGET_EXCEEDED}`, and `REVOKED ⇔ honestKey ∈ issuerSpkiSha256s`; **(t)** (o) plus 80 junk → same expectation as (s2); **(i), (s2), (t) and (y) present more than `MAX_PRESENTED` certificates and are walker-harness only; on every trust-manager path and `Revokt.evaluate` they are cut at step 3: `Budget(EXPLORATION_BUDGET)`, `endDepth = 0`, `PATH_BUDGET_EXCEEDED`, no CRLite query and no `FallbackNotUsed`, as (ag) asserts**;
   (u) `getAcceptedIssuers()` throws during `refreshAnchors()` → the current snapshot is kept, `anchorSnapshotId` unchanged, the walk proceeds under it (the wiring and `start()` throw cases are lifecycle fixtures, (h));
   (v) honest chain against a 200-anchor snapshot → `verifications ≤ 4`, `COMPLETE`; (v2) the same
   with a retired-root cross-certificate presented → `≤ 4`; (w) dense cross-certified mesh (6 roots,
@@ -3018,10 +3032,10 @@ tests; **live checks** are informational.
   same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `FallbackNotUsed(DISABLED)`, the honest key (which only the fallback reaches) not in
   `issuerSpkiSha256s`, so `rule = PATH_BUDGET_EXCEEDED`; (ae) platform
   accepts, walker `UNANCHORED` and fallback fails → `NO_ISSUER(PLATFORM_ONLY)`,
-  `walkerReason = UNANCHORED`; (af) 9 presented certificates with a link the walker cannot reproduce
+  `walkerReason = UNANCHORED`, `FallbackNotUsed(FAILED)`; (af) 9 presented certificates with a link the walker cannot reproduce
   (custom delegate) → fallback skipped, `PATH_BUDGET_EXCEEDED`; with the fallback disabled → `PATH_BUDGET_EXCEEDED`
   as well, `usedFallback = false`, `FallbackNotUsed(DISABLED)`; (ag) 70 presented certificates →
-  `Budget(EXPLORATION_BUDGET)` without a walk; (ah) `VERIFICATION_BUDGET`: 12 presented certificates
+  `Budget(EXPLORATION_BUDGET)` without a walk, no `FallbackNotUsed`; (ah) `VERIFICATION_BUDGET`: 12 presented certificates
   of distinct RSA duplicate-signature keys each verifying the leaf and recursing into a
   32-certificate dead-end subtree → `Budget(VERIFICATION_BUDGET)`, `verifications = 256`; (ai) a
   17-certificate honest path (16 non-terminal plus the anchor) → `Found`; an 18-certificate one →
