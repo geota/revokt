@@ -1,3 +1,31 @@
+public final class dev/revokt/AnchorSnapshot {
+	public synthetic fun <init> (Ldev/revokt/AnchorSnapshot$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAnchors ()Ljava/util/List;
+	public final fun getCreatedMillis ()J
+	public final fun getId ()J
+	public final fun getPreloadGenerationId ()Ljava/lang/String;
+	public final fun getSha256 ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/ChainSource : java/lang/Enum {
+	public static final field PLATFORM Ldev/revokt/ChainSource;
+	public static final field PRESENTED Ldev/revokt/ChainSource;
+	public static final field RECONSTRUCTED Ldev/revokt/ChainSource;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/ChainSource;
+	public static fun values ()[Ldev/revokt/ChainSource;
+}
+
+public final class dev/revokt/CredentialType : java/lang/Enum {
+	public static final field X509 Ldev/revokt/CredentialType;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/CredentialType;
+	public static fun values ()[Ldev/revokt/CredentialType;
+}
+
 public final class dev/revokt/CrliteQuery {
 	public synthetic fun <init> (Ldev/revokt/CrliteQuery$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
@@ -37,12 +65,89 @@ public final class dev/revokt/Dataset : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/Dataset;
 }
 
+public final class dev/revokt/EngineErrorProducer : java/lang/Enum {
+	public static final field BOUNDARY Ldev/revokt/EngineErrorProducer;
+	public static final field ENGINE Ldev/revokt/EngineErrorProducer;
+	public static final field EXEMPTION Ldev/revokt/EngineErrorProducer;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/EngineErrorProducer;
+	public static fun values ()[Ldev/revokt/EngineErrorProducer;
+}
+
 public final class dev/revokt/FilterFormat : java/lang/Enum {
 	public static final field V3 Ldev/revokt/FilterFormat;
 	public static final field V4 Ldev/revokt/FilterFormat;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/FilterFormat;
 	public static fun values ()[Ldev/revokt/FilterFormat;
+}
+
+public abstract class dev/revokt/Finding {
+}
+
+public final class dev/revokt/Finding$AlgorithmIdMismatch : dev/revokt/Finding {
+	public synthetic fun <init> (Ldev/revokt/Finding$AlgorithmIdMismatch$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCertIndex ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Finding$Path : dev/revokt/Finding {
+	public synthetic fun <init> (Ldev/revokt/Finding$Path$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAnchorSha256 ()[B
+	public final fun getAnchorSnapshotId ()J
+	public final fun getCacheHit ()Z
+	public final fun getCandidatesDropped ()I
+	public final fun getCredentialType ()Ldev/revokt/CredentialType;
+	public final fun getEndDepth ()Ljava/lang/Integer;
+	public final fun getEndReason ()Ldev/revokt/WalkEnd;
+	public final fun getIssuerSpkiSha256s ()Ljava/util/List;
+	public final fun getKeyabilityClause ()Ldev/revokt/KeyabilityClause;
+	public final fun getNoIssuerReason ()Ldev/revokt/NoIssuerReason;
+	public final fun getParseReason ()Ldev/revokt/ParseReason;
+	public final fun getPathsFound ()I
+	public final fun getReportedPathSha256s ()Ljava/util/List;
+	public final fun getRewalkEnd ()Ldev/revokt/WalkEnd;
+	public final fun getSource ()Ldev/revokt/ChainSource;
+	public final fun getStatus ()Ldev/revokt/PathStatus;
+	public final fun getTerminalKind ()Ldev/revokt/TerminalKind;
+	public final fun getUsedFallback ()Z
+	public final fun getWalkerReason ()Ldev/revokt/NoIssuerReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Finding$UnsupportedAlgorithm : dev/revokt/Finding {
+	public synthetic fun <init> (Ldev/revokt/Finding$UnsupportedAlgorithm$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOid ()Ljava/lang/String;
+	public final fun getOutcomeDepended ()Z
+	public final fun getWhere ()Ldev/revokt/Layer;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Finding$VerifierError : dev/revokt/Finding {
+	public synthetic fun <init> (Ldev/revokt/Finding$VerifierError$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public final fun getOid ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Freshness : java/lang/Enum {
+	public static final field ARTIFACT_DATE Ldev/revokt/Freshness;
+	public static final field LAST_VERIFIED_POLL Ldev/revokt/Freshness;
+	public static final field MANIFEST_LAST_MODIFIED Ldev/revokt/Freshness;
+	public static final field RECORD_LAST_MODIFIED Ldev/revokt/Freshness;
+	public static final field SEED_SIGNED_TIME Ldev/revokt/Freshness;
+	public static final field SEQUENCE_TIME Ldev/revokt/Freshness;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Freshness;
+	public static fun values ()[Ldev/revokt/Freshness;
 }
 
 public final class dev/revokt/GenerationFiles {
@@ -98,6 +203,16 @@ public final class dev/revokt/Layer : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/Layer;
 }
 
+public final class dev/revokt/NoIssuerReason : java/lang/Enum {
+	public static final field ALL_CANDIDATES_INVALID Ldev/revokt/NoIssuerReason;
+	public static final field NO_CANDIDATE Ldev/revokt/NoIssuerReason;
+	public static final field PLATFORM_ONLY Ldev/revokt/NoIssuerReason;
+	public static final field UNANCHORED Ldev/revokt/NoIssuerReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/NoIssuerReason;
+	public static fun values ()[Ldev/revokt/NoIssuerReason;
+}
+
 public final class dev/revokt/Outcome : java/lang/Enum {
 	public static final field ALLOW Ldev/revokt/Outcome;
 	public static final field REJECT Ldev/revokt/Outcome;
@@ -113,6 +228,10 @@ public final class dev/revokt/ParseReason : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/ParseReason;
 	public static fun values ()[Ldev/revokt/ParseReason;
+}
+
+public abstract interface class dev/revokt/PathBuilderFallback {
+	public abstract fun build (Ljava/util/List;Ldev/revokt/AnchorSnapshot;J)Ljava/util/List;
 }
 
 public final class dev/revokt/PathStatus : java/lang/Enum {
@@ -238,6 +357,13 @@ public abstract interface class dev/revokt/SignatureVerifier {
 	public abstract fun verify ([B[B[B[B)Ldev/revokt/VerifyResult;
 }
 
+public final class dev/revokt/TerminalKind : java/lang/Enum {
+	public static final field ANCHOR Ldev/revokt/TerminalKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/TerminalKind;
+	public static fun values ()[Ldev/revokt/TerminalKind;
+}
+
 public final class dev/revokt/TrustClass : java/lang/Enum {
 	public static final field BUNDLED Ldev/revokt/TrustClass;
 	public static final field MIRROR Ldev/revokt/TrustClass;
@@ -256,5 +382,15 @@ public final class dev/revokt/VerifyResult : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/VerifyResult;
 	public static fun values ()[Ldev/revokt/VerifyResult;
+}
+
+public final class dev/revokt/WalkEnd : java/lang/Enum {
+	public static final field COMPLETE Ldev/revokt/WalkEnd;
+	public static final field EXPLORATION_BUDGET Ldev/revokt/WalkEnd;
+	public static final field RELATED_BUDGET Ldev/revokt/WalkEnd;
+	public static final field VERIFICATION_BUDGET Ldev/revokt/WalkEnd;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/WalkEnd;
+	public static fun values ()[Ldev/revokt/WalkEnd;
 }
 
