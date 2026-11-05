@@ -39,15 +39,18 @@ Status: **draft spec / project proposal, revision 49** · Target: JVM 17+ and An
   - **Now:** the disabled branch gives what step 6 gives when no fallback path exists. A walk `Budget` is
     `PATH_BUDGET_EXCEEDED`, the same as with the fallback enabled, with `usedFallback = false` and only the walk's
     partial leaf keys evaluated. A `NotFound` over more than `FALLBACK_MAX_PRESENTED` certificates is
-    `PATH_BUDGET_EXCEEDED` with the skipped branch's finding, whether or not step 1 ran. Any other `NotFound` is
-    `ISSUER_UNVERIFIED` or `NO_ISSUER` under the fallback-failed branch's rule, `PLATFORM_ONLY` on a trust-manager
-    binding.
+    `PATH_BUDGET_EXCEEDED`, whether or not step 1 ran. Any other `NotFound` is `ISSUER_UNVERIFIED` or `NO_ISSUER`
+    under the fallback-failed branch's rule, `PLATFORM_ONLY` on a trust-manager binding.
+  - **The finding** (the maintainer's choice): wherever the fallback did not run because it is configured off, step
+    6 reports a distinct `VerifierError("fallback disabled")`. `"fallback skipped"` stays for the enabled, too-long
+    case only.
   - **The skipped branch with the fallback enabled** named only "the platform accepted in step 1". It now also
     applies where step 1 does not run (the walker-only harness and `Evaluator.evaluate`), as fixture (af) already
     expected on every platform path.
   - **Fixtures:** a row whose outcome depends on the fallback states its disabled expectation. (ad) disabled →
-    `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, and the honest key absent because only the fallback reaches it,
-    so `rule = PATH_BUDGET_EXCEEDED`. (af) disabled → `PATH_BUDGET_EXCEEDED`.
+    `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `VerifierError("fallback disabled")`, and the honest key absent
+    because only the fallback reaches it, so `rule = PATH_BUDGET_EXCEEDED`. (af) disabled → `PATH_BUDGET_EXCEEDED`
+    with `VerifierError("fallback disabled")`.
 - **Added** (§3.2, §4, §5.5): `RevocationEngine` gains `val name: String`, defaulting to the class's simple name, or
   `"anonymous"` when the class has none. The Kotlin engine returns `"kotlin"` and the upki engine `"upki"`.
   `Finding.EngineError.engineName` is that name whenever `producer == ENGINE`, so it is never null there. Before, a
@@ -1926,11 +1929,12 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      is `PATH_BUDGET_EXCEEDED` regardless; `usedFallback = true` when a fallback path was evaluated.
    - **fallback disabled** (`pkixFallback(false)`, and the walker-only harness's disabled path; revision 49):
      `pathBuilder.build` is never called, and step 6 gives what the branches above give when no fallback path
-     exists. Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same as with the fallback enabled, with only the walk's
-     partial leaf keys evaluated and `usedFallback = false`; walk `NotFound` with
-     `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` and the skipped
-     branch's finding, whether or not step 1 ran; any other walk `NotFound` → `ISSUER_UNVERIFIED` or `NO_ISSUER` under
-     the fallback-failed branch's rule. On a trust-manager binding any such `NO_ISSUER` is `PLATFORM_ONLY`: the platform
+     exists, with `VerifierError("fallback disabled")` wherever the fallback did not run because it is configured
+     off (`"fallback skipped"` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
+     as with the fallback enabled, with only the walk's partial leaf keys evaluated and `usedFallback = false`; walk
+     `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE`,
+     whether or not step 1 ran; any other walk `NotFound` → `ISSUER_UNVERIFIED` or `NO_ISSUER` under the
+     fallback-failed branch's rule. On a trust-manager binding any such `NO_ISSUER` is `PLATFORM_ONLY`: the platform
      trusts a chain the walker cannot reproduce, and no PKIX builder ran; `walkerReason` keeps the walker's reason.
 7. Data: the data rules (`NO_DATA` for each required dataset with no generation and not `pending`,
    never with a generation installed from a seed or a system cache for that dataset; `STALE`; `UNSIGNED_DATA`) were computed from the generation
@@ -2256,7 +2260,8 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   divergence from the delegate are reported as `Finding.VerifierError("fallback")` and surface as
   `PLATFORM_ONLY`. It is skipped above `FALLBACK_MAX_PRESENTED` presented certificates (no candidate
   budget; exponential on stuffed chains) with `VerifierError("fallback skipped")`, which cannot change
-  a `Budget` outcome.
+  a `Budget` outcome. With `pkixFallback(false)` it never runs, and step 6 reports `VerifierError("fallback disabled")`
+  instead (revision 49).
 - **Caches**, per trust manager, LRU-bounded (a synchronized access-ordered `LinkedHashMap` or a
   striped LRU; touched from concurrent handshake threads): the path cache holds `Found`, `NotFound`,
   `Budget` and the fallback result alike. **A path-cache entry is exactly**: `status`, `source`,
@@ -2924,7 +2929,8 @@ tests; **live checks** are informational.
   expected Walk (asserted only in the walker-only harness, revokt-engine's test set; every other path asserts the Finding.Path columns, and revokt-testing's recorded fixtures carry the Walk column as a string) | expected PathStatus / NoIssuerReason / WalkEnd | expected Path fields | verdict
   relation to the honest chain`, on every platform path (JVM walker, JVM walker with the fallback
   disabled in the walker-only harness, Android CT-gap path, Android plain delegate, `Revokt.evaluate`; a row whose
-  outcome depends on the fallback states its fallback-disabled expectation, decision step 6, revision 49):
+  outcome depends on the fallback states its fallback-disabled expectation, and on that path a row's "fallback
+  skipped" is `VerifierError("fallback disabled")`, decision step 6, revision 49):
   (a) random-key fake issuer; (b) ECDSA-recovered second key; (c) RSA duplicate-signature key;
   (d) recovered-key fake with an unsupported own signature, terminating at a real anchor; (e) 8, 16
   and 63 distinct-key related junk ahead of the real one → `Found`, verdict equals honest; (f)
@@ -2967,12 +2973,12 @@ tests; **live checks** are informational.
   honest issuer unrelated by encoding, six same-name mutually cross-signing junk certificates ahead →
   `Budget(EXPLORATION_BUDGET)`, `candidatesExplored = 1024`, `usedFallback = true`,
   `PATH_BUDGET_EXCEEDED`, `rule = REVOKED`, honest key last in `issuerSpkiSha256s`; with the fallback disabled the
-  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, the honest key (which only the fallback reaches) not in
+  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `VerifierError("fallback disabled")`, the honest key (which only the fallback reaches) not in
   `issuerSpkiSha256s`, so `rule = PATH_BUDGET_EXCEEDED`; (ae) platform
   accepts, walker `UNANCHORED` and fallback fails → `NO_ISSUER(PLATFORM_ONLY)`,
   `walkerReason = UNANCHORED`; (af) 9 presented certificates with a link the walker cannot reproduce
   (custom delegate) → fallback skipped, `PATH_BUDGET_EXCEEDED`; with the fallback disabled → `PATH_BUDGET_EXCEEDED`
-  as well, `usedFallback = false`; (ag) 70 presented certificates →
+  as well, `usedFallback = false`, `VerifierError("fallback disabled")`; (ag) 70 presented certificates →
   `Budget(EXPLORATION_BUDGET)` without a walk; (ah) `VERIFICATION_BUDGET`: 12 presented certificates
   of distinct RSA duplicate-signature keys each verifying the leaf and recursing into a
   32-certificate dead-end subtree → `Budget(VERIFICATION_BUDGET)`, `verifications = 256`; (ai) a
