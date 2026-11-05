@@ -3,8 +3,8 @@
 
 # Roadmap
 
-**Current focus**: 0.1's last three items: `RevocationEngine` and the Kotlin engine (#90), the walker's test
-infrastructure (#91), and JSON with canonical JSON (#92) (CONTRIBUTING §2).
+**Current focus**: 0.2, a working engine. 0.1's scope is merged, and 0.2's issues are being planned
+(CONTRIBUTING §2).
 
 > [!WARNING]
 > revokt is pre-release and not production ready. Nothing is published yet, and the public API may change in any
@@ -21,7 +21,7 @@ follows the critical path in
 
 | Milestone | What you get | Estimate | State |
 |---|---|---|---|
-| [0.1](#01-foundations) | The engine's foundations: certificate parser, filter decoder, rule model | 5 weeks | 🚧 in progress |
+| [0.1](#01-foundations) | The engine's foundations: certificate parser, filter decoder, rule model | 5 weeks | ✅ done |
 | [0.2](#02-a-working-engine) | A minimal working `Revokt`: path walker, signed Mozilla feed, in-memory updates | 4 weeks | ⏳ not started |
 | [0.3](#03-usable-in-apps) | Usable in apps: durable store, OkHttp and Ktor bindings, Android, WorkManager | 5 weeks | ⏳ not started |
 | [M2: 0.4 → 1.0](#m2-04--10-intermediates-onecrl-and-crlsets) | Intermediate preloading, OneCRL, the bundled denylist, Chrome CRLSets; the 1.0 API promise | | ⏳ not started |
@@ -46,9 +46,9 @@ independent implementations before anything is built on them. Nothing in 0.1 che
 | ✅ | `Rule` model, precedence and golden fixture | Every outcome is a named rule, in a fixed precedence; the `DEFAULT` and `STRICT` presets; a committed fixture whose CI diff only allows the changes the compatibility contract permits | #72, #73 |
 | ✅ | `Rule → BasicReason` map | Which `CertPathValidatorException` reason each rejection carries, so a missing-data rejection is never mistaken for a revocation | #72 |
 | ✅ | C2SP `index.bin` reader and writer, `GenerationFiles` | The on-disk layout of a filter generation, shared with rustls/upki, byte-identical to upki 1.0.1's writer | #86, #87 |
-| 🚧 | `RevocationEngine` and the Kotlin engine | The seam a revocation engine plugs into, and the default engine over the `clubcard` port | #90 |
-| 🚧 | `SymVerifier`, the §9.1 chain generator, the reference walker | Test infrastructure for 0.2's path walker: a fake signature scheme, a generator of adversarial chains and a slow but obviously correct walker to compare against | #91 |
-| 🚧 | JSON tree and canonical JSON | The JSON reader the Mozilla feed and its content signatures need | #92 |
+| ✅ | `RevocationEngine` and the Kotlin engine | The seam a revocation engine plugs into, and the default engine over the `clubcard` port | #90 |
+| ✅ | `SymVerifier`, the §9.1 chain generator, the reference walker | Test infrastructure for 0.2's path walker: a fake signature scheme, a generator of adversarial chains and a slow but obviously correct walker to compare against | #91 |
+| ✅ | JSON tree and canonical JSON | The JSON reader the Mozilla feed and its content signatures need | #92 |
 
 ## 0.2: a working engine
 
