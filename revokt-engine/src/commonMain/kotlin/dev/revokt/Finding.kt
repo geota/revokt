@@ -311,13 +311,14 @@ public sealed class Finding {
     }
 
     /**
-     * A verifier failure the walk recorded (spec §3 "Verifier contract", §5.1): a provider that threw, whose link
-     * counts as `INVALID`, or a PKIX fallback that was skipped, disabled or refused.
+     * A verifier or algorithm failure the walk recorded (spec §3 "Verifier contract", §4, §5.1): the link counts as
+     * `INVALID`. Never the PKIX fallback, which is [FallbackNotUsed].
      */
     @OptIn(RevoktTestingApi::class)
     public class VerifierError private constructor(
         builder: Builder,
     ) : Finding() {
+        /** The dotted OID of the signature algorithm whose verification failed. */
         public val oid: String = requireNotNull(builder.oid) { "oid is not set" }
 
         public val message: String = requireNotNull(builder.message) { "message is not set" }
@@ -346,6 +347,39 @@ public sealed class Finding {
             public fun message(message: String): Builder = apply { this.message = message }
 
             public fun build(): VerifierError = VerifierError(this)
+        }
+    }
+
+    /**
+     * Decision step 6 evaluated no PKIX fallback path (spec §4, §5.1): exactly one when the step-5 walk ended `NotFound`
+     * or `Budget` and `Finding.Path.usedFallback` is false. "Not used" rather than "not run": a [FallbackReason.FAILED]
+     * fallback did run.
+     */
+    @OptIn(RevoktTestingApi::class)
+    public class FallbackNotUsed private constructor(
+        builder: Builder,
+    ) : Finding() {
+        public val reason: FallbackReason = requireNotNull(builder.reason) { "reason is not set" }
+
+        /** A builder holding this finding's values. */
+        @RevoktTestingApi
+        public fun newBuilder(): Builder = Builder().reason(reason)
+
+        override fun equals(other: Any?): Boolean = other is FallbackNotUsed && reason == other.reason
+
+        override fun hashCode(): Int = reason.hashCode()
+
+        override fun toString(): String = "FallbackNotUsed(reason=$reason)"
+
+        /** Builds a [Finding.FallbackNotUsed] for tests and fakes. */
+        @RevoktTestingApi
+        public class Builder {
+            internal var reason: FallbackReason? = null
+                private set
+
+            public fun reason(reason: FallbackReason): Builder = apply { this.reason = reason }
+
+            public fun build(): FallbackNotUsed = FallbackNotUsed(this)
         }
     }
 

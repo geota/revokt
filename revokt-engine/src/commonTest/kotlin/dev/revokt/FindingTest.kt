@@ -93,6 +93,7 @@ class FindingTest {
             listOf("NO_CANDIDATE", "ALL_CANDIDATES_INVALID", "UNANCHORED", "PLATFORM_ONLY"),
             NoIssuerReason.entries.map { it.name },
         )
+        assertEquals(listOf("SKIPPED", "DISABLED", "FAILED"), FallbackReason.entries.map { it.name })
         assertEquals(
             listOf("COMPLETE", "RELATED_BUDGET", "VERIFICATION_BUDGET", "EXPLORATION_BUDGET"),
             WalkEnd.entries.map { it.name },
@@ -343,6 +344,18 @@ class FindingTest {
         assertNotEquals<Any>(ve, "ve")
         assertEquals("VerifierError(oid=1.2.840.10045.4.3.2, message=provider threw)", ve.toString())
 
+        val fn =
+            Finding.FallbackNotUsed
+                .Builder()
+                .reason(FallbackReason.FAILED)
+                .build()
+        assertValueSemantics(fn, fn.newBuilder().build())
+        for (reason in FallbackReason.entries - FallbackReason.FAILED) {
+            assertNotEquals(fn, fn.newBuilder().reason(reason).build())
+        }
+        assertNotEquals<Any>(fn, "fn")
+        assertEquals("FallbackNotUsed(reason=FAILED)", fn.toString())
+
         val am =
             Finding.AlgorithmIdMismatch
                 .Builder()
@@ -399,6 +412,7 @@ class FindingTest {
                     .build()
             },
         )
+        assertEquals("reason is not set", message { Finding.FallbackNotUsed.Builder().build() })
         assertEquals("certIndex is not set", message { Finding.AlgorithmIdMismatch.Builder().build() })
         assertTrue(
             "got -1" in
@@ -425,6 +439,10 @@ class FindingTest {
                     .Builder()
                     .oid("1.2")
                     .message("m")
+                    .build(),
+                Finding.FallbackNotUsed
+                    .Builder()
+                    .reason(FallbackReason.SKIPPED)
                     .build(),
                 Finding.AlgorithmIdMismatch
                     .Builder()

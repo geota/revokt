@@ -74,6 +74,15 @@ public final class dev/revokt/EngineErrorProducer : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/EngineErrorProducer;
 }
 
+public final class dev/revokt/FallbackReason : java/lang/Enum {
+	public static final field DISABLED Ldev/revokt/FallbackReason;
+	public static final field FAILED Ldev/revokt/FallbackReason;
+	public static final field SKIPPED Ldev/revokt/FallbackReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/FallbackReason;
+	public static fun values ()[Ldev/revokt/FallbackReason;
+}
+
 public final class dev/revokt/FilterFormat : java/lang/Enum {
 	public static final field V3 Ldev/revokt/FilterFormat;
 	public static final field V4 Ldev/revokt/FilterFormat;
@@ -89,6 +98,14 @@ public final class dev/revokt/Finding$AlgorithmIdMismatch : dev/revokt/Finding {
 	public synthetic fun <init> (Ldev/revokt/Finding$AlgorithmIdMismatch$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCertIndex ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Finding$FallbackNotUsed : dev/revokt/Finding {
+	public synthetic fun <init> (Ldev/revokt/Finding$FallbackNotUsed$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ldev/revokt/FallbackReason;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
