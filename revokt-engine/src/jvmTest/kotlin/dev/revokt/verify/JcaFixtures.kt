@@ -225,3 +225,36 @@ internal class DelegatingKeyFactory(
 
     override fun engineTranslateKey(key: Key): Key = throw UnsupportedOperationException()
 }
+
+/**
+ * A `SignatureSpi` that accepts every signature under any parameters: a provider that checks nothing, so a test can
+ * show which rejections are the verifier's own rules rather than the provider's.
+ */
+internal class AcceptingSignature : SignatureSpi() {
+    override fun engineInitVerify(publicKey: PublicKey) = Unit
+
+    override fun engineInitSign(privateKey: PrivateKey) = Unit
+
+    override fun engineUpdate(b: Byte) = Unit
+
+    override fun engineUpdate(
+        b: ByteArray,
+        off: Int,
+        len: Int,
+    ) = Unit
+
+    override fun engineSign(): ByteArray = ByteArray(0)
+
+    override fun engineVerify(sigBytes: ByteArray): Boolean = true
+
+    override fun engineSetParameter(params: AlgorithmParameterSpec?) = Unit
+
+    @Deprecated("JCA legacy API", ReplaceWith(""))
+    override fun engineSetParameter(
+        param: String?,
+        value: Any?,
+    ): Unit = throw UnsupportedOperationException()
+
+    @Deprecated("JCA legacy API", ReplaceWith(""))
+    override fun engineGetParameter(param: String?): Any = throw UnsupportedOperationException()
+}

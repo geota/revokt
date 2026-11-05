@@ -151,6 +151,74 @@ class JcaVerifierProvidersTest {
     }
 
     @Test
+    fun `verifier the reject rules are the verifier's own, not the provider's`() {
+        // A provider that accepts every signature: what is still INVALID is decided by the verifier's tables and rules.
+        // It has the RSASSA-PSS KeyFactory too: the PSS OID names a key and a signature, and one OID set covers both roles.
+        val key =
+            object : PublicKey {
+                override fun getAlgorithm() = "any"
+
+                override fun getFormat() = "X.509"
+
+                override fun getEncoded() = ByteArray(0)
+            }
+        val accepting = TestProvider("accepting")
+        for (name in listOf("RSASSA-PSS", "SHA256withRSA", "SHA1withRSA", "SHA256withECDSA", "SHA1withECDSA")) {
+            accepting.signature(name) { AcceptingSignature() }
+        }
+        // It has the RSASSA-PSS KeyFactory too: the PSS OID names a key and a signature, and one OID set covers both roles.
+        for (name in listOf("RSA", "RSASSA-PSS", "EC")) {
+            accepting.keyFactory(name) {
+                DelegatingKeyFactory(KeyFactory.getInstance(name)) { key }
+            }
+        }
+        val v = JcaSignatureVerifier(accepting)
+        val rsaKey = spki(algId(JcaFixtures.RSA_KEY, NULL), TestDer.bytes(1))
+        val junk = TestDer.bytes(1)
+        assertEquals(VERIFIED, v.verify(algId(PSS, pssParams(SHA256, SHA256, 32)), rsaKey, MESSAGE, junk))
+        assertEquals(VERIFIED, v.verify(algId(SHA256_RSA, NULL), rsaKey, MESSAGE, junk))
+        val rejected =
+            listOf(
+                "trailer field 2" to algId(PSS, pssParams(SHA256, SHA256, 32, 2)),
+                "SHA-1 PSS hash" to algId(PSS, pssParams(JcaFixtures.SHA1, SHA256, 32)),
+                "SHA-1 MGF1 hash" to algId(PSS, pssParams(SHA256, JcaFixtures.SHA1, 32)),
+                "salt past every key" to algId(PSS, pssParams(SHA256, SHA256, 2049)),
+                "absent PSS parameters" to algId(PSS),
+                "PKCS#1 with parameters" to algId(SHA256_RSA, TestDer.oid(P256)),
+                "SHA-1 PKCS#1" to algId(JcaFixtures.SHA1_RSA, NULL),
+            )
+        for ((what, sigAlg) in rejected) assertEquals(INVALID, v.verify(sigAlg, rsaKey, MESSAGE, junk), what)
+        assertEquals(
+            VERIFIED,
+            v.verify(algId(PSS, pssParams(SHA256, SHA256, 2048)), rsaKey, MESSAGE, junk),
+            "salt at the cap",
+        )
+        // The probe's junk signature verifies here, so no curve is supported; a curve outside the table is never tried.
+        assertTrue(P256 in v.unsupportedOids())
+        for (params in listOf(TestDer.oid(JcaFixtures.SECP256K1), NULL, ByteArray(0))) {
+            val ecKey = spki(algId(JcaFixtures.EC_KEY, params), TestDer.bytes(4, 1, 2))
+            assertEquals(INVALID, v.verify(algId(ECDSA_SHA256), ecKey, MESSAGE, junk))
+            assertEquals(INVALID, v.verify(algId(JcaFixtures.ECDSA_SHA1), ecKey, MESSAGE, junk))
+        }
+    }
+
+    @Test
+    fun `verifier a curve whose encoded key the provider cannot decode is unsupported`() {
+        // The provider's ECDSA runs on SunEC's keys, but its KeyFactory refuses encoded ones: verify decodes through it.
+        val provider =
+            TestProvider("ec-no-x509")
+                .signature("SHA256withECDSA") { DelegatingSignature(Signature.getInstance("SHA256withECDSA", "SunEC")) }
+                .keyFactory("EC") {
+                    DelegatingKeyFactory(KeyFactory.getInstance("EC", "SunEC")) {
+                        throw java.security.spec.InvalidKeySpecException("no X.509")
+                    }
+                }
+        val v = JcaSignatureVerifier(provider)
+        assertTrue(JcaAlgorithms.CURVES.all { it in v.unsupportedOids() })
+        assertFalse(ECDSA_SHA256 in v.unsupportedOids())
+    }
+
+    @Test
     fun `verifier a composite OID is verified by a provider that owns it`() {
         val expected = TestDer.bytes(9, 9, 9)
         val key =

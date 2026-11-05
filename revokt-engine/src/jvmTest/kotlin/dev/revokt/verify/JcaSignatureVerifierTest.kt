@@ -371,6 +371,13 @@ class JcaSignatureVerifierTest {
         val sha1 = sign("RSASSA-PSS", rsa.private, params = pssSpec("SHA-1", "SHA-1", 20))
         assertTrue(jdkVerifies("RSASSA-PSS", rsa.public, sha1, params = pssSpec("SHA-1", "SHA-1", 20)))
         assertEquals(INVALID, verifier.verify(algId(PSS, pssParams()), rsa.public.encoded, MESSAGE, sha1))
+        // SHA-1 as the message hash under an SHA-2 MGF1: the JDK verifies it; outside the rule.
+        val sha1Hash = sign("RSASSA-PSS", rsa.private, params = pssSpec("SHA-1", "SHA-256", 20))
+        assertTrue(jdkVerifies("RSASSA-PSS", rsa.public, sha1Hash, params = pssSpec("SHA-1", "SHA-256", 20)))
+        assertEquals(
+            INVALID,
+            verifier.verify(algId(PSS, pssParams(SHA1, SHA256)), rsa.public.encoded, MESSAGE, sha1Hash),
+        )
         // Only the hash given: MGF1 defaults to SHA-1, also outside the rule.
         val mgfSha1 = sign("RSASSA-PSS", rsa.private, params = pssSpec("SHA-256", "SHA-1", 20))
         assertEquals(INVALID, verifier.verify(algId(PSS, pssParams(SHA256)), rsa.public.encoded, MESSAGE, mgfSha1))
