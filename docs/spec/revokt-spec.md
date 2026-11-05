@@ -1453,8 +1453,9 @@ MGF1 hash must each be a SHA-2 hash, the family RSA PKCS#1 takes above. The mask
 mask-generation field means SHA-1.
 
 **Salt length:** a salt longer than 2,048 bytes is `INVALID`, decided before the provider is called. This describes
-the guard merged in #156 (`MAX_SALT_LENGTH`), not a new choice. 2,048 bytes is the longest salt any RSA key could take
-(RFC 8017 §9.1.1, `emLen >= hLen + sLen + 2`, at SunRsaSign's largest modulus of 16,384 bits). The JDK refuses a
+the guard merged in #156 (`MAX_SALT_LENGTH`), not a new choice. 2,048 bytes, the modulus bits / 8 at SunRsaSign's
+largest modulus of 16,384 bits, is an upper bound on any RSA key's salt. The real maximum is `emLen - hLen - 2`
+(RFC 8017 §9.1.1, `emLen >= hLen + sLen + 2`). The JDK refuses a
 longer salt for the key on its own, with a `GeneralSecurityException`, except near `Int.MAX_VALUE`. There its
 `hLen + sLen + 2` overflows into an `ArithmeticException`, which would otherwise become a `VerifierError` for a
 CA-chosen length. On JDK 21.0.13 with SHA-256, the overflow starts at 2,147,483,614.
