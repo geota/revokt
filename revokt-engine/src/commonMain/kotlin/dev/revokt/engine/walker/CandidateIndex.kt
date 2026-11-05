@@ -63,7 +63,8 @@ internal class CandidateIndex(
      * the store comes first (its certificates are terminals in M1), then the presented ones. Within the store: raw-name
      * matches, then canonical-name matches, then SKI matches; within each group the candidates whose key family is
      * compatible with `child.tbsSigOid` first, each part by bytesHash. Lazy: a walker that stops early (a found path
-     * below the leaf, `MAX_RELATED_PER_LEVEL`) never pays for the rest of a large group.
+     * below the leaf, `MAX_RELATED_PER_LEVEL`) never pays for the rest of a large group. The sequence reads
+     * [presented] and [seen] as it is iterated, so the caller must not mutate either while iterating it.
      */
     fun related(
         presented: List<Cert>,
@@ -76,7 +77,10 @@ internal class CandidateIndex(
         return distinct(if (belowLeaf) fromStore + fromPresented else fromPresented + fromStore, seen)
     }
 
-    /** The presented certificates not related to [child], by index, minus [seen], exact-byte duplicates once. */
+    /**
+     * The presented certificates not related to [child], by index, minus [seen], exact-byte duplicates once. Lazy, as
+     * [related]: the caller must not mutate [presented] or [seen] while iterating it.
+     */
     fun unrelated(
         presented: List<Cert>,
         child: Cert,
@@ -161,11 +165,6 @@ internal class CandidateIndex(
         ): List<Cert> {
             val (compatible, incompatible) = all.partition { KeyFamily.compatible(it, signatureOid, family) }
             return compatible + incompatible
-        }
-
-        private companion object {
-            /** The families whose compatibility the key family alone decides (UNKNOWN: with everything). */
-            val BY_FAMILY = setOf(KeyFamily.UNKNOWN, KeyFamily.RSA, KeyFamily.EC)
         }
     }
 }
