@@ -48,6 +48,12 @@ internal class FixtureWorld {
         curveOid: String? = null,
     ): SymKey = SymKey(SEED, keys++, keyOid, curveOid)
 
+    /**
+     * A leaf's key: `id-Ed25519`, which §9.2's keyability profile (K7) admits, so decision step 3 queries the leaf
+     * rather than cutting it as `PRODUCER_UNKEYABLE`. It takes the next ordinal, as [key] does.
+     */
+    fun leafKey(): SymKey = key(SymOids.ED25519)
+
     /** A one-RDN name `CN=[cn]`, its value under the string [tag] (UTF8String by default). */
     fun name(
         cn: String,
@@ -57,8 +63,9 @@ internal class FixtureWorld {
 
     /**
      * A certificate. [signer] is the key whose link verifies it (null: a signature no key verifies); the outer
-     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs. Each
-     * call takes a fresh serial, so two calls never give the same bytes.
+     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs;
+     * [validity] replaces the default `Validity` (a §9.2 K6 failure, for one). Each call takes a fresh serial, so two
+     * calls never give the same bytes.
      */
     fun cert(
         label: String,
@@ -68,6 +75,7 @@ internal class FixtureWorld {
         signer: SymKey? = null,
         sigOid: String = SymOids.SIGNATURE,
         extensions: List<ByteArray> = emptyList(),
+        validity: ByteArray = TestCert().validity,
     ): FixtureCert {
         val serial = ++serials
         val t =
@@ -75,6 +83,7 @@ internal class FixtureWorld {
                 serial = TestDer.tlv(0x02, TestDer.bytes(0x01, serial shr 8 and 0xff, serial and 0xff)),
                 tbsSignature = TestDer.seq(TestDer.oid(sigOid)),
                 issuer = issuer,
+                validity = validity,
                 subject = subject,
                 spki = key.spki,
                 extensions = extensions,
