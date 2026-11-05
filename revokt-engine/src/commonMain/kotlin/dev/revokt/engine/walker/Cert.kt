@@ -5,7 +5,6 @@ package dev.revokt.engine.walker
 
 import dev.revokt.CrliteSct
 import dev.revokt.KeyabilityClause
-import dev.revokt.RevoktTestingApi
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.ParsedCertificate
@@ -22,7 +21,8 @@ import okio.ByteString.Companion.toByteString
  *   `id-ecPublicKey`).
  * - [canonicalSubject] is computed once, at construction, and [canonicalIssuer] at most once, on first use (§5.1
  *   "Caches"); a canonicaliser that returns null or throws gives null, which matches nothing, so raw-byte and SKI
- *   matching still apply (§5.1 decision list). The canonicaliser gets a copy of the name.
+ *   matching still apply (§5.1 decision list); only a fatal error ([isFatal], §5.5) is rethrown. The canonicaliser
+ *   gets a copy of the name.
  * - [algorithmIdMismatch] is §5.1's per-certificate `AlgorithmIdMismatch`, computed by the parser after NULL/absent
  *   normalisation. §5.1 declares `findings: List<Finding>` here; decide turns this flag into that finding.
  * - [producerKeyable] and [keyabilityClause] are §9.2's keyability profile; only the leaf's are read (decision step 3).
@@ -59,15 +59,7 @@ internal class Cert private constructor(
     val serial: ByteArray = p.rawSerial()
 
     /** §6.1: the union over every SCT-list extension of the items §9.2 keeps, in first-seen order. */
-    @OptIn(RevoktTestingApi::class) // CrliteSct is built only through its Builder
-    val scts: List<CrliteSct> =
-        p.fields.scts.map {
-            CrliteSct
-                .Builder()
-                .logId(it.logId.toByteArray())
-                .timestampMillis(it.timestamp)
-                .build()
-        }
+    val scts: List<CrliteSct> = p.fields.scts.map { CrliteSct.of(it.logId, it.timestamp) }
     val notBefore: Long? = p.tbs.validity.notBeforeMillis
     val notAfter: Long? = p.tbs.validity.notAfterMillis
     val keyabilityClause: KeyabilityClause? = Keyability.firstFailing(p)
@@ -85,14 +77,17 @@ internal class Cert private constructor(
             canonicaliser: (ByteArray) -> String?,
         ): Cert = Cert(p, canonicaliser)
 
+        @Suppress("TooGenericExceptionCaught") // §5.5's rule: every throwable but a fatal error is caught
         private fun canonical(
             canonicaliser: (ByteArray) -> String?,
             name: ByteArray,
         ): String? =
             try {
                 canonicaliser(name.copyOf())
-            } catch (_: Exception) {
-                // §5.1 decision list: a canonicaliser throw is "no canonical match", for any canonicaliser.
+            } catch (t: Throwable) {
+                // §5.1 decision list: a canonicaliser throw is "no canonical match", for any canonicaliser, so a custom
+                // delegate's NotImplementedError or a StackOverflowError on a crafted name cannot reach the boundary.
+                if (isFatal(t)) throw t
                 null
             }
     }

@@ -12,6 +12,7 @@ import dev.revokt.engine.walker.WalkerCerts.akiKeyId
 import dev.revokt.engine.walker.WalkerCerts.der
 import dev.revokt.engine.walker.WalkerCerts.ecKey
 import dev.revokt.engine.walker.WalkerCerts.rsaKey
+import dev.revokt.testing.SymKey
 import dev.revokt.testing.SymName
 import okio.ByteString
 import kotlin.test.Test
@@ -238,6 +239,87 @@ class CandidateIndexTest {
             listOf(WalkerCerts.cert(noSkiSameName).bytesHash),
             hashes(index.relatedList(listOf(child), child, false)),
         )
+    }
+
+    @Test
+    fun `candidate index never treats a presented candidate without SKI as an SKI match`() {
+        val keyId = ByteArray(20) { 8 }
+        val index = index(der(other, other))
+        val child = index.cert(WalkerCerts.parse(der(leafName, root, aki = akiKeyId(keyId))))
+        val noSki = index.cert(WalkerCerts.parse(der(SymName("No SKI"), other)))
+        val otherSki = index.cert(WalkerCerts.parse(der(SymName("Other SKI"), other, ski = ByteArray(20) { 1 })))
+        val matching = index.cert(WalkerCerts.parse(der(SymName("Matching SKI"), other, ski = keyId)))
+        val presented = listOf(child, noSki, otherSki, matching)
+        assertEquals(listOf(matching.bytesHash), hashes(index.relatedList(presented, child, false)))
+        assertEquals(listOf(matching.bytesHash), hashes(index.relatedList(presented, child, true)))
+        assertEquals(hashes(listOf(noSki, otherSki)), hashes(index.unrelatedList(presented, child)))
+    }
+
+    @Test
+    fun `candidate index keeps presented candidates in index order whatever their key family`() {
+        val index = index(der(root, root, key = rsaKey()))
+        val leaf = index.cert(WalkerCerts.parse(der(leafName, root, sigOid = SHA256_RSA)))
+        val ecFirst = index.cert(WalkerCerts.parse(der(root, other, key = ecKey(), sigOid = ECDSA_SHA256)))
+        val rsaSecond = index.cert(WalkerCerts.parse(der(root, other, key = rsaKey())))
+        val presented = listOf(leaf, ecFirst, rsaSecond)
+        assertEquals(KeyFamily.EC, ecFirst.keyFamily)
+        assertEquals(
+            hashes(listOf(ecFirst, rsaSecond, index.store[0])),
+            hashes(index.relatedList(presented, leaf, belowLeaf = false)),
+        )
+        val intermediate = index.cert(WalkerCerts.parse(der(SymName("I"), root, sigOid = SHA256_RSA)))
+        assertEquals(
+            hashes(listOf(index.store[0], ecFirst, rsaSecond)),
+            hashes(index.relatedList(presented, intermediate, belowLeaf = true)),
+        )
+    }
+
+    @Test
+    fun `candidate index orders same-OID families by exact key OID, unknown keys compatible`() {
+        val ed25519 = "1.3.101.112"
+        val ed448 = "1.3.101.113"
+        val mlDsa65 = "2.16.840.1.101.3.4.3.18"
+        val keys =
+            listOf(ed25519, ed25519, ed448, ed448, "1.3.6.1.4.1.99999.91.1", WalkerCerts.RSA_KEY).mapIndexed { i, oid ->
+                der(root, root, key = SymKey(13, i, oid))
+            }
+        val index = index(*keys.toTypedArray())
+        val byOid = index.store.groupBy { it.keyOid }.mapValues { (_, v) -> v.map { it.bytesHash }.sorted() }
+        val unknown = byOid.getValue("1.3.6.1.4.1.99999.91.1")
+
+        fun orderUnder(sigOid: String): List<ByteString> {
+            val child = index.cert(WalkerCerts.parse(der(leafName, root, sigOid = sigOid)))
+            return hashes(index.relatedList(listOf(child), child, true))
+        }
+
+        fun rest(vararg first: List<ByteString>): List<ByteString> {
+            val head = first.toList().flatten()
+            return head +
+                index.store
+                    .map { it.bytesHash }
+                    .filter { it !in head }
+                    .sorted()
+        }
+        assertEquals(rest((byOid.getValue(ed25519) + unknown).sorted()), orderUnder(ed25519))
+        assertEquals(rest((byOid.getValue(ed448) + unknown).sorted()), orderUnder(ed448))
+        // No key in the group is ML-DSA-65: only the unknown key is compatible.
+        assertEquals(rest(unknown), orderUnder(mlDsa65))
+        assertEquals(rest((byOid.getValue(WalkerCerts.RSA_KEY) + unknown).sorted()), orderUnder(SHA256_RSA))
+        assertEquals(rest(unknown), orderUnder(ECDSA_SHA256))
+        assertEquals(index.store.map { it.bytesHash }.sorted(), orderUnder("1.3.6.1.4.1.99999.91.2"))
+    }
+
+    @Test
+    fun `candidate index related is lazy and yields the same sequence on every iteration`() {
+        val index = index(*Array(3) { der(root, root) })
+        val leaf = index.cert(WalkerCerts.parse(der(leafName, root)))
+        val p = index.cert(WalkerCerts.parse(der(root, other)))
+        val s = index.related(listOf(leaf, p, p), leaf, setOf(leaf.bytesHash), belowLeaf = false)
+        assertEquals(s.toList().map { it.bytesHash }, s.toList().map { it.bytesHash })
+        assertEquals(4, s.count())
+        assertEquals(listOf(p.bytesHash), s.take(1).map { it.bytesHash }.toList())
+        val u = index.unrelated(listOf(leaf, p), leaf, emptySet())
+        assertEquals(u.toList(), u.toList())
     }
 
     @Test

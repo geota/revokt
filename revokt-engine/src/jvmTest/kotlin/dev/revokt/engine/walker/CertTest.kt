@@ -29,6 +29,8 @@ import javax.security.auth.x500.X500Principal
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -183,6 +185,60 @@ class CertTest {
         assertContentEquals(SymName("Leaf").der(), mutating.subjectRaw)
         assertContentEquals(SymName("Issuer").der(), mutating.issuerRaw)
         assertEquals("x", mutating.canonicalIssuer)
+    }
+
+    @Test
+    fun `cert treats a canonicaliser Error or StackOverflowError as no canonical form and caches it`() {
+        val leaf = SymName("Leaf")
+        val der = WalkerCerts.der(leaf, SymName("Issuer"))
+        val throwers =
+            listOf<Pair<String, () -> Nothing>>(
+                "NotImplementedError" to { TODO("custom delegate") },
+                "StackOverflowError" to { throw StackOverflowError("crafted name") },
+                "AssertionError" to { throw AssertionError("custom delegate") },
+            )
+        for ((name, thrower) in throwers) {
+            // Only the issuer throws, so the throw happens on the lazy read: it must give null, every time.
+            var calls = 0
+            val c =
+                WalkerCerts.cert(der) {
+                    calls++
+                    if (it.contentEquals(leaf.der())) "cn=leaf" else thrower()
+                }
+            repeat(3) { assertNull(c.canonicalIssuer, name) }
+            assertEquals(2, calls, "$name: the issuer's failure is cached")
+            assertEquals("cn=leaf", c.canonicalSubject, name)
+            val index = CandidateIndex(listOf(WalkerCerts.der(SymName("Issuer"), SymName("Issuer")))) { thrower() }
+            val child = index.cert(WalkerCerts.parse(der))
+            assertEquals(
+                1,
+                index.related(listOf(child), child, setOf(child.bytesHash), belowLeaf = false).count(),
+                name,
+            )
+        }
+    }
+
+    @Test
+    fun `cert rethrows a fatal VirtualMachineError from the canonicaliser`() {
+        val leaf = SymName("Leaf")
+        val der = WalkerCerts.der(leaf, SymName("Issuer"))
+        assertFailsWith<OutOfMemoryError> { WalkerCerts.cert(der) { throw OutOfMemoryError("probe") } }
+        val issuerOnly =
+            WalkerCerts.cert(
+                der,
+            ) { if (it.contentEquals(leaf.der())) "cn=leaf" else throw InternalError("probe") }
+        assertFailsWith<InternalError> { issuerOnly.canonicalIssuer }
+    }
+
+    @Test
+    fun `cert isFatal follows the section 5_5 catch rule`() {
+        assertTrue(isFatal(OutOfMemoryError()))
+        assertTrue(isFatal(InternalError()))
+        assertFalse(isFatal(StackOverflowError()))
+        assertFalse(isFatal(NotImplementedError()))
+        assertFalse(isFatal(AssertionError()))
+        assertFalse(isFatal(IllegalStateException()))
+        assertFalse(isFatal(LinkageError()))
     }
 
     @Test

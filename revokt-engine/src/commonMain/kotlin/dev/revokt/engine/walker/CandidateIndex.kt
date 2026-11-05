@@ -35,10 +35,9 @@ internal class CandidateIndex(
 
     private val anchorBytes: Set<ByteString>
 
-    // Each list sorted by bytesHash, the tie-break of related()'s store order.
-    private val bySubjectRaw: Map<ByteString, List<Cert>>
-    private val bySubjectCanonical: Map<String, List<Cert>>
-    private val bySki: Map<ByteString, List<Cert>>
+    private val bySubjectRaw: Map<ByteString, Group>
+    private val bySubjectCanonical: Map<String, Group>
+    private val bySki: Map<ByteString, Group>
 
     init {
         val unique = LinkedHashMap<ByteString, Cert>()
@@ -50,7 +49,7 @@ internal class CandidateIndex(
         store = unique.values.toList()
         anchorBytes = unique.keys
         val sorted = store.sortedBy { it.bytesHash }
-        bySubjectRaw = sorted.groupBy { it.subjectRaw.toByteString() }
+        bySubjectRaw = sorted.groupByNotNull { it.subjectRaw.toByteString() }
         bySubjectCanonical = sorted.groupByNotNull { it.canonicalSubject }
         bySki = sorted.groupByNotNull { it.ski?.toByteString() }
     }
@@ -63,7 +62,8 @@ internal class CandidateIndex(
      * position. At the leaf (`belowLeaf == false`) the presented ones come first, by index, then the store; below it
      * the store comes first (its certificates are terminals in M1), then the presented ones. Within the store: raw-name
      * matches, then canonical-name matches, then SKI matches; within each group the candidates whose key family is
-     * compatible with `child.tbsSigOid` first, each part by bytesHash.
+     * compatible with `child.tbsSigOid` first, each part by bytesHash. Lazy: a walker that stops early (a found path
+     * below the leaf, `MAX_RELATED_PER_LEVEL`) never pays for the rest of a large group.
      */
     fun related(
         presented: List<Cert>,
@@ -71,15 +71,9 @@ internal class CandidateIndex(
         seen: Set<ByteString>,
         belowLeaf: Boolean,
     ): Sequence<Cert> {
-        val out = Distinct(seen)
-        if (belowLeaf) {
-            out.addAll(store(child))
-            out.addAll(presented.filter { isRelated(it, child) })
-        } else {
-            out.addAll(presented.filter { isRelated(it, child) })
-            out.addAll(store(child))
-        }
-        return out.list.asSequence()
+        val fromPresented = presented.asSequence().filter { isRelated(it, child) }
+        val fromStore = storeRelated(child)
+        return distinct(if (belowLeaf) fromStore + fromPresented else fromPresented + fromStore, seen)
     }
 
     /** The presented certificates not related to [child], by index, minus [seen], exact-byte duplicates once. */
@@ -87,7 +81,7 @@ internal class CandidateIndex(
         presented: List<Cert>,
         child: Cert,
         seen: Set<ByteString>,
-    ): Sequence<Cert> = Distinct(seen).apply { addAll(presented.filterNot { isRelated(it, child) }) }.list.asSequence()
+    ): Sequence<Cert> = distinct(presented.asSequence().filterNot { isRelated(it, child) }, seen)
 
     fun isAnchorBytes(c: Cert): Boolean = c.bytesHash in anchorBytes
 
@@ -95,19 +89,17 @@ internal class CandidateIndex(
     @Suppress("UNUSED_PARAMETER", "FunctionOnlyReturningConstant") // §5.1's declared member, filled in M2
     fun isPreloadBytes(c: Cert): Boolean = false
 
-    private fun store(child: Cert): List<Cert> {
-        val family = KeyFamily.ofSignature(child.tbsSigOid)
-        val groups =
-            listOfNotNull(
-                bySubjectRaw[child.issuerRaw.toByteString()],
-                child.canonicalIssuer?.let { bySubjectCanonical[it] },
-                child.akiKeyId?.let { bySki[it.toByteString()] },
-            )
-        return groups.flatMap { group ->
-            val (compatible, incompatible) = group.partition { KeyFamily.compatible(it, child.tbsSigOid, family) }
-            compatible + incompatible
+    private fun storeRelated(child: Cert): Sequence<Cert> =
+        sequence {
+            val family = KeyFamily.ofSignature(child.tbsSigOid)
+            val groups =
+                listOf(
+                    bySubjectRaw[child.issuerRaw.toByteString()],
+                    child.canonicalIssuer?.let { bySubjectCanonical[it] },
+                    child.akiKeyId?.let { bySki[it.toByteString()] },
+                )
+            for (group in groups) if (group != null) yieldAll(group.ordered(child.tbsSigOid, family))
         }
-    }
 
     private fun isRelated(
         candidate: Cert,
@@ -117,18 +109,63 @@ internal class CandidateIndex(
             (candidate.canonicalSubject != null && candidate.canonicalSubject == child.canonicalIssuer) ||
             (candidate.ski != null && child.akiKeyId != null && candidate.ski.contentEquals(child.akiKeyId))
 
-    private fun <K> List<Cert>.groupByNotNull(key: (Cert) -> K?): Map<K, List<Cert>> =
-        mapNotNull { c -> key(c)?.let { it to c } }.groupBy({ it.first }, { it.second })
+    private fun <K> List<Cert>.groupByNotNull(key: (Cert) -> K?): Map<K, Group> =
+        mapNotNull { c -> key(c)?.let { it to c } }.groupBy({ it.first }, { it.second }).mapValues { Group(it.value) }
 
-    /** Candidates in order, skipping [seen] and any bytes already added. */
-    private class Distinct(
-        private val seen: Set<ByteString>,
+    /** [candidates] without [seen] and without bytes already yielded; a fresh filter per iteration. */
+    private fun distinct(
+        candidates: Sequence<Cert>,
+        seen: Set<ByteString>,
+    ): Sequence<Cert> =
+        Sequence {
+            val yielded = HashSet<ByteString>()
+            candidates.filter { it.bytesHash !in seen && yielded.add(it.bytesHash) }.iterator()
+        }
+
+    /**
+     * One store group (certificates sharing a raw subject, a canonical subject or an SKI), sorted by bytesHash, with its
+     * family-compatible-first order precomputed at build for every signature class it can meet: an unknown signature
+     * (the group as it is), RSA, EC, and for EdDSA, ML-DSA and SLH-DSA each key OID in the group plus "none matches".
+     */
+    private class Group(
+        private val all: List<Cert>,
     ) {
-        private val added = HashSet<ByteString>()
-        val list = ArrayList<Cert>()
+        private val rsa = order("", KeyFamily.RSA)
+        private val ec = order("", KeyFamily.EC)
 
-        fun addAll(candidates: List<Cert>) {
-            for (c in candidates) if (c.bytesHash !in seen && added.add(c.bytesHash)) list += c
+        // For a same-OID family only the key OID decides, and a signature OID no key here carries leaves the UNKNOWN keys.
+        private val noSameOid = order("", KeyFamily.EDDSA)
+        private val bySameOid: Map<String, List<Cert>> =
+            all
+                .filter {
+                    it.keyFamily != KeyFamily.UNKNOWN && it.keyFamily != KeyFamily.RSA &&
+                        it.keyFamily != KeyFamily.EC
+                }.map { it.keyOid }
+                .distinct()
+                .associateWith { order(it, KeyFamily.ofSignature(it)) }
+
+        fun ordered(
+            signatureOid: String,
+            family: KeyFamily,
+        ): List<Cert> =
+            when (family) {
+                KeyFamily.UNKNOWN -> all
+                KeyFamily.RSA -> rsa
+                KeyFamily.EC -> ec
+                else -> bySameOid[signatureOid] ?: noSameOid
+            }
+
+        private fun order(
+            signatureOid: String,
+            family: KeyFamily,
+        ): List<Cert> {
+            val (compatible, incompatible) = all.partition { KeyFamily.compatible(it, signatureOid, family) }
+            return compatible + incompatible
+        }
+
+        private companion object {
+            /** The families whose compatibility the key family alone decides (UNKNOWN: with everything). */
+            val BY_FAMILY = setOf(KeyFamily.UNKNOWN, KeyFamily.RSA, KeyFamily.EC)
         }
     }
 }
