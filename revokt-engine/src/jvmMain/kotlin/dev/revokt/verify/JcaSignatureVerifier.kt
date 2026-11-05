@@ -24,6 +24,7 @@ import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.ECParameterSpec
 import java.security.spec.ECPublicKeySpec
+import java.security.spec.PSSParameterSpec
 import java.security.spec.X509EncodedKeySpec
 import java.util.Collections
 
@@ -74,17 +75,32 @@ public class JcaSignatureVerifier
             if (algorithm.oid in unsupported || key.oid in unsupported || key.parametersOid in unsupported) {
                 return VerifyResult.UNSUPPORTED
             }
-            val scheme = SIGNATURES[algorithm.oid] ?: return VerifyResult.INVALID
+            val scheme = SIGNATURES[algorithm.oid]?.takeIf { it.accepts(key) } ?: return VerifyResult.INVALID
             val keyFactory = KEYS[key.oid] ?: return VerifyResult.INVALID
-            if (!scheme.accepts(key)) return VerifyResult.INVALID
             val pss =
                 if (scheme.pss) {
-                    pssSpec(VerifierInput.pss(algorithm.parameters)) ?: return VerifyResult.INVALID
+                    pssSpec(
+                        VerifierInput.pss(algorithm.parameters),
+                    ) ?: return VerifyResult.INVALID
                 } else {
-                    if (!algorithm.noParameters) return VerifyResult.INVALID
                     null
                 }
-            return try {
+            if (!scheme.pss && !algorithm.noParameters) return VerifyResult.INVALID
+            return run(scheme, algorithm.oid, keyFactory, spki, message, signature, pss)
+        }
+
+        /** The JCA calls, once [verify]'s checks passed: a `GeneralSecurityException` is `INVALID`. */
+        @Suppress("TooGenericExceptionCaught") // §3: a provider's RuntimeException is rethrown wrapped, never swallowed
+        private fun run(
+            scheme: JcaAlgorithms.Scheme,
+            oid: String,
+            keyFactory: String,
+            spki: ByteArray,
+            message: ByteArray,
+            signature: ByteArray,
+            pss: PSSParameterSpec?,
+        ): VerifyResult =
+            try {
                 val hash = spki.toByteString().sha256()
                 val publicKey = keys[hash] ?: keyFactory(keyFactory).generatePublic(X509EncodedKeySpec(spki))
                 val verifier = signature(scheme.jcaName)
@@ -100,9 +116,8 @@ public class JcaSignatureVerifier
             } catch (_: GeneralSecurityException) {
                 VerifyResult.INVALID
             } catch (e: RuntimeException) {
-                throw ProviderException("${scheme.jcaName} on ${algorithm.oid} threw ${e::class.java.name}", e)
+                throw ProviderException("${scheme.jcaName} on $oid threw ${e::class.java.name}", e)
             }
-        }
 
         private fun signature(name: String): Signature =
             if (provider == null) Signature.getInstance(name) else Signature.getInstance(name, provider)
