@@ -19,13 +19,26 @@ Status: **draft spec / project proposal, revision 51** · Target: JVM 17+ and An
   - **§3:** the composite delegation rule names Conscrypt beside BC as a provider owning composite OIDs. No rule
     changes. The JDK-provider fixtures, such as (j)'s JDK without ML-DSA, are unaffected, since the §9.2 matrix
     uses Conscrypt as oracle 2's `CertificateFactory`, not as a `Signature` provider.
-- **Added** (§3, §9; the maintainer's choice on #156): the `id-RSASSA-PSS` parameter rule. The message hash and the
-  MGF1 hash are each a SHA-2 hash, the family the list gives RSA PKCS#1, and `trailerField` is 1. Any other PSS
-  parameters are `INVALID`.
-  - **SHA-1 PSS,** including the all-default parameters (RFC 4055: SHA-1, MGF1 with SHA-1), is `INVALID`, whatever
-    the provider would answer, as SHA-1 PKCS#1 v1.5 is not in the list.
+- **Stated** (§3, as merged in #156 at `5d419cc`): how an OID reaches a JCA service.
+  - The probe and `verify` resolve it through one table to a `Signature` and a `KeyFactory` name: standard names
+    for RSA and ECDSA, `RSASSA-PSS`, the algorithm names for EdDSA, ML-DSA and SLH-DSA, and the bare OID for each
+    composite.
+  - **Under Conscrypt alone:** ML-DSA, SLH-DSA-SHA2-128s (by name) and the 15 registered composites are supported.
+    The other SLH-DSA sets, three composite OIDs and `id-RSASSA-PSS` are `UNSUPPORTED`.
+  - An OID outside the tables is `INVALID`.
+  - **The unverified composite encoding:** if it differs from draft -19, the probe says supported and a real
+    certificate is `INVALID`, not `UNSUPPORTED`.
+- **Added** (§3, §9; the maintainer's choice on #156): the `id-RSASSA-PSS` parameter rule.
+  - The parameters are present.
+  - The message hash and the MGF1 hash are each a SHA-2 hash, the family the list gives RSA PKCS#1.
+  - The mask is `id-mgf1`, and `trailerField` is 1.
+  - An omitted field takes RFC 4055's SHA-1 DEFAULT.
+  - Any other PSS parameters are `INVALID`, whatever the provider would answer. That covers SHA-1 PSS, the
+    all-default parameters, a SHA-2 hash under MGF1 with SHA-1, and any other mask.
+  - **The probe decides first:** with `id-RSASSA-PSS` in `unsupportedOids()` (a verifier over Conscrypt alone),
+    every PSS signature is `UNSUPPORTED`.
   - **Before:** §3 said only that the verifier "honours RSASSA-PSS parameters".
-  - **§9's verifier tests** name the SHA-1 case.
+  - **§9's verifier tests** name the SHA-1, MGF1-SHA-1 and non-MGF1 cases, and the `UNSUPPORTED` precedence.
 
 ### Changes in revision 50 (the walker review's timing and the PKIX fallback finding, 2026-11-05)
 - **Aligned** (§14, #117): §14 gave the walker and the `Rule` model a dedicated adversarial review "before 0.2's
@@ -1416,16 +1429,54 @@ produced `VERIFIED` (presented junk keys are server-chosen; entry count exposed)
 server-chosen exception: an OID in `unsupportedOids()` → `UNSUPPORTED`; any
 `GeneralSecurityException` on a supported OID → `INVALID`; any `RuntimeException` from the provider
 → `INVALID` plus `Finding.VerifierError`. Signature OIDs: RSA PKCS#1 SHA-2, `id-RSASSA-PSS`, ECDSA
-SHA-2, Ed25519/448, ML-DSA-44/65/87 (RFC 9881), SLH-DSA, composite as drafts settle. **`id-RSASSA-PSS`
-parameters** (revision 51): the message hash and the MGF1 hash are each a SHA-2 hash, the family RSA PKCS#1 takes
-above, and `trailerField` is 1. A PSS signature with other parameters is `INVALID`, whatever the provider would
-answer. That includes a SHA-1 hash and the all-default parameters (RFC 4055: SHA-1, MGF1 with SHA-1), as SHA-1
-PKCS#1 v1.5 is not in the list. Key OIDs:
+SHA-2, Ed25519/448, ML-DSA-44/65/87 (RFC 9881), SLH-DSA, composite as drafts settle. An OID outside these tables
+is never in `unsupportedOids()` and is `INVALID`, as `sha1WithRSAEncryption` is. Key OIDs:
 `rsaEncryption`, `id-RSASSA-PSS`, `id-ecPublicKey` with named curves, Ed25519/448, ML-DSA, SLH-DSA.
 Key families (ordering only, used by `CandidateIndex.related()`, §5.1): RSA = {`rsaEncryption`, `id-RSASSA-PSS`} ↔ {RSA PKCS#1, PSS}; EC ↔
 ECDSA; EdDSA, ML-DSA, SLH-DSA, composite: key OID equals signature OID; unknown compatible with
 everything. Composite signatures are delegated to a provider owning the composite OID (BC; Conscrypt 2.7.0 and
 2.8.0 register 15 of them, Appendix A) or `UNSUPPORTED`.
+
+**`id-RSASSA-PSS` parameters** (revision 51). The `RSASSA-PSS-params` must be present. The message hash and the
+MGF1 hash must each be a SHA-2 hash, the family RSA PKCS#1 takes above. The mask generation function must be
+`id-mgf1`, and `trailerField` must be 1. A field left out takes its RFC 4055 DEFAULT, so an omitted hash or
+mask-generation field means SHA-1.
+
+A PSS signature with other parameters is `INVALID`, whatever the provider would answer. That covers:
+- a SHA-1 message or MGF1 hash, including the all-default parameters (SHA-1, MGF1 with SHA-1);
+- a SHA-2 message hash under MGF1 with SHA-1, which the JDK verifies;
+- any mask generation function other than `id-mgf1`;
+- absent parameters.
+
+The probe decides first. When `id-RSASSA-PSS` is in `unsupportedOids()`, every PSS signature is `UNSUPPORTED`,
+whatever its parameters, a SHA-1 one included. A verifier over the Conscrypt provider alone is such a case
+(Appendix A).
+
+**From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
+signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
+OID unsupported when the provider has no service under that name. The names are:
+- RSA PKCS#1 and ECDSA: their standard names, such as `SHA256withRSA` and `SHA256withECDSA`.
+- `id-RSASSA-PSS`: `RSASSA-PSS`.
+- Ed25519/448, ML-DSA and SLH-DSA: their names, such as `ML-DSA-44` and `SLH-DSA-SHA2-128s`.
+- Each composite: its bare OID string, so only a provider registering that OID verifies one.
+
+Conscrypt 2.7.0 and 2.8.0 (Appendix A) register ML-DSA under its name, its bare OID and its `OID.`-prefixed OID.
+They register the composites under a name and a bare OID (an `OID.` lookup throws), and SLH-DSA-SHA2-128s under its
+name only. So under Conscrypt, the probe reports these as supported:
+- ML-DSA-44/65/87;
+- SLH-DSA-SHA2-128s, found by name, the lookup the table makes;
+- the 15 registered composites.
+
+It reports these as `UNSUPPORTED`:
+- the other 11 SLH-DSA sets;
+- the composites `.47`, `.50` and `.51`;
+- `id-RSASSA-PSS`, which Conscrypt registers only as `SHA256withRSA/PSS` and similar names, with no `RSASSA-PSS`
+  service.
+
+**Composite encoding, unverified:** the probe checks only that a service exists. Conscrypt's composite key and
+signature encodings have not been checked against draft -19. If they differ, the probe reports the OID supported,
+and a real draft-19 certificate is `INVALID` (its key does not decode or its signature does not verify), not
+`UNSUPPORTED`.
 
 **Purity gate.** `linuxX64()` only when `revokt.purityGate` is present; never published; BCV
 `klib { enabled = false }`. Generation publication is a `@Volatile` reference whose only writers are
@@ -2998,8 +3049,10 @@ tests; **live checks** are informational.
   `resetState()` on a seeded `DEFAULT` instance → the next handshake is served by the seed, never
   `NO_DATA`; two listeners registered before the first handshake each receive every event in sequence order; an enqueue racing a drain's
   flag clear is still delivered without a further handshake.
-- **Verifier**: OID harvest; key-OID gaps; PSS parameters (a SHA-1 hash, the all-default parameters included, →
-  `INVALID`); raw-to-DER edge cases; an off-curve point
+- **Verifier**: OID harvest; key-OID gaps; PSS parameters (each `INVALID`: a SHA-1 message hash, the all-default
+  parameters included; a SHA-256 message hash with MGF1 over SHA-1, which the JDK verifies; a mask generation
+  function other than `id-mgf1`; each `UNSUPPORTED` instead under a provider without `id-RSASSA-PSS`); raw-to-DER
+  edge cases; an off-curve point
   on a supported OID → `INVALID`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
 - **Parser corpus** and the §9.2 differential parser oracle; **Android instrumented** (API 26, 31,
   34, 36) including the PKIX fallback (the jvmMain `PkixPathBuilderFallback` through ojluni, JVM-tested in 0.2), the
@@ -4055,6 +4108,13 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
       carries the OID. **Unverified:** whether Conscrypt's composite key and signature encodings match draft -19.
       The round trip shows only that Conscrypt agrees with itself; no draft test vector or other implementation
       was checked.
+    - **PSS:** there is no `RSASSA-PSS` `Signature` or `KeyFactory` and no `id-RSASSA-PSS` alias. PSS is registered
+      only as `SHA1withRSA/PSS` to `SHA512withRSA/PSS`.
+    - **`JcaSignatureVerifier` over Conscrypt** (at `5d419cc`): a scratch `jvmTest` on 21.0.13 ran under both
+      releases. `unsupportedOids()` is what §3's "From OID to JCA service" lists. ML-DSA-44/65/87,
+      SLH-DSA-SHA2-128s and the 15 composites each give `VERIFIED` for a Conscrypt-made key and signature, and
+      `INVALID` with one bit flipped. A SHA-1 PSS signature is `UNSUPPORTED` over Conscrypt and `INVALID` over the
+      JDK's providers, which verify it themselves.
     - **Not probed:** the platform Conscrypt on Android, whose version is the device's.
 - Kotlin: `kotlin.time.Clock` stable since 2.3; `kotlin.concurrent.atomics` still experimental;
   kotlinx-serialization-json cannot reject duplicate keys.
