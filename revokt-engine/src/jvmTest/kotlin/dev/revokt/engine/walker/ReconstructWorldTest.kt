@@ -133,7 +133,7 @@ class ReconstructWorldTest {
                 assertEquals(listOf(3, 2), walk.paths.map { it.certs.size }, "seed $seed: $walk")
             }
         }
-        assertTrue(crossSigned in 1..20, "root-issued leaves with a presented cross-certificate: $crossSigned")
+        assertEquals(6, crossSigned, "root-issued leaves with a presented cross-certificate")
     }
 
     @Test

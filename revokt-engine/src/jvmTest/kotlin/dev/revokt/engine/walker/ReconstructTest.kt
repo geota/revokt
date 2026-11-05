@@ -287,12 +287,22 @@ class ReconstructTest {
     @Test
     fun `walker a verifier throw is INVALID plus one VerifierError per verified pair`() {
         with(Honest()) {
-            // F shares I's key: the leaf's pair with that key is verified once, the second candidate is a memo hit.
+            // F shares I's key: the leaf's pair with that key is verified once, the second candidate is a memo hit. The
+            // leaf's own signature OID differs from its candidates', so the finding names the child's.
+            val own = "1.3.6.1.4.1.99999.91.7"
+            val ownLeaf =
+                w.cert(
+                    "L",
+                    w.name("leaf.example"),
+                    intermediate.subject,
+                    signer = intermediate.key,
+                    sigOid = own,
+                )
             val sameKey = w.cert("F", intermediate.subject, w.name("Attacker"), intermediate.key)
             val f =
                 fixture(
                     "throw",
-                    presented = listOf(leaf, sameKey, intermediate),
+                    presented = listOf(ownLeaf, sameKey, intermediate),
                     walk = notFound(NoIssuerReason.ALL_CANDIDATES_INVALID),
                 )
             for (error in listOf<() -> Throwable>(
@@ -309,7 +319,7 @@ class ReconstructTest {
                 assertEquals(1, walk.stats.verifications)
                 assertEquals(2, walk.stats.candidatesExplored)
                 assertEquals(
-                    listOf(Finding.VerifierError.of(SymOids.SIGNATURE, error().message!!)),
+                    listOf(Finding.VerifierError.of(own, error().message!!)),
                     walk.findings,
                 )
             }
@@ -519,6 +529,46 @@ class ReconstructTest {
                 ),
             )
         }
+    }
+
+    @Test
+    fun `walker below the leaf the unrelated loop stops once a path exists`() {
+        val w = FixtureWorld()
+        val absent = w.name("Absent issuer")
+        val u1 = w.root("U1", "Unrelated 1")
+        val u2 = w.root("U2", "Unrelated 2")
+        // I's issuer is neither presented nor in the snapshot; U1 and U2 are anchors unrelated to I that both verify it.
+        val i = w.cert("I", w.name("Intermediate"), absent).also { w.verifies(it, u1.key) }
+        w.verifies(i, u2.key)
+        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key)
+        // L/I, then I/U1 through I's unrelated loop; U2 is never explored, at I or (a related path exists) at the leaf.
+        check(
+            w.fixture(
+                "unrelated",
+                "",
+                listOf(leaf, i, u1, u2),
+                listOf(u1, u2),
+                found(listOf(leaf, i, u1)).copy(verifications = 2, candidatesExplored = 2, unrelatedExploredAtLeaf = 0),
+            ),
+        )
+    }
+
+    @Test
+    fun `walker an unrelated candidate at the leaf that trips MAX_EXPLORED is counted as explored at the leaf`() {
+        // 1,024 unrelated junk at the leaf use the budget; I, the 1,025th unrelated candidate, trips it at the leaf.
+        val (h, presented) = unrelatedAtLeaf(RevoktLimits.MAX_EXPLORED)
+        check(
+            h.fixture(
+                "budget",
+                "unrelated trip",
+                presented,
+                budget(WalkEnd.EXPLORATION_BUDGET, 1).copy(
+                    verifications = 1,
+                    candidatesExplored = RevoktLimits.MAX_EXPLORED,
+                    unrelatedExploredAtLeaf = RevoktLimits.MAX_EXPLORED + 1,
+                ),
+            ),
+        )
     }
 
     @Test

@@ -350,7 +350,10 @@ public sealed class Finding {
         }
 
         internal companion object {
-            /** A verifier throw as the walk records it (spec §5.1 decision list). */
+            /**
+             * A verifier throw as the walk records it (spec §5.1 decision list): [oid] is the child's own TBS signature
+             * OID, `""` when that `AlgorithmIdentifier` does not decode (`Cert.tbsSigOid`).
+             */
             fun of(
                 oid: String,
                 message: String,

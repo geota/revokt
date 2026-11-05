@@ -279,8 +279,10 @@ internal object WalkerFixturesS1ToAj {
                 "",
                 listOf(leaf) + junk + h.intermediate,
                 listOf(h.root),
-                budget(WalkEnd.EXPLORATION_BUDGET, endDepth = null).copy(
+                budget(WalkEnd.EXPLORATION_BUDGET, endDepth = 7).copy(
                     candidatesExplored = RevoktLimits.MAX_EXPLORED,
+                    // J0's subtree takes 652 explorations; J1's trips the budget at a path through all six junk.
+                    relatedExploredAtLeaf = 2,
                     maxVerifications = 42,
                 ),
                 customCanonicaliser = true,
@@ -348,6 +350,8 @@ internal object WalkerFixturesS1ToAj {
                         budget(WalkEnd.VERIFICATION_BUDGET, 2).copy(
                             verifications = RevoktLimits.MAX_VERIFICATIONS,
                             candidatesExplored = RevoktLimits.MAX_VERIFICATIONS + 1,
+                            // D1 … D5 complete; D6's subtree trips the guard.
+                            relatedExploredAtLeaf = 6,
                         ),
                 ),
             )
