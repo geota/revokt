@@ -27,6 +27,7 @@
           - "**/walker/**"
           - "**/RevoktTrustManager*"
           - "**/parser/**"
+          - "**/parse/**"
           - "**/fetch/**"
           - "**/signature/**"
           - "data/seed/**"
