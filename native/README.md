@@ -6,7 +6,9 @@ a published module** (CONTRIBUTING §3 "Oracles are tools, never shipped"); `ver
 - `revokt-oracle`: Rust cdylib (Panama) and CLI over `clubcard-crlite`, `upki`, `rust-query-crlite`, `x509-parser`,
   the §9.2 TLV locator and `canonical_json`, with a `catch_unwind` shim. Today: the CLI subcommands `inspect`,
   `transcode`, `build-synthetic`, `gen-queries` and `goldens` over `clubcard-crlite 0.6.2`, which record the clubcard
-  corpus goldens (docs/dev/corpus.md "Clubcard corpus"); the cdylib is still the ABI-version skeleton.
+  corpus goldens (docs/dev/corpus.md "Clubcard corpus"); `canonical-json`, `signed-payload` and `gen-numbers` over
+  `canonical_json 0.7.0`, which `revokt-oracle/record-canonical-json.sh` records the canonical JSON goldens with
+  (spec §7.1, §9); the cdylib is still the ABI-version skeleton.
 - `revokt-upki-shim`: Rust cdylib statically linking the `upki` crate; exposes `revokt_upki_config_new/free` and
   `revokt_upki_check` (spec §3.2).
 - `producer-oracle`: a Go CLI over Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`), run

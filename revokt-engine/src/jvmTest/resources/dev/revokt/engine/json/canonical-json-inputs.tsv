@@ -1,0 +1,203 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+# The curated inputs of the canonical JSON differential (spec §7.1, §9; #92): name <TAB> text|base64 <TAB> the JSON
+# text, as UTF-8 or base64. native/revokt-oracle/record-canonical-json.sh adds the generated numbers and records
+# canonical_json 0.7.0's reply to each in canonical-json.tsv. The duplicate-* inputs are the declared difference.
+crate-null	text	null
+crate-true	text	true
+crate-false	text	false
+crate-zero	text	0
+crate-int	text	123
+crate-neg-int	text	-123
+crate-float-23.1	text	23.1
+crate-int-23	text	23
+crate-float-1.0	text	1.0
+crate-float-0.0	text	0.0
+crate-float-23.0	text	23.0
+crate-float--23.0	text	-23.0
+crate-int-2300	text	2300
+crate-float-0.00099	text	0.00099
+crate-float-0.000011	text	0.000011
+crate-float-0.0000011	text	0.0000011
+crate-float-0.000001	text	0.000001
+crate-float-5.6	text	5.6
+crate-float-0.00000099	text	0.00000099
+crate-float-0.0000001	text	0.0000001
+crate-float-9.30258908e-7	text	0.000000930258908
+crate-float-6.8272e-13	text	0.00000000000068272
+crate-float-1e21	text	1e21
+crate-float-1e20	text	1e20
+crate-float-1e15+0.1	text	1000000000000000.1
+crate-float-1.1e16	text	11000000000000000.0
+crate-string-empty	text	""
+crate-string-single-quote	text	" Preserve single quotes'in string"
+crate-string-quotes	text	" Escapes quotes \" "
+crate-string-backslash	text	"This\\and this"
+crate-string-heart	text	"I ❤ testing"
+crate-string-newline	text	"This is a sentence.\n"
+crate-string-tab	text	"This is a \t tab."
+crate-string-cr	text	"This is a \r carriage return char."
+crate-string-slash	text	"image/jpeg"
+crate-string-slashes	text	"image//jpeg"
+crate-string-escaped-slashes	text	"image\/\/jpeg"
+crate-string-number-text	text	"frequency at 10.0e+04"
+crate-string-brace-empty	text	"I \\u{} testing"
+crate-string-brace-open	text	"I \\u{1234 testing"
+crate-string-brace-double	text	"I \\u{{12345}} testing"
+crate-string-g-clef	text	"𝄞"
+crate-string-math-bold	text	"𝗠𝗼𝘇"
+crate-string-supplementary-edges	text	"𐀀 􏿿"
+crate-object-empty-member	text	{"a": {}, "b": "b"}
+crate-object-order	text	{"a": "a", "id": "1", "b": "b"}
+crate-object-nested	text	{"a": {"b": "b", "a": "a", "c": {"b": "b", "a": "a", "c": ["b", "a", "c"], "d": {"b": "b", "a": "a"}, "id": "1", "e": 1, "f": [2, 3, 1], "g": {"2": 2, "3": 3, "1": {"b": "b", "a": "a", "c": "c"}}}}, "id": "1"}
+crate-object-arrays	text	{"b": ["two", "three"], "a": ["zero", "one"]}
+crate-object-two	text	{"b": { "d": "d", "c": "c" }, "a": { "b": "b", "a": "a" }}
+crate-object-unicode-key	text	{"é": "check"}
+crate-object-mixed	text	{"def": "bar", "abc": 0.000000930258908, "ghi": 1000000000000000000000.0, "rust": "❤", "zoo": ["zorilla", "anteater"]}
+crate-array-empty	text	[]
+crate-array-order	text	["one", "two", "three"]
+crate-array-check	text	[{ "key": "✓" }]
+crate-array-e-ogonek	text	[{ "key": "ę" }]
+crate-array-e-acute	text	[{ "key": "é" }]
+crate-array-records	text	[{ "foo": "bar", "last_modified": "12345", "id": "1" }, { "bar": "baz", "last_modified": "45678", "id": "2" }]
+crate-object-zam	text	{"z": 1, "a": 2, "m": 3}
+string-all-ascii-escaped	text	"\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008\u0009\u000a\u000b\u000c\u000d\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f\u0020\u0021\u0022\u0023\u0024\u0025\u0026\u0027\u0028\u0029\u002a\u002b\u002c\u002d\u002e\u002f\u0030\u0031\u0032\u0033\u0034\u0035\u0036\u0037\u0038\u0039\u003a\u003b\u003c\u003d\u003e\u003f\u0040\u0041\u0042\u0043\u0044\u0045\u0046\u0047\u0048\u0049\u004a\u004b\u004c\u004d\u004e\u004f\u0050\u0051\u0052\u0053\u0054\u0055\u0056\u0057\u0058\u0059\u005a\u005b\u005c\u005d\u005e\u005f\u0060\u0061\u0062\u0063\u0064\u0065\u0066\u0067\u0068\u0069\u006a\u006b\u006c\u006d\u006e\u006f\u0070\u0071\u0072\u0073\u0074\u0075\u0076\u0077\u0078\u0079\u007a\u007b\u007c\u007d\u007e\u007f"
+string-printable-ascii	text	" !#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+string-short-escapes	text	"\"\\\/\b\f\n\r\t"
+string-hex-case	text	"\u00E9\u00e9\uABCD\uabcd\uD834\uDD1E\ud834\udd1e"
+string-del-raw	text	"ab"
+string-latin1	text	" ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"
+string-bmp-edges	text	"߿ࠀ퟿�￿"
+string-bmp-edges-escaped	text	"\u0080\u07ff\u0800\ud7ff\ue000\ufffd\uffff"
+string-nul	text	"\u0000"
+string-emoji	text	"😀 👍🏽 🇩🇪"
+string-combining	text	"é ́"
+string-bidi	text	"‮​﻿"
+string-long	text	"abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc"
+keys-code-point-order	text	{"😀": 1, "￿": 2, "": 3, "퟿": 4, "z": 5, "": 6, "a": 7, "aa": 8, "A": 9, "é": 10}
+keys-escaped	text	{"\u0062": 1, "\u0061": 2, "\ud83d\ude00": 3, "\uffff": 4}
+keys-prefix	text	{"ab": 1, "a": 2, "abc": 3, "b": 4}
+whitespace	base64	IAkKDVsgMSAsIHsgImEiIDogWyBdIH0gLCBbIF0gXQ0KCSA=
+nested-127	text	[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+nested-mixed-127	text	{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}
+array-scalars	text	[null, true, false, 0, -1, "", [], {}]
+number-u64-max	text	18446744073709551615
+number-u64-max+1	text	18446744073709551616
+number-i64-min	text	-9223372036854775808
+number-i64-min-1	text	-9223372036854775809
+number-neg-u64-max	text	-18446744073709551615
+number-i64-max	text	9223372036854775807
+number-long-integer	text	123456789012345678901234567890
+number-long-integer-300	text	999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999
+number-neg-zero	text	-0
+number-neg-zero-float	text	-0.0
+number-zero-exp	text	0e5
+number-zero-huge-exp	text	0e99999999999999999999
+number-underflow	text	1e-400
+number-neg-underflow	text	-1e-400
+number-tiny-huge-exp	text	1e-99999999999999999999
+number-double-max	text	1.7976931348623157e308
+number-double-max-up	text	1.7976931348623158e308
+number-min-normal	text	2.2250738585072014e-308
+number-max-subnormal	text	2.2250738585072009e-308
+number-serde-ulp-case	text	2.2250738585072011e-308
+number-min-subnormal	text	4.9e-324
+number-min-subnormal-long	text	4.9406564584124654e-324
+number-half-min-subnormal	text	2.4703282292062327e-324
+number-above-half-min-subnormal	text	2.4703282292062328e-324
+number-1e23	text	1e23
+number-2^53+1	text	9007199254740993
+number-2^53+1-float	text	9007199254740993.0
+number-halfway-long	text	9007199254740993.00000000000000000000000000000000000000000000000000000000000000000000000000000001
+number-tenth	text	0.1
+number-point-three	text	0.30000000000000004
+number-e-capital	text	1E2
+number-e-plus	text	1e+2
+number-e-minus	text	1e-2
+number-fraction-exp	text	12.5e-3
+number-many-zeros	text	0.000000000000000000000000000000000000000000000000001
+number-100e-2	text	100e-2
+number-8.98846567431158e307	text	8.98846567431158e307
+number-pi	text	3.141592653589793
+number-e	text	2.718281828459045
+number-exp-leading-zeros	text	1e0005
+number-neg-exp-leading-zeros	text	1e-0005
+number-big-mantissa-small-exp	text	123456789012345678901234567890e-29
+number-shortest-tie-up	text	1497898211722073.25
+number-shortest-tie-2^50	text	1125899906842624.25
+number-shortest-tie-75	text	1125899906842624.75
+number-shortest-tie-below-2^51	text	2251799813685247.75
+number-shortest-tie-negative	text	-1497898211722073.75
+number-array	text	[1.0, -2, 3E2, 0.5, -0.0, 1e-7, 123456789.123456789]
+number-long-mantissa	text	0.1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+payload-crlite-shape	text	{"data": [{"attachment": {"filename": "20261017-1-compat.filter", "hash": "84754db048341a3df406a0b65bdd3528e2fa2f89ed2ccdaa078b69da3c04f316", "location": "security-state-staging/cert-revocations/20261017154830--5cc04cc0-2229-4273-bdd3-be095a8f0468--88b81362-120b-46af-8bdc-3aa52cea3441.filter", "mimetype": "application/octet-stream", "size": 1574015}, "channel": "compat", "effectiveTimestamp": 1792241654000, "filter_expression": "", "id": "5cc04cc0-2229-4273-bdd3-be095a8f0468", "incremental": false, "last_modified": 1792241710000, "schema": 1792241700000}], "last_modified": "1792241710000"}
+reject-empty	text	
+reject-whitespace-only	text	  
+reject-trailing-comma-array	text	[1,]
+reject-trailing-comma-object	text	{"a":1,}
+reject-missing-comma	text	[1 2]
+reject-missing-colon	text	{"a" 1}
+reject-number-key	text	{1:2}
+reject-single-quotes	text	{'a':1}
+reject-trailing-bytes	text	{} x
+reject-two-values	text	1 2
+reject-trailing-nul	base64	bnVsbAA=
+reject-bare-word	text	True
+reject-truncated-literal	text	tru
+reject-unclosed-array	text	[1,
+reject-unclosed-object	text	{"a":
+reject-unclosed-string	text	"abc
+reject-leading-zero	text	01
+reject-neg-leading-zero	text	-01
+reject-dot-only	text	.5
+reject-plus	text	+1
+reject-trailing-dot	text	1.
+reject-dot-exp	text	1.e5
+reject-bare-exp	text	1e
+reject-exp-sign-only	text	1e+
+reject-minus-only	text	-
+reject-nan	text	NaN
+reject-infinity	text	Infinity
+reject-neg-infinity	text	-Infinity
+reject-hex	text	0x10
+reject-double-dot	text	1.5.3
+reject-overflow	text	1e400
+reject-neg-overflow	text	-1.8e308
+reject-overflow-huge-exp	text	1e99999999999999999999
+reject-lone-high	text	"\uD800"
+reject-lone-low	text	"\uDC00"
+reject-reversed-pair	text	"\udfff\ud800"
+reject-high-then-bmp	text	"\uD800\u0041"
+reject-high-high	text	"\uD800\uD800"
+reject-high-then-char	text	"\uD800x"
+reject-high-then-escape	text	"\uD800\n"
+reject-bad-escape	text	"\x"
+reject-bad-hex	text	"\u12G4"
+reject-upper-u	text	"\U0041"
+reject-escaped-single-quote	text	"\'"
+reject-short-hex	text	"\u12"
+reject-form-feed-ws	base64	DDE=
+reject-nested-128	text	[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+reject-nested-mixed-128	text	{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}]}
+reject-control-raw	base64	IgEi
+reject-tab-raw	base64	ImEJYiI=
+reject-newline-raw	base64	ImEKYiI=
+reject-bom	base64	77u/MQ==
+reject-utf8-overlong-2	base64	IsCAIg==
+reject-utf8-overlong-2b	base64	IsG/Ig==
+reject-utf8-overlong-3	base64	IuCfvyI=
+reject-utf8-surrogate-utf8	base64	Iu2ggCI=
+reject-utf8-surrogate-utf8-low	base64	Iu2/vyI=
+reject-utf8-overlong-4	base64	IvCPv78i
+reject-utf8-above-10ffff	base64	IvSQgIAi
+reject-utf8-f5	base64	IvWAgIAi
+reject-utf8-ff	base64	Iv8i
+reject-utf8-continuation	base64	IoAi
+reject-utf8-bad-continuation	base64	IsMoIg==
+reject-utf8-truncated	base64	IuKCIg==
+reject-utf8-unterminated	base64	IuKC
+accept-utf8-edges	base64	IsKA37/goIDtn7/ugIDvv7/wkICA9I+/vyI=
+duplicate-same	text	{"a":1,"a":2}
+duplicate-escaped	text	{"a":1,"\u0061":2}
+duplicate-nested	text	[{"x":{"":1,"":2}}]
+duplicate-surrogate	text	{"\ud83d\ude00":1,"😀":2}

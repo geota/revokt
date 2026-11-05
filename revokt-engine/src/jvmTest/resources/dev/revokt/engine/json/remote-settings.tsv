@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+# canonical_json 0.7.0 on Remote Settings changesets (native/revokt-oracle/record-canonical-json.sh, never edit):
+# file <TAB> its SHA-256 <TAB> document | payload <TAB> SHA-256 of the canonical JSON <TAB> its length. A file
+# named issuer/... is in the large corpus; the payload is the content-signature payload without its prefix.
+crlite-changeset.json	a7152c5611ee46e7e8fffe94576d1db3117b003a0651f4287fe451cca5722d8c	document	473ed323284520e8446848b30855b9bf29aca7a1d5311b93986eb57245cfb7ac	2300
+crlite-changeset.json	a7152c5611ee46e7e8fffe94576d1db3117b003a0651f4287fe451cca5722d8c	payload	f96129221e593b41a1583715fdaa7f3fd9e608dc4591901735d3676c36eae0d1	1810
+issuer/mozilla-intermediates/changeset.json	42252682e49de1df22e9d4b2861f47e230490754db11108816e23bcb05e5e479	document	337f2a367bd07b853ff19590eff41ed709311b672baf69a23c67d02d6b586234	1210112
+issuer/mozilla-intermediates/changeset.json	42252682e49de1df22e9d4b2861f47e230490754db11108816e23bcb05e5e479	payload	1c61b5032833a1b5737d08f6eced7270f0db54e909c631cf5b110ff3baea6b94	1207616
