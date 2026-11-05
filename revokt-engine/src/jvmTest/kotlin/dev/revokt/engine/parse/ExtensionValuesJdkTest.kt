@@ -161,24 +161,26 @@ class ExtensionValuesJdkTest {
     @Test
     fun `the readers agree with the JDK over the committed corpus`() {
         val labels = listOf("basicConstraints", "keyUsage", "extKeyUsage", "subjectAltName")
-        var compared = 0
         val differ = ArrayList<String>()
         val onlyRevokt = ArrayList<String>()
         val onlyJdk = ArrayList<String>()
         val agreed = labels.associateWithTo(LinkedHashMap()) { 0 }
-        for (input in ProducerCorpus.inputs) {
-            val x = (Oracle1.run(input.der) as? PlatformOracle.Outcome.Accept)?.certificate ?: continue
-            val c = (CertificateParser.parse(input.der) as? CertificateParse.Parsed)?.certificate ?: continue
-            compared++
-            val ours = revokt(c)
-            val theirs = jdk(x)
+        val both =
+            ProducerCorpus.inputs.mapNotNull { input ->
+                val x = (Oracle1.run(input.der) as? PlatformOracle.Outcome.Accept)?.certificate
+                val c = (CertificateParser.parse(input.der) as? CertificateParse.Parsed)?.certificate
+                if (x == null || c == null) null else Triple(input.name, revokt(c), jdk(x))
+            }
+        val compared = both.size
+        for ((name, ours, theirs) in both) {
             for (i in labels.indices) {
-                val absent = if (i == 0) -1 else null
-                when {
-                    ours[i] == theirs[i] -> if (ours[i] != absent) agreed.merge(labels[i], 1, Int::plus)
-                    ours[i] == absent -> onlyJdk += "${input.name} ${labels[i]}"
-                    theirs[i] == absent -> onlyRevokt += "${input.name} ${labels[i]}"
-                    else -> differ += "${input.name} ${labels[i]}: JDK ${theirs[i]}, revokt ${ours[i]}"
+                val label = "$name ${labels[i]}"
+                when (compare(ours[i], theirs[i], if (i == 0) -1 else null)) {
+                    Agreement.SAME_VALUE -> agreed.merge(labels[i], 1, Int::plus)
+                    Agreement.SAME_ABSENT -> Unit
+                    Agreement.JDK_ONLY -> onlyJdk += label
+                    Agreement.REVOKT_ONLY -> onlyRevokt += label
+                    Agreement.DIFFER -> differ += "$label: JDK ${theirs[i]}, revokt ${ours[i]}"
                 }
             }
         }
@@ -189,4 +191,19 @@ class ExtensionValuesJdkTest {
         assertTrue(agreed.values.all { it > 10 }, "too few values compared: $agreed")
         assertEquals(emptyList(), differ)
     }
+
+    private enum class Agreement { SAME_VALUE, SAME_ABSENT, JDK_ONLY, REVOKT_ONLY, DIFFER }
+
+    /** How revokt's [ours] and the JDK's [theirs] compare, [absent] being what a getter reports for no value. */
+    private fun compare(
+        ours: Any?,
+        theirs: Any?,
+        absent: Any?,
+    ): Agreement =
+        when {
+            ours == theirs -> if (ours == absent) Agreement.SAME_ABSENT else Agreement.SAME_VALUE
+            ours == absent -> Agreement.JDK_ONLY
+            theirs == absent -> Agreement.REVOKT_ONLY
+            else -> Agreement.DIFFER
+        }
 }
