@@ -1,10 +1,31 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 50** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
+Status: **draft spec / project proposal, revision 51** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 51 (Conscrypt's post-quantum algorithms and the PSS hashes, 2026-11-05)
+- **Corrected** (Appendix A, §3; found in the review of #156): Appendix A said Conscrypt does not ship ML-DSA.
+  Conscrypt uber 2.7.0 and 2.8.0, the §9.2 matrix's two releases, both register ML-DSA-44, -65 and -87,
+  SLH-DSA-SHA2-128s and 15 composite ML-DSA OIDs (`1.3.6.1.5.5.7.6.37`–`.46`, `.48`, `.49`, `.52`–`.54`).
+  - **How it was checked:** a single-file Java program over the Gradle-cached jars, on JDK 17.0.21 and 21.0.13,
+    listed the provider's services and `Alg.Alias` entries and looked each algorithm up by name and by OID. Each
+    ML-DSA set verifies a signature the JDK made. Appendix A records the details.
+  - **By name or by OID:** ML-DSA and the composites are registered by name and by OID alias, and
+    SLH-DSA-SHA2-128s by name only, with no OID alias.
+  - **Unverified:** whether Conscrypt's composite encoding matches draft -19, and the platform Conscrypt on Android.
+  - **§3:** the composite delegation rule names Conscrypt beside BC as a provider owning composite OIDs. No rule
+    changes. The JDK-provider fixtures, such as (j)'s JDK without ML-DSA, are unaffected, since the §9.2 matrix
+    uses Conscrypt as oracle 2's `CertificateFactory`, not as a `Signature` provider.
+- **Added** (§3, §9; the maintainer's choice on #156): the `id-RSASSA-PSS` parameter rule. The message hash and the
+  MGF1 hash are each a SHA-2 hash, the family the list gives RSA PKCS#1, and `trailerField` is 1. Any other PSS
+  parameters are `INVALID`.
+  - **SHA-1 PSS,** including the all-default parameters (RFC 4055: SHA-1, MGF1 with SHA-1), is `INVALID`, whatever
+    the provider would answer, as SHA-1 PKCS#1 v1.5 is not in the list.
+  - **Before:** §3 said only that the verifier "honours RSASSA-PSS parameters".
+  - **§9's verifier tests** name the SHA-1 case.
 
 ### Changes in revision 50 (the walker review's timing and the PKIX fallback finding, 2026-11-05)
 - **Aligned** (§14, #117): §14 gave the walker and the `Rule` model a dedicated adversarial review "before 0.2's
@@ -1395,12 +1416,16 @@ produced `VERIFIED` (presented junk keys are server-chosen; entry count exposed)
 server-chosen exception: an OID in `unsupportedOids()` → `UNSUPPORTED`; any
 `GeneralSecurityException` on a supported OID → `INVALID`; any `RuntimeException` from the provider
 → `INVALID` plus `Finding.VerifierError`. Signature OIDs: RSA PKCS#1 SHA-2, `id-RSASSA-PSS`, ECDSA
-SHA-2, Ed25519/448, ML-DSA-44/65/87 (RFC 9881), SLH-DSA, composite as drafts settle. Key OIDs:
+SHA-2, Ed25519/448, ML-DSA-44/65/87 (RFC 9881), SLH-DSA, composite as drafts settle. **`id-RSASSA-PSS`
+parameters** (revision 51): the message hash and the MGF1 hash are each a SHA-2 hash, the family RSA PKCS#1 takes
+above, and `trailerField` is 1. A PSS signature with other parameters is `INVALID`, whatever the provider would
+answer. That includes a SHA-1 hash and the all-default parameters (RFC 4055: SHA-1, MGF1 with SHA-1), as SHA-1
+PKCS#1 v1.5 is not in the list. Key OIDs:
 `rsaEncryption`, `id-RSASSA-PSS`, `id-ecPublicKey` with named curves, Ed25519/448, ML-DSA, SLH-DSA.
 Key families (ordering only, used by `CandidateIndex.related()`, §5.1): RSA = {`rsaEncryption`, `id-RSASSA-PSS`} ↔ {RSA PKCS#1, PSS}; EC ↔
 ECDSA; EdDSA, ML-DSA, SLH-DSA, composite: key OID equals signature OID; unknown compatible with
-everything. Composite signatures are delegated to a provider owning the composite OID (BC) or
-`UNSUPPORTED`.
+everything. Composite signatures are delegated to a provider owning the composite OID (BC; Conscrypt 2.7.0 and
+2.8.0 register 15 of them, Appendix A) or `UNSUPPORTED`.
 
 **Purity gate.** `linuxX64()` only when `revokt.purityGate` is present; never published; BCV
 `klib { enabled = false }`. Generation publication is a `@Volatile` reference whose only writers are
@@ -2973,7 +2998,8 @@ tests; **live checks** are informational.
   `resetState()` on a seeded `DEFAULT` instance → the next handshake is served by the seed, never
   `NO_DATA`; two listeners registered before the first handshake each receive every event in sequence order; an enqueue racing a drain's
   flag clear is still delivered without a further handshake.
-- **Verifier**: OID harvest; key-OID gaps; PSS parameters; raw-to-DER edge cases; an off-curve point
+- **Verifier**: OID harvest; key-OID gaps; PSS parameters (a SHA-1 hash, the all-default parameters included, →
+  `INVALID`); raw-to-DER edge cases; an off-curve point
   on a supported OID → `INVALID`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
 - **Parser corpus** and the §9.2 differential parser oracle; **Android instrumented** (API 26, 31,
   34, 36) including the PKIX fallback (the jvmMain `PkixPathBuilderFallback` through ojluni, JVM-tested in 0.2), the
@@ -4010,7 +4036,26 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
   SunJSSE's `AlgorithmId` normalises NULL parameters; SunEC pure Java since JDK 16, no brainpool since 15.
 - Crypto: ECDSA public-key recovery (SEC 1 §4.1.6); RSA duplicate-signature key selection
   (Blake–Smart; SunRsaSign accepts any exponent for moduli ≤ 3072); ML-DSA in X.509 is RFC 9881;
-  JDK 24 ships ML-DSA (backported in 17.0.21 and 21.0.13); Conscrypt does not; composite signatures are not one JCA operation.
+  JDK 24 ships ML-DSA (backported in 17.0.21 and 21.0.13). No provider of JDK 17.0.21, 21.0.13 or 27 registers
+  SLH-DSA or a composite OID (revision 51). A composite signature is not one operation of the JDK's providers, so
+  only a provider registering the composite OID verifies one.
+  - **Conscrypt uber 2.7.0 and 2.8.0** (revision 51; both register the same set). Probed on JDK 17.0.21 and 21.0.13
+    with a single-file Java program over the Gradle-cached jars. It lists the provider's `Signature`, `KeyFactory`
+    and `KeyPairGenerator` services and their `Alg.Alias` entries, then looks each algorithm up by name, bare OID and
+    `OID.`-prefixed OID.
+    - **ML-DSA-44, -65 and -87:** registered by name and by both OID aliases. Each verifies a signature the JDK's
+      `SUN` provider made, with the key decoded from the JDK's SPKI encoding, and rejects it with one bit flipped.
+    - **SLH-DSA-SHA2-128s:** registered by name only, with no OID alias for 2.16.840.1.101.3.4.3.20 (the OID its
+      own keys encode). It also registers a HashSLH-DSA `SLH-DSA-SHA2-128S-WITH-SHA384`, by name only. Only a
+      Conscrypt-made signature was checked, since none of those JDKs makes one.
+    - **15 composite ML-DSA OIDs** of draft-ietf-lamps-pq-composite-sigs: `1.3.6.1.5.5.7.6.37`–`.46`, `.48`,
+      `.49` and `.52`–`.54` (not `.47`, `.50` or `.51`). Each is registered for `Signature`, `KeyFactory` and
+      `KeyPairGenerator` under a name such as `MLDSA44-RSA2048-PSS-SHA256`, with a bare OID alias but no
+      `OID.`-prefixed one. Each round-trips a Conscrypt-made key and signature, and the key's SPKI
+      carries the OID. **Unverified:** whether Conscrypt's composite key and signature encodings match draft -19.
+      The round trip shows only that Conscrypt agrees with itself; no draft test vector or other implementation
+      was checked.
+    - **Not probed:** the platform Conscrypt on Android, whose version is the device's.
 - Kotlin: `kotlin.time.Clock` stable since 2.3; `kotlin.concurrent.atomics` still experimental;
   kotlinx-serialization-json cannot reject duplicate keys.
 - Fuzzing: ClusterFuzzLite and OSS-Fuzz need a static entry point; OSS-Fuzz admission requires usage.
