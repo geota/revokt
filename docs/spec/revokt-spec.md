@@ -24,7 +24,15 @@ Status: **draft spec / project proposal, revision 51** · Target: JVM 17+ and An
     for RSA and ECDSA, `RSASSA-PSS`, the algorithm names for EdDSA, ML-DSA and SLH-DSA, and the bare OID for each
     composite.
   - **Under Conscrypt alone:** ML-DSA, SLH-DSA-SHA2-128s (by name) and the 15 registered composites are supported.
-    The other SLH-DSA sets, three composite OIDs and `id-RSASSA-PSS` are `UNSUPPORTED`.
+    `unsupportedOids()` is 21 OIDs, the same under 2.7.0 and 2.8.0:
+    - `SHA512/224withRSA` and `SHA512/256withRSA`;
+    - `id-RSASSA-PSS`;
+    - Ed448;
+    - the other 11 SLH-DSA sets;
+    - the composites `.47`, `.50` and `.51`;
+    - the three brainpool curves.
+
+    §3 lists them all.
   - An OID outside the tables is `INVALID`.
   - **The unverified composite encoding:** if it differs from draft -19, the probe says supported and a real
     certificate is `INVALID`, not `UNSUPPORTED`.
@@ -33,6 +41,8 @@ Status: **draft spec / project proposal, revision 51** · Target: JVM 17+ and An
   - The message hash and the MGF1 hash are each a SHA-2 hash, the family the list gives RSA PKCS#1.
   - The mask is `id-mgf1`, and `trailerField` is 1.
   - An omitted field takes RFC 4055's SHA-1 DEFAULT.
+  - **Salt:** a salt over 2,048 bytes is `INVALID`. This describes #156's merged `MAX_SALT_LENGTH` guard, not a new
+    choice: the JDK throws `ArithmeticException` on salts near `Int.MAX_VALUE`.
   - Any other PSS parameters are `INVALID`, whatever the provider would answer. That covers SHA-1 PSS, the
     all-default parameters, a SHA-2 hash under MGF1 with SHA-1, and any other mask.
   - **The probe decides first:** with `id-RSASSA-PSS` in `unsupportedOids()` (a verifier over Conscrypt alone),
@@ -1442,6 +1452,13 @@ MGF1 hash must each be a SHA-2 hash, the family RSA PKCS#1 takes above. The mask
 `id-mgf1`, and `trailerField` must be 1. A field left out takes its RFC 4055 DEFAULT, so an omitted hash or
 mask-generation field means SHA-1.
 
+**Salt length:** a salt longer than 2,048 bytes is `INVALID`, decided before the provider is called. This describes
+the guard merged in #156 (`MAX_SALT_LENGTH`), not a new choice. 2,048 bytes is the longest salt any RSA key could take
+(RFC 8017 §9.1.1, `emLen >= hLen + sLen + 2`, at SunRsaSign's largest modulus of 16,384 bits). The JDK refuses a
+longer salt for the key on its own, with a `GeneralSecurityException`, except near `Int.MAX_VALUE`. There its
+`hLen + sLen + 2` overflows into an `ArithmeticException`, which would otherwise become a `VerifierError` for a
+CA-chosen length. On JDK 21.0.13 with SHA-256, the overflow starts at 2,147,483,614.
+
 A PSS signature with other parameters is `INVALID`, whatever the provider would answer. That covers:
 - a SHA-1 message or MGF1 hash, including the all-default parameters (SHA-1, MGF1 with SHA-1);
 - a SHA-2 message hash under MGF1 with SHA-1, which the JDK verifies;
@@ -1454,7 +1471,9 @@ whatever its parameters, a SHA-1 one included. A verifier over the Conscrypt pro
 
 **From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
 signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
-OID unsupported when the provider has no service under that name. The names are:
+OID unsupported when the provider has no service under that name. A named curve is probed separately: it is
+unsupported unless a key on it decodes through the provider's EC `KeyFactory` and its ECDSA `Signature` runs over
+that key. The names are:
 - RSA PKCS#1 and ECDSA: their standard names, such as `SHA256withRSA` and `SHA256withECDSA`.
 - `id-RSASSA-PSS`: `RSASSA-PSS`.
 - Ed25519/448, ML-DSA and SLH-DSA: their names, such as `ML-DSA-44` and `SLH-DSA-SHA2-128s`.
@@ -1467,11 +1486,15 @@ name only. So under Conscrypt, the probe reports these as supported:
 - SLH-DSA-SHA2-128s, found by name, the lookup the table makes;
 - the 15 registered composites.
 
-It reports these as `UNSUPPORTED`:
-- the other 11 SLH-DSA sets;
-- the composites `.47`, `.50` and `.51`;
-- `id-RSASSA-PSS`, which Conscrypt registers only as `SHA256withRSA/PSS` and similar names, with no `RSASSA-PSS`
-  service.
+Everything else in the tables is supported as well. The complete `unsupportedOids()` is 21 OIDs, the same under
+both releases (37 table entries, since several OIDs fill both the signature and the key role):
+- **RSA PKCS#1:** `SHA512/224withRSA` (`1.2.840.113549.1.1.15`) and `SHA512/256withRSA` (`.16`), signature only.
+- **`id-RSASSA-PSS`** (`1.2.840.113549.1.1.10`), as signature and key. Conscrypt registers PSS only as
+  `SHA1withRSA/PSS` to `SHA512withRSA/PSS`, with no `RSASSA-PSS` `Signature` or `KeyFactory`.
+- **Ed448** (`1.3.101.113`), as signature and key.
+- **The other 11 SLH-DSA sets**, `2.16.840.1.101.3.4.3.21`–`.31`, as signature and key.
+- **The composites** `1.3.6.1.5.5.7.6.47`, `.50` and `.51`, as signature and key.
+- **brainpoolP256r1, P384r1 and P512r1** (`1.3.36.3.3.2.8.1.1.7`, `.11`, `.13`), through the curve probe.
 
 **Composite encoding, unverified:** the probe checks only that a service exists. Conscrypt's composite key and
 signature encodings have not been checked against draft -19. If they differ, the probe reports the OID supported,
@@ -4111,11 +4134,15 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     - **PSS:** there is no `RSASSA-PSS` `Signature` or `KeyFactory` and no `id-RSASSA-PSS` alias. PSS is registered
       only as `SHA1withRSA/PSS` to `SHA512withRSA/PSS`.
     - **`JcaSignatureVerifier` over Conscrypt** (at `5d419cc`): a scratch `jvmTest` on 21.0.13 ran under both
-      releases. `unsupportedOids()` is what §3's "From OID to JCA service" lists. ML-DSA-44/65/87,
+      releases. Printed in full, `unsupportedOids()` is exactly the 21 OIDs §3's "From OID to JCA service" lists,
+      identical under both releases. ML-DSA-44/65/87,
       SLH-DSA-SHA2-128s and the 15 composites each give `VERIFIED` for a Conscrypt-made key and signature, and
       `INVALID` with one bit flipped. A SHA-1 PSS signature is `UNSUPPORTED` over Conscrypt and `INVALID` over the
       JDK's providers, which verify it themselves.
     - **Not probed:** the platform Conscrypt on Android, whose version is the device's.
+  - **PSS salt on the JDK** (revision 51, a scratch `jvmTest` at `5d419cc` on 21.0.13, 2048-bit key, SHA-256 and MGF1
+    with SHA-256): `RSASSA-PSS` throws `InvalidAlgorithmParameterException` for salts of 2,048 and 2,049 bytes, and
+    `ArithmeticException` from 2,147,483,614 up to `Int.MAX_VALUE`. The verifier gives `INVALID` for each.
 - Kotlin: `kotlin.time.Clock` stable since 2.3; `kotlin.concurrent.atomics` still experimental;
   kotlinx-serialization-json cannot reject duplicate keys.
 - Fuzzing: ClusterFuzzLite and OSS-Fuzz need a static entry point; OSS-Fuzz admission requires usage.
