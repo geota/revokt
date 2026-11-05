@@ -10,8 +10,6 @@ package dev.revokt.engine.parse
  */
 internal object ExtensionGrammars {
     private const val BOOLEAN = 0x01
-    private const val INTEGER = 0x02
-    private const val BIT_STRING = 0x03
     private const val OCTET_STRING = 0x04
     private const val OBJECT_IDENTIFIER = 0x06
     private const val SEQUENCE = 0x30
@@ -21,14 +19,9 @@ internal object ExtensionGrammars {
     private const val IP_ADDRESS = 0x87
     private const val KEY_IDENTIFIER = 0x80
     private const val CONTEXT_0 = 0xa0
-    private const val MAX_PATH_LEN_OCTETS = 4
     private const val CONSTRUCTED = 0x20
 
-    private val KEY_USAGE = byteArrayOf(0x55, 0x1d, 0x0f)
-    private val BASIC_CONSTRAINTS = byteArrayOf(0x55, 0x1d, 0x13)
-    private val SUBJECT_ALT_NAME = byteArrayOf(0x55, 0x1d, 0x11)
     private val CRL_DISTRIBUTION_POINTS = byteArrayOf(0x55, 0x1d, 0x1f)
-    private val EXT_KEY_USAGE = byteArrayOf(0x55, 0x1d, 0x25)
     private val CERTIFICATE_POLICIES = byteArrayOf(0x55, 0x1d, 0x20)
     private val AUTHORITY_INFO_ACCESS = byteArrayOf(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x01)
     private val NAME_CONSTRAINTS = byteArrayOf(0x55, 0x1d, 0x1e)
@@ -37,12 +30,13 @@ internal object ExtensionGrammars {
     /** Each listed OID's grammar over the `extnValue` content; nameConstraints and subjectInfoAccess have none. */
     private val GRAMMARS: List<Pair<ByteArray, (ByteArray, Span) -> Boolean>> =
         listOf(
-            KEY_USAGE to { b, v -> only(b, v, BIT_STRING) { Keyability.bitStringPadding(b, it.content) } },
-            BASIC_CONSTRAINTS to { b, v -> sequence(b, v) { basicConstraints(b, it) } },
-            SUBJECT_ALT_NAME to { b, v -> sequence(b, v) { r -> r.hasMore() && all(r) { sanName(b, it) } } },
+            Oid.KEY_USAGE_CONTENT to { b, v -> ExtensionValues.keyUsage(b, v) is ExtensionRead.Value },
+            Oid.BASIC_CONSTRAINTS_CONTENT to { b, v -> ExtensionValues.basicConstraints(b, v) is ExtensionRead.Value },
+            Oid.SUBJECT_ALT_NAME_CONTENT to
+                { b, v -> ExtensionValues.subjectAltName(b, v).let { it is ExtensionRead.Value && listed(it.value) } },
             CRL_DISTRIBUTION_POINTS to { b, v -> sequence(b, v) { r -> all(r) { distributionPoint(b, it) } } },
             Oid.AUTHORITY_KEY_IDENTIFIER_CONTENT to { b, v -> sequence(b, v) { keyIdentifierOnly(it) } },
-            EXT_KEY_USAGE to { b, v -> sequence(b, v) { r -> r.hasMore() && all(r) { it.tag == OBJECT_IDENTIFIER } } },
+            Oid.EXT_KEY_USAGE_CONTENT to { b, v -> ExtensionValues.extendedKeyUsage(b, v) is ExtensionRead.Value },
             Oid.SUBJECT_KEY_IDENTIFIER_CONTENT to { b, v -> only(b, v, OCTET_STRING) { true } },
             CERTIFICATE_POLICIES to { b, v -> sequence(b, v) { r -> all(r) { policy(b, it) } } },
             AUTHORITY_INFO_ACCESS to
@@ -72,7 +66,7 @@ internal object ExtensionGrammars {
         b: ByteArray,
         e: Extension,
     ): List<Span> {
-        val direct = Oid.matches(b, e.oid, EXT_KEY_USAGE)
+        val direct = Oid.matches(b, e.oid, Oid.EXT_KEY_USAGE_CONTENT)
         val nested = Oid.matches(b, e.oid, CERTIFICATE_POLICIES) || Oid.matches(b, e.oid, AUTHORITY_INFO_ACCESS)
         if (!direct && !nested) return emptyList()
         val out = ArrayList<Span>()
@@ -156,7 +150,7 @@ internal object ExtensionGrammars {
                 continue
             }
             val t = r.readAny(SITE)
-            if (t.tag == BOOLEAN && !boolean(b, t.content)) return false
+            if (t.tag == BOOLEAN && !ExtensionValues.boolean(b, t.content)) return false
             if (t.tag and CONSTRUCTED != 0) stack.add(reader(b, t.content))
         }
         return true
@@ -169,38 +163,15 @@ internal object ExtensionGrammars {
         return true
     }
 
-    /** `SEQUENCE { cA BOOLEAN OPTIONAL, pathLen INTEGER (0..2^31 − 1) OPTIONAL }`, a BOOLEAN `00` or `FF`. */
-    private fun basicConstraints(
-        b: ByteArray,
-        r: DerReader,
-    ): Boolean {
-        val ca = r.readOptional(BOOLEAN, SITE)
-        val pathLen = r.readOptional(INTEGER, SITE)
-        r.requireEnd("basicConstraints")
-        val caOk = ca == null || boolean(b, ca.content)
-        val pathLenOk =
-            pathLen == null ||
-                (
-                    Keyability.minimalInteger(b, pathLen.content) && b[pathLen.content.start] >= 0 &&
-                        pathLen.content.length <= MAX_PATH_LEN_OCTETS
-                )
-        return caOk && pathLenOk
-    }
-
-    private fun boolean(
-        b: ByteArray,
-        content: Span,
-    ): Boolean = content.length == 1 && b[content.start].toInt() and 0xff in setOf(0x00, 0xff)
-
-    /** A SAN entry: `dNSName` or `rfc822Name` of ASCII octets, or `iPAddress` of 4 or 16 octets. */
-    private fun sanName(
-        b: ByteArray,
-        t: Tlv,
-    ): Boolean =
-        when (t.tag) {
-            DNS_NAME, RFC822_NAME -> ascii(b, t.content)
-            IP_ADDRESS -> t.content.length == 4 || t.content.length == 16
-            else -> false
+    /** K8 on a read SAN: every name a `dNSName` or `rfc822Name` of ASCII octets, or an `iPAddress` of 4 or 16 octets. */
+    private fun listed(san: SubjectAltNames): Boolean =
+        san.names.all {
+            when (it.tag) {
+                DNS_NAME -> true
+                RFC822_NAME -> it.content.toByteArray().all { octet -> octet >= 0 }
+                IP_ADDRESS -> it.content.size == 4 || it.content.size == 16
+                else -> false
+            }
         }
 
     /** `SEQUENCE { [0] { [0] GeneralNames } }` holding at least one `[6]` URI of ASCII octets and nothing else. */
@@ -214,7 +185,7 @@ internal object ExtensionGrammars {
         point.requireEnd("DistributionPoint")
         val full = reader(b, name.read(CONTEXT_0, SITE).content)
         name.requireEnd("DistributionPointName")
-        return full.hasMore() && all(full) { it.tag == URI && ascii(b, it.content) }
+        return full.hasMore() && all(full) { it.tag == URI && ExtensionValues.ascii(b, it.content) }
     }
 
     /** `SEQUENCE { OID, … }`: the qualifiers after the identifier are walked by K1 only. */
@@ -233,11 +204,6 @@ internal object ExtensionGrammars {
         r.read(OBJECT_IDENTIFIER, SITE)
         val location = r.read(URI, SITE)
         r.requireEnd("AccessDescription")
-        return ascii(b, location.content)
+        return ExtensionValues.ascii(b, location.content)
     }
-
-    private fun ascii(
-        b: ByteArray,
-        content: Span,
-    ): Boolean = (content.start until content.end).all { b[it] >= 0 }
 }

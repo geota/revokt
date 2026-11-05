@@ -15,6 +15,10 @@ internal object Oid {
     val SCT_LIST_CONTENT: ByteArray = byteArrayOf(0x2b, 0x06, 0x01, 0x04, 0x01, 0xd6.toByte(), 0x79, 0x02, 0x04, 0x02)
     val SUBJECT_KEY_IDENTIFIER_CONTENT: ByteArray = byteArrayOf(0x55, 0x1d, 0x0e)
     val AUTHORITY_KEY_IDENTIFIER_CONTENT: ByteArray = byteArrayOf(0x55, 0x1d, 0x23)
+    val KEY_USAGE_CONTENT: ByteArray = byteArrayOf(0x55, 0x1d, 0x0f)
+    val SUBJECT_ALT_NAME_CONTENT: ByteArray = byteArrayOf(0x55, 0x1d, 0x11)
+    val BASIC_CONSTRAINTS_CONTENT: ByteArray = byteArrayOf(0x55, 0x1d, 0x13)
+    val EXT_KEY_USAGE_CONTENT: ByteArray = byteArrayOf(0x55, 0x1d, 0x25)
 
     /** True when the OID content at [content] is exactly [canonical]; a non-minimal arc spelling never matches. */
     fun matches(
