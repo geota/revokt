@@ -149,8 +149,8 @@ class JcaVerifierProvidersTest {
     fun `verifier a provider whose services fail to link while probed has them unsupported`() {
         val linkage =
             TestProvider("linkage")
-                .signature("Ed25519") { throw NoClassDefFoundError("provider/Ed25519Spi") }
-                .keyFactory("Ed25519") { throw UnsatisfiedLinkError("no native library") }
+                .signature("Ed25519") { fail(NoClassDefFoundError("provider/Ed25519Spi")) }
+                .keyFactory("Ed25519") { fail(UnsatisfiedLinkError("no native library")) }
                 .signature(
                     "SHA256withRSA",
                 ) { DelegatingSignature(Signature.getInstance("SHA256withRSA", "SunRsaSign")) }
@@ -164,7 +164,7 @@ class JcaVerifierProvidersTest {
             v.verify(algId(SHA256_RSA, NULL), rsa.public.encoded, MESSAGE, sign("SHA256withRSA", rsa.private)),
         )
         // A fatal error while probing is not swallowed (§5.5).
-        val fatal = TestProvider("fatal").signature("Ed25519") { throw OutOfMemoryError("probe") }
+        val fatal = TestProvider("fatal").signature("Ed25519") { fail(OutOfMemoryError("probe")) }
         assertFailsWith<OutOfMemoryError> { JcaSignatureVerifier(fatal) }
     }
 
@@ -456,4 +456,7 @@ class JcaVerifierProvidersTest {
         // The other SLH-DSA sets are not Conscrypt's.
         assertTrue("2.16.840.1.101.3.4.3.21" in unsupported)
     }
+
+    /** A service factory that fails with [t], as a provider whose class cannot load or link does. */
+    private fun fail(t: Throwable): Nothing = throw t
 }
