@@ -1,10 +1,40 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 49** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
+Status: **draft spec / project proposal, revision 50** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 50 (the walker review's timing and the PKIX fallback finding, 2026-11-05)
+- **Aligned** (§14, #117): §14 gave the walker and the `Rule` model a dedicated adversarial review "before 0.2's
+  walker is coded". The review now runs once they are implemented (after the walker, `reconstruct` and decision steps
+  1–8 merge) and before the §9.1 walker fuzzer runs against them. §14 and §11's 0.2 row now say the same.
+  - **Why:** §11's 0.2 row already ordered the review before the fuzzer, and the spec's own review rounds on §5.1 and
+    the `Rule` model ran in revisions 9, 10 and 12. What is left to review adversarially is the implementation.
+  - The next sentence, the fuzzer's P1–P8 gate before 0.2 ships, is unchanged.
+- **Added** (§4, §5.1, §9; the maintainer's choice): `Finding.FallbackNotUsed` with `val reason: FallbackReason`, and
+  the growable `enum class FallbackReason { SKIPPED, DISABLED, FAILED }`.
+  - **Before:** step 6 and the PKIX fallback contract reported `VerifierError("fallback skipped")`,
+    `VerifierError("fallback disabled")` and `VerifierError("fallback")`. But `VerifierError.oid` is the signature
+    algorithm whose verification failed, and these three carried no algorithm.
+  - **Now:** `VerifierError` is a verifier or algorithm failure only, both fields non-null. Step 6 reports exactly
+    one `FallbackNotUsed` when the walk ended `NotFound` or `Budget` and no fallback path was evaluated: `SKIPPED`
+    above `FALLBACK_MAX_PRESENTED` with the fallback enabled, `DISABLED` under `pkixFallback(false)` and the
+    walker-only harness's disabled path, `FAILED` when the fallback ran and gave no path. It is named "not used"
+    because a `FAILED` fallback did run.
+  - **`FAILED`** is a `build` that returned null or threw. A `jdk.certpath.disabledAlgorithms` rejection and a
+    provider that diverges from the delegate, which the contract already reported, are two such failures. A throw
+    is a failed fallback, never an engine error. Before, the other failed runs had no finding. They now have one,
+    since the JDK's builder reports them alike (below).
+  - **No message string:** every build failure of the JDK's `SunCertPathBuilder` carries the same text, "unable to
+    find valid certification path to requested target" (checked in JDK 21's source). Other builders' texts differ,
+    and consumers match on codes, never on messages. The reason is the triage value, and it fits the path cache.
+  - **Path cache:** an entry keeps the reason, so a hit reports the finding the miss did.
+  - **`RevoktStatus.verifierErrors`** counts `VerifierError` findings only; `FallbackNotUsed` has no counter.
+  - **Fixtures:** the walker-fixture header states the rule for every row, and (ad) and (af) disabled now expect
+    `FallbackNotUsed(DISABLED)`. Revision 49's entry below uses the new names where it states the current rule;
+    older entries stay as written.
 
 ### Changes in revision 49 (0.2's scope, step 6 without the fallback, the engine name, the AMO SPKI pin, 2026-11-05)
 - **Retagged** (§9, §11; the maintainer's decisions on the 0.2 plan): four groups of items tagged or listed for 0.2
@@ -42,15 +72,15 @@ Status: **draft spec / project proposal, revision 49** · Target: JVM 17+ and An
     `PATH_BUDGET_EXCEEDED`, whether or not step 1 ran. Any other `NotFound` is `ISSUER_UNVERIFIED` or `NO_ISSUER`
     under the fallback-failed branch's rule, `PLATFORM_ONLY` on a trust-manager binding.
   - **The finding** (the maintainer's choice): wherever the fallback did not run because it is configured off, step
-    6 reports a distinct `VerifierError("fallback disabled")`. `"fallback skipped"` stays for the enabled, too-long
-    case only.
+    6 reports a distinct `FallbackNotUsed(DISABLED)` (named so since revision 50). `SKIPPED` stays for the enabled,
+    too-long case only.
   - **The skipped branch with the fallback enabled** named only "the platform accepted in step 1". It now also
     applies where step 1 does not run (the walker-only harness and `Evaluator.evaluate`), as fixture (af) already
     expected on every platform path.
   - **Fixtures:** a row whose outcome depends on the fallback states its disabled expectation. (ad) disabled →
-    `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `VerifierError("fallback disabled")`, and the honest key absent
+    `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `FallbackNotUsed(DISABLED)`, and the honest key absent
     because only the fallback reaches it, so `rule = PATH_BUDGET_EXCEEDED`. (af) disabled → `PATH_BUDGET_EXCEEDED`
-    with `VerifierError("fallback disabled")`.
+    with `FallbackNotUsed(DISABLED)`.
 - **Added** (§3.2, §4, §5.5): `RevocationEngine` gains `val name: String`, defaulting to the class's simple name, or
   `"anonymous"` when the class has none. The Kotlin engine returns `"kotlin"` and the upki engine `"upki"`.
   `Finding.EngineError.engineName` is that name whenever `producer == ENGINE`, so it is never null there. Before, a
@@ -1606,6 +1636,7 @@ enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable
 enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; keyabilityClause != null ⇔ parseReason == PRODUCER_UNKEYABLE
 enum class TerminalKind { ANCHOR /* M2: PRELOAD */ }   // growable; the reported path's terminal (§5.1 invariant)
 enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
+enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and threw, returned null, or diverged from the delegate */ }   // growable; why decision step 6 evaluated no fallback path (§5.1, revision 50)
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
 enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
 enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
@@ -1670,7 +1701,8 @@ sealed class Finding {
         val rules: Set<Rule>                             // the data rules that fired for this dataset: NO_DATA, STALE, UNSIGNED_DATA }
     /* M2, reserved shape: class PathHit : Finding() { val rule: Rule; val dataset: Dataset; val certSha256: ByteArray; val onReportedPath: Boolean; val recordId: String? }  // M4: certSha256 == anchorSha256 */
     class UnsupportedAlgorithm : Finding() { val oid: String; val where: Layer; val outcomeDepended: Boolean }
-    class VerifierError : Finding() { val oid: String; val message: String }
+    class VerifierError : Finding() { val oid: String; val message: String }   // a verifier or algorithm failure only: oid is the signature algorithm whose verification failed; never the PKIX fallback, which is FallbackNotUsed
+    class FallbackNotUsed : Finding() { val reason: FallbackReason }   // exactly one ⇔ the step-5 walk ended NotFound or Budget and usedFallback == false (§5.1 decision step 6, revision 50); named "not used" because a FAILED fallback did run
     class AlgorithmIdMismatch : Finding() { val certIndex: Int }
     class EngineError : Finding() { val message: String; val producer: EngineErrorProducer; val engineName: String? /* the engine's RevocationEngine.name (§3.2) when producer == ENGINE, so never null there: "kotlin" and "upki" for the two shipped engines */ }
     class Exempted : Finding() { val rule: Rule }
@@ -1691,7 +1723,7 @@ interface RevoktListener { fun onVerdict(event: RevoktEvent); fun onStateChanged
 class RevoktStatus private constructor(…) {            // snapshot; counters monotonic since build() for unevaluated, since start() for every other; maps zero-filled over Rule.entries
     val evaluations: Long; val rejects: Map<Rule, Long> /* ENFORCE only */; val wouldRejects: Map<Rule, Long> /* OBSERVE only */; val shadowWouldRejects: Map<Rule, Long> /* the shadow policy's Rejected verdicts by rule, under ENFORCE and OBSERVE */; val fired: Map<Rule, Long>; val exempted: Map<Rule, Long>
     val noData: Map<Dataset, Long>; val stale: Map<Dataset, Long> /* loud flag seen */; val unsignedData: Map<Dataset, Long>; val noIssuer: Map<NoIssuerReason, Long> /* keyed by the reported (promoted) reason */; val parseFailed: Map<ParseReason, Long> /* fired[PARSE_FAILED] split by reason, zero-filled */; val walkEnds: Map<WalkEnd, Long>; val chainSources: Map<ChainSource, Long>; val fallbackUsed: Long
-    val verifierErrors: Long; val candidatesDropped: Long; val verdictCacheHits: Long; val storeFailures: Long; val trustManagerCount: Int; val droppedEvents: Long; val droppedRejectedEvents: Long; val listenerFailures: Long
+    val verifierErrors: Long /* Finding.VerifierError only; FallbackNotUsed is not counted */; val candidatesDropped: Long; val verdictCacheHits: Long; val storeFailures: Long; val trustManagerCount: Int; val droppedEvents: Long; val droppedRejectedEvents: Long; val listenerFailures: Long
     val unevaluated: Map<UnevaluatedReason, Long>        // handshakes that returned after flow step 1 without reaching step 2, on every trust manager including fetcherTrustManager (FETCHER_SNAPSHOT_UNAVAILABLE counts only handshakes a consumer delivers to it directly while it has no snapshot; a sync whose build retry failed runs no fetch, §5.1); the one counter group that still advances in CREATED, after close() and under OFF, so an operator can tell "no traffic" from "not checking"
     val readinessWaits: Long; val readinessTimeouts: Long; val readinessWaitNanosTotal: Long   // flow step 0
     val pendingAllows: Map<Dataset, Long> }               // verdicts computed (verdict-cache misses only) while the dataset was pending (allowed without data); separates "checked" from "pending-allow"
@@ -1910,13 +1942,14 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    with and without a `<domain-config>`, it does not establish availability.
 5. `walk = reconstruct(presented, index)`; `Found` → step 7.
 6. `fallback = pathBuilder.build(presented, anchors, now)` if the fallback is enabled and `presented.size ≤ FALLBACK_MAX_PRESENTED`,
-   cached under the path key:
+   cached under the path key; a `build` that returns null or throws is a **failed** fallback (a throw is caught here,
+   never an engine error):
    - walk `NotFound` and the fallback finds a path → `Found([fallback], usedFallback = true)`.
    - walk `NotFound`, the fallback was **skipped** (chain too long) and the platform accepted in
-     step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `VerifierError("fallback skipped")`:
+     step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
      no honest Web PKI chain is longer than 8 certificates and unreproducible by the walker, and the
      server controls chain length.
-   - walk `NotFound` and the fallback failed: `ISSUER_UNVERIFIED` when the child's own signature OID
+   - walk `NotFound` and the fallback failed (`FallbackNotUsed(FAILED)`): `ISSUER_UNVERIFIED` when the child's own signature OID
      (`child.tbsSigOid`, CA-chosen) was `UNSUPPORTED` against a **related** candidate; a candidate's key or
      curve OID (server-chosen on a decoy) never counts, so a related unsupported decoy cannot relabel
      `NO_ISSUER` into the separately exemptable `ISSUER_UNVERIFIED`; else `NO_ISSUER`. On a trust-manager
@@ -1929,13 +1962,18 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      is `PATH_BUDGET_EXCEEDED` regardless; `usedFallback = true` when a fallback path was evaluated.
    - **fallback disabled** (`pkixFallback(false)`, and the walker-only harness's disabled path; revision 49):
      `pathBuilder.build` is never called, and step 6 gives what the branches above give when no fallback path
-     exists, with `VerifierError("fallback disabled")` wherever the fallback did not run because it is configured
-     off (`"fallback skipped"` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
+     exists, with `FallbackNotUsed(DISABLED)` wherever the fallback did not run because it is configured off
+     (`SKIPPED` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
      as with the fallback enabled, with only the walk's partial leaf keys evaluated and `usedFallback = false`; walk
      `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE`,
      whether or not step 1 ran; any other walk `NotFound` → `ISSUER_UNVERIFIED` or `NO_ISSUER` under the
      fallback-failed branch's rule. On a trust-manager binding any such `NO_ISSUER` is `PLATFORM_ONLY`: the platform
      trusts a chain the walker cannot reproduce, and no PKIX builder ran; `walkerReason` keeps the walker's reason.
+   - **The fallback finding** (revision 50): exactly one `Finding.FallbackNotUsed` when the walk ended `NotFound` or
+     `Budget` and no fallback path was evaluated (`usedFallback = false`), on every branch above: `DISABLED` with the
+     fallback disabled; else `SKIPPED` when `presented.size > FALLBACK_MAX_PRESENTED`; else `FAILED`. A fallback
+     path evaluated, a walk `Found`, and every exit before step 5 carry none. It never changes the path status or a
+     rule.
 7. Data: the data rules (`NO_DATA` for each required dataset with no generation and not `pending`,
    never with a generation installed from a seed or a system cache for that dataset; `STALE`; `UNSIGNED_DATA`) were computed from the generation
    snapshot (read at flow step 2) before decision step 1, outside the catch boundary (the one clock read is itself guarded: a
@@ -2257,16 +2295,17 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   `X509CertSelector().apply { certificate = leaf }`; Android resolves to ojluni's `SunCertPathBuilder`
   with Conscrypt doing signatures. The builder verifies every link under the platform's providers,
   so its path satisfies the invariant's intent; `jdk.certpath.disabledAlgorithms` and provider
-  divergence from the delegate are reported as `Finding.VerifierError("fallback")` and surface as
-  `PLATFORM_ONLY`. It is skipped above `FALLBACK_MAX_PRESENTED` presented certificates (no candidate
-  budget; exponential on stuffed chains) with `VerifierError("fallback skipped")`, which cannot change
-  a `Budget` outcome. With `pkixFallback(false)` it never runs, and step 6 reports `VerifierError("fallback disabled")`
-  instead (revision 49).
+  divergence from the delegate fail the build, and like every failed build (null or a throw) are reported as
+  `Finding.FallbackNotUsed(FAILED)` and surface as `PLATFORM_ONLY` on a walk `NotFound` at a trust-manager binding.
+  It is skipped above `FALLBACK_MAX_PRESENTED` presented certificates (no candidate
+  budget; exponential on stuffed chains) with `FallbackNotUsed(SKIPPED)`, which cannot change
+  a `Budget` outcome. With `pkixFallback(false)` it never runs, and step 6 reports `FallbackNotUsed(DISABLED)`
+  instead (revision 49; a `FallbackNotUsed` since revision 50).
 - **Caches**, per trust manager, LRU-bounded (a synchronized access-ordered `LinkedHashMap` or a
   striped LRU; touched from concurrent handshake threads): the path cache holds `Found`, `NotFound`,
   `Budget` and the fallback result alike. **A path-cache entry is exactly**: `status`, `source`,
   `noIssuerReason`, `walkerReason`, `parseReason`, `keyabilityClause`, `terminalKind`, `endReason`, `endDepth`,
-  `usedFallback`, `pathsFound`, the reported path as (source, index) pairs for walker entries or, for
+  `usedFallback`, the step-6 `FallbackReason` (null when no `FallbackNotUsed` was reported; revision 50), `pathsFound`, the reported path as (source, index) pairs for walker entries or, for
   `PLATFORM` entries, the leaf-issuer SPKI hash, the anchor hash and the path length (a
   Conscrypt-completed chain can contain certificates from neither source), `reportedPathSha256s`,
   `issuerSpkiSha256s`, `candidatesDropped`, `anchorSha256`, the walk's `WalkStats` and `unsupportedOids`
@@ -2929,8 +2968,11 @@ tests; **live checks** are informational.
   expected Walk (asserted only in the walker-only harness, revokt-engine's test set; every other path asserts the Finding.Path columns, and revokt-testing's recorded fixtures carry the Walk column as a string) | expected PathStatus / NoIssuerReason / WalkEnd | expected Path fields | verdict
   relation to the honest chain`, on every platform path (JVM walker, JVM walker with the fallback
   disabled in the walker-only harness, Android CT-gap path, Android plain delegate, `Revokt.evaluate`; a row whose
-  outcome depends on the fallback states its fallback-disabled expectation, and on that path a row's "fallback
-  skipped" is `VerifierError("fallback disabled")`, decision step 6, revision 49):
+  outcome depends on the fallback states its fallback-disabled expectation, decision step 6, revision 49; every row
+  whose walk ends `NotFound` or `Budget` with `usedFallback = false` asserts exactly one `FallbackNotUsed` with step
+  6's reason, revision 50: `DISABLED` on the disabled path, where a row's "fallback skipped" is
+  `FallbackNotUsed(DISABLED)`; else `SKIPPED` above `FALLBACK_MAX_PRESENTED`, as in a row's "fallback skipped"; else
+  `FAILED`):
   (a) random-key fake issuer; (b) ECDSA-recovered second key; (c) RSA duplicate-signature key;
   (d) recovered-key fake with an unsupported own signature, terminating at a real anchor; (e) 8, 16
   and 63 distinct-key related junk ahead of the real one → `Found`, verdict equals honest; (f)
@@ -2973,12 +3015,12 @@ tests; **live checks** are informational.
   honest issuer unrelated by encoding, six same-name mutually cross-signing junk certificates ahead →
   `Budget(EXPLORATION_BUDGET)`, `candidatesExplored = 1024`, `usedFallback = true`,
   `PATH_BUDGET_EXCEEDED`, `rule = REVOKED`, honest key last in `issuerSpkiSha256s`; with the fallback disabled the
-  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `VerifierError("fallback disabled")`, the honest key (which only the fallback reaches) not in
+  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `FallbackNotUsed(DISABLED)`, the honest key (which only the fallback reaches) not in
   `issuerSpkiSha256s`, so `rule = PATH_BUDGET_EXCEEDED`; (ae) platform
   accepts, walker `UNANCHORED` and fallback fails → `NO_ISSUER(PLATFORM_ONLY)`,
   `walkerReason = UNANCHORED`; (af) 9 presented certificates with a link the walker cannot reproduce
   (custom delegate) → fallback skipped, `PATH_BUDGET_EXCEEDED`; with the fallback disabled → `PATH_BUDGET_EXCEEDED`
-  as well, `usedFallback = false`, `VerifierError("fallback disabled")`; (ag) 70 presented certificates →
+  as well, `usedFallback = false`, `FallbackNotUsed(DISABLED)`; (ag) 70 presented certificates →
   `Budget(EXPLORATION_BUDGET)` without a walk; (ah) `VERIFICATION_BUDGET`: 12 presented certificates
   of distinct RSA duplicate-signature keys each verifying the leaf and recursing into a
   32-certificate dead-end subtree → `Budget(VERIFICATION_BUDGET)`, `verifications = 256`; (ai) a
@@ -3809,7 +3851,8 @@ A project with two release-capable maintainers (under the maintainer's personal 
 §3.1 containment checks on every PR; weekly upstream-drift and `mozilla/crlite` release watchers;
 `SECURITY.md` with a 90-day disclosure policy; two-person review on the trust manager, walker,
 verifiers and clubcard module; external review before 1.0; **the walker and the `Rule` model get a
-dedicated adversarial review before 0.2's walker is coded**, since every review round so far found its hole there.
+dedicated adversarial review once they are implemented (after the walker, `reconstruct` and decision steps 1–8
+merge) and before the §9.1 walker fuzzer runs against them**, since every review round so far found its hole there.
 **Before 0.2 ships, the §9.1 walker fuzzer must pass P1–P8 against the implementation.**
 
 ## Appendix A. Verification log (2026-10-21, additions 2026-10-22)
