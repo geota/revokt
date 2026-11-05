@@ -29,9 +29,8 @@ Certificates.
 
 > [!WARNING]
 > **revokt is not production ready.** Nothing is published to Maven Central, and the API below is a design sketch
-> that may change in any 0.x release; binary compatibility is promised from 1.0. The project is in milestone 0.1, the
-> engine's foundations. The first `Revokt` facade
-> lands in 0.2, and the OkHttp, Ktor and Android bindings in 0.3. See the [roadmap](ROADMAP.md) for progress.
+> that may change in any 0.x release; binary compatibility is promised from 1.0. Milestone 0.1, the engine's
+> foundations, is done. The first `Revokt` facade lands in 0.2, and the OkHttp, Ktor and Android bindings in 0.3. See the [roadmap](ROADMAP.md) for progress.
 
 ## Why
 
@@ -130,7 +129,7 @@ behind it.
 | ⏳ | Per-anchor distrust | M4 |
 | ⏳ | Merkle Tree Certificates | M5 |
 
-✅ done · 🚧 in progress · ⏳ planned. The [roadmap](ROADMAP.md) has the detail.
+✅ done · 🚧 in progress · ⏳ not started. The [roadmap](ROADMAP.md) has the detail.
 
 ## Modules
 
@@ -155,7 +154,7 @@ behind it.
 
 ## Progress
 
-The 0.1 parser track is complete. Its bar is a **differential oracle** (spec §9.2): every certificate is parsed by
+0.1 is complete. Its parser's bar is a **differential oracle** (spec §9.2): every certificate is parsed by
 revokt and by independent implementations, and a disagreement that could change a revocation answer fails the build
 unless it is recorded with a written justification.
 
