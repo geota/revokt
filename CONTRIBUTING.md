@@ -320,7 +320,7 @@ a trailer rule is violated:
   while two maintainers exist the Action adds nothing GitHub does not already enforce through code-owner
   review; it becomes a boundary at three.
 - Protected paths (CODEOWNERS and the `protected-paths` Action, one list, kept in `.github/protected-paths.txt`): `revokt-clubcard/**`,
-  `**/verify/**`, `**/walker/**`, `**/RevoktTrustManager*`, `**/parser/**`, `**/fetch/**`, `**/signature/**`,
+  `**/verify/**`, `**/walker/**`, `**/RevoktTrustManager*`, `**/parser/**`, `**/parse/**`, `**/fetch/**`, `**/signature/**`,
   `data/seed/**`, `.github/**`, `build-logic/**`, the dependency ingress files (section 3), `docs/spec/**`,
   `gradle/corpus-pin.properties` (which corpus CI trusts) and `gradle/oracle-matrix.properties` (which oracle versions
   it replays).
