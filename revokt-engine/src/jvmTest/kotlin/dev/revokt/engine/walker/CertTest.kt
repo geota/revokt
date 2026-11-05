@@ -24,7 +24,6 @@ import java.security.AlgorithmParameters
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.interfaces.ECPublicKey
-import java.security.spec.ECGenParameterSpec
 import javax.security.auth.x500.X500Principal
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -34,6 +33,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import org.ietf.jgss.Oid as JdkOid
 
 /** Spec §5.1 `Cert` and §5.5: every field from the one parse of `Cert.tbs`, against the parser and the JDK. */
 class CertTest {
@@ -119,13 +119,10 @@ class CertTest {
             assertContentEquals(jdk.publicKey.encoded, c.spki, name)
             val family = mapOf("RSA" to KeyFamily.RSA, "EC" to KeyFamily.EC).getValue(jdk.publicKey.algorithm)
             assertEquals(family, c.keyFamily, name)
+            // The named curve's OID as the JDK encodes the parameters; ECGenParameterSpec.name is a name on some JDKs.
             val curve =
                 (jdk.publicKey as? ECPublicKey)?.let {
-                    AlgorithmParameters
-                        .getInstance("EC")
-                        .apply { init(it.params) }
-                        .getParameterSpec(ECGenParameterSpec::class.java)
-                        .name
+                    JdkOid(AlgorithmParameters.getInstance("EC").apply { init(it.params) }.encoded).toString()
                 }
             assertEquals(curve, c.curveOid, name)
             assertContentEquals(jdk.subjectX500Principal.encoded, c.subjectRaw, name)

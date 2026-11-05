@@ -63,9 +63,12 @@ class KeyFamilyTest {
             type: String,
             oid: String,
         ): String? =
+            // getService resolves aliases however the provider registered them (legacy properties or putService, which
+            // differ across JDK releases); its algorithm is the standard name.
             providers.firstNotNullOfOrNull { p ->
-                p.getProperty("Alg.Alias.$type.$oid") ?: p.getProperty("Alg.Alias.$type.OID.$oid")
-                    ?: p.services.firstOrNull { it.type == type && it.algorithm == oid }?.algorithm
+                (p.getService(type, oid) ?: p.getService(type, "OID.$oid"))?.algorithm
+                    ?: p.getProperty("Alg.Alias.$type.$oid")
+                    ?: p.getProperty("Alg.Alias.$type.OID.$oid")
             }
         val expected =
             rsaSignatures.associateWith { listOf("RSA") } + ecdsaSignatures.associateWith { listOf("ECDSA") } +
@@ -84,8 +87,15 @@ class KeyFamilyTest {
         }
         // JDK 17 already knows every RSA and ECDSA OID listed and EdDSA; later JDKs add ML-DSA and SLH-DSA.
         assertTrue(known >= rsaSignatures.size + ecdsaSignatures.size - 2, "the JDK named only $known OIDs")
+        // JDK 17's SunEC registers no OID alias for its EC KeyFactory, so key OIDs are checked where the JDK knows them.
+        val keys =
+            mapOf(
+                "1.2.840.113549.1.1.1" to "RSA",
+                "1.2.840.113549.1.1.10" to "RSASSA-PSS",
+                "1.2.840.10045.2.1" to "EC",
+            )
+        for ((oid, standard) in keys) jdkName("KeyFactory", oid)?.let { assertEquals(standard, it.uppercase(), oid) }
         assertEquals("RSA", jdkName("KeyFactory", "1.2.840.113549.1.1.1")?.uppercase())
-        assertEquals("EC", jdkName("KeyFactory", "1.2.840.10045.2.1")?.uppercase())
     }
 
     @Test
