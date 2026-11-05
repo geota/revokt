@@ -1,10 +1,65 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 48** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-04
+Status: **draft spec / project proposal, revision 49** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 49 (0.2's scope, step 6 without the fallback, the engine name, the AMO SPKI pin, 2026-11-05)
+- **Retagged** (§9, §11; the maintainer's decisions on the 0.2 plan): four groups of items tagged or listed for 0.2
+  need machinery §11 puts in 0.3. They move to 0.3, and §11's 0.2 and 0.3 rows now say the same as §9.
+  - **`Rule` model:** the counter sums (`parseFailed.values.sum() == fired[PARSE_FAILED]`, the `rejects` sums), the
+    K6 clause on a path-cache hit, the `shadowPolicy` item and the loader halves of the `c2spCache`/`SYSTEM` items
+    need `status()` counters, the path cache, the shadow policy and the system cache.
+    - **Their verdict-level halves stay [0.2]:** over a `SYSTEM` generation the test hands the evaluator, `Accepted`
+      with `UNSIGNED_DATA` under `minTrustClass(CRLITE, SIGNED)` and `Rejected(UNSIGNED_DATA)` under `STRICT`; a
+      `NO_SCTS` chain under `DEFAULT` is `Accepted`.
+    - **§11's 0.3 row** now names `shadowPolicy`, which no row named before.
+  - **PKIX fallback:** "on both platforms" becomes the jvmMain `PkixPathBuilderFallback`, which Android also runs
+    through ojluni, tested on the JVM in 0.2. Its Android instrumented run joins the 0.3 suite, with `revokt-android`.
+  - **(g)'s fetcher items:** the 401/407 item's Android and OkHttp halves and the SAN item's Android half are 0.3,
+    with those fetchers' modules. The JDK halves stay 0.2.
+  - **Content-signature fixtures:** the restart with the clock still behind needs a store that outlives the
+    instance. The mirror `index.bin` window and the 1 MiB + 1 mirror `index.bin` need a `MIRROR` source. All three
+    are tagged [0.3].
+- **Decided** (§11, 0.2's minimal `Revokt`):
+  - **`FetcherTls`:** in 0.2 each source's `FetcherTls` carries the platform `fetcherDelegate` only. The fetcher
+    trust managers (`fetcherTrustManager` and the per-source instances), `FETCHER_TRUST_UNAVAILABLE` and the
+    `BLOCKED_BY_SELF` hold arrive together in 0.3, so the §8 fetcher policy does not run in 0.2. The signed feed is
+    still authenticated end to end by its content signature (§7.1).
+  - **`sync()`:** `sync()`, `syncAsync()` and `syncBlocking()` are internal in 0.2, so the updater syncs only on its
+    schedule; they are public from 0.3. `SyncResult`, `SyncOutcome` and `SyncStage` ship public in 0.2.
+  - **An empty or throwing default trust store:** `start()` succeeds, and `evaluator.evaluate` throws
+    `IllegalStateException` until an index exists. That is 0.3's behaviour too: fixture (h) starts a seed-only
+    configuration over an empty default trust store, and §4's lazily created `revokt.trustManager` throws only once
+    something asks for it. So 0.3 does not reverse 0.2.
+- **Decided** (§5.1 decision step 6, the walker fixtures): step 6 never said what happens with the PKIX fallback
+  disabled (`pkixFallback(false)`, and the walker-only harness's disabled path).
+  - **Now:** the disabled branch gives what step 6 gives when no fallback path exists. A walk `Budget` is
+    `PATH_BUDGET_EXCEEDED`, the same as with the fallback enabled, with `usedFallback = false` and only the walk's
+    partial leaf keys evaluated. A `NotFound` over more than `FALLBACK_MAX_PRESENTED` certificates is
+    `PATH_BUDGET_EXCEEDED`, whether or not step 1 ran. Any other `NotFound` is `ISSUER_UNVERIFIED` or `NO_ISSUER`
+    under the fallback-failed branch's rule, `PLATFORM_ONLY` on a trust-manager binding.
+  - **The finding** (the maintainer's choice): wherever the fallback did not run because it is configured off, step
+    6 reports a distinct `VerifierError("fallback disabled")`. `"fallback skipped"` stays for the enabled, too-long
+    case only.
+  - **The skipped branch with the fallback enabled** named only "the platform accepted in step 1". It now also
+    applies where step 1 does not run (the walker-only harness and `Evaluator.evaluate`), as fixture (af) already
+    expected on every platform path.
+  - **Fixtures:** a row whose outcome depends on the fallback states its disabled expectation. (ad) disabled →
+    `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `VerifierError("fallback disabled")`, and the honest key absent
+    because only the fallback reaches it, so `rule = PATH_BUDGET_EXCEEDED`. (af) disabled → `PATH_BUDGET_EXCEEDED`
+    with `VerifierError("fallback disabled")`.
+- **Added** (§3.2, §4, §5.5): `RevocationEngine` gains `val name: String`, defaulting to the class's simple name, or
+  `"anonymous"` when the class has none. The Kotlin engine returns `"kotlin"` and the upki engine `"upki"`.
+  `Finding.EngineError.engineName` is that name whenever `producer == ENGINE`, so it is never null there. Before, a
+  third-party engine had no name to report. `name` must not throw, and revokt reads it once; an engine in an
+  R8-minified Android app overrides it with a stable string.
+- **Completed** (§7.1, Appendix A): §7.1 gave `root-ca-production-amo` only as a truncated certificate hash, from
+  which no SPKI pin can be written. Its full SPKI SHA-256, `3317FA45…B1E2E7`, is now the default pin of
+  `MozillaRemoteSettings.DEFAULT`. Appendix A records it, the full certificate hash and the two independent sources
+  it was verified against: the live x5u chain and Firefox's built-in content-signature root.
 
 ### Changes in revision 48 (every unrelated leaf issuer collected, the C2SP index rules for every source, and the JSON allocation budget, 2026-11-04)
 - **Decided** (#98, found while reviewing #91's reference walker; the maintainer chose reading B): at the leaf, §5.1's
@@ -1343,6 +1398,7 @@ MPL-2.0 is file-level copyleft. Upstream files carry the Exhibit A header only, 
 ```kotlin
 interface RevocationEngine : AutoCloseable {
     val formats: Set<FilterFormat>                                   // generations in other formats are never offered to prepare()
+    val name: String get() = this::class.simpleName ?: "anonymous"   // the class's simple name, or "anonymous" when the class has none; Finding.EngineError.engineName on every ENGINE_ERROR whose producer is ENGINE (§4, §5.5), so never null there; the Kotlin engine returns "kotlin", the upki engine "upki"; must not throw, and revokt reads it once per instance; on Android under R8, which renames classes, an engine overrides it with a stable string (revision 49)
     fun prepare(generation: GenerationFiles): PreparedGeneration     // serialised: the loader dispatcher, or the start() caller's thread in the sole-seed synchronous path (§4 S), never concurrently; builds an inactive state (decode, validate); throws on a corrupt generation; the engine's live generation is untouched
     fun activate(prepared: PreparedGeneration)                        // loader only; atomic swap with respect to concurrent query(); the previous generation is released once in-flight queries drain; a throw leaves the live generation in place
     fun install(generation: GenerationFiles): String = prepare(generation).use { activate(it); it.generationId }   // convenience (use {} so an activate() throw closes the prepared generation; close() after activate() is a no-op); the loader never calls it: it runs the §6.5 self-check on the prepared state between the two calls, so a failure leaves the engine untouched and no recovery path has a window
@@ -1362,7 +1418,7 @@ class CrliteQuery private constructor(…) {                           // growab
 ```
 
 **Seam.** `Revokt.Builder.revocationEngine(engine: RevocationEngine)` is public from 0.2 (the first `Revokt`; the engine-side types are public from 0.1) and
-defaults to the Kotlin engine (`formats = {V3, V4}`). The
+defaults to the Kotlin engine (`formats = {V3, V4}`, `name = "kotlin"`). The
 updater builds `index.bin` itself for Remote Settings generations (full, deltas and their
 parentage, coverage), so every `GenerationFiles` is a directory image any C2SP reader accepts; the
 only engine-specific property is `format`. **`index.bin` consistency, verified by the loader before
@@ -1400,6 +1456,7 @@ no SCT extension, or none whose list parses under §9.2 (for example an empty li
 
 **upki adapter (`revokt-engine-upki`, Panama, JDK 22+; CI-only until the §12 trigger).**
 Verified against upki at tag v1.0.1 (crates.io: 1.0.0; the shim's `Cargo.lock` pins the git tag) `ffi.rs`, `revocation/mod.rs` and `rustls-upki` (Appendix A).
+- *Name*: `"upki"`, the `engineName` of its `ENGINE_ERROR` findings (revision 49).
 - *Formats*: `{V3, V4}`. upki's `clubcard-crlite` dependency (`bincode` feature) decodes both version bytes (`Encoding::read` accepts 3 and 4), so Mozilla's v3 filters are read as served; the C2SP spec says v4 and the crate is laxer than the spec. The engine never transcodes.
 - *Lifecycle*: `prepare` writes the files verbatim into a fresh directory, writes a TOML config whose
   `cache_dir` is that directory and calls `revokt_upki_config_new`; the returned `PreparedGeneration`
@@ -1615,7 +1672,7 @@ sealed class Finding {
     class UnsupportedAlgorithm : Finding() { val oid: String; val where: Layer; val outcomeDepended: Boolean }
     class VerifierError : Finding() { val oid: String; val message: String }
     class AlgorithmIdMismatch : Finding() { val certIndex: Int }
-    class EngineError : Finding() { val message: String; val producer: EngineErrorProducer; val engineName: String? /* "kotlin", "upki" when producer == ENGINE */ }
+    class EngineError : Finding() { val message: String; val producer: EngineErrorProducer; val engineName: String? /* the engine's RevocationEngine.name (§3.2) when producer == ENGINE, so never null there: "kotlin" and "upki" for the two shipped engines */ }
     class Exempted : Finding() { val rule: Rule }
 }
 class PresentedChain private constructor(…) { val size: Int; fun der(i: Int): ByteArray; fun subject(i: Int): ByteArray; fun issuer(i: Int): ByteArray; fun spkiSha256(i: Int): ByteArray /* SHA-256 of the SPKI TLV */; fun serial(i: Int): ByteArray /* rawSerial: INTEGER content bytes as encoded, sign byte and leading zeros preserved */; fun dnsNames(i: Int): List<String> }
@@ -1650,8 +1707,9 @@ class RevoktState private constructor(…) { val lifecycle: RevoktLifecycle /* t
 Growable enums are labelled above; closed ones are `Outcome`, `Enforcement`, `RuleClass`,
 `Severity`, `RevoktLifecycle`, `VerifyResult`, `LogLevel`. `RevoktLimits` constants are `@JvmField val`, never `const val`. Members
 shown as extensions are declared as members (except the binding extensions on `OkHttpClient`/`OkHttpClient.Builder`, which are top-level in their artifact under `@file:JvmName("RevoktOkHttp")`), `suspend` members are `@JvmSynthetic`, and every file
-holding public top-level `kotlin.time` extensions carries `@file:JvmName`. The build asserts
-`-jvm-default=enable` so interface members with bodies are default methods for Java implementers.
+holding public top-level `kotlin.time` extensions carries `@file:JvmName`. Interface members with bodies are default
+methods for Java implementers: `-jvm-default=enable` is the Kotlin compiler's default at the build's Kotlin version, and
+build-logic does not override it.
 `RevoktCertificateException : CertificateException` carries the `Verdict.Rejected` as `@Transient val verdict: Verdict.Rejected?` (null only after deserialisation) and a
 `CertPathValidatorException` as its immediate cause whose reason is a **per-rule constant** in the
 `revokt-engine` jvmMain `Rule → BasicReason` map (`java.security.cert` is not commonMain; in `revokt-engine`, not `revokt-jsse`, so the 0.1 golden fixture can assert it), total
@@ -1781,7 +1839,7 @@ remaining a subsequence.
 | `MAX_RELATED_PER_LEVEL` | 64 | related candidates explored at one node; the 65th triggers `RELATED_BUDGET` without being explored |
 | `MAX_VERIFICATIONS` | 256 | verifier calls per walk (memo hits excluded; the guard-tripping attempt not counted) |
 | `MAX_EXPLORED` | 1,024 | candidates for which verification was requested per walk, memo hits included |
-| `FALLBACK_MAX_PRESENTED` | 8 | the PKIX fallback is skipped for longer presented chains; a `NotFound` on such a chain that the platform accepted is `PATH_BUDGET_EXCEEDED`, never `NO_ISSUER` |
+| `FALLBACK_MAX_PRESENTED` | 8 | the PKIX fallback is skipped for longer presented chains; a `NotFound` on such a chain is `PATH_BUDGET_EXCEEDED`, never `NO_ISSUER`, whether the platform accepted it in step 1 or step 1 did not run (the walker-only harness, `Evaluator.evaluate`), and with the fallback enabled or disabled (decision step 6) |
 | `PATH_CACHE_ENTRIES` / `PATH_CACHE_TTL` | 256 / 10 min | per trust manager; TTLs are absolute from insertion on the monotonic `TimeSource`, not sliding; entries hold the leaf's DER, `serial` and `scts` only, never the presented chain |
 | `CROSS_CALL_MEMO_ENTRIES` | 1,024 | per `Revokt`; `VERIFIED` only; synchronized, shared by concurrent handshake threads across trust managers |
 | `ACCEPTANCE_MEMO_ENTRIES` / `ACCEPTANCE_MEMO_TTL` | 1,024 / 24 h | per trust manager; the 3-arg null-host retry memo (flow step 1), keyed (chain hash, host'), written only after a Socket/SSLEngine overload's flow step 1 returned; absolute TTL; an expired entry costs a failed lazy cleaner on a long-lived connection and buys no safety, hence long |
@@ -1851,11 +1909,11 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    provided")` on a null hostname otherwise (Appendix A); the 0.3 probe confirms behaviour per image,
    with and without a `<domain-config>`, it does not establish availability.
 5. `walk = reconstruct(presented, index)`; `Found` → step 7.
-6. `fallback = pathBuilder.build(presented, anchors, now)` if `presented.size ≤ FALLBACK_MAX_PRESENTED`,
+6. `fallback = pathBuilder.build(presented, anchors, now)` if the fallback is enabled and `presented.size ≤ FALLBACK_MAX_PRESENTED`,
    cached under the path key:
    - walk `NotFound` and the fallback finds a path → `Found([fallback], usedFallback = true)`.
    - walk `NotFound`, the fallback was **skipped** (chain too long) and the platform accepted in
-     step 1 → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `VerifierError("fallback skipped")`:
+     step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `VerifierError("fallback skipped")`:
      no honest Web PKI chain is longer than 8 certificates and unreproducible by the walker, and the
      server controls chain length.
    - walk `NotFound` and the fallback failed: `ISSUER_UNVERIFIED` when the child's own signature OID
@@ -1869,6 +1927,15 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    - walk `Budget`: the fallback path's issuer key (appended last) and the walk's partial leaf keys
      are evaluated in step 7 **only so that `REVOKED` is reported when reachable**; the path status
      is `PATH_BUDGET_EXCEEDED` regardless; `usedFallback = true` when a fallback path was evaluated.
+   - **fallback disabled** (`pkixFallback(false)`, and the walker-only harness's disabled path; revision 49):
+     `pathBuilder.build` is never called, and step 6 gives what the branches above give when no fallback path
+     exists, with `VerifierError("fallback disabled")` wherever the fallback did not run because it is configured
+     off (`"fallback skipped"` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
+     as with the fallback enabled, with only the walk's partial leaf keys evaluated and `usedFallback = false`; walk
+     `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE`,
+     whether or not step 1 ran; any other walk `NotFound` → `ISSUER_UNVERIFIED` or `NO_ISSUER` under the
+     fallback-failed branch's rule. On a trust-manager binding any such `NO_ISSUER` is `PLATFORM_ONLY`: the platform
+     trusts a chain the walker cannot reproduce, and no PKIX builder ran; `walkerReason` keeps the walker's reason.
 7. Data: the data rules (`NO_DATA` for each required dataset with no generation and not `pending`,
    never with a generation installed from a seed or a system cache for that dataset; `STALE`; `UNSIGNED_DATA`) were computed from the generation
    snapshot (read at flow step 2) before decision step 1, outside the catch boundary (the one clock read is itself guarded: a
@@ -2193,7 +2260,8 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   divergence from the delegate are reported as `Finding.VerifierError("fallback")` and surface as
   `PLATFORM_ONLY`. It is skipped above `FALLBACK_MAX_PRESENTED` presented certificates (no candidate
   budget; exponential on stuffed chains) with `VerifierError("fallback skipped")`, which cannot change
-  a `Budget` outcome.
+  a `Budget` outcome. With `pkixFallback(false)` it never runs, and step 6 reports `VerifierError("fallback disabled")`
+  instead (revision 49).
 - **Caches**, per trust manager, LRU-bounded (a synchronized access-ordered `LinkedHashMap` or a
   striped LRU; touched from concurrent handshake threads): the path cache holds `Found`, `NotFound`,
   `Budget` and the fallback result alike. **A path-cache entry is exactly**: `status`, `source`,
@@ -2395,7 +2463,7 @@ and `Evaluator.evaluate` (which throws `IllegalStateException` outside `STARTED`
 the exception preceded the walk; the data rules and `dataStates`, computed before the boundary, are
 on the verdict regardless. `ENGINE_ERROR` has exactly three producers (`EngineErrorProducer`): the
 catch boundary, an engine result (`CrliteQueryResult.ENGINE_ERROR`, or `NO_DATA` while a generation
-is published; with `engineName`), and an exemption that throws;
+is published; with `engineName`, the engine's `RevocationEngine.name`), and an exemption that throws;
 each attaches `Finding.EngineError`.
 
 Layers by milestone: **[M2] L1/L2** over every path the walker (or an exhaustive re-walk) returned;
@@ -2629,9 +2697,10 @@ HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parse
 and every non-terminal link; for every non-leaf link below the terminal: basicConstraints `cA = TRUE`,
 `pathLenConstraint` honoured, subject name equal to the child's issuer (raw or canonical), keyUsage
 `keyCertSign` when present;
-links verified with the signed TBS algorithm; root SPKI hash in the pinned set (today
-`CN=root-ca-production-amo`, certificate SHA-256 `C8A80E9A…A106DB`; the set is additive while any seed
-references a root); **the terminal is a trust anchor**: the first certificate on the path whose SPKI is
+links verified with the signed TBS algorithm; root SPKI hash in the pinned set (today one entry, the SPKI SHA-256 of
+`CN=root-ca-production-amo`, `3317FA45154AC7DA55694D3782316056471FC147C04AED3E03FFE99565B1E2E7`, which
+`MozillaRemoteSettings.DEFAULT` pins; certificate SHA-256 `C8A80E9A…A106DB`; both verified in Appendix A, revision 49;
+the set is additive while any seed references a root); **the terminal is a trust anchor**: the first certificate on the path whose SPKI is
 pinned, anything after it ignored; only its SPKI is checked, never its validity, CA bits, key usage
 or subject (mozilla::pkix semantics; the wrapper around a pinned key is attacker-choosable, so a
 check on it stops nothing, while root expiry would freeze every deployed client and seed); leaf EKU
@@ -2778,10 +2847,10 @@ tests; **live checks** are informational.
   the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
   disagreement fails the job.
-- **Content-signature fixtures** with mutations; incremental fixtures; a seed with an expired signer
-  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a mirror generation whose `index.bin` names a log window absent from the filter's coverage → `FAILED`, `INDEX_INCONSISTENT`; a mirror `index.bin` of 1 MiB + 1 byte → `FAILED`, `INDEX_INCONSISTENT`, before it is parsed (revision 48); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; signature
+- **Content-signature fixtures** (0.2 gates, except the three items tagged [0.3], which need the §6.5 store or a `MIRROR` source; revision 49) with mutations; incremental fixtures; a seed with an expired signer
+  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; [0.3] a mirror generation whose `index.bin` names a log window absent from the filter's coverage → `FAILED`, `INDEX_INCONSISTENT`; [0.3] a mirror `index.bin` of 1 MiB + 1 byte → `FAILED`, `INDEX_INCONSISTENT`, before it is parsed (revision 48); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; signature
   over records with a tombstone merged vs not merged.
-- **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items are 0.2 gates; those items and (c), (e), (f), (h) need the store, mirror or lifecycle machine and are 0.3 gates): (a) changeset older than the watermark beyond the window →
+- **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (c), (e), (f), (h) need the store, mirror, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
   `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
   with equal coverage → installs; **newer timestamp with lower coverage → installs and advances the
   watermark**; a refused rollback leaves `consecutiveFailures` and `lastVerified*` unchanged;
@@ -2821,7 +2890,7 @@ tests; **live checks** are informational.
   a signed `intermediates` changeset served on the `cert-revocations` URL → `FAILED`,
   `SYNC_SCHEMA_REJECTED`, cursor, watermark and `lastVerified*` unchanged; a 3xx → `FAILED`; a gzip
   body inflating past its cap → `FAILED` before the cap is exceeded; a signed attachment whose size
-  exceeds `MAX_FILTER_BYTES` → `FAILED` with `CAP_NEAR_LIMIT`, nothing advanced, not fetched; a signed revocation of the Remote Settings host → `BLOCKED_BY_SELF`; the same hit chain delivered to the public `fetcherTrustManager` by a consumer client → rejected, `feedHostBlock` not written, `updateBlockedBySelf` unchanged, while the same chain on the source's internal instance during its fetch → `BLOCKED_BY_SELF`; two sources with a factory that returns one client built over the first source's `tls` for both → the second source's hit chain, handshaking outside any fetch of the first source, writes nothing; a sync 23 h after the first block (across a process restart) is still `BLOCKED_BY_SELF`; one at 25 h installs with `feedHostRevoked = true` and `FEED_HOST_REVOKED` on `RevoktState.warnings`; the same on a `c2spMirror` host → `BLOCKED_BY_SELF` while its chain is hit (fetcher-trust-manager unit fixture: in M1 a mirror is fetched only with no `SIGNED` generation and evidence comes from `SIGNED`/`BUNDLED` data, so the end-to-end case is M2's denylist); a test engine whose `formats` is `{V4}` with the v3 seed and no fetching source → `start()` throws `SEED_UNREADABLE` in the sole-seed `ENFORCE` configuration (V `FORMAT_UNSUPPORTED` cannot fire first, there is no fetching source); a fetch answered 401 or 407 → `FAILED` with `httpStatus` set, on the JDK, Android and OkHttp fetchers; the JDK and Android fetchers against a server whose certificate lacks the host's SAN → `FAILED` (endpoint identification);
+  exceeds `MAX_FILTER_BYTES` → `FAILED` with `CAP_NEAR_LIMIT`, nothing advanced, not fetched; a signed revocation of the Remote Settings host → `BLOCKED_BY_SELF`; the same hit chain delivered to the public `fetcherTrustManager` by a consumer client → rejected, `feedHostBlock` not written, `updateBlockedBySelf` unchanged, while the same chain on the source's internal instance during its fetch → `BLOCKED_BY_SELF`; two sources with a factory that returns one client built over the first source's `tls` for both → the second source's hit chain, handshaking outside any fetch of the first source, writes nothing; a sync 23 h after the first block (across a process restart) is still `BLOCKED_BY_SELF`; one at 25 h installs with `feedHostRevoked = true` and `FEED_HOST_REVOKED` on `RevoktState.warnings`; the same on a `c2spMirror` host → `BLOCKED_BY_SELF` while its chain is hit (fetcher-trust-manager unit fixture: in M1 a mirror is fetched only with no `SIGNED` generation and evidence comes from `SIGNED`/`BUNDLED` data, so the end-to-end case is M2's denylist); a test engine whose `formats` is `{V4}` with the v3 seed and no fetching source → `start()` throws `SEED_UNREADABLE` in the sole-seed `ENFORCE` configuration (V `FORMAT_UNSUPPORTED` cannot fire first, there is no fetching source); a fetch answered 401 or 407 → `FAILED` with `httpStatus` set, on the JDK fetcher; [0.3] the same on the Android and OkHttp fetchers; the JDK fetcher against a server whose certificate lacks the host's SAN → `FAILED` (endpoint identification); [0.3] the same on the Android fetcher;
   (h) lifecycle: `close()` with a live client under `STRICT` → subsequent handshakes succeed on the
   platform verdict, `evaluations` frozen, no events; `close()` before ready → `readyFuture()` fails with
   `IllegalStateException`; `ready` is false in `CREATED` even with `requiredDatasets` empty; a
@@ -2852,13 +2921,16 @@ tests; **live checks** are informational.
 - **Verifier**: OID harvest; key-OID gaps; PSS parameters; raw-to-DER edge cases; an off-curve point
   on a supported OID → `INVALID`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
 - **Parser corpus** and the §9.2 differential parser oracle; **Android instrumented** (API 26, 31,
-  34, 36) including the null-host extension-call probe and the §9.2 corpus replay against the
+  34, 36) including the PKIX fallback (the jvmMain `PkixPathBuilderFallback` through ojluni, JVM-tested in 0.2), the
+  null-host extension-call probe and the §9.2 corpus replay against the
   platform `CertificateFactory` (a 0.3 gate; pinned system-image revisions, Conscrypt APEX version logged); **live checks**; **benchmarks** on a physical ARM device including
   verifications per honest handshake.
 - **Walker fixtures**, schema `id | presented (ordered) | snapshot | preload | verifier.unsupported |
   expected Walk (asserted only in the walker-only harness, revokt-engine's test set; every other path asserts the Finding.Path columns, and revokt-testing's recorded fixtures carry the Walk column as a string) | expected PathStatus / NoIssuerReason / WalkEnd | expected Path fields | verdict
   relation to the honest chain`, on every platform path (JVM walker, JVM walker with the fallback
-  disabled in the walker-only harness, Android CT-gap path, Android plain delegate, `Revokt.evaluate`):
+  disabled in the walker-only harness, Android CT-gap path, Android plain delegate, `Revokt.evaluate`; a row whose
+  outcome depends on the fallback states its fallback-disabled expectation, and on that path a row's "fallback
+  skipped" is `VerifierError("fallback disabled")`, decision step 6, revision 49):
   (a) random-key fake issuer; (b) ECDSA-recovered second key; (c) RSA duplicate-signature key;
   (d) recovered-key fake with an unsupported own signature, terminating at a real anchor; (e) 8, 16
   and 63 distinct-key related junk ahead of the real one → `Found`, verdict equals honest; (f)
@@ -2900,10 +2972,13 @@ tests; **live checks** are informational.
   junk ahead → `Found` through the unrelated loop, `REVOKED`; (ad) **walker-harness only**: leaf,
   honest issuer unrelated by encoding, six same-name mutually cross-signing junk certificates ahead →
   `Budget(EXPLORATION_BUDGET)`, `candidatesExplored = 1024`, `usedFallback = true`,
-  `PATH_BUDGET_EXCEEDED`, `rule = REVOKED`, honest key last in `issuerSpkiSha256s`; (ae) platform
+  `PATH_BUDGET_EXCEEDED`, `rule = REVOKED`, honest key last in `issuerSpkiSha256s`; with the fallback disabled the
+  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `VerifierError("fallback disabled")`, the honest key (which only the fallback reaches) not in
+  `issuerSpkiSha256s`, so `rule = PATH_BUDGET_EXCEEDED`; (ae) platform
   accepts, walker `UNANCHORED` and fallback fails → `NO_ISSUER(PLATFORM_ONLY)`,
   `walkerReason = UNANCHORED`; (af) 9 presented certificates with a link the walker cannot reproduce
-  (custom delegate) → fallback skipped, `PATH_BUDGET_EXCEEDED`; (ag) 70 presented certificates →
+  (custom delegate) → fallback skipped, `PATH_BUDGET_EXCEEDED`; with the fallback disabled → `PATH_BUDGET_EXCEEDED`
+  as well, `usedFallback = false`, `VerifierError("fallback disabled")`; (ag) 70 presented certificates →
   `Budget(EXPLORATION_BUDGET)` without a walk; (ah) `VERIFICATION_BUDGET`: 12 presented certificates
   of distinct RSA duplicate-signature keys each verifying the leaf and recursing into a
   32-certificate dead-end subtree → `Budget(VERIFICATION_BUDGET)`, `verifications = 256`; (ai) a
@@ -2921,23 +2996,31 @@ tests; **live checks** are informational.
   consumes no cap slot; the cap throws at `maxTrustManagers + 1` live instances and instances are collected when their
   client is dropped; a trust manager that can go past flow step 1 has a snapshot (`fetcherTrustManager` without one never goes past flow step 1); `enforcement = ENFORCE` after the start task found the sole seed unreadable → `IllegalStateException` `NO_DATA_AT_FLIP`, enforcement unchanged; two concurrent
   `trustManager(d)` calls return the same instance.
-- **`Rule` model tests** (tagged by milestone: **0.1** the enum, preset tables, golden fixture, the `revokt-engine` jvmMain `Rule → BasicReason` map and precedence; **0.2** everything that needs `evaluate`; **0.3** exceptions, caches, listeners and the Java compile): [0.1] both preset tables are total over `Rule.entries`, the two status-map ranges are subsets of it, the `Rule → BasicReason` map is total, and the `RevoktStatus` and `RevoktEvent` rule-keyed maps are zero-filled over `Rule.entries`; `entries == entries.sortedBy { ruleClass }`; the golden growability fixture diff is
+- **`Rule` model tests** (tagged by milestone: **0.1** the enum, preset tables, golden fixture, the `revokt-engine` jvmMain `Rule → BasicReason` map and precedence; **0.2** everything that needs `evaluate` alone; **0.3** exceptions, caches, counters, the shadow policy, the system cache, listeners and the Java compile; revision 49 moved the parts of [0.2] items that need 0.3 machinery to [0.3]): [0.1] both preset tables are total over `Rule.entries`, the two status-map ranges are subsets of it, the `Rule → BasicReason` map is total, and the `RevoktStatus` and `RevoktEvent` rule-keyed maps are zero-filled over `Rule.entries`; `entries == entries.sortedBy { ruleClass }`; the golden growability fixture diff is
   additive; the `PathStatus → Rule` and `CrliteQueryResult → Rule` tables; `parseFailed` zero-filled over `ParseReason.entries`; [0.2] `Verdict.rule` is the
-  first fired non-exempted `REJECT` rule; `parseFailed.values.sum() == fired[PARSE_FAILED]`; a leaf failing K6 →
-  `PARSE_FAILED(PRODUCER_UNKEYABLE)` with `keyabilityClause = TIME` and `crlite == null`, the same clause on a path-cache
-  hit, and an issuer candidate outside the profile not dropped; `rejects` sums equal rejection counts; per-dataset
+  first fired non-exempted `REJECT` rule; a leaf failing K6 →
+  `PARSE_FAILED(PRODUCER_UNKEYABLE)` with `keyabilityClause = TIME` and `crlite == null`, and an issuer candidate
+  outside the profile not dropped; per-dataset
   `NO_DATA` and `STALE` with a fresh CRLite and a 30-day-old OneCRL generation (M2) fire nothing;
   `DEFAULT.newBuilder().rule(STALE, REJECT)` with 4-day-old data → `Accepted`, `DataState.stale`,
-  `rules` empty; the same with `rejectStaleAfter(CRLITE, 3 d)` on a generation that is not `fromSeed` (or, when `fromSeed`, after a sync attempt has completed since the seed install: persisted `datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`) → `Rejected(STALE)`, and with `exempt(STALE, anchorIn(privateCa))` a chain under that anchor → `Accepted` with `Finding.Exempted(STALE)`; a `shadowPolicy = STRICT` under `DEFAULT`/`ENFORCE` with a `NO_SCTS` chain → `Accepted`, `shadowVerdict` is `Rejected(NO_SCTS)`, `shadowWouldRejects[NO_SCTS] == 1`, `rejects` unchanged, one event;
-  `dataStates[CRLITE].rules == {STALE}`; `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)` with `SeedSource.none()`,
-  an empty store and a `c2spCache` as the only source → the loader installs the `SYSTEM` generation, and a chain it
-  does not list as revoked is `Accepted` with
-  `UNSIGNED_DATA` in `Verdict.rules`, `dataStates[CRLITE].rules == {UNSIGNED_DATA}` and `fired[UNSIGNED_DATA]` advanced
-  (revision 47); `STRICT` with a `SYSTEM` generation (reached through a runtime `policy` flip from `DEFAULT`, since §7.3 never installs one under `STRICT`) → `Rejected(UNSIGNED_DATA)`
-  and, through the loader, the generation is not installed while a `SIGNED` one exists;
+  `rules` empty; the same with `rejectStaleAfter(CRLITE, 3 d)` on a generation that is not `fromSeed` (or, when `fromSeed`, after a sync attempt has completed since the seed install: persisted `datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`) → `Rejected(STALE)`, and with `exempt(STALE, anchorIn(privateCa))` a chain under that anchor → `Accepted` with `Finding.Exempted(STALE)`;
+  `dataStates[CRLITE].rules == {STALE}`; a `NO_SCTS` chain under `DEFAULT` → `Accepted`;
+  `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)` over a `SYSTEM` generation (in 0.2 the test hands the evaluator
+  that generation; the system cache is 0.3) and a chain it does not list as revoked → `Accepted` with `UNSIGNED_DATA`
+  in `Verdict.rules` and `dataStates[CRLITE].rules == {UNSIGNED_DATA}` (revision 47); `STRICT` over a `SYSTEM`
+  generation → `Rejected(UNSIGNED_DATA)`;
   `requiredDatasets = {CRLITE}`, no generation after the start task completed (`pending == false`), and a walker that throws → `Rejected(NO_DATA)` with
   `rules == {ENGINE_ERROR, NO_DATA}`; the golden fixture accepts the `ALLOW → REJECT` flip exactly
-  once per rule and preset and rejects a second; [0.3] `RevoktCertificateException.cause.reason` equals
+  once per rule and preset and rejects a second; [0.3] the parts of former [0.2] items that need 0.3
+  machinery (revision 49): `parseFailed.values.sum() == fired[PARSE_FAILED]`; `rejects` sums equal rejection counts; the K6 leaf
+  above on a path-cache hit → the same `PARSE_FAILED(PRODUCER_UNKEYABLE)` clause; a `shadowPolicy = STRICT` under
+  `DEFAULT`/`ENFORCE` with a `NO_SCTS` chain → `Accepted`, `shadowVerdict` is `Rejected(NO_SCTS)`,
+  `shadowWouldRejects[NO_SCTS] == 1`, `rejects` unchanged, one event; `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)`
+  with `SeedSource.none()`, an empty store and a `c2spCache` as the only source → the loader installs the `SYSTEM`
+  generation, and a chain it does not list as revoked gets the [0.2] verdict above with `fired[UNSIGNED_DATA]`
+  advanced; `STRICT` with a `SYSTEM` generation reached through a runtime `policy` flip from `DEFAULT` (§7.3 never
+  installs one under `STRICT`) → `Rejected(UNSIGNED_DATA)` and, through the loader, the generation is not installed
+  while a `SIGNED` one exists; `RevoktCertificateException.cause.reason` equals
   the declared reason for every rule (`REVOKED` for `REVOKED`, `UNDETERMINED_REVOCATION_STATUS` for `NO_DATA`, …); `Rejected.getRule()`
   is non-null from Java; every preset passes `validate(ENFORCE)` with no `ERROR` at every release
   (including the M3/M4 one-minor `ALLOW` rows); ENFORCE with a revoked chain twice within the
@@ -3677,8 +3760,8 @@ APIs outside the promise, the growability contract in §4.
 | Release | Scope | Estimate |
 |---|---|---|
 | 0.1 | engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3; the walker fuzzer itself is 0.2, with the walker); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8 (gated direction; D8 gap reported)); JSON tree and canonical JSON (§7.1; the content-signature payload builder is 0.2); clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; oracle CI | 5 weeks |
-| 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists); candidate index and walker per §5.1, PKIX fallback on both platforms, the §9.2 read fallback in the JVM binding, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3); **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation; CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
-| 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2; caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `status()` and `state`; Android instrumented suite including the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (revision 38's Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
+| 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists; `start()` over an empty or throwing default trust store succeeds, and `evaluator.evaluate` throws `IllegalStateException` until an index exists; `sync()`, `syncAsync()` and `syncBlocking()` are internal and the updater syncs only on its schedule, while `SyncResult`, `SyncOutcome` and `SyncStage` ship public; each source's `FetcherTls` carries the platform `fetcherDelegate` only, so the §8 fetcher policy does not run in 0.2); candidate index and walker per §5.1, the PKIX fallback (the jvmMain `PkixPathBuilderFallback`, which Android also runs through ojluni, tested on the JVM; the Android instrumented run is 0.3), the §9.2 read fallback in the JVM binding, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3) with the §9 `Rule` model's [0.2] tests; **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation (the §9 content-signature fixtures less the three tagged [0.3]); CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its Android and OkHttp fetcher halves; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
+| 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2 (`BLOCKED_BY_SELF`, `MIRROR`, and the Android and OkHttp fetcher halves); the §9 content-signature fixtures tagged [0.3] (the restart with the clock behind, and the two mirror `index.bin` items); caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; the fetcher trust managers (`fetcherTrustManager` and the per-source instances in `FetcherTls`) with the §8 fetcher policy, `FETCHER_TRUST_UNAVAILABLE` and the `BLOCKED_BY_SELF` hold; public `sync()`, `syncAsync()` and `syncBlocking()`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `shadowPolicy`, `status()` and `state`, with the §9 `Rule` model's [0.3] tests; Android instrumented suite including the PKIX fallback, the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (revision 38's Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
 
 About 14 weeks. **M2** (0.4, then 1.0): preloading as a second candidate set, exhaustive re-walk on L1/L2
 hits, OneCRL including anchors, denylist, CRLSet, `NOT_ENROLLED` split, the §5.2 residual closed,
@@ -3736,6 +3819,22 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
 - `cert-revocations`: 18 records, 9 per channel = 1 full (effective 2026-10-17) + 8 deltas through
   2026-10-21. Signed by `onecrl_202402`; x5u chain leaf P-384 (2026-09-06 to 2026-11-25) →
   `Content Signing Intermediate` (P-384) → `root-ca-production-amo` (RSA-4096, 2024-02-01, SHA-256 `C8A80E9A…A106DB`).
+- **`root-ca-production-amo`, the §7.1 pinned root** (revision 49, verified 2026-11-05): SPKI SHA-256 (over the DER
+  `SubjectPublicKeyInfo` TLV) `3317FA45154AC7DA55694D3782316056471FC147C04AED3E03FFE99565B1E2E7`; certificate SHA-256
+  `C8A80E9AFAEF4E219B6FB5D7A71D0F101223BAC5001AC28F9B0D43DC59A106DB`; self-signed, subject `C=US, O=Mozilla
+  Corporation, OU=Mozilla AMO Production Signing Service, CN=root-ca-production-amo`, RSA-4096, valid 2024-02-01 to
+  2200-12-03. Two independent sources give byte-identical DER:
+  - the terminal certificate of the live x5u chain the `cert-revocations` changeset names (signer `onecrl_202402`,
+    `content-signature-2.cdn.mozilla.net/g/chains/202402/onecrl.content-signature.mozilla.org-2026-12-15-22-12-40.chain`),
+    a rotated chain: its leaf is valid 2026-09-26 to 2026-12-15, where the bullet above recorded 2026-09-06 to
+    2026-11-25. Its leaf and `Content Signing Intermediate` verify up to it under `openssl verify`;
+  - Firefox's built-in content-signature production root, `security/manager/ssl/content-signature-prod.pem` in
+    `mozilla-firefox/firefox` at `cac25a6` (the file last changed in `3ad0ffc`, bug 1914064), the anchor of
+    `nsIContentSignatureVerifier.ContentSignatureProdRoot`.
+
+  application-services' Remote Settings client pins the same certificate SHA-256 (`ROOT_CERT_SHA256_HASH_PROD`,
+  `components/remote_settings/src/client.rs` at `9ef6d76`). The SPKI hash was computed twice with OpenSSL 4.1.0: from
+  `openssl x509 -pubkey` re-encoded as DER, and from the SPKI TLV cut out of the certificate at its DER offset.
 - `onecrl`: 1,901 records; 645 `enabled = false`.
 - Filters begin `03 00` (v3) on both channels; `default` 6,006,419 B, `compat` 1,574,015 B.
 - Firefox: `crlite_channel` `"compat"` on Android; `crlite_mode` 2; `crlite_timestamps_for_coverage` 1;
