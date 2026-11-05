@@ -1,10 +1,96 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 49** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
+Status: **draft spec / project proposal, revision 51** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 51 (Conscrypt's post-quantum algorithms and the PSS hashes, 2026-11-05)
+- **Corrected** (Appendix A, §3; found in the review of #156): Appendix A said Conscrypt does not ship ML-DSA.
+  Conscrypt uber 2.7.0 and 2.8.0, the §9.2 matrix's two releases, both register ML-DSA-44, -65 and -87,
+  SLH-DSA-SHA2-128s and 15 composite ML-DSA OIDs (`1.3.6.1.5.5.7.6.37`–`.46`, `.48`, `.49`, `.52`–`.54`).
+  - **How it was checked:** a single-file Java program over the Gradle-cached jars, on JDK 17.0.21 and 21.0.13,
+    listed the provider's services and `Alg.Alias` entries and looked each algorithm up by name and by OID. Each
+    ML-DSA set verifies a signature the JDK made. Appendix A records the details.
+  - **By name or by OID:** ML-DSA and the composites are registered by name and by OID alias, and
+    SLH-DSA-SHA2-128s by name only, with no OID alias.
+  - **Unverified:** whether Conscrypt's composite encoding matches draft -19, and the platform Conscrypt on Android.
+  - **§3:** the composite delegation rule names Conscrypt beside BC as a provider owning composite OIDs. No rule
+    changes. The JDK-provider fixtures, such as (j)'s JDK without ML-DSA, are unaffected, since the §9.2 matrix
+    uses Conscrypt as oracle 2's `CertificateFactory`, not as a `Signature` provider.
+- **Stated** (§3, as merged in #156 at `5d419cc`): how an OID reaches a JCA service.
+  - The probe and `verify` resolve it through one table to a `Signature` and a `KeyFactory` name: standard names
+    for RSA and ECDSA, `RSASSA-PSS`, the algorithm names for EdDSA, ML-DSA and SLH-DSA, and the bare OID for each
+    composite.
+  - **Under Conscrypt alone:** ML-DSA, SLH-DSA-SHA2-128s (by name) and the 15 registered composites are supported.
+    `unsupportedOids()` is 21 OIDs, the same under 2.7.0 and 2.8.0:
+    - `SHA512/224withRSA` and `SHA512/256withRSA`;
+    - `id-RSASSA-PSS`;
+    - Ed448;
+    - the other 11 SLH-DSA sets;
+    - the composites `.47`, `.50` and `.51`;
+    - the three brainpool curves.
+
+    §3 lists them all.
+  - An OID outside the tables is `INVALID`.
+  - **The unverified composite encoding:** if it differs from draft -19, the probe says supported and a real
+    certificate is `INVALID`, not `UNSUPPORTED`.
+- **Added** (§3, §9; the maintainer's choice on #156): the `id-RSASSA-PSS` parameter rule.
+  - The parameters are present.
+  - The message hash and the MGF1 hash are each a SHA-2 hash, the family the list gives RSA PKCS#1.
+  - The mask is `id-mgf1`, and `trailerField` is 1.
+  - An omitted field takes RFC 4055's SHA-1 DEFAULT.
+  - **Salt:** a salt over 2,048 bytes is `INVALID`. This describes #156's merged `MAX_SALT_LENGTH` guard, not a new
+    choice: the JDK throws `ArithmeticException` on salts near `Int.MAX_VALUE`.
+  - Any other PSS parameters are `INVALID`, whatever the provider would answer. That covers SHA-1 PSS, the
+    all-default parameters, a SHA-2 hash under MGF1 with SHA-1, and any other mask.
+  - **The probe decides first:** with `id-RSASSA-PSS` in `unsupportedOids()` (a verifier over Conscrypt alone),
+    every PSS signature is `UNSUPPORTED`.
+  - **Before:** §3 said only that the verifier "honours RSASSA-PSS parameters".
+  - **§9's verifier tests** name the SHA-1, MGF1-SHA-1 and non-MGF1 cases, and the `UNSUPPORTED` precedence.
+
+### Changes in revision 50 (the walker review's timing and the PKIX fallback finding, 2026-11-05)
+- **Aligned** (§14, #117): §14 gave the walker and the `Rule` model a dedicated adversarial review "before 0.2's
+  walker is coded". The review now runs once they are implemented (after the walker, `reconstruct` and decision steps
+  1–8 merge) and before the §9.1 walker fuzzer runs against them. §14 and §11's 0.2 row now say the same.
+  - **Why:** §11's 0.2 row already ordered the review before the fuzzer, and the spec's own review rounds on §5.1 and
+    the `Rule` model ran in revisions 9, 10 and 12. What is left to review adversarially is the implementation.
+  - The next sentence, the fuzzer's P1–P8 gate before 0.2 ships, is unchanged.
+- **Added** (§4, §5.1, §9; the maintainer's choice): `Finding.FallbackNotUsed` with `val reason: FallbackReason`, and
+  the growable `enum class FallbackReason { SKIPPED, DISABLED, FAILED }`.
+  - **Before:** step 6 and the PKIX fallback contract reported `VerifierError("fallback skipped")`,
+    `VerifierError("fallback disabled")` and `VerifierError("fallback")`. But `VerifierError.oid` is the signature
+    algorithm whose verification failed, and these three carried no algorithm.
+  - **Now:** `VerifierError` is a verifier or algorithm failure only, both fields non-null. Step 6 reports exactly
+    one `FallbackNotUsed` when the step-5 walk ended `NotFound` or `Budget` and no fallback path was evaluated: `SKIPPED`
+    above `FALLBACK_MAX_PRESENTED` with the fallback enabled, `DISABLED` under `pkixFallback(false)` and the
+    walker-only harness's disabled path, `FAILED` when the fallback ran and gave no path. It is named "not used"
+    because a `FAILED` fallback did run. A chain cut at step 3 (`MAX_PRESENTED`, `PARSE_FAILED`) never reaches the
+    walk and carries none.
+  - **`FAILED`** is a `build` that returned null or threw. A `jdk.certpath.disabledAlgorithms` rejection and a
+    provider that diverges from the delegate, which the contract already reported, are two such failures. Before,
+    the other failed runs had no finding. They now have one, since the JDK's builder reports them alike (below).
+  - **A throwing `build`** (the maintainer's choice, "`FAILED`, not cached"): before, a throw was unspecified and
+    reached the catch boundary as `ENGINE_ERROR`. Now step 6 catches it as a failed fallback, `FallbackNotUsed(FAILED)`,
+    and rethrows every `VirtualMachineError` except `StackOverflowError`, as §5.5's catch boundary does. A result
+    produced by a throw is cached nowhere, neither as a path-cache entry nor as the verdict built on it (flow step
+    3a), so a transient error is not remembered; a null return is cached as before. The acceptance memo (platform
+    acceptance at flow step 1) and the cross-call memo (the walker's `VERIFIED` signatures) hold nothing the
+    fallback produces.
+    - **Status effect:** a throw on a `Budget` walk is `PATH_BUDGET_EXCEEDED` instead of `ENGINE_ERROR`, so it
+      rejects under `DEFAULT` too. A throw on a `NotFound` walk is `NO_ISSUER` (`PLATFORM_ONLY` on a trust-manager
+      binding) or `ISSUER_UNVERIFIED` instead of `ENGINE_ERROR`; under `STRICT` it still rejects, but as
+      `NO_ISSUER`, which is exemptable.
+    - **`PathBuilderFallback`'s declaration** says that a throw counts as a failed build.
+  - **No message string:** every build failure of the JDK's `SunCertPathBuilder` carries the same text, "unable to
+    find valid certification path to requested target" (checked in JDK 21's source). Other builders' texts differ,
+    and consumers match on codes, never on messages. The reason is the triage value, and it fits the path cache.
+  - **Path cache:** an entry keeps the reason, so a hit reports the finding the miss did.
+  - **`RevoktStatus.verifierErrors`** counts `VerifierError` findings only; `FallbackNotUsed` has no counter.
+  - **Fixtures:** the walker-fixture header states the rule for every row and names the step-3 cuts that carry none.
+    (ad) and (af) disabled now expect `FallbackNotUsed(DISABLED)`, and (ae) `FallbackNotUsed(FAILED)`. Revision 49's
+    entry below names the new finding once, in its rule bullet; its fixture text and older entries stay as written.
 
 ### Changes in revision 49 (0.2's scope, step 6 without the fallback, the engine name, the AMO SPKI pin, 2026-11-05)
 - **Retagged** (§9, §11; the maintainer's decisions on the 0.2 plan): four groups of items tagged or listed for 0.2
@@ -42,8 +128,8 @@ Status: **draft spec / project proposal, revision 49** · Target: JVM 17+ and An
     `PATH_BUDGET_EXCEEDED`, whether or not step 1 ran. Any other `NotFound` is `ISSUER_UNVERIFIED` or `NO_ISSUER`
     under the fallback-failed branch's rule, `PLATFORM_ONLY` on a trust-manager binding.
   - **The finding** (the maintainer's choice): wherever the fallback did not run because it is configured off, step
-    6 reports a distinct `VerifierError("fallback disabled")`. `"fallback skipped"` stays for the enabled, too-long
-    case only.
+    6 reports a distinct `FallbackNotUsed(DISABLED)` (named so since revision 50). `SKIPPED` stays for the enabled,
+    too-long case only.
   - **The skipped branch with the fallback enabled** named only "the platform accepted in step 1". It now also
     applies where step 1 does not run (the walker-only harness and `Evaluator.evaluate`), as fixture (af) already
     expected on every platform path.
@@ -1314,7 +1400,7 @@ interface SignatureVerifier {
     fun unsupportedOids(): Set<String>                      // startup probe over the signature, key and curve OID tables
 }
 enum class VerifyResult { VERIFIED, INVALID, UNSUPPORTED }   // closed
-interface PathBuilderFallback { fun build(chainDer: List<ByteArray>, anchors: AnchorSnapshot, nowMillis: Long): List<ByteArray>? }   // leaf first, trust anchor's certificate appended last
+interface PathBuilderFallback { fun build(chainDer: List<ByteArray>, anchors: AnchorSnapshot, nowMillis: Long): List<ByteArray>? }   // leaf first, trust anchor's certificate appended last; null = no path; a throw counts as a failed build: FallbackNotUsed(FAILED), cached in neither the path nor the verdict cache, every VirtualMachineError except StackOverflowError rethrown (§5.1 decision step 6, revision 50)
 internal expect fun canonicalSubject(nameDer: ByteArray): String?     // JVM/Android: X500Principal(der).getName(CANONICAL), null on a construction failure; linuxX64 gate: an empty actual stub returning null (the gate only compiles); the public seam is PlatformTrust.canonicalSubject
 class StoreLockedException @JvmOverloads constructor(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 enum class NewerLayout { IN_MEMORY, REBUILD }   // growable; what a store whose `store.version` is higher than this engine's gets (§6.5)
@@ -1353,11 +1439,67 @@ produced `VERIFIED` (presented junk keys are server-chosen; entry count exposed)
 server-chosen exception: an OID in `unsupportedOids()` → `UNSUPPORTED`; any
 `GeneralSecurityException` on a supported OID → `INVALID`; any `RuntimeException` from the provider
 → `INVALID` plus `Finding.VerifierError`. Signature OIDs: RSA PKCS#1 SHA-2, `id-RSASSA-PSS`, ECDSA
-SHA-2, Ed25519/448, ML-DSA-44/65/87 (RFC 9881), SLH-DSA, composite as drafts settle. Key OIDs:
+SHA-2, Ed25519/448, ML-DSA-44/65/87 (RFC 9881), SLH-DSA, composite as drafts settle. An OID outside these tables
+is never in `unsupportedOids()` and is `INVALID`, as `sha1WithRSAEncryption` is. Key OIDs:
 `rsaEncryption`, `id-RSASSA-PSS`, `id-ecPublicKey` with named curves, Ed25519/448, ML-DSA, SLH-DSA.
 Key families (ordering only, used by `CandidateIndex.related()`, §5.1): RSA = {`rsaEncryption`, `id-RSASSA-PSS`} ↔ {RSA PKCS#1, PSS}; EC ↔
 ECDSA; EdDSA, ML-DSA, SLH-DSA, composite: key OID equals signature OID; unknown compatible with
-everything. Composite signatures are delegated to a provider owning the composite OID (BC) or
+everything. Composite signatures are delegated to a provider owning the composite OID (BC; Conscrypt 2.7.0 and
+2.8.0 register 15 of them, Appendix A) or `UNSUPPORTED`.
+
+**`id-RSASSA-PSS` parameters** (revision 51). The `RSASSA-PSS-params` must be present. The message hash and the
+MGF1 hash must each be a SHA-2 hash, the family RSA PKCS#1 takes above. The mask generation function must be
+`id-mgf1`, and `trailerField` must be 1. A field left out takes its RFC 4055 DEFAULT, so an omitted hash or
+mask-generation field means SHA-1.
+
+**Salt length:** a salt longer than 2,048 bytes is `INVALID`, decided before the provider is called. This describes
+the guard merged in #156 (`MAX_SALT_LENGTH`), not a new choice. 2,048 bytes, the modulus bits / 8 at SunRsaSign's
+largest modulus of 16,384 bits, is an upper bound on any RSA key's salt. The real maximum is `emLen - hLen - 2`
+(RFC 8017 §9.1.1, `emLen >= hLen + sLen + 2`). The JDK refuses a
+longer salt for the key on its own, with a `GeneralSecurityException`, except near `Int.MAX_VALUE`. There its
+`hLen + sLen + 2` overflows into an `ArithmeticException`, which would otherwise become a `VerifierError` for a
+CA-chosen length. On JDK 21.0.13 with SHA-256, the overflow starts at 2,147,483,614.
+
+A PSS signature with other parameters is `INVALID`, whatever the provider would answer. That covers:
+- a SHA-1 message or MGF1 hash, including the all-default parameters (SHA-1, MGF1 with SHA-1);
+- a SHA-2 message hash under MGF1 with SHA-1, which the JDK verifies;
+- any mask generation function other than `id-mgf1`;
+- absent parameters.
+
+The probe decides first. When `id-RSASSA-PSS` is in `unsupportedOids()`, every PSS signature is `UNSUPPORTED`,
+whatever its parameters, a SHA-1 one included. A verifier over the Conscrypt provider alone is such a case
+(Appendix A).
+
+**From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
+signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
+OID unsupported when the provider has no service under that name. A named curve is probed separately: it is
+unsupported unless a key on it decodes through the provider's EC `KeyFactory` and its ECDSA `Signature` runs over
+that key. The names are:
+- RSA PKCS#1 and ECDSA: their standard names, such as `SHA256withRSA` and `SHA256withECDSA`.
+- `id-RSASSA-PSS`: `RSASSA-PSS`.
+- Ed25519/448, ML-DSA and SLH-DSA: their names, such as `ML-DSA-44` and `SLH-DSA-SHA2-128s`.
+- Each composite: its bare OID string, so only a provider registering that OID verifies one.
+
+Conscrypt 2.7.0 and 2.8.0 (Appendix A) register ML-DSA under its name, its bare OID and its `OID.`-prefixed OID.
+They register the composites under a name and a bare OID (an `OID.` lookup throws), and SLH-DSA-SHA2-128s under its
+name only. So under Conscrypt, the probe reports these as supported:
+- ML-DSA-44/65/87;
+- SLH-DSA-SHA2-128s, found by name, the lookup the table makes;
+- the 15 registered composites.
+
+Everything else in the tables is supported as well. The complete `unsupportedOids()` is 21 OIDs, the same under
+both releases (37 table entries, since several OIDs fill both the signature and the key role):
+- **RSA PKCS#1:** `SHA512/224withRSA` (`1.2.840.113549.1.1.15`) and `SHA512/256withRSA` (`.16`), signature only.
+- **`id-RSASSA-PSS`** (`1.2.840.113549.1.1.10`), as signature and key. Conscrypt registers PSS only as
+  `SHA1withRSA/PSS` to `SHA512withRSA/PSS`, with no `RSASSA-PSS` `Signature` or `KeyFactory`.
+- **Ed448** (`1.3.101.113`), as signature and key.
+- **The other 11 SLH-DSA sets**, `2.16.840.1.101.3.4.3.21`–`.31`, as signature and key.
+- **The composites** `1.3.6.1.5.5.7.6.47`, `.50` and `.51`, as signature and key.
+- **brainpoolP256r1, P384r1 and P512r1** (`1.3.36.3.3.2.8.1.1.7`, `.11`, `.13`), through the curve probe.
+
+**Composite encoding, unverified:** the probe checks only that a service exists. Conscrypt's composite key and
+signature encodings have not been checked against draft -19. If they differ, the probe reports the OID supported,
+and a real draft-19 certificate is `INVALID` (its key does not decode or its signature does not verify), not
 `UNSUPPORTED`.
 
 **Purity gate.** `linuxX64()` only when `revokt.purityGate` is present; never published; BCV
@@ -1606,6 +1748,7 @@ enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable
 enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; keyabilityClause != null ⇔ parseReason == PRODUCER_UNKEYABLE
 enum class TerminalKind { ANCHOR /* M2: PRELOAD */ }   // growable; the reported path's terminal (§5.1 invariant)
 enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
+enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and found no path: build returned null or threw; a thrown result is neither path- nor verdict-cached */ }   // growable; why decision step 6 evaluated no fallback path (§5.1, revision 50)
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
 enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
 enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
@@ -1670,7 +1813,8 @@ sealed class Finding {
         val rules: Set<Rule>                             // the data rules that fired for this dataset: NO_DATA, STALE, UNSIGNED_DATA }
     /* M2, reserved shape: class PathHit : Finding() { val rule: Rule; val dataset: Dataset; val certSha256: ByteArray; val onReportedPath: Boolean; val recordId: String? }  // M4: certSha256 == anchorSha256 */
     class UnsupportedAlgorithm : Finding() { val oid: String; val where: Layer; val outcomeDepended: Boolean }
-    class VerifierError : Finding() { val oid: String; val message: String }
+    class VerifierError : Finding() { val oid: String; val message: String }   // a verifier or algorithm failure only: oid is the signature algorithm whose verification failed; never the PKIX fallback, which is FallbackNotUsed
+    class FallbackNotUsed : Finding() { val reason: FallbackReason }   // exactly one ⇔ the step-5 walk ended NotFound or Budget and usedFallback == false (§5.1 decision step 6, revision 50); named "not used" because a FAILED fallback did run
     class AlgorithmIdMismatch : Finding() { val certIndex: Int }
     class EngineError : Finding() { val message: String; val producer: EngineErrorProducer; val engineName: String? /* the engine's RevocationEngine.name (§3.2) when producer == ENGINE, so never null there: "kotlin" and "upki" for the two shipped engines */ }
     class Exempted : Finding() { val rule: Rule }
@@ -1691,7 +1835,7 @@ interface RevoktListener { fun onVerdict(event: RevoktEvent); fun onStateChanged
 class RevoktStatus private constructor(…) {            // snapshot; counters monotonic since build() for unevaluated, since start() for every other; maps zero-filled over Rule.entries
     val evaluations: Long; val rejects: Map<Rule, Long> /* ENFORCE only */; val wouldRejects: Map<Rule, Long> /* OBSERVE only */; val shadowWouldRejects: Map<Rule, Long> /* the shadow policy's Rejected verdicts by rule, under ENFORCE and OBSERVE */; val fired: Map<Rule, Long>; val exempted: Map<Rule, Long>
     val noData: Map<Dataset, Long>; val stale: Map<Dataset, Long> /* loud flag seen */; val unsignedData: Map<Dataset, Long>; val noIssuer: Map<NoIssuerReason, Long> /* keyed by the reported (promoted) reason */; val parseFailed: Map<ParseReason, Long> /* fired[PARSE_FAILED] split by reason, zero-filled */; val walkEnds: Map<WalkEnd, Long>; val chainSources: Map<ChainSource, Long>; val fallbackUsed: Long
-    val verifierErrors: Long; val candidatesDropped: Long; val verdictCacheHits: Long; val storeFailures: Long; val trustManagerCount: Int; val droppedEvents: Long; val droppedRejectedEvents: Long; val listenerFailures: Long
+    val verifierErrors: Long /* Finding.VerifierError only; FallbackNotUsed is not counted */; val candidatesDropped: Long; val verdictCacheHits: Long; val storeFailures: Long; val trustManagerCount: Int; val droppedEvents: Long; val droppedRejectedEvents: Long; val listenerFailures: Long
     val unevaluated: Map<UnevaluatedReason, Long>        // handshakes that returned after flow step 1 without reaching step 2, on every trust manager including fetcherTrustManager (FETCHER_SNAPSHOT_UNAVAILABLE counts only handshakes a consumer delivers to it directly while it has no snapshot; a sync whose build retry failed runs no fetch, §5.1); the one counter group that still advances in CREATED, after close() and under OFF, so an operator can tell "no traffic" from "not checking"
     val readinessWaits: Long; val readinessTimeouts: Long; val readinessWaitNanosTotal: Long   // flow step 0
     val pendingAllows: Map<Dataset, Long> }               // verdicts computed (verdict-cache misses only) while the dataset was pending (allowed without data); separates "checked" from "pending-allow"
@@ -1873,9 +2017,9 @@ checkServerTrusted(chain, authType, socket|engine|host|none)
      index = trustManager.candidateIndex (the one @Volatile read of the anchor snapshot per handshake; its id is anchorSnapshotId; decision step 1 uses this reference and performs no read of its own)
      verdictCache[(chainHash, host', gen.epoch, anchorSnapshotId, policyEpoch, shadowPolicyEpoch)]?.let { return apply(it) }   // no parse, no event; counters (evaluations, fired, exempted, rejects/wouldRejects, shadowWouldRejects, per-dataset and per-reason maps) advance exactly as on a miss; verdictCacheHits++; the Android 3-arg overload still calls the extension for its return value
      pathKey = (chainHash, anchorSnapshotId, host' if step 4 would run on this platform and host' != null)
-     walk = pathCache[pathKey] ?: decide(chain, index).also { cache unless decide threw }               // decide = decision steps 1–6 only (the path result; no CRLite query, so the path cache is valid across installs)
+     walk = pathCache[pathKey] ?: decide(chain, index).also { cache unless decide threw or step 6's build threw }               // decide = decision steps 1–6 only (the path result; no CRLite query, so the path cache is valid across installs)
   3. verdict = evaluate(walk, gen, policy)                                                            // decision steps 7–8; the enforced catch boundary closes here: the verdict is final before any event work
-  3a. shadowVerdict = evaluate(walk, gen, shadowPolicy) under its own boundary (the §5.5 catch rule) when set, skipped (null) when verdict carries EngineError(BOUNDARY)   // after the enforced boundary closed: a throw yields a shadow Verdict carrying Finding.EngineError(BOUNDARY) and never touches `verdict`; verdictCache.put(verdict, shadowVerdict) unless `verdict` is ENGINE_ERROR, with shadowVerdict stored as null when it is a shadow-only ENGINE_ERROR (never cached, counted once on this miss); counters (`rejects`/`wouldRejects`/`fired`/`exempted`, per-dataset and per-reason maps from `verdict`; `shadowWouldRejects` from `shadowVerdict`) are applied by `apply()` here, after 3a, never inside `evaluate`. Runs on every trust-manager path and in `Revokt.evaluate` (which shares the registry caches); `Evaluator.evaluate` evaluates the enforced policy only, `shadowVerdict` null
+  3a. shadowVerdict = evaluate(walk, gen, shadowPolicy) under its own boundary (the §5.5 catch rule) when set, skipped (null) when verdict carries EngineError(BOUNDARY)   // after the enforced boundary closed: a throw yields a shadow Verdict carrying Finding.EngineError(BOUNDARY) and never touches `verdict`; verdictCache.put(verdict, shadowVerdict) unless `verdict` is ENGINE_ERROR or step 6's build threw (revision 50: a throw's outcome is cached nowhere), with shadowVerdict stored as null when it is a shadow-only ENGINE_ERROR (never cached, counted once on this miss); counters (`rejects`/`wouldRejects`/`fired`/`exempted`, per-dataset and per-reason maps from `verdict`; `shadowWouldRejects` from `shadowVerdict`) are applied by `apply()` here, after 3a, never inside `evaluate`. Runs on every trust-manager path and in `Revokt.evaluate` (which shares the registry caches); `Evaluator.evaluate` evaluates the enforced policy only, `shadowVerdict` null
   3b. emit event (verdict-cache misses only): each listener's drain submission (executor.execute) runs under its own try/catch; a throw (RejectedExecutionException after shutdown, or any Throwable other than a VirtualMachineError except StackOverflowError, as §5.5) counts listenerFailures, removes that listener and clears its cursor; the ring entry is untouched, so droppedEvents/droppedRejectedEvents are unaffected; nothing here changes the verdict or step 4
   4. if enforcement == ENFORCE && verdict is Rejected throw RevoktCertificateException(verdict)
 ```
@@ -1910,13 +2054,17 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    with and without a `<domain-config>`, it does not establish availability.
 5. `walk = reconstruct(presented, index)`; `Found` → step 7.
 6. `fallback = pathBuilder.build(presented, anchors, now)` if the fallback is enabled and `presented.size ≤ FALLBACK_MAX_PRESENTED`,
-   cached under the path key:
+   cached under the path key; a `build` that returns null or throws is a **failed** fallback. A throw is caught here
+   and is never an engine error, except that every `VirtualMachineError` other than `StackOverflowError` is rethrown,
+   as at §5.5's catch boundary. A result produced by a throw is **not** cached, neither in the path cache nor, through
+   its verdict, in the verdict cache (flow step 3a), so a transient error is not remembered; a null return is (the
+   maintainer's choice, revision 50):
    - walk `NotFound` and the fallback finds a path → `Found([fallback], usedFallback = true)`.
    - walk `NotFound`, the fallback was **skipped** (chain too long) and the platform accepted in
-     step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `VerifierError("fallback skipped")`:
+     step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
      no honest Web PKI chain is longer than 8 certificates and unreproducible by the walker, and the
      server controls chain length.
-   - walk `NotFound` and the fallback failed: `ISSUER_UNVERIFIED` when the child's own signature OID
+   - walk `NotFound` and the fallback failed (`FallbackNotUsed(FAILED)`): `ISSUER_UNVERIFIED` when the child's own signature OID
      (`child.tbsSigOid`, CA-chosen) was `UNSUPPORTED` against a **related** candidate; a candidate's key or
      curve OID (server-chosen on a decoy) never counts, so a related unsupported decoy cannot relabel
      `NO_ISSUER` into the separately exemptable `ISSUER_UNVERIFIED`; else `NO_ISSUER`. On a trust-manager
@@ -1929,13 +2077,18 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      is `PATH_BUDGET_EXCEEDED` regardless; `usedFallback = true` when a fallback path was evaluated.
    - **fallback disabled** (`pkixFallback(false)`, and the walker-only harness's disabled path; revision 49):
      `pathBuilder.build` is never called, and step 6 gives what the branches above give when no fallback path
-     exists, with `VerifierError("fallback disabled")` wherever the fallback did not run because it is configured
-     off (`"fallback skipped"` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
+     exists, with `FallbackNotUsed(DISABLED)` wherever the fallback did not run because it is configured off
+     (`SKIPPED` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
      as with the fallback enabled, with only the walk's partial leaf keys evaluated and `usedFallback = false`; walk
      `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE`,
      whether or not step 1 ran; any other walk `NotFound` → `ISSUER_UNVERIFIED` or `NO_ISSUER` under the
      fallback-failed branch's rule. On a trust-manager binding any such `NO_ISSUER` is `PLATFORM_ONLY`: the platform
      trusts a chain the walker cannot reproduce, and no PKIX builder ran; `walkerReason` keeps the walker's reason.
+   - **The fallback finding** (revision 50): exactly one `Finding.FallbackNotUsed` when the walk ended `NotFound` or
+     `Budget` and no fallback path was evaluated (`usedFallback = false`), on every branch above: `DISABLED` with the
+     fallback disabled; else `SKIPPED` when `presented.size > FALLBACK_MAX_PRESENTED`; else `FAILED`. A fallback
+     path evaluated, a walk `Found`, and every exit before step 5 carry none. It never changes the path status or a
+     rule.
 7. Data: the data rules (`NO_DATA` for each required dataset with no generation and not `pending`,
    never with a generation installed from a seed or a system cache for that dataset; `STALE`; `UNSIGNED_DATA`) were computed from the generation
    snapshot (read at flow step 2) before decision step 1, outside the catch boundary (the one clock read is itself guarded: a
@@ -2257,16 +2410,17 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   `X509CertSelector().apply { certificate = leaf }`; Android resolves to ojluni's `SunCertPathBuilder`
   with Conscrypt doing signatures. The builder verifies every link under the platform's providers,
   so its path satisfies the invariant's intent; `jdk.certpath.disabledAlgorithms` and provider
-  divergence from the delegate are reported as `Finding.VerifierError("fallback")` and surface as
-  `PLATFORM_ONLY`. It is skipped above `FALLBACK_MAX_PRESENTED` presented certificates (no candidate
-  budget; exponential on stuffed chains) with `VerifierError("fallback skipped")`, which cannot change
-  a `Budget` outcome. With `pkixFallback(false)` it never runs, and step 6 reports `VerifierError("fallback disabled")`
-  instead (revision 49).
+  divergence from the delegate fail the build, and like every failed build (null or a throw) are reported as
+  `Finding.FallbackNotUsed(FAILED)` and surface as `PLATFORM_ONLY` on a walk `NotFound` at a trust-manager binding.
+  It is skipped above `FALLBACK_MAX_PRESENTED` presented certificates (no candidate
+  budget; exponential on stuffed chains) with `FallbackNotUsed(SKIPPED)`, which cannot change
+  a `Budget` outcome. With `pkixFallback(false)` it never runs, and step 6 reports `FallbackNotUsed(DISABLED)`
+  instead (revision 49; a `FallbackNotUsed` since revision 50).
 - **Caches**, per trust manager, LRU-bounded (a synchronized access-ordered `LinkedHashMap` or a
   striped LRU; touched from concurrent handshake threads): the path cache holds `Found`, `NotFound`,
   `Budget` and the fallback result alike. **A path-cache entry is exactly**: `status`, `source`,
   `noIssuerReason`, `walkerReason`, `parseReason`, `keyabilityClause`, `terminalKind`, `endReason`, `endDepth`,
-  `usedFallback`, `pathsFound`, the reported path as (source, index) pairs for walker entries or, for
+  `usedFallback`, the step-6 `FallbackReason` (null when no `FallbackNotUsed` was reported; revision 50), `pathsFound`, the reported path as (source, index) pairs for walker entries or, for
   `PLATFORM` entries, the leaf-issuer SPKI hash, the anchor hash and the path length (a
   Conscrypt-completed chain can contain certificates from neither source), `reportedPathSha256s`,
   `issuerSpkiSha256s`, `candidatesDropped`, `anchorSha256`, the walk's `WalkStats` and `unsupportedOids`
@@ -2275,7 +2429,8 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   server park `PATH_CACHE_ENTRIES × MAX_PRESENTED_BYTES` in the cache); on a hit the `Finding.Path` is
   the stored one with `cacheHit = true` and `anchorSnapshotId` from the key, step 7 runs without
   re-parsing, and an exemption's `PresentedChain` is rebuilt from the live `chain` argument of that
-  call; `PLATFORM` results are keyed with the host; nothing is cached when `decide` threw. The
+  call; `PLATFORM` results are keyed with the host; nothing is cached when `decide` threw or step 6's `build` threw,
+  and a verdict built on a thrown `build` is not put in the verdict cache either (flow step 3a, revision 50). The
   verdict cache key includes `generationEpoch` (internal; a `Long` incremented on any install and whenever a dataset leaves `pending` without a generation at the end of the start task, so a verdict cached as a pending-allow is never served once `NO_DATA` should fire), `policyEpoch` and `shadowPolicyEpoch` (the §4 setters) and
   the anchor snapshot id. Events are emitted only on verdict-cache misses. On a walker reason of
   `NO_CANDIDATE` or `UNANCHORED` (read before any `PLATFORM_ONLY` promotion) a rate-limited
@@ -2918,7 +3073,10 @@ tests; **live checks** are informational.
   `resetState()` on a seeded `DEFAULT` instance → the next handshake is served by the seed, never
   `NO_DATA`; two listeners registered before the first handshake each receive every event in sequence order; an enqueue racing a drain's
   flag clear is still delivered without a further handshake.
-- **Verifier**: OID harvest; key-OID gaps; PSS parameters; raw-to-DER edge cases; an off-curve point
+- **Verifier**: OID harvest; key-OID gaps; PSS parameters (each `INVALID`: a SHA-1 message hash, the all-default
+  parameters included; a SHA-256 message hash with MGF1 over SHA-1, which the JDK verifies; a mask generation
+  function other than `id-mgf1`; each `UNSUPPORTED` instead under a provider without `id-RSASSA-PSS`); raw-to-DER
+  edge cases; an off-curve point
   on a supported OID → `INVALID`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
 - **Parser corpus** and the §9.2 differential parser oracle; **Android instrumented** (API 26, 31,
   34, 36) including the PKIX fallback (the jvmMain `PkixPathBuilderFallback` through ojluni, JVM-tested in 0.2), the
@@ -2929,8 +3087,12 @@ tests; **live checks** are informational.
   expected Walk (asserted only in the walker-only harness, revokt-engine's test set; every other path asserts the Finding.Path columns, and revokt-testing's recorded fixtures carry the Walk column as a string) | expected PathStatus / NoIssuerReason / WalkEnd | expected Path fields | verdict
   relation to the honest chain`, on every platform path (JVM walker, JVM walker with the fallback
   disabled in the walker-only harness, Android CT-gap path, Android plain delegate, `Revokt.evaluate`; a row whose
-  outcome depends on the fallback states its fallback-disabled expectation, and on that path a row's "fallback
-  skipped" is `VerifierError("fallback disabled")`, decision step 6, revision 49):
+  outcome depends on the fallback states its fallback-disabled expectation, decision step 6, revision 49; every row
+  whose step-5 walk ends `NotFound` or `Budget` with `usedFallback = false` asserts exactly one `FallbackNotUsed` with
+  step 6's reason, revision 50: `DISABLED` on the disabled path, where a row's "fallback skipped" is
+  `FallbackNotUsed(DISABLED)`; else `SKIPPED` above `FALLBACK_MAX_PRESENTED`, as in a row's "fallback skipped"; else
+  `FAILED`. A row cut at step 3 never walks and carries none: the `PARSE_FAILED` leaf, the 70-certificate chain, and
+  the rows over `MAX_PRESENTED` on every trust-manager path and `Revokt.evaluate`, as the step-3 note below says):
   (a) random-key fake issuer; (b) ECDSA-recovered second key; (c) RSA duplicate-signature key;
   (d) recovered-key fake with an unsupported own signature, terminating at a real anchor; (e) 8, 16
   and 63 distinct-key related junk ahead of the real one → `Found`, verdict equals honest; (f)
@@ -2953,7 +3115,7 @@ tests; **live checks** are informational.
   signature OID mismatch → `Found` with the finding, and a NULL-vs-absent pair → `Found` with no finding;
   **(s1)** (o) plus 62 related junk ahead of the honest key (64 related in total) → `Found`, `pathsFound = 2`,
   `REVOKED`; **(s2)** (o) plus 63 junk (65 related) → `Budget(RELATED_BUDGET)`, `Rejected` with `rule ∈ {REVOKED,
-  PATH_BUDGET_EXCEEDED}`, and `REVOKED ⇔ honestKey ∈ issuerSpkiSha256s`; **(t)** (o) plus 80 junk → same expectation as (s2); **(i), (s2), (t) and (y) present more than `MAX_PRESENTED` certificates and are walker-harness only; on every trust-manager path and `Revokt.evaluate` they are cut at step 3: `Budget(EXPLORATION_BUDGET)`, `endDepth = 0`, `PATH_BUDGET_EXCEEDED`, no CRLite query, as (ag) asserts**;
+  PATH_BUDGET_EXCEEDED}`, and `REVOKED ⇔ honestKey ∈ issuerSpkiSha256s`; **(t)** (o) plus 80 junk → same expectation as (s2); **(i), (s2), (t) and (y) present more than `MAX_PRESENTED` certificates and are walker-harness only; on every trust-manager path and `Revokt.evaluate` they are cut at step 3: `Budget(EXPLORATION_BUDGET)`, `endDepth = 0`, `PATH_BUDGET_EXCEEDED`, no CRLite query and no `FallbackNotUsed`, as (ag) asserts**;
   (u) `getAcceptedIssuers()` throws during `refreshAnchors()` → the current snapshot is kept, `anchorSnapshotId` unchanged, the walk proceeds under it (the wiring and `start()` throw cases are lifecycle fixtures, (h));
   (v) honest chain against a 200-anchor snapshot → `verifications ≤ 4`, `COMPLETE`; (v2) the same
   with a retired-root cross-certificate presented → `≤ 4`; (w) dense cross-certified mesh (6 roots,
@@ -2973,13 +3135,13 @@ tests; **live checks** are informational.
   honest issuer unrelated by encoding, six same-name mutually cross-signing junk certificates ahead →
   `Budget(EXPLORATION_BUDGET)`, `candidatesExplored = 1024`, `usedFallback = true`,
   `PATH_BUDGET_EXCEEDED`, `rule = REVOKED`, honest key last in `issuerSpkiSha256s`; with the fallback disabled the
-  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `VerifierError("fallback disabled")`, the honest key (which only the fallback reaches) not in
+  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `FallbackNotUsed(DISABLED)`, the honest key (which only the fallback reaches) not in
   `issuerSpkiSha256s`, so `rule = PATH_BUDGET_EXCEEDED`; (ae) platform
   accepts, walker `UNANCHORED` and fallback fails → `NO_ISSUER(PLATFORM_ONLY)`,
-  `walkerReason = UNANCHORED`; (af) 9 presented certificates with a link the walker cannot reproduce
+  `walkerReason = UNANCHORED`, `FallbackNotUsed(FAILED)`; (af) 9 presented certificates with a link the walker cannot reproduce
   (custom delegate) → fallback skipped, `PATH_BUDGET_EXCEEDED`; with the fallback disabled → `PATH_BUDGET_EXCEEDED`
-  as well, `usedFallback = false`, `VerifierError("fallback disabled")`; (ag) 70 presented certificates →
-  `Budget(EXPLORATION_BUDGET)` without a walk; (ah) `VERIFICATION_BUDGET`: 12 presented certificates
+  as well, `usedFallback = false`, `FallbackNotUsed(DISABLED)`; (ag) 70 presented certificates →
+  `Budget(EXPLORATION_BUDGET)` without a walk, no `FallbackNotUsed`; (ah) `VERIFICATION_BUDGET`: 12 presented certificates
   of distinct RSA duplicate-signature keys each verifying the leaf and recursing into a
   32-certificate dead-end subtree → `Budget(VERIFICATION_BUDGET)`, `verifications = 256`; (ai) a
   17-certificate honest path (16 non-terminal plus the anchor) → `Found`; an 18-certificate one →
@@ -3809,7 +3971,8 @@ A project with two release-capable maintainers (under the maintainer's personal 
 §3.1 containment checks on every PR; weekly upstream-drift and `mozilla/crlite` release watchers;
 `SECURITY.md` with a 90-day disclosure policy; two-person review on the trust manager, walker,
 verifiers and clubcard module; external review before 1.0; **the walker and the `Rule` model get a
-dedicated adversarial review before 0.2's walker is coded**, since every review round so far found its hole there.
+dedicated adversarial review once they are implemented (after the walker, `reconstruct` and decision steps 1–8
+merge) and before the §9.1 walker fuzzer runs against them**, since every review round so far found its hole there.
 **Before 0.2 ships, the §9.1 walker fuzzer must pass P1–P8 against the implementation.**
 
 ## Appendix A. Verification log (2026-10-21, additions 2026-10-22)
@@ -3950,7 +4113,37 @@ dedicated adversarial review before 0.2's walker is coded**, since every review 
   SunJSSE's `AlgorithmId` normalises NULL parameters; SunEC pure Java since JDK 16, no brainpool since 15.
 - Crypto: ECDSA public-key recovery (SEC 1 §4.1.6); RSA duplicate-signature key selection
   (Blake–Smart; SunRsaSign accepts any exponent for moduli ≤ 3072); ML-DSA in X.509 is RFC 9881;
-  JDK 24 ships ML-DSA (backported in 17.0.21 and 21.0.13); Conscrypt does not; composite signatures are not one JCA operation.
+  JDK 24 ships ML-DSA (backported in 17.0.21 and 21.0.13). No provider of JDK 17.0.21, 21.0.13 or 27 registers
+  SLH-DSA or a composite OID (revision 51). A composite signature is not one operation of the JDK's providers, so
+  only a provider registering the composite OID verifies one.
+  - **Conscrypt uber 2.7.0 and 2.8.0** (revision 51; both register the same set). Probed on JDK 17.0.21 and 21.0.13
+    with a single-file Java program over the Gradle-cached jars. It lists the provider's `Signature`, `KeyFactory`
+    and `KeyPairGenerator` services and their `Alg.Alias` entries, then looks each algorithm up by name, bare OID and
+    `OID.`-prefixed OID.
+    - **ML-DSA-44, -65 and -87:** registered by name and by both OID aliases. Each verifies a signature the JDK's
+      `SUN` provider made, with the key decoded from the JDK's SPKI encoding, and rejects it with one bit flipped.
+    - **SLH-DSA-SHA2-128s:** registered by name only, with no OID alias for 2.16.840.1.101.3.4.3.20 (the OID its
+      own keys encode). It also registers a HashSLH-DSA `SLH-DSA-SHA2-128S-WITH-SHA384`, by name only. Only a
+      Conscrypt-made signature was checked, since none of those JDKs makes one.
+    - **15 composite ML-DSA OIDs** of draft-ietf-lamps-pq-composite-sigs: `1.3.6.1.5.5.7.6.37`–`.46`, `.48`,
+      `.49` and `.52`–`.54` (not `.47`, `.50` or `.51`). Each is registered for `Signature`, `KeyFactory` and
+      `KeyPairGenerator` under a name such as `MLDSA44-RSA2048-PSS-SHA256`, with a bare OID alias but no
+      `OID.`-prefixed one. Each round-trips a Conscrypt-made key and signature, and the key's SPKI
+      carries the OID. **Unverified:** whether Conscrypt's composite key and signature encodings match draft -19.
+      The round trip shows only that Conscrypt agrees with itself; no draft test vector or other implementation
+      was checked.
+    - **PSS:** there is no `RSASSA-PSS` `Signature` or `KeyFactory` and no `id-RSASSA-PSS` alias. PSS is registered
+      only as `SHA1withRSA/PSS` to `SHA512withRSA/PSS`.
+    - **`JcaSignatureVerifier` over Conscrypt** (at `5d419cc`): a scratch `jvmTest` on 21.0.13 ran under both
+      releases. Printed in full, `unsupportedOids()` is exactly the 21 OIDs §3's "From OID to JCA service" lists,
+      identical under both releases. ML-DSA-44/65/87,
+      SLH-DSA-SHA2-128s and the 15 composites each give `VERIFIED` for a Conscrypt-made key and signature, and
+      `INVALID` with one bit flipped. A SHA-1 PSS signature is `UNSUPPORTED` over Conscrypt and `INVALID` over the
+      JDK's providers, which verify it themselves.
+    - **Not probed:** the platform Conscrypt on Android, whose version is the device's.
+  - **PSS salt on the JDK** (revision 51, a scratch `jvmTest` at `5d419cc` on 21.0.13, 2048-bit key, SHA-256 and MGF1
+    with SHA-256): `RSASSA-PSS` throws `InvalidAlgorithmParameterException` for salts of 2,048 and 2,049 bytes, and
+    `ArithmeticException` from 2,147,483,614 up to `Int.MAX_VALUE`. The verifier gives `INVALID` for each.
 - Kotlin: `kotlin.time.Clock` stable since 2.3; `kotlin.concurrent.atomics` still experimental;
   kotlinx-serialization-json cannot reject duplicate keys.
 - Fuzzing: ClusterFuzzLite and OSS-Fuzz need a static entry point; OSS-Fuzz admission requires usage.
