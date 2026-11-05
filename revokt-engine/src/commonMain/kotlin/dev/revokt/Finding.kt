@@ -348,6 +348,14 @@ public sealed class Finding {
 
             public fun build(): VerifierError = VerifierError(this)
         }
+
+        internal companion object {
+            /** A verifier throw as the walk records it (spec §5.1 decision list). */
+            fun of(
+                oid: String,
+                message: String,
+            ): VerifierError = Builder().oid(oid).message(message).build()
+        }
     }
 
     /**
