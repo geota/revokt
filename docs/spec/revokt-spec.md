@@ -1839,7 +1839,7 @@ remaining a subsequence.
 | `MAX_RELATED_PER_LEVEL` | 64 | related candidates explored at one node; the 65th triggers `RELATED_BUDGET` without being explored |
 | `MAX_VERIFICATIONS` | 256 | verifier calls per walk (memo hits excluded; the guard-tripping attempt not counted) |
 | `MAX_EXPLORED` | 1,024 | candidates for which verification was requested per walk, memo hits included |
-| `FALLBACK_MAX_PRESENTED` | 8 | the PKIX fallback is skipped for longer presented chains; a `NotFound` on such a chain that the platform accepted is `PATH_BUDGET_EXCEEDED`, never `NO_ISSUER` |
+| `FALLBACK_MAX_PRESENTED` | 8 | the PKIX fallback is skipped for longer presented chains; a `NotFound` on such a chain is `PATH_BUDGET_EXCEEDED`, never `NO_ISSUER`, whether the platform accepted it in step 1 or step 1 did not run (the walker-only harness, `Evaluator.evaluate`), and with the fallback enabled or disabled (decision step 6) |
 | `PATH_CACHE_ENTRIES` / `PATH_CACHE_TTL` | 256 / 10 min | per trust manager; TTLs are absolute from insertion on the monotonic `TimeSource`, not sliding; entries hold the leaf's DER, `serial` and `scts` only, never the presented chain |
 | `CROSS_CALL_MEMO_ENTRIES` | 1,024 | per `Revokt`; `VERIFIED` only; synchronized, shared by concurrent handshake threads across trust managers |
 | `ACCEPTANCE_MEMO_ENTRIES` / `ACCEPTANCE_MEMO_TTL` | 1,024 / 24 h | per trust manager; the 3-arg null-host retry memo (flow step 1), keyed (chain hash, host'), written only after a Socket/SSLEngine overload's flow step 1 returned; absolute TTL; an expired entry costs a failed lazy cleaner on a long-lived connection and buys no safety, hence long |
