@@ -54,7 +54,13 @@ public class CrliteSct private constructor(
         public fun build(): CrliteSct = CrliteSct(this)
     }
 
-    private companion object {
+    internal companion object {
         private const val LOG_ID_BYTES = 32
+
+        /** The parser's SCT pair (spec §9.2) as a query SCT. */
+        fun of(
+            logId: ByteString,
+            timestampMillis: Long,
+        ): CrliteSct = Builder().logId(logId.toByteArray()).timestampMillis(timestampMillis).build()
     }
 }

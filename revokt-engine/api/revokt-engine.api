@@ -411,3 +411,12 @@ public final class dev/revokt/WalkEnd : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/WalkEnd;
 }
 
+public final class dev/revokt/verify/JcaSignatureVerifier : dev/revokt/SignatureVerifier {
+	public fun <init> ()V
+	public fun <init> (Ljava/security/Provider;)V
+	public synthetic fun <init> (Ljava/security/Provider;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getCachedKeyCount ()I
+	public fun unsupportedOids ()Ljava/util/Set;
+	public fun verify ([B[B[B[B)Ldev/revokt/VerifyResult;
+}
+
