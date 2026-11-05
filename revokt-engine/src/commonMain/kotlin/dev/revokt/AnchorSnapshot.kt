@@ -34,6 +34,7 @@ public class AnchorSnapshot private constructor(
     /**
      * The platform's encoding of each anchor, in [anchors] order, for the PKIX fallback; the bytes read unless the
      * snapshot's builder set them. Not part of equality: [sha256] and [anchors] already identify the same anchors.
+     * Exactly one per anchor: a caller that drops an anchor drops its encoding too.
      */
     internal val platformEncodings: List<ByteString> = builder.platformEncodings ?: anchorDers
 

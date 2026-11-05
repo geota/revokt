@@ -32,6 +32,35 @@ class FindingTest {
             .walkStats(WalkStats(2, 2, 1, 0))
             .build()
 
+    /**
+     * Every field set away from its builder default, so a round trip that drops one shows. The reason fields exclude
+     * each other, so a NO_ISSUER and a PARSE_FAILED fixture between them set all three; credentialType has only X509.
+     */
+    private fun everyField(status: PathStatus): Finding.Path =
+        Finding.Path
+            .Builder()
+            .status(status)
+            .source(ChainSource.PLATFORM)
+            .noIssuerReason(NoIssuerReason.PLATFORM_ONLY.takeIf { status == PathStatus.NO_ISSUER })
+            .walkerReason(NoIssuerReason.UNANCHORED)
+            .parseReason(ParseReason.PRODUCER_UNKEYABLE.takeIf { status == PathStatus.PARSE_FAILED })
+            .keyabilityClause(KeyabilityClause.TIME.takeIf { status == PathStatus.PARSE_FAILED })
+            .terminalKind(TerminalKind.ANCHOR)
+            .rewalkEnd(WalkEnd.VERIFICATION_BUDGET)
+            .endReason(WalkEnd.EXPLORATION_BUDGET)
+            .endDepth(2)
+            .cacheHit(true)
+            .anchorSnapshotId(11)
+            .usedFallback(true)
+            .pathsFound(3)
+            .reportedPathSha256s(listOf(hash(1), hash(3)))
+            .issuerSpkiSha256s(listOf(hash(4), hash(5)))
+            .candidatesDropped(2)
+            .anchorSha256(hash(3))
+            .walkStats(WalkStats(5, 6, 7, 8))
+            .credentialType(CredentialType.X509)
+            .build()
+
     private fun noIssuer(reason: NoIssuerReason) =
         found()
             .newBuilder()
@@ -89,10 +118,7 @@ class FindingTest {
     fun `a path built from equal inputs is equal, and newBuilder round-trips`() {
         assertValueSemantics(found(), found())
         assertValueSemantics(found(), found().newBuilder().build())
-        for (p in listOf(
-            noIssuer(NoIssuerReason.PLATFORM_ONLY),
-            parseFailed(ParseReason.PRODUCER_UNKEYABLE, KeyabilityClause.NAME),
-        )) {
+        for (p in listOf(everyField(PathStatus.NO_ISSUER), everyField(PathStatus.PARSE_FAILED))) {
             assertValueSemantics(p, p.newBuilder().build())
         }
         assertNotEquals<Any>(found(), "path")

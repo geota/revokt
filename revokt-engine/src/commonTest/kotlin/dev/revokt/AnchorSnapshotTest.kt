@@ -35,6 +35,18 @@ class AnchorSnapshotTest {
         assertEquals(s.hashCode(), snapshot().hashCode())
         assertEquals(s, s.newBuilder().build())
         assertEquals(s.hashCode(), s.newBuilder().build().hashCode())
+        // Every field away from its default, the internal encodings included, so a round trip that drops one shows.
+        val full =
+            s
+                .newBuilder()
+                .preloadGenerationId("g")
+                .platformEncodings(listOf(b, a))
+                .build()
+        val again = full.newBuilder().build()
+        assertEquals(full, again)
+        assertEquals(full.toString(), again.toString())
+        assertEquals("g", again.preloadGenerationId)
+        assertEquals(full.platformEncodings, again.platformEncodings)
         assertNotEquals(s, s.newBuilder().id(4).build())
         assertNotEquals(s, s.newBuilder().sha256(ByteArray(32)).build())
         assertNotEquals(s, s.newBuilder().anchors(listOf(b, a)).build())
