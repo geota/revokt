@@ -30,8 +30,10 @@ Status: **draft spec / project proposal, revision 50** · Target: JVM 17+ and An
   - **A throwing `build`** (the maintainer's choice, "`FAILED`, not cached"): before, a throw was unspecified and
     reached the catch boundary as `ENGINE_ERROR`. Now step 6 catches it as a failed fallback, `FallbackNotUsed(FAILED)`,
     and rethrows every `VirtualMachineError` except `StackOverflowError`, as §5.5's catch boundary does. A result
-    produced by a throw is not path-cached, so a transient error is not remembered; a null return is cached as
-    before.
+    produced by a throw is cached nowhere, neither as a path-cache entry nor as the verdict built on it (flow step
+    3a), so a transient error is not remembered; a null return is cached as before. The acceptance memo (platform
+    acceptance at flow step 1) and the cross-call memo (the walker's `VERIFIED` signatures) hold nothing the
+    fallback produces.
     - **Status effect:** a throw on a `Budget` walk is `PATH_BUDGET_EXCEEDED` instead of `ENGINE_ERROR`, so it
       rejects under `DEFAULT` too. A throw on a `NotFound` walk is `NO_ISSUER` (`PLATFORM_ONLY` on a trust-manager
       binding) or `ISSUER_UNVERIFIED` instead of `ENGINE_ERROR`; under `STRICT` it still rejects, but as
@@ -1354,7 +1356,7 @@ interface SignatureVerifier {
     fun unsupportedOids(): Set<String>                      // startup probe over the signature, key and curve OID tables
 }
 enum class VerifyResult { VERIFIED, INVALID, UNSUPPORTED }   // closed
-interface PathBuilderFallback { fun build(chainDer: List<ByteArray>, anchors: AnchorSnapshot, nowMillis: Long): List<ByteArray>? }   // leaf first, trust anchor's certificate appended last; null = no path; a throw counts as a failed build: FallbackNotUsed(FAILED), not path-cached, every VirtualMachineError except StackOverflowError rethrown (§5.1 decision step 6, revision 50)
+interface PathBuilderFallback { fun build(chainDer: List<ByteArray>, anchors: AnchorSnapshot, nowMillis: Long): List<ByteArray>? }   // leaf first, trust anchor's certificate appended last; null = no path; a throw counts as a failed build: FallbackNotUsed(FAILED), cached in neither the path nor the verdict cache, every VirtualMachineError except StackOverflowError rethrown (§5.1 decision step 6, revision 50)
 internal expect fun canonicalSubject(nameDer: ByteArray): String?     // JVM/Android: X500Principal(der).getName(CANONICAL), null on a construction failure; linuxX64 gate: an empty actual stub returning null (the gate only compiles); the public seam is PlatformTrust.canonicalSubject
 class StoreLockedException @JvmOverloads constructor(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 enum class NewerLayout { IN_MEMORY, REBUILD }   // growable; what a store whose `store.version` is higher than this engine's gets (§6.5)
@@ -1646,7 +1648,7 @@ enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable
 enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; keyabilityClause != null ⇔ parseReason == PRODUCER_UNKEYABLE
 enum class TerminalKind { ANCHOR /* M2: PRELOAD */ }   // growable; the reported path's terminal (§5.1 invariant)
 enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
-enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and found no path: build returned null or threw; a thrown result is not path-cached */ }   // growable; why decision step 6 evaluated no fallback path (§5.1, revision 50)
+enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and found no path: build returned null or threw; a thrown result is neither path- nor verdict-cached */ }   // growable; why decision step 6 evaluated no fallback path (§5.1, revision 50)
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
 enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
 enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
@@ -1917,7 +1919,7 @@ checkServerTrusted(chain, authType, socket|engine|host|none)
      pathKey = (chainHash, anchorSnapshotId, host' if step 4 would run on this platform and host' != null)
      walk = pathCache[pathKey] ?: decide(chain, index).also { cache unless decide threw or step 6's build threw }               // decide = decision steps 1–6 only (the path result; no CRLite query, so the path cache is valid across installs)
   3. verdict = evaluate(walk, gen, policy)                                                            // decision steps 7–8; the enforced catch boundary closes here: the verdict is final before any event work
-  3a. shadowVerdict = evaluate(walk, gen, shadowPolicy) under its own boundary (the §5.5 catch rule) when set, skipped (null) when verdict carries EngineError(BOUNDARY)   // after the enforced boundary closed: a throw yields a shadow Verdict carrying Finding.EngineError(BOUNDARY) and never touches `verdict`; verdictCache.put(verdict, shadowVerdict) unless `verdict` is ENGINE_ERROR, with shadowVerdict stored as null when it is a shadow-only ENGINE_ERROR (never cached, counted once on this miss); counters (`rejects`/`wouldRejects`/`fired`/`exempted`, per-dataset and per-reason maps from `verdict`; `shadowWouldRejects` from `shadowVerdict`) are applied by `apply()` here, after 3a, never inside `evaluate`. Runs on every trust-manager path and in `Revokt.evaluate` (which shares the registry caches); `Evaluator.evaluate` evaluates the enforced policy only, `shadowVerdict` null
+  3a. shadowVerdict = evaluate(walk, gen, shadowPolicy) under its own boundary (the §5.5 catch rule) when set, skipped (null) when verdict carries EngineError(BOUNDARY)   // after the enforced boundary closed: a throw yields a shadow Verdict carrying Finding.EngineError(BOUNDARY) and never touches `verdict`; verdictCache.put(verdict, shadowVerdict) unless `verdict` is ENGINE_ERROR or step 6's build threw (revision 50: a throw's outcome is cached nowhere), with shadowVerdict stored as null when it is a shadow-only ENGINE_ERROR (never cached, counted once on this miss); counters (`rejects`/`wouldRejects`/`fired`/`exempted`, per-dataset and per-reason maps from `verdict`; `shadowWouldRejects` from `shadowVerdict`) are applied by `apply()` here, after 3a, never inside `evaluate`. Runs on every trust-manager path and in `Revokt.evaluate` (which shares the registry caches); `Evaluator.evaluate` evaluates the enforced policy only, `shadowVerdict` null
   3b. emit event (verdict-cache misses only): each listener's drain submission (executor.execute) runs under its own try/catch; a throw (RejectedExecutionException after shutdown, or any Throwable other than a VirtualMachineError except StackOverflowError, as §5.5) counts listenerFailures, removes that listener and clears its cursor; the ring entry is untouched, so droppedEvents/droppedRejectedEvents are unaffected; nothing here changes the verdict or step 4
   4. if enforcement == ENFORCE && verdict is Rejected throw RevoktCertificateException(verdict)
 ```
@@ -1954,8 +1956,9 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
 6. `fallback = pathBuilder.build(presented, anchors, now)` if the fallback is enabled and `presented.size ≤ FALLBACK_MAX_PRESENTED`,
    cached under the path key; a `build` that returns null or throws is a **failed** fallback. A throw is caught here
    and is never an engine error, except that every `VirtualMachineError` other than `StackOverflowError` is rethrown,
-   as at §5.5's catch boundary. A result produced by a throw is **not** path-cached, so a transient error is not
-   remembered; a null return is (the maintainer's choice, revision 50):
+   as at §5.5's catch boundary. A result produced by a throw is **not** cached, neither in the path cache nor, through
+   its verdict, in the verdict cache (flow step 3a), so a transient error is not remembered; a null return is (the
+   maintainer's choice, revision 50):
    - walk `NotFound` and the fallback finds a path → `Found([fallback], usedFallback = true)`.
    - walk `NotFound`, the fallback was **skipped** (chain too long) and the platform accepted in
      step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
@@ -2326,8 +2329,8 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   server park `PATH_CACHE_ENTRIES × MAX_PRESENTED_BYTES` in the cache); on a hit the `Finding.Path` is
   the stored one with `cacheHit = true` and `anchorSnapshotId` from the key, step 7 runs without
   re-parsing, and an exemption's `PresentedChain` is rebuilt from the live `chain` argument of that
-  call; `PLATFORM` results are keyed with the host; nothing is cached when `decide` threw or step 6's `build` threw
-  (revision 50). The
+  call; `PLATFORM` results are keyed with the host; nothing is cached when `decide` threw or step 6's `build` threw,
+  and a verdict built on a thrown `build` is not put in the verdict cache either (flow step 3a, revision 50). The
   verdict cache key includes `generationEpoch` (internal; a `Long` incremented on any install and whenever a dataset leaves `pending` without a generation at the end of the start task, so a verdict cached as a pending-allow is never served once `NO_DATA` should fire), `policyEpoch` and `shadowPolicyEpoch` (the §4 setters) and
   the anchor snapshot id. Events are emitted only on verdict-cache misses. On a walker reason of
   `NO_CANDIDATE` or `UNANCHORED` (read before any `PLATFORM_ONLY` promotion) a rate-limited
