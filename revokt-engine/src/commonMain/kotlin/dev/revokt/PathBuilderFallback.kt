@@ -10,7 +10,9 @@ package dev.revokt
 public interface PathBuilderFallback {
     /**
      * Builds a path for [chainDer] (the presented chain, leaf first) under [anchors] at [nowMillis]. Returns the path's
-     * DERs, leaf first, with the trust anchor's certificate appended last; null when no path is found.
+     * DERs, leaf first, with the trust anchor's certificate appended last; null when no path is found. A throw counts
+     * as a failed build, `Finding.FallbackNotUsed(FAILED)`, and its outcome is cached in neither the path nor the
+     * verdict cache; every `VirtualMachineError` except `StackOverflowError` is rethrown (§5.1 decision step 6).
      */
     public fun build(
         chainDer: List<ByteArray>,
