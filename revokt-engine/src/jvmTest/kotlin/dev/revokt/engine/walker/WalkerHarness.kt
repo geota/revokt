@@ -10,6 +10,7 @@ import dev.revokt.RevoktLimits
 import dev.revokt.TerminalKind
 import dev.revokt.VerifyResult
 import dev.revokt.WalkEnd
+import dev.revokt.WalkStats
 import dev.revokt.testing.CertId
 import dev.revokt.testing.KeyId
 import dev.revokt.testing.SymOids
@@ -24,7 +25,8 @@ import kotlin.test.fail
  * One row of the §9 walker fixture table, as the walker-only harness reads it: `id | presented (ordered) | snapshot |
  * preload | verifier.unsupported | expected Walk | …`. The verifier is the §9.1 [SymVerifier] over [ok];
  * [unsupported] is both its startup probe and the probe the walk reads. [variant] names one of a row's cases (an order,
- * a count). The other columns (path status, `Finding.Path` fields, verdict) are added by #136 and #140.
+ * a count). [preload] is M2's column (spec §7.4), empty in every 0.2 row. The other columns (path status,
+ * `Finding.Path` fields, verdict) are added by #136 and #140.
  */
 internal class WalkerFixture(
     val id: String,
@@ -33,11 +35,12 @@ internal class WalkerFixture(
     val snapshot: List<ByteArray>,
     val ok: Set<Pair<CertId, KeyId>>,
     val walk: ExpectedWalk,
-    val preload: List<ByteArray> = emptyList(),
     val unsupported: Set<String> = SymOids.UNSUPPORTED,
     val customCanonicaliser: Boolean = false,
     val label: (ByteString) -> String = { it.hex().take(8) },
 ) {
+    val preload: List<ByteArray> get() = emptyList()
+
     override fun toString(): String = "walker ($id)${if (variant.isEmpty()) "" else " $variant"}"
 }
 
@@ -87,7 +90,6 @@ internal object WalkerHarness {
         crossCallMemo: LruMap<Pair<ByteString, ByteString>, VerifyResult> =
             LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
     ): Walk {
-        require(f.preload.isEmpty()) { "$f: the preload column is M2 (spec §7.4); M1 has none" }
         val index = CandidateIndex(f.snapshot, customCanonicaliser = f.customCanonicaliser)
         val presented = f.presented.map { index.cert(WalkerCerts.parse(it)) }
         val verifier = SymVerifier(f.ok, f.unsupported)
@@ -108,30 +110,7 @@ internal object WalkerHarness {
         at: String,
     ) {
         val shown = describe(walk, label)
-        val paths: List<WalkPath>
-        val keys: Set<ByteString>
-        when (expected.kind) {
-            ExpectedWalk.Kind.FOUND -> {
-                if (walk !is Walk.Found) fail("$at: expected Found, got $shown")
-                paths = walk.paths
-                keys = walk.leafKeys
-            }
-
-            ExpectedWalk.Kind.NOT_FOUND -> {
-                if (walk !is Walk.NotFound) fail("$at: expected NotFound, got $shown")
-                assertEquals(expected.reason, walk.reason, "$at: reason; $shown")
-                paths = emptyList()
-                keys = emptySet()
-            }
-
-            ExpectedWalk.Kind.BUDGET -> {
-                if (walk !is Walk.Budget) fail("$at: expected Budget, got $shown")
-                assertEquals(expected.end, walk.end, "$at: end; $shown")
-                expected.endDepth?.let { assertEquals(it, walk.endDepth, "$at: endDepth; $shown") }
-                paths = walk.partialPaths
-                keys = walk.partialLeafKeys
-            }
-        }
+        val (paths, keys) = variant(expected, walk, "$at: ", "; $shown")
         expected.paths?.let { want ->
             assertEquals(
                 want.map { p -> p.map(label) },
@@ -145,18 +124,53 @@ internal object WalkerHarness {
         paths.forEach { assertTrue(it.terminal == TerminalKind.ANCHOR, "$at: terminal; $shown") }
         assertEquals(expected.unsupportedOids, walk.unsupportedOids, "$at: unsupportedOids; $shown")
         assertEquals(expected.findings, walk.findings, "$at: findings; $shown")
-        val s = walk.stats
-        expected.verifications?.let { assertEquals(it, s.verifications, "$at: verifications; $shown") }
-        expected.maxVerifications?.let { assertTrue(s.verifications <= it, "$at: verifications ≤ $it; $shown") }
-        expected.candidatesExplored?.let { assertEquals(it, s.candidatesExplored, "$at: candidatesExplored; $shown") }
+        stats(expected, walk.stats, "$at: ", "; $shown")
+    }
+
+    /** Asserts the variant and its own fields; returns its paths (partial for `Budget`) and leaf keys. */
+    private fun variant(
+        expected: ExpectedWalk,
+        walk: Walk,
+        at: String,
+        shown: String,
+    ): Pair<List<WalkPath>, Set<ByteString>> =
+        when (expected.kind) {
+            ExpectedWalk.Kind.FOUND -> {
+                if (walk !is Walk.Found) fail("${at}expected Found$shown")
+                walk.paths to walk.leafKeys
+            }
+
+            ExpectedWalk.Kind.NOT_FOUND -> {
+                if (walk !is Walk.NotFound) fail("${at}expected NotFound$shown")
+                assertEquals(expected.reason, walk.reason, "${at}reason$shown")
+                emptyList<WalkPath>() to emptySet()
+            }
+
+            ExpectedWalk.Kind.BUDGET -> {
+                if (walk !is Walk.Budget) fail("${at}expected Budget$shown")
+                assertEquals(expected.end, walk.end, "${at}end$shown")
+                expected.endDepth?.let { assertEquals(it, walk.endDepth, "${at}endDepth$shown") }
+                walk.partialPaths to walk.partialLeafKeys
+            }
+        }
+
+    private fun stats(
+        expected: ExpectedWalk,
+        s: WalkStats,
+        at: String,
+        shown: String,
+    ) {
+        expected.verifications?.let { assertEquals(it, s.verifications, "${at}verifications$shown") }
+        expected.maxVerifications?.let { assertTrue(s.verifications <= it, "${at}verifications ≤ $it$shown") }
+        expected.candidatesExplored?.let { assertEquals(it, s.candidatesExplored, "${at}candidatesExplored$shown") }
         expected.relatedExploredAtLeaf?.let {
-            assertEquals(it, s.relatedExploredAtLeaf, "$at: relatedExploredAtLeaf; $shown")
+            assertEquals(it, s.relatedExploredAtLeaf, "${at}relatedExploredAtLeaf$shown")
         }
         expected.unrelatedExploredAtLeaf?.let {
-            assertEquals(it, s.unrelatedExploredAtLeaf, "$at: unrelatedExploredAtLeaf; $shown")
+            assertEquals(it, s.unrelatedExploredAtLeaf, "${at}unrelatedExploredAtLeaf$shown")
         }
-        assertTrue(s.verifications <= RevoktLimits.MAX_VERIFICATIONS, "$at: MAX_VERIFICATIONS; $shown")
-        assertTrue(s.candidatesExplored <= RevoktLimits.MAX_EXPLORED, "$at: MAX_EXPLORED; $shown")
+        assertTrue(s.verifications <= RevoktLimits.MAX_VERIFICATIONS, "${at}MAX_VERIFICATIONS$shown")
+        assertTrue(s.candidatesExplored <= RevoktLimits.MAX_EXPLORED, "${at}MAX_EXPLORED$shown")
     }
 
     private fun keysOf(paths: List<WalkPath>): Set<ByteString> = paths.mapTo(LinkedHashSet()) { it.certs[1].spkiHash }

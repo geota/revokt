@@ -128,8 +128,10 @@ private class Reconstruction(
         private var foundHere = false
         private var related = 0
 
-        fun walk(): WalkEnd? {
-            // The candidate sequences read `presented` and `seen` lazily; neither is changed while they are iterated.
+        // The candidate sequences read `presented` and `seen` lazily; neither is changed while they are iterated.
+        fun walk(): WalkEnd? = exploreRelated() ?: exploreUnrelated(relatedPath = foundHere)
+
+        private fun exploreRelated(): WalkEnd? {
             for (candidate in index.related(presented, child, seen, belowLeaf = !isLeaf)) {
                 if (isLeaf) relatedAtLeaf = true
                 if (!isLeaf && foundHere) break
@@ -142,11 +144,16 @@ private class Reconstruction(
                 if (isLeaf) relatedExploredAtLeaf++
                 explore(candidate, isRelated = true)?.let { return it }
             }
-            val relatedPath = foundHere
+            return null
+        }
+
+        /** [relatedPath]: a path through a related candidate exists at this node. */
+        private fun exploreUnrelated(relatedPath: Boolean): WalkEnd? {
+            // Stops as soon as a path exists, except at the leaf under a custom canonicaliser (deferral rule) or with no
+            // related path (every unrelated issuer is collected, revision 48).
+            val collectAll = isLeaf && (index.customCanonicaliser || !relatedPath)
             for (candidate in index.unrelated(presented, child, seen)) {
-                // Stops as soon as a path exists, except at the leaf under a custom canonicaliser (deferral rule) or
-                // with no related path (every unrelated issuer is collected, revision 48).
-                if (foundHere && !(isLeaf && (index.customCanonicaliser || !relatedPath))) break
+                if (foundHere && !collectAll) break
                 if (isLeaf) unrelatedExploredAtLeaf++
                 explore(candidate, isRelated = false)?.let { return it }
             }

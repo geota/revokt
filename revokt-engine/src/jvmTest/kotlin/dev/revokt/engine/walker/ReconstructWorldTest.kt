@@ -181,80 +181,70 @@ class ReconstructWorldTest {
      * subjects, issuers, keys, signers, SKIs, AKIs and extra recovered links; anchors drawn from them and beside them;
      * the presented order shuffled, with exact-byte duplicates.
      */
-    private fun mesh(seed: Long): Triple<List<ByteArray>, List<ByteArray>, Set<Pair<CertId, KeyId>>> {
-        val rng = SplitMix64(seed)
-        val w = FixtureWorld()
-        val cns = List(rng.nextInt(1, 5)) { "N$it" }
+    private class Mesh(
+        seed: Long,
+    ) {
+        private val rng = SplitMix64(seed)
+        private val w = FixtureWorld()
+        private val cns = List(rng.nextInt(1, 5)) { "N$it" }
+        private val keys: List<SymKey> =
+            List(rng.nextInt(1, 7)) { w.key(if (rng.nextInt(10) == 0) SymOids.UNSUPPORTED_KEY else SymOids.KEY) }
+        private val certs = List(rng.nextInt(2, 14)) { cert(it) }
+        val ok: Set<Pair<CertId, KeyId>>
+        val anchors: List<ByteArray>
+        val presented: List<ByteArray>
 
-        fun name(): ByteArray {
+        init {
+            for (c in certs) if (rng.nextInt(3) == 0) w.verifies(c, key())
+            val others = certs.drop(1)
+            anchors =
+                (others.filter { rng.nextInt(3) == 0 } + List(rng.nextInt(3)) { w.root("A$it", cn(), key()) }).map {
+                    it.der
+                }
+            val shown = ArrayList(rng.shuffled(others.filter { rng.nextInt(5) != 0 }))
+            repeat(rng.nextInt(3)) {
+                if (shown.isNotEmpty()) shown.add(rng.nextInt(shown.size + 1), shown[rng.nextInt(shown.size)])
+            }
+            presented = (listOf(certs[0]) + shown).map { it.der }
+            ok = w.ok
+        }
+
+        private fun cn() = cns[rng.nextInt(cns.size)]
+
+        private fun key() = keys[rng.nextInt(keys.size)]
+
+        private fun name(): ByteArray {
             val tag =
                 when (rng.nextInt(20)) {
                     0 -> TELETEX_STRING
                     in 1..5 -> PRINTABLE_STRING
                     else -> UTF8_STRING
                 }
-            return w.name(cns[rng.nextInt(cns.size)], tag)
+            return w.name(cn(), tag)
         }
-        val keys: List<SymKey> =
-            List(rng.nextInt(1, 7)) {
-                w.key(
-                    if (rng.nextInt(10) ==
-                        0
-                    ) {
-                        SymOids.UNSUPPORTED_KEY
-                    } else {
-                        SymOids.KEY
-                    },
-                )
-            }
 
-        fun key() = keys[rng.nextInt(keys.size)]
-        val count = rng.nextInt(2, 14)
-        val certs =
-            List(count) { n ->
-                val signer = if (rng.nextInt(5) == 0) null else key()
-                val aki =
-                    when (rng.nextInt(5)) {
-                        0 -> TestDer.seq(TestDer.tlv(0x80, key().keyIdentifier))
-                        1 -> FixtureWorld.akiIssuerAndSerial(name())
-                        else -> null
-                    }
-                w.cert(
-                    "C$n",
-                    name(),
-                    name(),
-                    if (n == 0) w.key() else key(),
-                    signer = signer,
-                    sigOid = if (rng.nextInt(20) == 0) SymOids.UNSUPPORTED_SIGNATURE else SymOids.SIGNATURE,
-                    ski = rng.nextInt(3) == 0,
-                    aki = aki,
-                )
-            }
-        for (c in certs) if (rng.nextInt(3) == 0) w.verifies(c, key())
-        val leaf = certs[0]
-        val others = certs.drop(1)
-        val anchors =
-            others.filter { rng.nextInt(3) == 0 } +
-                List(rng.nextInt(3)) { w.root("A$it", cns[rng.nextInt(cns.size)], key()) }
-        val presented = ArrayList(rng.shuffled(others.filter { rng.nextInt(5) != 0 }))
-        repeat(rng.nextInt(3)) {
-            if (presented.isNotEmpty()) {
-                presented.add(
-                    rng.nextInt(presented.size + 1),
-                    presented[rng.nextInt(presented.size)],
-                )
-            }
+        private fun cert(n: Int): FixtureCert {
+            val key = if (n == 0) w.key() else key()
+            val signer = if (rng.nextInt(5) == 0) null else key()
+            val aki =
+                when (rng.nextInt(5)) {
+                    0 -> TestDer.seq(TestDer.tlv(0x80, key().keyIdentifier))
+                    1 -> FixtureWorld.akiIssuerAndSerial(name())
+                    else -> null
+                }
+            val extensions =
+                listOfNotNull(FixtureWorld.ski(key).takeIf { rng.nextInt(3) == 0 }, aki?.let { FixtureWorld.aki(it) })
+            val sigOid = if (rng.nextInt(20) == 0) SymOids.UNSUPPORTED_SIGNATURE else SymOids.SIGNATURE
+            return w.cert("C$n", name(), name(), key, signer, sigOid, extensions = extensions)
         }
-        presented.add(0, leaf)
-        return Triple(presented.map { it.der }, anchors.map { it.der }, w.ok)
     }
 
     @Test
     fun `walker reconstruct matches the reference walker on random mesh worlds`() {
         val tally = Tally()
         for (seed in 1L..4000L) {
-            val (presented, anchors, ok) = mesh(seed)
-            differential(presented, anchors, ok, SymOids.UNSUPPORTED, "mesh seed $seed", tally)
+            val mesh = Mesh(seed)
+            differential(mesh.presented, mesh.anchors, mesh.ok, SymOids.UNSUPPORTED, "mesh seed $seed", tally)
         }
         assertTrue(tally.found > 300 && tally.notFound > 300 && tally.multiKey > 20, "$tally")
     }

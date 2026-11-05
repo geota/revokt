@@ -13,8 +13,7 @@ import dev.revokt.WalkEnd
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.found
 import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
-import dev.revokt.engine.walker.WalkerFixtures.Honest
-import dev.revokt.engine.walker.WalkerFixtures.fixture
+import dev.revokt.engine.walker.Honest
 import dev.revokt.testing.SymOids
 import dev.revokt.testing.SymVerifier
 import okio.ByteString
@@ -67,8 +66,8 @@ class ReconstructTest {
      * leaf → I1 → … → I4 → R with `junk[k]` certificates named like node k's issuer ahead of it (node 0 is the leaf): a
      * walk that costs `sum(junk) + 5` verifications and as many explorations.
      */
-    private fun levels(junk: List<Int>): Pair<WalkerFixtures.Deep, List<FixtureCert>> {
-        val d = WalkerFixtures.Deep(4)
+    private fun levels(junk: List<Int>): Pair<Deep, List<FixtureCert>> {
+        val d = Deep(4)
         val nodes = listOf(d.leaf) + d.intermediates
         val presented = mutableListOf(d.leaf)
         for ((k, n) in junk.withIndex()) {
@@ -101,7 +100,7 @@ class ReconstructTest {
      * The leaf's issuer is absent, so every presented certificate is unrelated and explored (uncapped, revision 48):
      * [junk] of them share one key (one verification, then memo hits) ahead of U, an unrelated issuer under the root.
      */
-    private fun unrelatedAtLeaf(junk: Int): Pair<WalkerFixtures.Honest, List<FixtureCert>> {
+    private fun unrelatedAtLeaf(junk: Int): Pair<Honest, List<FixtureCert>> {
         val h = Honest(leafIssuer = FixtureWorld().name("Missing issuer"))
         val shared = h.w.key()
         val js = List(junk) { h.w.cert("J$it", h.w.name("Junk $it"), h.w.name("Junk issuer"), shared) }
@@ -150,7 +149,7 @@ class ReconstructTest {
 
     @Test
     fun `walker below the leaf a found path ends the related loop before the cap is reached`() {
-        val d = WalkerFixtures.Deep(2)
+        val d = Deep(2)
         val (i1, i2) = d.intermediates
         val before = List(63) { d.w.cert("J$it", i2.subject, d.w.name("Junk issuer $it")) }
         val after = List(5) { d.w.cert("K$it", i2.subject, d.w.name("Junk issuer K$it")) }
@@ -235,8 +234,10 @@ class ReconstructTest {
     @Test
     fun `walker verifier calls equal WalkStats verifications on every fixture row`() {
         val rows =
-            with(WalkerFixtures) {
-                listOf(a(), b(), c(), d(), e(), f(), g(), h(), i(), k(), k2(), l(), m(), n(), o(), p(), q(), r()) +
+            with(WalkerFixturesAToR) {
+                listOf(a(), b(), c(), d(), e(), f(), g(), h(), i(), k(), k2(), l(), m(), n(), o(), p(), q(), r())
+            }.flatten() +
+                with(WalkerFixturesS1ToAj) {
                     listOf(
                         s1(),
                         s2(),
@@ -256,7 +257,7 @@ class ReconstructTest {
                         ai(),
                         aj(),
                     )
-            }.flatten()
+                }.flatten()
         for (f in rows) {
             val counting = Counting(SymVerifier(f.ok, f.unsupported))
             val verifications = walk(f, counting).stats.verifications
@@ -434,7 +435,7 @@ class ReconstructTest {
     }
 
     private fun WalkerFixture.copyWith(walk: ExpectedWalk) =
-        WalkerFixture(id, variant, presented, snapshot, ok, walk, preload, unsupported, customCanonicaliser, label)
+        WalkerFixture(id, variant, presented, snapshot, ok, walk, unsupported, customCanonicaliser, label)
 
     @Test
     fun `walker NoIssuerReason comes from the leaf-level flags`() {
@@ -487,7 +488,7 @@ class ReconstructTest {
     @Test
     fun `walker at the leaf a related path stops the unrelated loop unless the canonicaliser is custom`() {
         // (ac)'s second case with the platform's own canonicaliser: the related decoy path hides the unrelated issuer.
-        val custom = WalkerFixtures.ac()[1]
+        val custom = WalkerFixturesS1ToAj.ac()[1]
         val platform = custom.copyWithCanonicaliser(false)
         val walk = walk(platform)
         assertIs<Walk.Found>(walk)
@@ -500,7 +501,7 @@ class ReconstructTest {
     }
 
     private fun WalkerFixture.copyWithCanonicaliser(custom: Boolean) =
-        WalkerFixture(id, variant, presented, snapshot, ok, walk, preload, unsupported, custom, label)
+        WalkerFixture(id, variant, presented, snapshot, ok, walk, unsupported, custom, label)
 
     @Test
     fun `walker below the leaf a custom canonicaliser does not run the unrelated loop after a path`() {
@@ -541,7 +542,7 @@ class ReconstructTest {
         assertFailsWith<IllegalArgumentException> {
             reconstruct(emptyList(), index, verifier, emptySet(), LruMap(1))
         }
-        val f = WalkerFixtures.h().single()
+        val f = WalkerFixturesAToR.h().single()
         val idx = CandidateIndex(f.snapshot)
         val presented = f.presented.map { idx.cert(WalkerCerts.parse(it)) }
         val copy = presented.toList()

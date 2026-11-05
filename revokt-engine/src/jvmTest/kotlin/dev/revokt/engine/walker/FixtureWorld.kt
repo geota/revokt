@@ -56,9 +56,9 @@ internal class FixtureWorld {
         TestDer.seq(TestDer.tlv(0x31, TestDer.seq(TestDer.oid("2.5.4.3"), TestDer.tlv(tag, TestDer.ascii(cn)))))
 
     /**
-     * A certificate. [signer] is the key whose link verifies it (null: a signature no key verifies). [outerAlgorithm]
-     * is the outer `signatureAlgorithm` TLV, by default the TBS one. [ski] writes an SKI of [key], [aki] an AKI with
-     * that extension value. Each call takes a fresh serial, so two calls never give the same bytes.
+     * A certificate. [signer] is the key whose link verifies it (null: a signature no key verifies); the outer
+     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs. Each
+     * call takes a fresh serial, so two calls never give the same bytes.
      */
     fun cert(
         label: String,
@@ -67,9 +67,7 @@ internal class FixtureWorld {
         key: SymKey = key(),
         signer: SymKey? = null,
         sigOid: String = SymOids.SIGNATURE,
-        outerAlgorithm: ByteArray = TestDer.seq(TestDer.oid(sigOid)),
-        ski: Boolean = false,
-        aki: ByteArray? = null,
+        extensions: List<ByteArray> = emptyList(),
     ): FixtureCert {
         val serial = ++serials
         val t =
@@ -79,20 +77,23 @@ internal class FixtureWorld {
                 issuer = issuer,
                 subject = subject,
                 spki = key.spki,
-                extensions =
-                    listOfNotNull(
-                        TestDer.extension(Oid.SUBJECT_KEY_IDENTIFIER, TestDer.tlv(0x04, key.keyIdentifier)).takeIf {
-                            ski
-                        },
-                        aki?.let { TestDer.extension(Oid.AUTHORITY_KEY_IDENTIFIER, it) },
-                    ),
-                outerAlgorithm = outerAlgorithm,
+                extensions = extensions,
+                outerAlgorithm = TestDer.seq(TestDer.oid(sigOid)),
                 signature = TestDer.tlv(0x03, TestDer.bytes(0x00, serial and 0xff)),
             )
         val c = FixtureCert(label, t.der, t.tbs, subject, key)
         labels[c.bytesHash] = label
         signer?.let { verifies(c, it) }
         return c
+    }
+
+    /** [c] with the outer `signatureAlgorithm` TLV [outer]: the same TBS, so the same links. */
+    fun withOuterAlgorithm(
+        c: FixtureCert,
+        outer: ByteArray,
+    ): FixtureCert {
+        val der = TestDer.seq(c.tbs, outer, TestDer.tlv(0x03, TestDer.bytes(0x00, 0x01)))
+        return FixtureCert(c.label, der, c.tbs, c.subject, c.key).also { labels[it.bytesHash] = c.label }
     }
 
     /** A self-signed root named [cn]. */
@@ -119,6 +120,13 @@ internal class FixtureWorld {
         const val UTF8_STRING: Int = 0x0c
         const val PRINTABLE_STRING: Int = 0x13
         const val TELETEX_STRING: Int = 0x14
+
+        /** An SKI extension of [key]: its key identifier. */
+        fun ski(key: SymKey): ByteArray =
+            TestDer.extension(Oid.SUBJECT_KEY_IDENTIFIER, TestDer.tlv(0x04, key.keyIdentifier))
+
+        /** An AKI extension with [value], the extension's `AuthorityKeyIdentifier` SEQUENCE. */
+        fun aki(value: ByteArray): ByteArray = TestDer.extension(Oid.AUTHORITY_KEY_IDENTIFIER, value)
 
         /** An AKI extension value with only the issuer-and-serial form: `[1] GeneralNames`, `[2] serial`. */
         fun akiIssuerAndSerial(issuer: ByteArray): ByteArray =
