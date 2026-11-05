@@ -1,10 +1,54 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 50** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
+Status: **draft spec / project proposal, revision 51** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 51 (Conscrypt's post-quantum algorithms and the PSS hashes, 2026-11-05)
+- **Corrected** (Appendix A, §3; found in the review of #156): Appendix A said Conscrypt does not ship ML-DSA.
+  Conscrypt uber 2.7.0 and 2.8.0, the §9.2 matrix's two releases, both register ML-DSA-44, -65 and -87,
+  SLH-DSA-SHA2-128s and 15 composite ML-DSA OIDs (`1.3.6.1.5.5.7.6.37`–`.46`, `.48`, `.49`, `.52`–`.54`).
+  - **How it was checked:** a single-file Java program over the Gradle-cached jars, on JDK 17.0.21 and 21.0.13,
+    listed the provider's services and `Alg.Alias` entries and looked each algorithm up by name and by OID. Each
+    ML-DSA set verifies a signature the JDK made. Appendix A records the details.
+  - **By name or by OID:** ML-DSA and the composites are registered by name and by OID alias, and
+    SLH-DSA-SHA2-128s by name only, with no OID alias.
+  - **Unverified:** whether Conscrypt's composite encoding matches draft -19, and the platform Conscrypt on Android.
+  - **§3:** the composite delegation rule names Conscrypt beside BC as a provider owning composite OIDs. No rule
+    changes. The JDK-provider fixtures, such as (j)'s JDK without ML-DSA, are unaffected, since the §9.2 matrix
+    uses Conscrypt as oracle 2's `CertificateFactory`, not as a `Signature` provider.
+- **Stated** (§3, as merged in #156 at `5d419cc`): how an OID reaches a JCA service.
+  - The probe and `verify` resolve it through one table to a `Signature` and a `KeyFactory` name: standard names
+    for RSA and ECDSA, `RSASSA-PSS`, the algorithm names for EdDSA, ML-DSA and SLH-DSA, and the bare OID for each
+    composite.
+  - **Under Conscrypt alone:** ML-DSA, SLH-DSA-SHA2-128s (by name) and the 15 registered composites are supported.
+    `unsupportedOids()` is 21 OIDs, the same under 2.7.0 and 2.8.0:
+    - `SHA512/224withRSA` and `SHA512/256withRSA`;
+    - `id-RSASSA-PSS`;
+    - Ed448;
+    - the other 11 SLH-DSA sets;
+    - the composites `.47`, `.50` and `.51`;
+    - the three brainpool curves.
+
+    §3 lists them all.
+  - An OID outside the tables is `INVALID`.
+  - **The unverified composite encoding:** if it differs from draft -19, the probe says supported and a real
+    certificate is `INVALID`, not `UNSUPPORTED`.
+- **Added** (§3, §9; the maintainer's choice on #156): the `id-RSASSA-PSS` parameter rule.
+  - The parameters are present.
+  - The message hash and the MGF1 hash are each a SHA-2 hash, the family the list gives RSA PKCS#1.
+  - The mask is `id-mgf1`, and `trailerField` is 1.
+  - An omitted field takes RFC 4055's SHA-1 DEFAULT.
+  - **Salt:** a salt over 2,048 bytes is `INVALID`. This describes #156's merged `MAX_SALT_LENGTH` guard, not a new
+    choice: the JDK throws `ArithmeticException` on salts near `Int.MAX_VALUE`.
+  - Any other PSS parameters are `INVALID`, whatever the provider would answer. That covers SHA-1 PSS, the
+    all-default parameters, a SHA-2 hash under MGF1 with SHA-1, and any other mask.
+  - **The probe decides first:** with `id-RSASSA-PSS` in `unsupportedOids()` (a verifier over Conscrypt alone),
+    every PSS signature is `UNSUPPORTED`.
+  - **Before:** §3 said only that the verifier "honours RSASSA-PSS parameters".
+  - **§9's verifier tests** name the SHA-1, MGF1-SHA-1 and non-MGF1 cases, and the `UNSUPPORTED` precedence.
 
 ### Changes in revision 50 (the walker review's timing and the PKIX fallback finding, 2026-11-05)
 - **Aligned** (§14, #117): §14 gave the walker and the `Rule` model a dedicated adversarial review "before 0.2's
@@ -1395,11 +1439,67 @@ produced `VERIFIED` (presented junk keys are server-chosen; entry count exposed)
 server-chosen exception: an OID in `unsupportedOids()` → `UNSUPPORTED`; any
 `GeneralSecurityException` on a supported OID → `INVALID`; any `RuntimeException` from the provider
 → `INVALID` plus `Finding.VerifierError`. Signature OIDs: RSA PKCS#1 SHA-2, `id-RSASSA-PSS`, ECDSA
-SHA-2, Ed25519/448, ML-DSA-44/65/87 (RFC 9881), SLH-DSA, composite as drafts settle. Key OIDs:
+SHA-2, Ed25519/448, ML-DSA-44/65/87 (RFC 9881), SLH-DSA, composite as drafts settle. An OID outside these tables
+is never in `unsupportedOids()` and is `INVALID`, as `sha1WithRSAEncryption` is. Key OIDs:
 `rsaEncryption`, `id-RSASSA-PSS`, `id-ecPublicKey` with named curves, Ed25519/448, ML-DSA, SLH-DSA.
 Key families (ordering only, used by `CandidateIndex.related()`, §5.1): RSA = {`rsaEncryption`, `id-RSASSA-PSS`} ↔ {RSA PKCS#1, PSS}; EC ↔
 ECDSA; EdDSA, ML-DSA, SLH-DSA, composite: key OID equals signature OID; unknown compatible with
-everything. Composite signatures are delegated to a provider owning the composite OID (BC) or
+everything. Composite signatures are delegated to a provider owning the composite OID (BC; Conscrypt 2.7.0 and
+2.8.0 register 15 of them, Appendix A) or `UNSUPPORTED`.
+
+**`id-RSASSA-PSS` parameters** (revision 51). The `RSASSA-PSS-params` must be present. The message hash and the
+MGF1 hash must each be a SHA-2 hash, the family RSA PKCS#1 takes above. The mask generation function must be
+`id-mgf1`, and `trailerField` must be 1. A field left out takes its RFC 4055 DEFAULT, so an omitted hash or
+mask-generation field means SHA-1.
+
+**Salt length:** a salt longer than 2,048 bytes is `INVALID`, decided before the provider is called. This describes
+the guard merged in #156 (`MAX_SALT_LENGTH`), not a new choice. 2,048 bytes, the modulus bits / 8 at SunRsaSign's
+largest modulus of 16,384 bits, is an upper bound on any RSA key's salt. The real maximum is `emLen - hLen - 2`
+(RFC 8017 §9.1.1, `emLen >= hLen + sLen + 2`). The JDK refuses a
+longer salt for the key on its own, with a `GeneralSecurityException`, except near `Int.MAX_VALUE`. There its
+`hLen + sLen + 2` overflows into an `ArithmeticException`, which would otherwise become a `VerifierError` for a
+CA-chosen length. On JDK 21.0.13 with SHA-256, the overflow starts at 2,147,483,614.
+
+A PSS signature with other parameters is `INVALID`, whatever the provider would answer. That covers:
+- a SHA-1 message or MGF1 hash, including the all-default parameters (SHA-1, MGF1 with SHA-1);
+- a SHA-2 message hash under MGF1 with SHA-1, which the JDK verifies;
+- any mask generation function other than `id-mgf1`;
+- absent parameters.
+
+The probe decides first. When `id-RSASSA-PSS` is in `unsupportedOids()`, every PSS signature is `UNSUPPORTED`,
+whatever its parameters, a SHA-1 one included. A verifier over the Conscrypt provider alone is such a case
+(Appendix A).
+
+**From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
+signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
+OID unsupported when the provider has no service under that name. A named curve is probed separately: it is
+unsupported unless a key on it decodes through the provider's EC `KeyFactory` and its ECDSA `Signature` runs over
+that key. The names are:
+- RSA PKCS#1 and ECDSA: their standard names, such as `SHA256withRSA` and `SHA256withECDSA`.
+- `id-RSASSA-PSS`: `RSASSA-PSS`.
+- Ed25519/448, ML-DSA and SLH-DSA: their names, such as `ML-DSA-44` and `SLH-DSA-SHA2-128s`.
+- Each composite: its bare OID string, so only a provider registering that OID verifies one.
+
+Conscrypt 2.7.0 and 2.8.0 (Appendix A) register ML-DSA under its name, its bare OID and its `OID.`-prefixed OID.
+They register the composites under a name and a bare OID (an `OID.` lookup throws), and SLH-DSA-SHA2-128s under its
+name only. So under Conscrypt, the probe reports these as supported:
+- ML-DSA-44/65/87;
+- SLH-DSA-SHA2-128s, found by name, the lookup the table makes;
+- the 15 registered composites.
+
+Everything else in the tables is supported as well. The complete `unsupportedOids()` is 21 OIDs, the same under
+both releases (37 table entries, since several OIDs fill both the signature and the key role):
+- **RSA PKCS#1:** `SHA512/224withRSA` (`1.2.840.113549.1.1.15`) and `SHA512/256withRSA` (`.16`), signature only.
+- **`id-RSASSA-PSS`** (`1.2.840.113549.1.1.10`), as signature and key. Conscrypt registers PSS only as
+  `SHA1withRSA/PSS` to `SHA512withRSA/PSS`, with no `RSASSA-PSS` `Signature` or `KeyFactory`.
+- **Ed448** (`1.3.101.113`), as signature and key.
+- **The other 11 SLH-DSA sets**, `2.16.840.1.101.3.4.3.21`–`.31`, as signature and key.
+- **The composites** `1.3.6.1.5.5.7.6.47`, `.50` and `.51`, as signature and key.
+- **brainpoolP256r1, P384r1 and P512r1** (`1.3.36.3.3.2.8.1.1.7`, `.11`, `.13`), through the curve probe.
+
+**Composite encoding, unverified:** the probe checks only that a service exists. Conscrypt's composite key and
+signature encodings have not been checked against draft -19. If they differ, the probe reports the OID supported,
+and a real draft-19 certificate is `INVALID` (its key does not decode or its signature does not verify), not
 `UNSUPPORTED`.
 
 **Purity gate.** `linuxX64()` only when `revokt.purityGate` is present; never published; BCV
@@ -2973,7 +3073,10 @@ tests; **live checks** are informational.
   `resetState()` on a seeded `DEFAULT` instance → the next handshake is served by the seed, never
   `NO_DATA`; two listeners registered before the first handshake each receive every event in sequence order; an enqueue racing a drain's
   flag clear is still delivered without a further handshake.
-- **Verifier**: OID harvest; key-OID gaps; PSS parameters; raw-to-DER edge cases; an off-curve point
+- **Verifier**: OID harvest; key-OID gaps; PSS parameters (each `INVALID`: a SHA-1 message hash, the all-default
+  parameters included; a SHA-256 message hash with MGF1 over SHA-1, which the JDK verifies; a mask generation
+  function other than `id-mgf1`; each `UNSUPPORTED` instead under a provider without `id-RSASSA-PSS`); raw-to-DER
+  edge cases; an off-curve point
   on a supported OID → `INVALID`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
 - **Parser corpus** and the §9.2 differential parser oracle; **Android instrumented** (API 26, 31,
   34, 36) including the PKIX fallback (the jvmMain `PkixPathBuilderFallback` through ojluni, JVM-tested in 0.2), the
@@ -4010,7 +4113,37 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
   SunJSSE's `AlgorithmId` normalises NULL parameters; SunEC pure Java since JDK 16, no brainpool since 15.
 - Crypto: ECDSA public-key recovery (SEC 1 §4.1.6); RSA duplicate-signature key selection
   (Blake–Smart; SunRsaSign accepts any exponent for moduli ≤ 3072); ML-DSA in X.509 is RFC 9881;
-  JDK 24 ships ML-DSA (backported in 17.0.21 and 21.0.13); Conscrypt does not; composite signatures are not one JCA operation.
+  JDK 24 ships ML-DSA (backported in 17.0.21 and 21.0.13). No provider of JDK 17.0.21, 21.0.13 or 27 registers
+  SLH-DSA or a composite OID (revision 51). A composite signature is not one operation of the JDK's providers, so
+  only a provider registering the composite OID verifies one.
+  - **Conscrypt uber 2.7.0 and 2.8.0** (revision 51; both register the same set). Probed on JDK 17.0.21 and 21.0.13
+    with a single-file Java program over the Gradle-cached jars. It lists the provider's `Signature`, `KeyFactory`
+    and `KeyPairGenerator` services and their `Alg.Alias` entries, then looks each algorithm up by name, bare OID and
+    `OID.`-prefixed OID.
+    - **ML-DSA-44, -65 and -87:** registered by name and by both OID aliases. Each verifies a signature the JDK's
+      `SUN` provider made, with the key decoded from the JDK's SPKI encoding, and rejects it with one bit flipped.
+    - **SLH-DSA-SHA2-128s:** registered by name only, with no OID alias for 2.16.840.1.101.3.4.3.20 (the OID its
+      own keys encode). It also registers a HashSLH-DSA `SLH-DSA-SHA2-128S-WITH-SHA384`, by name only. Only a
+      Conscrypt-made signature was checked, since none of those JDKs makes one.
+    - **15 composite ML-DSA OIDs** of draft-ietf-lamps-pq-composite-sigs: `1.3.6.1.5.5.7.6.37`–`.46`, `.48`,
+      `.49` and `.52`–`.54` (not `.47`, `.50` or `.51`). Each is registered for `Signature`, `KeyFactory` and
+      `KeyPairGenerator` under a name such as `MLDSA44-RSA2048-PSS-SHA256`, with a bare OID alias but no
+      `OID.`-prefixed one. Each round-trips a Conscrypt-made key and signature, and the key's SPKI
+      carries the OID. **Unverified:** whether Conscrypt's composite key and signature encodings match draft -19.
+      The round trip shows only that Conscrypt agrees with itself; no draft test vector or other implementation
+      was checked.
+    - **PSS:** there is no `RSASSA-PSS` `Signature` or `KeyFactory` and no `id-RSASSA-PSS` alias. PSS is registered
+      only as `SHA1withRSA/PSS` to `SHA512withRSA/PSS`.
+    - **`JcaSignatureVerifier` over Conscrypt** (at `5d419cc`): a scratch `jvmTest` on 21.0.13 ran under both
+      releases. Printed in full, `unsupportedOids()` is exactly the 21 OIDs §3's "From OID to JCA service" lists,
+      identical under both releases. ML-DSA-44/65/87,
+      SLH-DSA-SHA2-128s and the 15 composites each give `VERIFIED` for a Conscrypt-made key and signature, and
+      `INVALID` with one bit flipped. A SHA-1 PSS signature is `UNSUPPORTED` over Conscrypt and `INVALID` over the
+      JDK's providers, which verify it themselves.
+    - **Not probed:** the platform Conscrypt on Android, whose version is the device's.
+  - **PSS salt on the JDK** (revision 51, a scratch `jvmTest` at `5d419cc` on 21.0.13, 2048-bit key, SHA-256 and MGF1
+    with SHA-256): `RSASSA-PSS` throws `InvalidAlgorithmParameterException` for salts of 2,048 and 2,049 bytes, and
+    `ArithmeticException` from 2,147,483,614 up to `Int.MAX_VALUE`. The verifier gives `INVALID` for each.
 - Kotlin: `kotlin.time.Clock` stable since 2.3; `kotlin.concurrent.atomics` still experimental;
   kotlinx-serialization-json cannot reject duplicate keys.
 - Fuzzing: ClusterFuzzLite and OSS-Fuzz need a static entry point; OSS-Fuzz admission requires usage.
