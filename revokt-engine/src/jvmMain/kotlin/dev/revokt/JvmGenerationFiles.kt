@@ -5,6 +5,7 @@ package dev.revokt
 
 import okio.ByteString.Companion.toByteString
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 
 /** Reads [GenerationFiles] from disk (spec §3.2), so a third-party engine can be tested against a C2SP directory image. */
@@ -21,7 +22,8 @@ public object JvmGenerationFiles {
      * fresh git checkout does not reproduce.
      *
      * @throws java.io.IOException when [dir] has no readable `index.bin` or a named file cannot be read.
-     * @throws IllegalArgumentException when `index.bin` is malformed, or a file it names is not a regular file in [dir].
+     * @throws IllegalArgumentException when `index.bin` is malformed, or a file it names is not a regular file in [dir]
+     *   (a symbolic link is not one, so a named file is never read from outside [dir]).
      */
     @RevoktTestingApi
     @JvmStatic
@@ -35,8 +37,10 @@ public object JvmGenerationFiles {
         val files = linkedMapOf(INDEX to Files.readAllBytes(indexPath))
         for (name in GenerationFiles.filenamesIn(files.getValue(INDEX))) {
             val path = dir.resolve(name)
-            require(Files.isRegularFile(path)) { "$indexPath names $name, which is not a regular file in $dir" }
-            files[name] = Files.readAllBytes(path)
+            require(Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                "$indexPath names $name, which is not a regular file in $dir"
+            }
+            files[name] = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS).use { it.readBytes() }
         }
         val digest = files.keys.sorted().joinToString("\n") { "$it\t" + sha256Hex(files.getValue(it)) }
         return GenerationFiles
