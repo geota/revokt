@@ -9,10 +9,11 @@ import java.util.Base64
 
 /**
  * Spec §9.1 target "seed archive and x5u PEM", the PEM half (#106): the reader returns only `Certificates` or `Failed`;
- * `OVERSIZE` exactly when the body is over the cap; under the cap it reads exactly what [reference], an independent
- * model of the grammar on the JDK's `Base64` (canonical when re-encoding gives the text back), reads. The input is also
- * read as one DER, whose canonical encoding must read back to it. With `JAZZER_FUZZ` unset JUnit replays
- * `X5uPemFuzzTestInputs/`; the nightly job runs it with `-max_len=65537`, `MAX_X5U_BYTES` + 1, so the cap is reached.
+ * `OVERSIZE` exactly when the body is over the cap; under the cap it reads exactly what [reference] reads, an
+ * independent model of `rustls-pki-types` 1.15.1's framing (written on regular expressions) and decoding (the JDK's
+ * `Base64` over the text with whitespace removed). The input is also read as one DER, whose canonical encoding must read
+ * back to it. With `JAZZER_FUZZ` unset JUnit replays `X5uPemFuzzTestInputs/`; the nightly job runs it with
+ * `-max_len=65537`, `MAX_X5U_BYTES` + 1, so the cap is reached.
  */
 class X5uPemFuzzTest {
     @FuzzTest(maxDuration = "60s")
@@ -21,11 +22,23 @@ class X5uPemFuzzTest {
     }
 
     companion object {
-        private const val BEGIN = "-----BEGIN CERTIFICATE-----"
-        private const val END = "-----END CERTIFICATE-----"
+        /** A BEGIN line: the label, then exactly five dashes with spaces among and after them. */
+        private val BEGIN = Regex("^-----BEGIN (.*?)-(?: *-){4} *$")
 
         /** HT, LF, VT, FF, CR and space. */
-        private val WHITESPACE = setOf(0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20)
+        private val WHITESPACE = Regex("[\\t\\n\\x0B\\f\\r ]")
+
+        private val KNOWN =
+            setOf(
+                "CERTIFICATE",
+                "PUBLIC KEY",
+                "RSA PRIVATE KEY",
+                "PRIVATE KEY",
+                "EC PRIVATE KEY",
+                "X509 CRL",
+                "CERTIFICATE REQUEST",
+                "ECHCONFIG",
+            )
 
         /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
         @JvmStatic
@@ -37,7 +50,6 @@ class X5uPemFuzzTest {
                     check(
                         second is X5uPemRead.Certificates && same(first.ders, second.ders),
                     ) { "a second read differs" }
-                    check(first.ders.all { it.isNotEmpty() }) { "an empty block was read" }
                     val expected = reference(data)
                     check(expected != null && same(first.ders, expected)) { "the reference reads otherwise" }
                 }
@@ -66,40 +78,48 @@ class X5uPemFuzzTest {
             }
         }
 
-        /** The grammar of [X5uPem] written independently: the blocks' DER, or null where the body fails. */
+        /** The blocks' DER as `rustls-pki-types` reads them, or null where it reports an error or finds no certificate. */
         private fun reference(data: ByteArray): List<ByteArray>? {
-            val lines = String(data, Charsets.ISO_8859_1).split('\n', '\r')
             val out = ArrayList<ByteArray>()
-            var block: StringBuilder? = null
-            for (line in lines) {
-                val open = block
-                if (open == null) {
-                    if (line.startsWith(BEGIN) &&
-                        line.substring(BEGIN.length).all { it == ' ' }
-                    ) {
-                        block = StringBuilder()
-                    }
-                } else if (!line.startsWith(END)) {
-                    open.append(line.filterNot { it.code in WHITESPACE })
-                } else {
-                    out += canonical(open.toString()) ?: return null
-                    block = null
+            var label: String? = null
+            val text = StringBuilder()
+            for (line in String(data, Charsets.ISO_8859_1).split('\n', '\r')) {
+                val open = label
+                when {
+                    line.startsWith("-----BEGIN ") -> label = beginLabel(line) ?: return null
+                    open == null -> Unit
+                    !line.startsWith("-----END $open-----") -> text.append(line)
+                    else -> label = if (close(open, text, out)) null else return null
                 }
             }
-            return if (block != null || out.isEmpty()) null else out
+            return if (label != null || out.isEmpty()) null else out
         }
 
-        /** [text] decoded when it is non-empty, canonical base64, else null. */
-        private fun canonical(text: String): ByteArray? {
-            if (text.isEmpty()) return null
-            val der =
-                try {
-                    Base64.getDecoder().decode(text)
-                } catch (_: IllegalArgumentException) {
-                    return null
-                }
-            return der.takeIf { Base64.getEncoder().encodeToString(it) == text }
+        /** A BEGIN line's label, or null when it is malformed: a label that still ends in a dash had six or more. */
+        private fun beginLabel(line: String): String? {
+            val label = BEGIN.find(line)?.groupValues?.get(1) ?: return null
+            return label.takeUnless { it.trimEnd(' ').endsWith('-') }
         }
+
+        /** Ends the block [label]: decodes a known label's [text], keeps a certificate in [out]; false on an error. */
+        private fun close(
+            label: String,
+            text: StringBuilder,
+            out: MutableList<ByteArray>,
+        ): Boolean {
+            val der = if (label in KNOWN) decoded(text.toString()) ?: return false else null
+            if (label == "CERTIFICATE") out += checkNotNull(der)
+            text.clear()
+            return true
+        }
+
+        /** [text] decoded as the JDK decodes base64 once whitespace is removed; null where it rejects the text. */
+        private fun decoded(text: String): ByteArray? =
+            try {
+                Base64.getDecoder().decode(text.replace(WHITESPACE, ""))
+            } catch (_: IllegalArgumentException) {
+                null
+            }
 
         private fun same(
             a: List<ByteArray>,

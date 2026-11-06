@@ -10,7 +10,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
-/** The x5u PEM reader (spec §7.1 "x5u chain", §6.5 `x5u.pem`): lenient outside a block, strict base64 inside, the cap first. */
+/** The x5u PEM reader (spec §7.1 "x5u chain", §6.5 `x5u.pem`): `rustls-pki-types` 1.15.1's rules, the cap first. */
 class X5uPemTest {
     private val leaf = ByteArray(100) { it.toByte() }
     private val intermediate = ByteArray(47) { (it * 7).toByte() }
@@ -50,124 +50,191 @@ class X5uPemTest {
         assertDers(both, ders(lf.replace("\n", "\r")))
         assertDers(both, ders(lf.replaceFirst("\n", "\r\n").replaceFirst("\n", "\r")))
         assertDers(both, ders(lf.dropLast(1)))
-        assertDers(both, ders(lf.replace("\n", "\r\n").dropLast(2)))
         assertDers(both, ders(lf.dropLast(1) + "\r"))
     }
 
     @Test
-    fun `text, blank lines and other blocks outside a CERTIFICATE block are skipped`() {
+    fun `text, blank lines and blocks with other labels are skipped`() {
         val pem = X5uPemFixtures.pem(leaf, intermediate)
         val both = listOf(leaf, intermediate)
         val blocks = pem.split("-----END CERTIFICATE-----\n").map { it + "-----END CERTIFICATE-----\n" }
-        assertDers(both, ders(pem + "trailing text\n"))
-        assertDers(both, ders(pem + "\n\n"))
-        assertDers(both, ders(pem + " "))
-        assertDers(both, ders("subject=CN=leaf\nissuer=CN=intermediate\n\n$pem"))
+        assertDers(both, ders(pem + "trailing text\n\n"))
+        assertDers(both, ders("subject=CN=leaf\n\n$pem"))
         assertDers(both, ders(blocks[0] + "\n\r\n" + blocks[1]))
         assertDers(both, ders("-----END CERTIFICATE-----\n$pem-----END CERTIFICATE-----\n"))
+        // A known label (decoded, then dropped) and an unknown one (skipped undecoded, even when not base64).
         val key = X5uPemFixtures.pem(root).replace("CERTIFICATE", "PUBLIC KEY")
         assertDers(both, ders(blocks[0] + key + blocks[1]))
-        // A boundary that is not exact starts no block, so its block is skipped as text (as Firefox skips it).
+        assertDers(
+            both,
+            ders(
+                blocks[0] + "-----BEGIN X509 CERTIFICATE-----\nnot base64!\n-----END X509 CERTIFICATE-----\n" +
+                    blocks[1],
+            ),
+        )
+        // A known label's base64 is decoded even though the block is dropped, so a bad one fails the body; an unknown
+        // label's is not.
+        val badKey = "-----BEGIN PUBLIC KEY-----\nnot base64!\n-----END PUBLIC KEY-----\n"
+        assertEquals(X5uPemFailure.BASE64, failure(blocks[0] + badKey + blocks[1]))
+        // A label is compared by its octets, a non-ASCII one included.
+        assertDers(
+            both,
+            ders(blocks[0] + "-----BEGIN ÉTIQUETTE-----\nnot base64!\n-----END ÉTIQUETTE-----\n" + blocks[1]),
+        )
+        // A line that does not start with "-----BEGIN " opens nothing, so its block is skipped as text.
         val bom = Char(0xFEFF)
         assertDers(listOf(intermediate), ders("$bom$pem"))
         assertDers(
             listOf(intermediate),
-            ders(pem.replaceFirst("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE-----x")),
-        )
-        assertDers(
-            listOf(intermediate),
             ders(pem.replaceFirst("-----BEGIN CERTIFICATE-----", " -----BEGIN CERTIFICATE-----")),
         )
-        assertDers(listOf(intermediate), ders(pem.replaceFirst("BEGIN CERTIFICATE", "BEGIN X509 CERTIFICATE")))
-        assertDers(listOf(intermediate), ders(pem.replaceFirst("BEGIN CERTIFICATE", "BEGIN CERTIFICATX")))
+        // A label other than exactly CERTIFICATE, a space before the dashes included, is another block.
+        assertDers(listOf(intermediate), ders(blocks[0].replace("CERTIFICATE", "CERTIFICATX") + blocks[1]))
+        assertDers(listOf(intermediate), ders(blocks[0].replace("CERTIFICATE-----", "CERTIFICATE -----") + blocks[1]))
+        // Its END must name it: one that names CERTIFICATE leaves the block open, so the next BEGIN restarts it with the
+        // END line as base64.
+        assertEquals(X5uPemFailure.BASE64, failure(pem.replaceFirst("BEGIN CERTIFICATE", "BEGIN CERTIFICATX")))
     }
 
     @Test
-    fun `spaces after BEGIN and anything after END on its line are allowed, as rustls-pki-types allows them`() {
+    fun `a BEGIN line ends in five dashes, spaces allowed among and after them`() {
         val pem = X5uPemFixtures.pem(leaf, intermediate)
         val both = listOf(leaf, intermediate)
-        assertDers(both, ders(pem.replace("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE-----   ")))
-        assertDers(both, ders(pem.replace("-----END CERTIFICATE-----", "-----END CERTIFICATE----- ")))
-        assertDers(both, ders(pem.replace("-----END CERTIFICATE-----", "-----END CERTIFICATE-----trailing text")))
-        // A tab after BEGIN is not a space.
-        assertDers(
-            listOf(intermediate),
-            ders(pem.replaceFirst("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE-----\t")),
-        )
+        for (begin in listOf(
+            "-----BEGIN CERTIFICATE-----   ",
+            "-----BEGIN CERTIFICATE--- --",
+            "-----BEGIN CERTIFICATE- - - - - ",
+        )) {
+            assertDers(both, ders(pem.replace("-----BEGIN CERTIFICATE-----", begin)))
+        }
+        // Text after the dashes, four or six dashes, a tab: the line is malformed and the body fails, as in rustls.
+        for (begin in listOf(
+            "-----BEGIN CERTIFICATE-----x",
+            "-----BEGIN CERTIFICATE----",
+            "-----BEGIN CERTIFICATE------",
+            "-----BEGIN CERTIFICATE-----\t",
+            "-----BEGIN CERTIFICATE",
+            "-----BEGIN ",
+        )) {
+            assertEquals(X5uPemFailure.FRAMING, failure(pem.replaceFirst("-----BEGIN CERTIFICATE-----", begin)), begin)
+        }
+        // A malformed BEGIN line of any label, or among the text, fails too.
+        assertEquals(X5uPemFailure.FRAMING, failure(pem + "-----BEGIN PUBLIC KEY----\n"))
+        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN comment\n$pem"))
+        // An empty label is a label like any other.
+        assertDers(both, ders("-----BEGIN -----\nx\n-----END -----\n$pem"))
     }
 
     @Test
-    fun `no block, an empty block and an unterminated block are framing failures`() {
+    fun `a BEGIN line inside a block restarts it and keeps the base64 read so far`() {
+        val text = (leaf + intermediate).toByteString().base64()
+        val split = text.length / 2 / 4 * 4
+        val (head, tail) = text.take(split) to text.drop(split)
+        val begin = "-----BEGIN CERTIFICATE-----"
+        val body = "$begin\n$head\n$begin\n$tail\n-----END CERTIFICATE-----\n"
+        assertDers(listOf(leaf + intermediate), ders(body))
+        // Restarted as another label, the block is skipped at that label's END.
+        val other =
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----BEGIN OTHER-----\n-----END OTHER-----\n" + X5uPemFixtures.pem(root)
+        assertDers(listOf(root), ders(other))
+    }
+
+    @Test
+    fun `an END line names the block's label and may be followed by anything`() {
+        val pem = X5uPemFixtures.pem(leaf, intermediate)
+        val both = listOf(leaf, intermediate)
+        assertDers(both, ders(pem.replace("-----END CERTIFICATE-----", "-----END CERTIFICATE----- ")))
+        assertDers(both, ders(pem.replace("-----END CERTIFICATE-----", "-----END CERTIFICATE-----trailing text")))
+        // Another label's END inside the block is base64, and not valid base64.
+        assertEquals(
+            X5uPemFailure.BASE64,
+            failure(pem.replaceFirst("-----END CERTIFICATE-----", "-----END PUBLIC KEY-----")),
+        )
+        // An END that does not start the line, names another label or is short of dashes never ends a block, so the body
+        // ends inside one.
+        for (end in listOf(" -----END CERTIFICATE-----", "-----END CERTIFICATX-----", "-----END CERTIFICATE----")) {
+            assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("-----END CERTIFICATE-----", end)), end)
+        }
+    }
+
+    @Test
+    fun `no CERTIFICATE block, and a block the body ends inside, are framing failures`() {
         val pem = X5uPemFixtures.pem(leaf, intermediate)
         assertEquals(X5uPemFailure.FRAMING, failure(""))
         assertEquals(X5uPemFailure.FRAMING, failure("\n\r\n"))
         assertEquals(X5uPemFailure.FRAMING, failure("trailing text\n"))
         assertEquals(X5uPemFailure.FRAMING, failure("-----END CERTIFICATE-----\n"))
         assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("CERTIFICATE", "PUBLIC KEY")))
-        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n"))
-        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN CERTIFICATE-----\n\n\r\n-----END CERTIFICATE-----\n"))
         assertEquals(X5uPemFailure.FRAMING, failure(pem.substringBeforeLast("-----END CERTIFICATE-----")))
-        // An END that is not exact does not end the block.
-        assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("END CERTIFICATE", "END X509 CERTIFICATE")))
-        assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("END CERTIFICATE", "END CERTIFICATX")))
-        assertEquals(
-            X5uPemFailure.FRAMING,
-            failure(pem.replace("-----END CERTIFICATE-----", " -----END CERTIFICATE-----")),
-        )
-        // A boundary cut short by the end of the body.
-        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN CERT"))
         assertEquals(
             X5uPemFailure.FRAMING,
             failure(pem.substringBeforeLast("-----END CERTIFICATE-----") + "-----END CERT"),
         )
-        // A block of whitespace only is empty.
-        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN CERTIFICATE-----\n \t \n-----END CERTIFICATE-----\n"))
+        // A block of another label left open at the end fails too, as rustls' MissingSectionEnd does.
+        assertEquals(X5uPemFailure.FRAMING, failure(pem + "-----BEGIN PUBLIC KEY-----\nAAAA\n"))
+        assertEquals(X5uPemFailure.FRAMING, failure(pem + "-----BEGIN OTHER-----\n"))
     }
 
     @Test
-    fun `inside a block, lines of any length join into one canonical base64 text`() {
-        val pem = X5uPemFixtures.pem(leaf)
-        val lines = pem.lines()
-        val begin = lines.first()
-        val end = lines[lines.size - 2]
+    fun `an empty CERTIFICATE block reads as no octets, as rustls-pki-types reads it`() {
+        val empty = "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n"
+        assertDers(listOf(ByteArray(0)), ders(empty))
+        assertDers(
+            listOf(ByteArray(0), leaf),
+            ders(empty.replace("\n-----END", "\n \t\n-----END") + X5uPemFixtures.pem(leaf)),
+        )
+    }
 
-        fun with(body: List<String>) = (listOf(begin) + body + end).joinToString("\n", postfix = "\n")
-        val body = lines.subList(1, lines.size - 2)
-        val joined = body.joinToString("")
-        // Rewrapped at 76 (MIME), at 60, at 1 and unwrapped; blank lines inside; padding split across lines.
-        for (wrapped in listOf(joined.chunked(76), joined.chunked(60), joined.chunked(1), listOf(joined))) {
-            assertDers(listOf(leaf), ders(with(wrapped)))
+    @Test
+    fun `the base64 decoder is rustls-pki-types' decoder`() {
+        fun block(vararg lines: String) =
+            (listOf("-----BEGIN CERTIFICATE-----") + lines + "-----END CERTIFICATE-----").joinToString("\n")
+
+        fun der(vararg lines: String) = ders(block(*lines)).single()
+
+        val leafText = leaf.toByteString().base64()
+        // Any line length, blank lines, whitespace (HT, LF, VT, FF, CR, space) anywhere, padding split across lines.
+        for (wrapped in listOf(leafText.chunked(76), leafText.chunked(1), listOf(leafText))) {
+            assertContentEquals(leaf, der(*wrapped.toTypedArray()))
         }
-        assertDers(listOf(leaf), ders(with(listOf("") + body + "")))
-        assertDers(listOf(ByteArray(1)), ders(with(listOf("AA=", "="))))
-        assertDers(listOf(ByteArray(1)), ders(with(listOf("A", "A", "==", ""))))
-        // A text whose length is not a multiple of 4, padding inside, a pad character too many.
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf(joined.dropLast(1)))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf(joined.dropLast(2)))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA==", "AAAA"))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("A=AA"))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("A==="))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("===="))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA"))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("="))))
-        // Non-zero bits after the last octet: "AA==" is the one spelling of 00, "AB==" is not; likewise "AAA=" and "AAB=".
-        assertDers(listOf(ByteArray(1)), ders(with(listOf("AA=="))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AB=="))))
-        assertDers(listOf(ByteArray(2)), ders(with(listOf("AAA="))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AAB="))))
-        // The URL-safe alphabet, whitespace, a NUL, a non-ASCII octet, a header line and a nested BEGIN.
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA-_"))))
-        // Whitespace inside the base64 is skipped: space, HT, VT, FF (rustls-pki-types' set).
         val vt = Char(0x0b)
         val ff = Char(0x0c)
-        assertDers(listOf(ByteArray(2)), ders(with(listOf(" A A\tA= ", "$vt$ff"))))
-        assertDers(listOf(leaf), ders(with(body.map { " $it\t" })))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA A"))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AAé"))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA\u0000A"))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("Proc-Type: 4,ENCRYPTED") + body)))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf(begin) + body)))
+        assertContentEquals(ByteArray(2), der(" A A\tA= ", "$vt$ff"))
+        assertContentEquals(ByteArray(1), der("AA=", "="))
+        // Padding is optional, and the bits after the last octet are dropped unchecked.
+        assertContentEquals(ByteArray(1), der("AA"))
+        assertContentEquals(ByteArray(2), der("AAA"))
+        assertContentEquals(ByteArray(1), der("AB=="))
+        assertContentEquals(ByteArray(1), der("AP"))
+        assertContentEquals(bytes(0, 0), der("AAB="))
+        assertContentEquals(leaf, der(leafText.trimEnd('=')))
+        assertContentEquals(ByteArray(6), der("AAAAAAAA"))
+        assertContentEquals(ByteArray(4), der("AAAAAA"))
+        assertContentEquals(ByteArray(5), der("AAAAAAA="))
+        // A lone sextet, padding not at the end, a malformed last group.
+        for (bad in listOf(
+            "A",
+            "AAAAA",
+            "AA=",
+            "A=",
+            "=",
+            "A===",
+            "====",
+            "A=AA",
+            "AA==AAAA",
+            "AAA=AAAA",
+            "AAAA=",
+            "AAAAAA=A",
+        )) {
+            assertEquals(X5uPemFailure.BASE64, failure(block(bad)), bad)
+        }
+        // The URL-safe alphabet, a NUL, a non-ASCII octet, a header line.
+        for (bad in listOf("AA-_", "AA\u0000A", "AAé=", "Proc-Type: 4,ENCRYPTED")) {
+            assertEquals(X5uPemFailure.BASE64, failure(block(bad)), bad)
+        }
     }
+
+    private fun bytes(vararg values: Int) = ByteArray(values.size) { values[it].toByte() }
 
     @Test
     fun `a body over the cap is rejected before decoding`() {
