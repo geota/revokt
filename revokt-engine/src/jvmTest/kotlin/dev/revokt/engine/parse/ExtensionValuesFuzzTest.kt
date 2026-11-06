@@ -10,7 +10,8 @@ import dev.revokt.RevoktLimits
  * Spec §9.1 target "the TBS/DER parser", over the x5u extension readers (#106): the first octet picks basicConstraints,
  * keyUsage, extKeyUsage or subjectAltName and the rest is the `extnValue` content. The readers return only `Value` or
  * `Failed`; a read value keeps its grammar's invariants; the certificate-level read of the value as the one extension
- * of a certificate equals the direct read; and K8's verdict equals the 0.1 grammar's (kept below as the reference), so
+ * of a certificate equals the direct read (its failure details aside, which name offsets); a strict read value is the
+ * lenient read's; and K8's verdict equals the 0.1 grammar's (kept below as the reference), so
  * the readers left K8 unchanged. With `JAZZER_FUZZ` unset JUnit replays `ExtensionValuesFuzzTestInputs/`; the nightly
  * job runs it with `-max_len=65537`.
  */
@@ -45,7 +46,12 @@ class ExtensionValuesFuzzTest {
                     ?: return check(
                         der.size > RevoktLimits.MAX_CERT_BYTES,
                     ) { "the wrapping certificate does not parse" }
-            check(same(direct, lookup(oid, c))) { "the certificate-level read differs" }
+            // The details name offsets, which differ between the value alone and the value inside a certificate.
+            check(same(direct, lookup(oid, c), details = false)) { "the certificate-level read differs" }
+            val lenient = read(oid, value, span, strict = false)
+            check(
+                direct !is ExtensionRead.Value || same(direct, lenient),
+            ) { "strict read a value the lenient read did not" }
             val e = c.tbs.extensions.single()
             check(ExtensionGrammars.valid(c.tbsBytes, e) == K8Reference.valid(c.tbsBytes, e)) { "K8 changed" }
         }
@@ -54,12 +60,13 @@ class ExtensionValuesFuzzTest {
             oid: String,
             b: ByteArray,
             v: Span,
+            strict: Boolean = true,
         ): ExtensionRead<Any> =
             when (oid) {
-                ExtensionValues.BASIC_CONSTRAINTS -> ExtensionValues.basicConstraints(b, v)
-                ExtensionValues.KEY_USAGE -> ExtensionValues.keyUsage(b, v)
-                ExtensionValues.EXT_KEY_USAGE -> ExtensionValues.extendedKeyUsage(b, v)
-                else -> ExtensionValues.subjectAltName(b, v)
+                ExtensionValues.BASIC_CONSTRAINTS -> ExtensionValues.basicConstraints(b, v, strict)
+                ExtensionValues.KEY_USAGE -> ExtensionValues.keyUsage(b, v, strict)
+                ExtensionValues.EXT_KEY_USAGE -> ExtensionValues.extendedKeyUsage(b, v, strict)
+                else -> ExtensionValues.subjectAltName(b, v, strict)
             }
 
         private fun lookup(
@@ -104,17 +111,27 @@ class ExtensionValuesFuzzTest {
         private fun same(
             a: ExtensionRead<Any>,
             b: ExtensionRead<Any>,
+            details: Boolean = true,
         ): Boolean =
             when (a) {
-                is ExtensionRead.Failed -> b is ExtensionRead.Failed && a.reason == b.reason && a.detail == b.detail
-                is ExtensionRead.Value -> b is ExtensionRead.Value && fields(a.value) == fields(b.value)
-                ExtensionRead.Absent -> b == ExtensionRead.Absent
+                is ExtensionRead.Failed -> {
+                    b is ExtensionRead.Failed && a.reason == b.reason &&
+                        (!details || a.detail == b.detail)
+                }
+
+                is ExtensionRead.Value -> {
+                    b is ExtensionRead.Value && fields(a.value) == fields(b.value)
+                }
+
+                ExtensionRead.Absent -> {
+                    b == ExtensionRead.Absent
+                }
             }
 
         private fun fields(v: Any): Any? =
             when (v) {
                 is BasicConstraints -> v.ca to v.pathLen
-                is KeyUsage -> v.bits.toList()
+                is KeyUsage -> v.bits
                 is ExtendedKeyUsage -> v.purposes
                 is SubjectAltNames -> v.names.map { it.tag to it.content }
                 else -> v

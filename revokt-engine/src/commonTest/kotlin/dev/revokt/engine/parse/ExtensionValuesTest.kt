@@ -139,6 +139,12 @@ class ExtensionValuesTest {
         malformed(seq(oid(codeSigning), tlv(0x02, bytes(1))), reader)
         malformed(oid(codeSigning), reader)
         malformed(seq(oid(codeSigning)) + bytes(0), reader)
+        // Empty and truncated OID content: strict rejects it; K8 (strict = false) leaves it to K4.
+        for (bad in listOf(tlv(0x06), tlv(0x06, bytes(0x2b, 0x86)))) {
+            malformed(seq(oid(codeSigning), bad), reader)
+            val lenient = ExtensionValues.extendedKeyUsage(seq(bad), Span(0, seq(bad).size), strict = false)
+            assertIs<ExtensionRead.Value<ExtendedKeyUsage>>(lenient)
+        }
     }
 
     @Test
@@ -176,6 +182,45 @@ class ExtensionValuesTest {
         malformed(seq(tlv(0x82, ascii("a.example"))) + bytes(0), reader)
         malformed(tlv(0x82, ascii("a.example")), reader)
         malformed(seq(bytes(0x82, 0x05, 0x61)), reader)
+        // Each identifier in its one form: a constructed dNSName beside a valid one, a primitive otherName or
+        // directoryName, a constructed URI.
+        malformed(seq(tlv(0xa2, tlv(0x16, ascii("a.example"))), tlv(0x82, ascii("b.example"))), reader)
+        malformed(seq(tlv(0x80, ascii("x"))), reader)
+        malformed(seq(tlv(0x84, ascii("x"))), reader)
+        malformed(seq(tlv(0xa6, tlv(0x16, ascii("https://a.example/")))), reader)
+        malformed(seq(tlv(0xa1, ascii("x"))), reader)
+        // An iPAddress of other than 4 or 16 octets (8 and 32 are nameConstraints' forms), an empty or truncated
+        // registeredID.
+        for (n in listOf(0, 3, 5, 8, 15, 17, 32)) malformed(seq(tlv(0x87, ByteArray(n))), reader)
+        malformed(seq(tlv(0x88)), reader)
+        malformed(seq(tlv(0x88, bytes(0x2b, 0x86))), reader)
+    }
+
+    @Test
+    fun `strict readers reject a non-minimal length that K8 leaves to K1`() {
+        // basicConstraints SEQUENCE { TRUE } with its SEQUENCE length in long form.
+        val bc = bytes(0x30, 0x81, 0x03, 0x01, 0x01, 0xff)
+        malformed(bc, basicConstraintsReader)
+        assertEquals(
+            true,
+            assertIs<ExtensionRead.Value<BasicConstraints>>(
+                ExtensionValues.basicConstraints(bc, Span(0, bc.size), strict = false),
+            ).value.ca,
+        )
+        val ku = bytes(0x03, 0x81, 0x02, 0x01, 0x06)
+        malformed(ku, keyUsageReader)
+        assertIs<ExtensionRead.Value<KeyUsage>>(ExtensionValues.keyUsage(ku, Span(0, ku.size), strict = false))
+        val san = seq(bytes(0x82, 0x81, 0x01) + ascii("a"))
+        malformed(san, subjectAltNameReader)
+        assertIs<ExtensionRead.Value<SubjectAltNames>>(
+            ExtensionValues.subjectAltName(san, Span(0, san.size), strict = false),
+        )
+        val eku = bytes(0x30, 0x0b, 0x06, 0x81, 0x08) + TestDer.oidContent(codeSigning)
+        malformed(eku, extendedKeyUsageReader)
+        val purposes = ExtensionValues.extendedKeyUsage(eku, Span(0, eku.size), strict = false)
+        assertTrue(
+            assertIs<ExtensionRead.Value<ExtendedKeyUsage>>(purposes).value.contains(TestDer.oidContent(codeSigning)),
+        )
     }
 
     @Test

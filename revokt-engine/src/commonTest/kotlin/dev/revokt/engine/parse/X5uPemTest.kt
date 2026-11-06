@@ -10,7 +10,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
-/** The x5u PEM reader (spec §7.1 "x5u chain", §6.5 `x5u.pem`): strict RFC 7468 blocks, the cap first. */
+/** The x5u PEM reader (spec §7.1 "x5u chain", §6.5 `x5u.pem`): lenient outside a block, strict base64 inside, the cap first. */
 class X5uPemTest {
     private val leaf = ByteArray(100) { it.toByte() }
     private val intermediate = ByteArray(47) { (it * 7).toByte() }
@@ -43,86 +43,100 @@ class X5uPemTest {
     }
 
     @Test
-    fun `CRLF, mixed line endings and a missing final line ending are accepted`() {
+    fun `LF, CR and CRLF line endings, mixed or missing at the end, are accepted`() {
         val lf = X5uPemFixtures.pem(leaf, intermediate)
-        assertDers(listOf(leaf, intermediate), ders(lf.replace("\n", "\r\n")))
-        assertDers(listOf(leaf, intermediate), ders(lf.replaceFirst("\n", "\r\n")))
-        assertDers(listOf(leaf, intermediate), ders(lf.dropLast(1)))
-        assertDers(listOf(leaf, intermediate), ders(lf.replace("\n", "\r\n").dropLast(2)))
+        val both = listOf(leaf, intermediate)
+        assertDers(both, ders(lf.replace("\n", "\r\n")))
+        assertDers(both, ders(lf.replace("\n", "\r")))
+        assertDers(both, ders(lf.replaceFirst("\n", "\r\n").replaceFirst("\n", "\r")))
+        assertDers(both, ders(lf.dropLast(1)))
+        assertDers(both, ders(lf.replace("\n", "\r\n").dropLast(2)))
+        assertDers(both, ders(lf.dropLast(1) + "\r"))
     }
 
     @Test
-    fun `text before, between or after the blocks is a framing failure`() {
+    fun `text, blank lines and other blocks outside a CERTIFICATE block are skipped`() {
         val pem = X5uPemFixtures.pem(leaf, intermediate)
-        val blocks = pem.split("-----END CERTIFICATE-----\n")
-        assertEquals(X5uPemFailure.FRAMING, failure(pem + "trailing text\n"))
-        assertEquals(X5uPemFailure.FRAMING, failure(pem + "\n"))
-        assertEquals(X5uPemFailure.FRAMING, failure(pem + " "))
-        assertEquals(X5uPemFailure.FRAMING, failure(pem.dropLast(1) + "\r"))
-        assertEquals(X5uPemFailure.FRAMING, failure("subject=CN=leaf\n$pem"))
-        assertEquals(X5uPemFailure.FRAMING, failure("\n$pem"))
-        // A byte order mark.
-        assertEquals(X5uPemFailure.FRAMING, failure("\uFEFF$pem"))
-        assertEquals(
-            X5uPemFailure.FRAMING,
-            failure(blocks[0] + "-----END CERTIFICATE-----\n\n" + blocks[1] + "-----END CERTIFICATE-----\n"),
+        val both = listOf(leaf, intermediate)
+        val blocks = pem.split("-----END CERTIFICATE-----\n").map { it + "-----END CERTIFICATE-----\n" }
+        assertDers(both, ders(pem + "trailing text\n"))
+        assertDers(both, ders(pem + "\n\n"))
+        assertDers(both, ders(pem + " "))
+        assertDers(both, ders("subject=CN=leaf\nissuer=CN=intermediate\n\n$pem"))
+        assertDers(both, ders(blocks[0] + "\n\r\n" + blocks[1]))
+        assertDers(both, ders("-----END CERTIFICATE-----\n$pem-----END CERTIFICATE-----\n"))
+        val key = X5uPemFixtures.pem(root).replace("CERTIFICATE", "PUBLIC KEY")
+        assertDers(both, ders(blocks[0] + key + blocks[1]))
+        // A boundary that is not exact starts no block, so its block is skipped as text (as Firefox skips it).
+        val bom = Char(0xFEFF)
+        assertDers(listOf(intermediate), ders("$bom$pem"))
+        assertDers(
+            listOf(intermediate),
+            ders(pem.replaceFirst("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE----- ")),
         )
-        assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("BEGIN CERTIFICATE", "BEGIN X509 CERTIFICATE")))
+        assertDers(listOf(intermediate), ders(pem.replaceFirst("BEGIN CERTIFICATE", "BEGIN X509 CERTIFICATE")))
+        assertDers(listOf(intermediate), ders(pem.replaceFirst("BEGIN CERTIFICATE", "BEGIN CERTIFICATX")))
+    }
+
+    @Test
+    fun `no block, an empty block and an unterminated block are framing failures`() {
+        val pem = X5uPemFixtures.pem(leaf, intermediate)
+        assertEquals(X5uPemFailure.FRAMING, failure(""))
+        assertEquals(X5uPemFailure.FRAMING, failure("\n\r\n"))
+        assertEquals(X5uPemFailure.FRAMING, failure("trailing text\n"))
+        assertEquals(X5uPemFailure.FRAMING, failure("-----END CERTIFICATE-----\n"))
+        assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("CERTIFICATE", "PUBLIC KEY")))
+        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n"))
+        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN CERTIFICATE-----\n\n\r\n-----END CERTIFICATE-----\n"))
+        assertEquals(X5uPemFailure.FRAMING, failure(pem.substringBeforeLast("-----END CERTIFICATE-----")))
+        // An END that is not exact does not end the block.
         assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("END CERTIFICATE", "END X509 CERTIFICATE")))
-        assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("BEGIN CERTIFICATE", "BEGIN CERTIFICATX")))
         assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("END CERTIFICATE", "END CERTIFICATX")))
         assertEquals(
             X5uPemFailure.FRAMING,
-            failure(pem.replaceFirst("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE----- ")),
+            failure(pem.replace("-----END CERTIFICATE-----", "-----END CERTIFICATE----- ")),
         )
-        assertEquals(
-            X5uPemFailure.FRAMING,
-            failure(pem.replaceFirst("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE----")),
-        )
-        assertEquals(X5uPemFailure.FRAMING, failure(blocks[0]))
-        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n"))
-        assertEquals(X5uPemFailure.FRAMING, failure(""))
-        assertEquals(X5uPemFailure.FRAMING, failure("\n"))
-        assertEquals(X5uPemFailure.FRAMING, failure("-----END CERTIFICATE-----\n"))
     }
 
     @Test
-    fun `base64 lines must be 64 characters but the last, canonical and padded only at the end`() {
+    fun `inside a block, lines of any length join into one canonical base64 text`() {
         val pem = X5uPemFixtures.pem(leaf)
         val lines = pem.lines()
-
         val begin = lines.first()
         val end = lines[lines.size - 2]
 
         fun with(body: List<String>) = (listOf(begin) + body + end).joinToString("\n", postfix = "\n")
         val body = lines.subList(1, lines.size - 2)
-        // Rewrapped at 76 (MIME) and at 60 columns.
         val joined = body.joinToString("")
-        assertEquals(X5uPemFailure.BASE64, failure(with(joined.chunked(76))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(joined.chunked(60))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf(body[0] + "AAAA") + body.drop(1))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf(body[0] + "AAAA"))))
-        // A last line that is not a whole quantum, one with padding inside, a pad character too many.
-        assertEquals(X5uPemFailure.BASE64, failure(with(body.dropLast(1) + body.last().dropLast(1))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(body.dropLast(1) + "A=AA")))
-        assertEquals(X5uPemFailure.BASE64, failure(with(body.dropLast(1) + "A===")))
-        assertEquals(X5uPemFailure.BASE64, failure(with(body.dropLast(1) + "====")))
-        assertEquals(X5uPemFailure.BASE64, failure(with(body.dropLast(1) + "AA")))
+        // Rewrapped at 76 (MIME), at 60, at 1 and unwrapped; blank lines inside; padding split across lines.
+        for (wrapped in listOf(joined.chunked(76), joined.chunked(60), joined.chunked(1), listOf(joined))) {
+            assertDers(listOf(leaf), ders(with(wrapped)))
+        }
+        assertDers(listOf(leaf), ders(with(listOf("") + body + "")))
+        assertDers(listOf(ByteArray(1)), ders(with(listOf("AA=", "="))))
+        assertDers(listOf(ByteArray(1)), ders(with(listOf("A", "A", "==", ""))))
+        // A text whose length is not a multiple of 4, padding inside, a pad character too many.
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf(joined.dropLast(1)))))
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf(joined.dropLast(2)))))
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA==", "AAAA"))))
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("A=AA"))))
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("A==="))))
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("===="))))
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA"))))
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("="))))
         // Non-zero bits after the last octet: "AA==" is the one spelling of 00, "AB==" is not; likewise "AAA=" and "AAB=".
         assertDers(listOf(ByteArray(1)), ders(with(listOf("AA=="))))
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AB=="))))
         assertDers(listOf(ByteArray(2)), ders(with(listOf("AAA="))))
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AAB="))))
-        // The URL-safe alphabet, whitespace, a stray CR and a non-ASCII octet.
+        // The URL-safe alphabet, whitespace, a NUL, a non-ASCII octet, a header line and a nested BEGIN.
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA-_"))))
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA A"))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA\rA"))))
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA\tA"))))
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AAé"))))
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA\u0000A"))))
-        // A header line (RFC 1421) and a blank line inside a block.
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("Proc-Type: 4,ENCRYPTED") + body)))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("") + body)))
-        assertEquals(X5uPemFailure.BASE64, failure(with(body + "")))
+        assertEquals(X5uPemFailure.BASE64, failure(with(listOf(begin) + body)))
     }
 
     @Test

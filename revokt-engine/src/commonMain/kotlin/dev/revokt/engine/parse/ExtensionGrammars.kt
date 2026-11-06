@@ -13,10 +13,7 @@ internal object ExtensionGrammars {
     private const val OCTET_STRING = 0x04
     private const val OBJECT_IDENTIFIER = 0x06
     private const val SEQUENCE = 0x30
-    private const val RFC822_NAME = 0x81
-    private const val DNS_NAME = 0x82
     private const val URI = 0x86
-    private const val IP_ADDRESS = 0x87
     private const val KEY_IDENTIFIER = 0x80
     private const val CONTEXT_0 = 0xa0
     private const val CONSTRUCTED = 0x20
@@ -30,13 +27,20 @@ internal object ExtensionGrammars {
     /** Each listed OID's grammar over the `extnValue` content; nameConstraints and subjectInfoAccess have none. */
     private val GRAMMARS: List<Pair<ByteArray, (ByteArray, Span) -> Boolean>> =
         listOf(
-            Oid.KEY_USAGE_CONTENT to { b, v -> ExtensionValues.keyUsage(b, v) is ExtensionRead.Value },
-            Oid.BASIC_CONSTRAINTS_CONTENT to { b, v -> ExtensionValues.basicConstraints(b, v) is ExtensionRead.Value },
+            Oid.KEY_USAGE_CONTENT to { b, v -> ExtensionValues.keyUsage(b, v, strict = false) is ExtensionRead.Value },
+            Oid.BASIC_CONSTRAINTS_CONTENT to
+                { b, v -> ExtensionValues.basicConstraints(b, v, strict = false) is ExtensionRead.Value },
             Oid.SUBJECT_ALT_NAME_CONTENT to
-                { b, v -> ExtensionValues.subjectAltName(b, v).let { it is ExtensionRead.Value && listed(it.value) } },
+                { b, v ->
+                    ExtensionValues.subjectAltName(b, v, strict = false).let {
+                        it is ExtensionRead.Value &&
+                            listed(it.value)
+                    }
+                },
             CRL_DISTRIBUTION_POINTS to { b, v -> sequence(b, v) { r -> all(r) { distributionPoint(b, it) } } },
             Oid.AUTHORITY_KEY_IDENTIFIER_CONTENT to { b, v -> sequence(b, v) { keyIdentifierOnly(it) } },
-            Oid.EXT_KEY_USAGE_CONTENT to { b, v -> ExtensionValues.extendedKeyUsage(b, v) is ExtensionRead.Value },
+            Oid.EXT_KEY_USAGE_CONTENT to
+                { b, v -> ExtensionValues.extendedKeyUsage(b, v, strict = false) is ExtensionRead.Value },
             Oid.SUBJECT_KEY_IDENTIFIER_CONTENT to { b, v -> only(b, v, OCTET_STRING) { true } },
             CERTIFICATE_POLICIES to { b, v -> sequence(b, v) { r -> all(r) { policy(b, it) } } },
             AUTHORITY_INFO_ACCESS to
@@ -163,13 +167,15 @@ internal object ExtensionGrammars {
         return true
     }
 
-    /** K8 on a read SAN: every name a `dNSName` or `rfc822Name` of ASCII octets, or an `iPAddress` of 4 or 16 octets. */
+    /**
+     * K8 on a read SAN: every name a `dNSName` (ASCII, as the reader requires), an `rfc822Name` of ASCII octets or an
+     * `iPAddress` (4 or 16 octets, as the reader requires).
+     */
     private fun listed(san: SubjectAltNames): Boolean =
         san.names.all {
             when (it.tag) {
-                DNS_NAME -> true
-                RFC822_NAME -> it.content.toByteArray().all { octet -> octet >= 0 }
-                IP_ADDRESS -> it.content.size == 4 || it.content.size == 16
+                ExtensionValues.DNS_NAME, ExtensionValues.IP_ADDRESS -> true
+                ExtensionValues.RFC822_NAME -> it.content.toByteArray().all { octet -> octet >= 0 }
                 else -> false
             }
         }
