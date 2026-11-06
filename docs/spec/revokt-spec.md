@@ -1,10 +1,63 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 51** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-05
+Status: **draft spec / project proposal, revision 52** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-06
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 52 (names from unsigned source data, 2026-11-06)
+- **Added** (§7.3, §6.3, §6.5; the maintainer's rules on #160, from the review of #166): a mirror's manifest names.
+  - **Why:** a mirror's data is unsigned, so a name it serves is checked before it names a file or a URL.
+  - **The check:** every `manifest.json` filename passes §6.3's filename rule, does not end in `.` (Win32 strips a
+    trailing `.`, so `meta.json.` would open `meta.json`), is none of §6.3's reserved names (compared ignoring ASCII
+    case, so `META.JSON` fails), and is unique in the manifest ignoring ASCII case.
+  - **The hash:** each file's manifest `hash`, the one unsigned string that reaches a storage key (`blobs/<sha256>`,
+    looked up before the fetch), is exactly 64 hex characters (32 bytes); the blob key is its lowercase re-encoding.
+  - **The URL:** the base is the configured `c2spMirror` URL with a `/` appended when it does not end in one;
+    `manifest.json` and every mirror file are fetched only from the base followed by their name. §4 gains the rule
+    "R: a `c2spMirror` URL with a query or a fragment": `build()` throws `IllegalArgumentException`.
+  - **The outcome:** any failing name or hash rejects the whole manifest before any body is fetched or written:
+    `SyncOutcome.FAILED` with `INDEX_INCONSISTENT`, stage `INDEX`, the outcome of §6.5's name collision. §4's
+    `INDEX_INCONSISTENT` line names it.
+  - **Names over 32 bytes:** the adopted text names `C2spIndex.isFilename`, C2SP's 1-to-32-byte rule. The
+    maintainer's earlier decision on #160 gives mirror filenames over 32 bytes §6.5's derived names, so the manifest
+    name is checked under §6.3's 1-to-64-byte rule, and the generation's name is the filename when it passes
+    `isFilename` and its derived name otherwise. So every name a mirror generation stores passes `isFilename`. The
+    generation's names are unique ignoring ASCII case too, and §6.5 now derives names from manifest filenames as well as
+    attachment filenames.
+- **Added** (§6.5): a seed's entry names.
+  - **Why:** a zip entry's name is outside the signature.
+  - **The rule:** the loader never derives a name or a path from a zip entry. It accepts exactly the fixed entries
+    (`seed.json`, `records.json`, `signature`, `x5u.pem`, `index.bin`), plus `attachments/<f>` for each §6.3-checked
+    `attachment.filename` f of a record in the verified `records.json` that `buildIndex(records, channel)` places
+    in the generation, and reads each entry by that exact name.
+  - **The outcome:** a duplicate, extra or missing entry is `SEED_UNREADABLE`. An entry that differs from an
+    expected name only in letter case is an extra entry, and so is a directory entry.
+  - **The central directory:** the entries are the zip's central directory. Every read goes through a
+    central-directory entry whose local header names the same file, and the first entry is `seed.json` (§5.1's header
+    read takes it), else `SEED_UNREADABLE`.
+  - **When:** the fixed entries are checked before any entry but `seed.json` is read, and at that check every name
+    that is neither a fixed entry nor under `attachments/` is already extra; the attachment entries are checked once
+    `records.json` is verified and before any of them is inflated.
+  - **Which records:** the verified `records.json` holds every channel's records, so the expected attachments are
+    the ones `buildIndex` places in the seed's generation, not one per record.
+- **Fixtures** (§9): the manifest rows join (e), beside the manifest cap: `.`, `..`, `../x`, `/x`, `a/b`,
+  `META.JSON`, `meta.json.`, two names equal ignoring case and a hash of 63 or 65 or non-hex characters each fail the
+  sync with nothing fetched or written; a mirror URL without a trailing `/` gets one, and one with a query or a
+  fragment throws at `build()`. No row tests a name over 32 bytes yet: whether a mirror's `index.bin` is fetched or
+  built locally is still open on #160, and a C2SP `index.bin` cannot name such a file. The seed rows join the
+  content-signature fixtures, beside the seed's entry cap, as 0.2 gates: `attachments/../x`, a duplicate entry, an
+  extra entry, a case variant, a local-header name that differs from the central directory's, a first entry other
+  than `seed.json` and a missing attachment are each `SEED_UNREADABLE`.
+- **§10 and Appendix A:** §10's TLS-only mirror item says an unsigned name never names a path outside its generation
+  directory. A checked name can still be a Windows device name such as `NUL`; that only makes the install fail (the
+  read-back or `prepare()` fails, so the sync is `FAILED`), and full filters are stored under blob keys, not their
+  names. Its supply-chain item names the seed rule.
+  Appendix A's C2SP filename entry lists the case-insensitive checks as revokt's own rules.
+- **Omitted as not needed** (the maintainer, on #160), since signed data, the pinned-root chain check, or a check the names
+  already pass covers each: engine-side storage-key checks, a store symlink rule, load-time re-checks, the shape of
+  `attachment.location`, an x5u URL rebuild and a change to the install order.
 
 ### Changes in revision 51 (Conscrypt's post-quantum algorithms and the PSS hashes, 2026-11-05)
 - **Corrected** (Appendix A, §3; found in the review of #156): Appendix A said Conscrypt does not ship ML-DSA.
@@ -1968,7 +2021,8 @@ remaining a subsequence.
   header is read synchronously).
 - `NOT_STARTED` is not a warning: a trust manager or `sslContext()` obtained before `start()` runs step 1 only until `start()` and counts `unevaluated[NOT_STARTED]` (creating trust managers before `start()` is the recommended main-thread pattern, so it cannot be a stuck alert).
 - R `CHANNEL_UNSET`: no `channel` configured while a CRLite source (a seed included) is. R `PLATFORM_TRUST_MISMATCH`: Android runtime with a non-Android `platformTrust`. R `STORAGE_UNSET`: `AndroidPlatformTrust` with no explicit `storage` (§3).
-- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2, and §6.5's index-name collision), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
+- R: a `c2spMirror` URL with a query or a fragment (§7.3: every mirror URL is the base followed by a name).
+- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2, §6.5's index-name collision, and §7.3's manifest names), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
 
 ## 5. Trust manager [M1]
 
@@ -2113,7 +2167,7 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
 idempotent; `start()` after `close()` throws. **`start()`, synchronous on both platforms** (may throw;
 performs small disk reads, calls each delegate's `getAcceptedIssuers()` and takes the factory lock
 and the store lock, so call it off the main thread or under `StrictMode.allowThreadDiskReads`;
-`seed.json` is the first, stored entry of the seed zip so the header read is one small read). **The
+`seed.json` is the first, stored entry of the seed zip's central directory, §6.5, so the header read is a few small reads: the end-of-central-directory record, the central directory, then the first local header). **The
 whole synchronous part runs under the factory lock of "Trust managers per delegate"** (an internal
 `STARTING` flag set under the lock for its duration, released around the sole-seed decode below) and the
 lifecycle flips to `STARTED` as its last step under that lock, so no `trustManager(d)` and no second
@@ -2697,7 +2751,7 @@ Detect the encoding from the 2-byte prefix `[version, reserved0 = 0]`:
   evicts a `MIRROR` or `SYSTEM` one.
 
 **Hardening**: every length and offset checked before allocation with an explicit allocation budget
-per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (today's attachment names are 31 characters; a three-digit daily index must not fail the rule; a name longer than C2SP's 32 bytes is renamed in `index.bin`, §6.5) and never a reserved name (`index.bin`, `meta.json`, `records.json`, `current`, `updater.json`, `store.version`, `.lock`; `index.bin` added in revision 48, since a filter of that name cannot sit beside the index in a C2SP image); downloads capped at `min(attachment.size, MAX_FILTER_BYTES)` for signed bodies and at the per-kind fixed cap for unsigned bodies (§5.1 limits).
+per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (today's attachment names are 31 characters; a three-digit daily index must not fail the rule; a name longer than C2SP's 32 bytes is renamed in `index.bin`, §6.5) and never a reserved name (`index.bin`, `meta.json`, `records.json`, `current`, `updater.json`, `store.version`, `.lock`; `index.bin` added in revision 48, since a filter of that name cannot sit beside the index in a C2SP image; a mirror's manifest names are compared with them ignoring ASCII case, §7.3); downloads capped at `min(attachment.size, MAX_FILTER_BYTES)` for signed bodies and at the per-kind fixed cap for unsigned bodies (§5.1 limits).
 
 ### 6.4 Filter storage
 `LongArray` columns padded with one zero word in an immutable `Generation`. No mmap.
@@ -2716,13 +2770,16 @@ are a fixed 2 s.
 
 **Layout over `RevoktStorage`'s key space** (each generation is materialisable into a C2SP directory
 image). **A file's name in a generation** (revision 48) is derived from its §6.3-validated Remote Settings
-`attachment.filename`: the filename itself when it is at most 32 bytes (a C2SP filename: 1 to 32 bytes of
+`attachment.filename`, or in a `MIRROR` generation from its §7.3-checked `manifest.json` filename (revision 52): the
+filename itself when it is at most 32 bytes (a C2SP filename: 1 to 32 bytes of
 `[A-Za-z0-9._-]`), otherwise its first 15 characters, `-` and the first 16 lowercase hex characters of the SHA-256 of
-the filename's ASCII bytes (not `attachment.hash`), 32 characters in all, since §6.3 admits names of up to 64
+the filename's ASCII bytes (not `attachment.hash` or the manifest's hash), 32 characters in all, since §6.3 admits names of up to 64
 characters and C2SP up to 32. That name is the file's name everywhere in a generation: `index.bin`,
 `GenerationFiles.names`, the generation directory and `meta.json`. The attachment filename appears only in the signed
-records (`records.json`); a seed's `attachments/<name>` keeps the attachment filename and is mapped by this rule at
-load. Two attachments that map to one name fail the generation before any body is fetched: `SyncOutcome.FAILED` with
+records (`records.json`), and a manifest filename only in the manifest and its body's URL (§7.3); a seed's
+`attachments/<f>` entry keeps the attachment filename f, is looked up by it (Seed archive, below) and is mapped by this
+rule at load. Two attachments or manifest files that map to one name (for a mirror, one name ignoring ASCII case, §7.3)
+fail the generation before any body is fetched: `SyncOutcome.FAILED` with
 `INDEX_INCONSISTENT`, stage `INDEX`, and `SEED_UNREADABLE` for a seed (`buildIndex` refuses it). `meta.json` maps each
 name to its blob. Path segments for dataset and channel are lowercase enum names; persisted enum
 values are names, never ordinals:
@@ -2816,7 +2873,7 @@ periods are then checked at the decoded `<ts>` (§7.2), so only JSON signed unde
 `start()`. The budgets are measured on HotSpot only; ART is not asserted.
 
 **Seed archive** (`revokt-seed-<channel>`, weekly; **shipped by default**: `SeedSource.bundled()`, the builder default, resolves `/revokt/seed-<channel>.zip` from that artifact on the classpath, and the OkHttp and Android quickstarts declare the dependency; decision, revision 23): a zip with `seed.json` {`seedFormat`, `channel`,
-`dataset`, `filterFormat`, `recordsLastModified`, `engineFloor`}, `records.json` (byte-for-byte the canonical-JSON signed payload `{"data": records sorted by id, tombstones removed, "last_modified": "<ts>"}`, so the seed verifier hashes the file unchanged; the `<ts>` inside it, verified, is the seed's timestamp for every rule below, the unsigned `seed.json.recordsLastModified` being a hint for the header read only), `signature` (the `signature` field as served: the 128-character base64url text encoding 96 raw r‖s bytes), `x5u.pem` (the x5u body as served, leaf first), `attachments/<name>`, `index.bin` (produced by one engine function `buildIndex(records, channel)` with entries ordered by `(effectiveTimestamp, record id)`, full before deltas; its output bytes are frozen per `seedFormat`, a change bumps `seedFormat`, which is what makes the load-time byte compare valid across minors; the weekly job calls that function from the oldest supported minor). **Entry caps, enforced while inflating** (zip-declared sizes are untrusted; `fromResource`/`fromPath`/`of` accept any file, and the sole-seed `ENFORCE` path inflates inside `start()`, where an `OutOfMemoryError` would crash-loop an app): `records.json` ≤ `MAX_JSON_BYTES`, `x5u.pem` ≤ `MAX_X5U_BYTES`, each attachment ≤ `min(signed size, MAX_FILTER_BYTES)`, `index.bin` ≤ 1 MiB, `seed.json` ≤ 64 KiB; over any cap → `SEED_UNREADABLE` (§10 supply chain). Engine rules: `seedFormat` or
+`dataset`, `filterFormat`, `recordsLastModified`, `engineFloor`}, `records.json` (byte-for-byte the canonical-JSON signed payload `{"data": records sorted by id, tombstones removed, "last_modified": "<ts>"}`, so the seed verifier hashes the file unchanged; the `<ts>` inside it, verified, is the seed's timestamp for every rule below, the unsigned `seed.json.recordsLastModified` being a hint for the header read only), `signature` (the `signature` field as served: the 128-character base64url text encoding 96 raw r‖s bytes), `x5u.pem` (the x5u body as served, leaf first), `attachments/<f>`, `index.bin` (produced by one engine function `buildIndex(records, channel)` with entries ordered by `(effectiveTimestamp, record id)`, full before deltas; its output bytes are frozen per `seedFormat`, a change bumps `seedFormat`, which is what makes the load-time byte compare valid across minors; the weekly job calls that function from the oldest supported minor). **Entry names** (revision 52; a zip entry's name is outside the signature): the loader never derives a name or a path from a zip entry. It accepts exactly the fixed entries `seed.json`, `records.json`, `signature`, `x5u.pem` and `index.bin`, plus `attachments/<f>` for each §6.3-checked `attachment.filename` f of a record in the verified `records.json` that `buildIndex(records, channel)` places in the generation, and reads each entry by that exact name. The entries are the zip's central directory: every read goes through a central-directory entry whose local header names the same file, and the first entry is `seed.json`; otherwise the seed is `SEED_UNREADABLE`. A duplicate, extra or missing entry is `SEED_UNREADABLE`; an entry that differs from an expected name only in letter case is an extra entry, and so is a directory entry. The fixed entries are checked before any entry but `seed.json` is read, and at that check every name that is neither a fixed entry nor under `attachments/` is already extra; the attachment entries are checked once `records.json` is verified and before any of them is inflated. **Entry caps, enforced while inflating** (zip-declared sizes are untrusted; `fromResource`/`fromPath`/`of` accept any file, and the sole-seed `ENFORCE` path inflates inside `start()`, where an `OutOfMemoryError` would crash-loop an app): `records.json` ≤ `MAX_JSON_BYTES`, `x5u.pem` ≤ `MAX_X5U_BYTES`, each attachment ≤ `min(signed size, MAX_FILTER_BYTES)`, `index.bin` ≤ 1 MiB, `seed.json` ≤ 64 KiB; over any cap → `SEED_UNREADABLE` (§10 supply chain). Engine rules: `seedFormat` or
 `engineFloor` above what this engine supports, or `filterFormat ∉ revocationEngine.formats`, → `SEED_UNREADABLE` warning and the seed is ignored (so in the sole-seed `ENFORCE` configuration `start()` throws, §4 S bullet); **a seed whose signed timestamp exceeds local now + `clockSkew` is installed** (decision, revision 29: the timestamp is Mozilla-signed and its x5u checks run at that signed time, so "future" can only mean the local clock is behind, which the spec calls routine; refusing it put the default preset at `NO_DATA` on every device whose clock was a day behind) with `DataState.clockBehind = true`, `ageMillis` clamped at 0, the sticky-while-true `CLOCK_BEHIND` warning, and the watermark at the signed timestamp as for any seed (rollback comparisons are server time against server time and never involve the local clock);
 `channel` ≠ configured channel → `SEED_CHANNEL_MISMATCH` `ERROR` thrown by `start()`; the shipped
 `index.bin` is **rebuilt from `records.json` and byte-compared** at load (the signature binds records
@@ -2883,7 +2940,19 @@ their content changes only when a CA is listed; CRLSet from its sequence time; t
 artifact date; seeds from their signed timestamp.
 
 ### 7.3 C2SP manifest mirrors and system cache [M1]
-Protocol as `upki fetch`. **Bootstrap only.** A `MIRROR` or `SYSTEM` generation installs **only when
+Protocol as `upki fetch`. **Manifest names** (revision 52; a mirror's data is unsigned, so a name it serves is checked
+before it names anything): every `manifest.json` filename passes §6.3's filename rule (1 to 64 bytes of
+`[A-Za-z0-9._-]`, not `.` or `..`), does not end in `.` (Win32 strips a trailing `.`, so `meta.json.` would open
+`meta.json`), is none of §6.3's reserved names, compared ignoring ASCII case, and is unique in the manifest ignoring
+ASCII case. Its name in the generation is §6.5's: the filename itself when it passes
+`C2spIndex.isFilename` (C2SP's rule, 1 to 32 bytes of the same characters), otherwise its 32-character derived name,
+and the generation's names are unique ignoring ASCII case too. Each file's manifest `hash` is exactly 64 hexadecimal
+characters (32 bytes), since it is the one unsigned string that reaches a storage key; its `blobs/<sha256>` key
+(§6.5) is the lowercase re-encoding of those 32 bytes. **The base** is the configured `c2spMirror` URL with a `/`
+appended when it does not end in one, and `manifest.json` and every mirror file are fetched only from the base
+followed by their name (a `c2spMirror` URL with a query or a fragment throws at `build()`, §4). A manifest with any
+failing name or hash is rejected whole before any body is fetched or written: `SyncOutcome.FAILED` with
+`INDEX_INCONSISTENT`, stage `INDEX`, as for §6.5's name collision. **Bootstrap only.** A `MIRROR` or `SYSTEM` generation installs **only when
 the dataset has no generation of a higher trust class at all** (no seed, no stored `SIGNED`
 generation), its trust class is not below the dataset's `minTrustClass` while
 `outcome(UNSIGNED_DATA) == REJECT`, and its coverage passes §6.3; it is evicted by the first
@@ -3003,7 +3072,7 @@ tests; **live checks** are informational.
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
   disagreement fails the job.
 - **Content-signature fixtures** (0.2 gates, except the three items tagged [0.3], which need the §6.5 store or a `MIRROR` source; revision 49) with mutations; incremental fixtures; a seed with an expired signer
-  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; [0.3] a mirror generation whose `index.bin` names a log window absent from the filter's coverage → `FAILED`, `INDEX_INCONSISTENT`; [0.3] a mirror `index.bin` of 1 MiB + 1 byte → `FAILED`, `INDEX_INCONSISTENT`, before it is parsed (revision 48); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; signature
+  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); [0.3] a mirror generation whose `index.bin` names a log window absent from the filter's coverage → `FAILED`, `INDEX_INCONSISTENT`; [0.3] a mirror `index.bin` of 1 MiB + 1 byte → `FAILED`, `INDEX_INCONSISTENT`, before it is parsed (revision 48); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; signature
   over records with a tombstone merged vs not merged.
 - **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (c), (e), (f), (h) need the store, mirror, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
   `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
@@ -3034,7 +3103,11 @@ tests; **live checks** are informational.
   and no file written for the session; two consecutive syncs whose `engine.prepare()` throws → `live`
   and `previous` still load, `storeFailures = 2` (sync-time `prepare()` throws count), both syncs `FAILED` with stage `PREPARE`, the two failed directories deleted; stored
   generation equal to the seed → no verification, `names()` unchanged; a manifest with 33 entries or a 17 MiB declared filter → rejected before any
-  body fetch; (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
+  body fetch; a manifest naming `.`, `..`, `../x`, `/x`, `a/b`, `META.JSON` or `meta.json.`, or two files whose names
+  are equal ignoring ASCII case (`a.filter`, `A.FILTER`), or a file whose `hash` is 63 or 65 hex characters or holds a
+  non-hex character → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched and nothing written (revision
+  52); a `c2spMirror` URL without a trailing `/` → `manifest.json` and each body fetched from the URL, `/` and the
+  name; a `c2spMirror` URL with a query or a fragment → `build()` throws `IllegalArgumentException`; (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
   `start()` throws on both platforms; stored `MIRROR` with coverage newer than the seed → seed
   installed, `trustClass = SIGNED`, the `MIRROR` directory pruned; stored `SIGNED` newer than the seed
   → seed skipped; corrupt `live` with an evicted `MIRROR` still on disk → recovery goes to seed, never
@@ -3899,7 +3972,9 @@ justified in writing.
   then reported as `feedHostRevoked` while fetches proceed (the payload is authenticated end to end, so
   TLS authenticity to that host protects nothing an attacker could exploit); a TLS-only mirror's host is
   blocked while its current chain is hit (`updateBlockedBySelf`); this is the one deliberate departure from Firefox's behaviour on the feed path; untrusted bytes hardened per C2SP with allocation budgets and per-kind download caps,
-  so an unsigned manifest bounds neither heap nor disk nor metered bandwidth;
+  so an unsigned manifest bounds neither heap nor disk nor metered bandwidth; its names are checked and a body is
+  fetched only from the configured mirror URL followed by a checked name (§7.3), so an unsigned name never names a
+  path outside its generation directory or another URL;
   x5u allowlisted, capped and path-validated; the parser is at least as lenient as the platforms,
   verified differentially (§9.2), and `PARSE_FAILED` applies to the leaf only.
 - Crypto never implemented in Kotlin except the raw-to-DER ECDSA conversion and the §9.2 profile's EC on-curve check (public field arithmetic over P-256, P-384 and P-521, no secret data); `UNSUPPORTED` is decided
@@ -3911,7 +3986,9 @@ justified in writing.
 - Supply chain: reproducible builds, publishing from CI only (a protected release environment with a second maintainer's approval, PGP-signed artefacts, SLSA provenance attestations; Central Portal has no OIDC trusted publishing), SBOM, `dependencyLocking`,
   `SECURITY.md`, two-person review on the clubcard module, the verifiers, the walker,
   `RevoktTrustManager` and the §9.2 parser; seed archive entries are capped while inflating (§6.5) and
-  everything in a seed outside `seed.json` is Mozilla-signed or hashed; seed artifacts carry no code
+  everything in a seed outside `seed.json` is Mozilla-signed or hashed; the entry names are not, so the loader reads
+  only the fixed entries and the attachments the verified records name, and derives no name or path from an entry
+  (§6.5); seed artifacts carry no code
   dependency, so a data bump cannot desynchronise the code set.
 
 ## 11. Milestones and versioning
@@ -4003,7 +4080,7 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
 - Firefox: `crlite_channel` `"compat"` on Android; `crlite_mode` 2; `crlite_timestamps_for_coverage` 1;
   OCSP fallback when CRLite is stale or absent.
 - C2SP `upki-revocation@v1.0.0`: the spec says v4; `clubcard-crlite` (the crate upki depends on, `bincode` feature) decodes version bytes 3 and 4, so upki reads Mozilla's v3 filters as served (verified 2026-10-22 in rustls/upki `Cargo.toml` and clubcard-crlite `Encoding::read`); aggregation over covering filters only; selection goes through `index.bin`'s log directory (`Index::check` binary-searches it per SCT and loads only the named filters). **0.2 verification, open**: how `upki-mirror` writes overlapping windows (a full and its deltas sharing boundary timestamps) and how `Index::check` treats overlapping directory entries; the §3.2 selection-equivalence check is stated so that either representation passes.
-- C2SP `upki-revocation@v1.0.0` filenames, read 2026-11-04 at the pinned commit `7e6ded4` (`upki-revocation.md`, "Revocation cache directory layout", "Header" and "Filename table"): filter filenames "MUST be between 1 and 32 bytes long and MUST consist only of the ASCII characters `A`–`Z`, `a`–`z`, `0`–`9`, hyphen (`-`), period (`.`), and underscore (`_`)"; "The names `.` and `..` MUST NOT be used"; an index naming a file that violates these is malformed; each name slot is 32 bytes, zero-padded; `num_filenames` limits an index to 65535 files. The spec states no uniqueness rule for filenames, does not reserve `index.bin` as a filter name, and sets no size cap on `index.bin`: revokt's derived names (§6.5), its `index.bin` reservation (§6.3) and its 1 MiB cap (§3.2) are its own rules (revision 48). `C2spIndex.isFilename` implements exactly the filename rule.
+- C2SP `upki-revocation@v1.0.0` filenames, read 2026-11-04 at the pinned commit `7e6ded4` (`upki-revocation.md`, "Revocation cache directory layout", "Header" and "Filename table"): filter filenames "MUST be between 1 and 32 bytes long and MUST consist only of the ASCII characters `A`–`Z`, `a`–`z`, `0`–`9`, hyphen (`-`), period (`.`), and underscore (`_`)"; "The names `.` and `..` MUST NOT be used"; an index naming a file that violates these is malformed; each name slot is 32 bytes, zero-padded; `num_filenames` limits an index to 65535 files. The spec states no uniqueness rule for filenames, does not reserve `index.bin` as a filter name, and sets no size cap on `index.bin`: revokt's derived names (§6.5), its `index.bin` reservation (§6.3) and its 1 MiB cap (§3.2) are its own rules (revision 48), as are a mirror manifest's checks of reserved names and of uniqueness ignoring ASCII case, and its ban on a trailing `.` (§7.3, revision 52). `C2spIndex.isFilename` implements exactly the filename rule.
 - `upki.rustls.dev`: GitHub Pages, `default` only, v4 transcode; `upki-mirror` verifies the
   attachment hash, not the content signature. upki FFI: three functions; no Android prebuilt.
   `rustls_upki::Policy` defaults: `missing_data = Error`, `cert_not_covered = Allowed`, `cert_has_no_scts = Allowed`.
