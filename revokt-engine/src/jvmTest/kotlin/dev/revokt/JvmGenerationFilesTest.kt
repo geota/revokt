@@ -6,6 +6,7 @@ package dev.revokt
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.engine.c2sp.C2spIndex
 import okio.ByteString.Companion.toByteString
+import org.junit.jupiter.api.Assumptions
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -186,10 +187,10 @@ class JvmGenerationFilesTest {
             (filters - "delta-v4").forEach { (name, bytes) -> Files.write(image.resolve(name), bytes) }
             try {
                 Files.createSymbolicLink(image.resolve("delta-v4"), outside)
-            } catch (_: java.io.IOException) {
-                return // the platform or account cannot create symbolic links, so there is nothing to test
-            } catch (_: UnsupportedOperationException) {
-                return
+            } catch (e: java.io.IOException) {
+                // Only Windows may refuse a link (the account lacks the privilege): the test is then skipped, never passed.
+                if (!System.getProperty("os.name").startsWith("Windows")) throw e
+                Assumptions.abort<Unit>("cannot create symbolic links here: $e")
             }
             val e = assertFailsWith<IllegalArgumentException> { read(image) }
             assertTrue("not a regular file" in e.message!!, e.message)

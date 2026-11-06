@@ -40,7 +40,7 @@ public object JvmGenerationFiles {
             require(Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
                 "$indexPath names $name, which is not a regular file in $dir"
             }
-            files[name] = Files.readAllBytes(path)
+            files[name] = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS).use { it.readBytes() }
         }
         val digest = files.keys.sorted().joinToString("\n") { "$it\t" + sha256Hex(files.getValue(it)) }
         return GenerationFiles
