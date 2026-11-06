@@ -85,22 +85,44 @@ internal object X5uPem {
         val base64 = ArrayList<Span>()
         for (line in lines(body)) {
             val open = label
-            if (line.startsWith(body, BEGIN)) {
-                label = beginLabel(body, line) ?: return failed(X5uPemFailure.FRAMING, "a malformed BEGIN line")
-            } else if (open != null && isEnd(body, line, open)) {
-                if (open in KNOWN) {
-                    val der = Base64Pem.decode(body, base64) ?: return failed(X5uPemFailure.BASE64, "the $open block")
-                    if (open == CERTIFICATE) ders.add(der)
+            when {
+                line.startsWith(body, BEGIN) -> {
+                    label = beginLabel(body, line) ?: return failed(X5uPemFailure.FRAMING, "a malformed BEGIN line")
                 }
-                label = null
-                base64.clear()
-            } else if (open != null) {
-                base64.add(line)
+
+                open == null -> {}
+
+                !isEnd(body, line, open) -> {
+                    base64.add(line)
+                }
+
+                else -> {
+                    close(body, open, base64, ders)?.let { return it }
+                    label = null
+                }
             }
         }
         if (label != null) return failed(X5uPemFailure.FRAMING, "no END line for the $label block")
         if (ders.isEmpty()) return failed(X5uPemFailure.FRAMING, "no CERTIFICATE block")
         return X5uPemRead.Certificates(ders)
+    }
+
+    /**
+     * Ends the block [label]: decodes a known label's [base64] (its octets kept in [ders] for a `CERTIFICATE`) and
+     * clears it; the failure when the decode fails, else null.
+     */
+    private fun close(
+        body: ByteArray,
+        label: String,
+        base64: MutableList<Span>,
+        ders: MutableList<ByteArray>,
+    ): X5uPemRead.Failed? {
+        if (label in KNOWN) {
+            val der = Base64Pem.decode(body, base64) ?: return failed(X5uPemFailure.BASE64, "the $label block")
+            if (label == CERTIFICATE) ders.add(der)
+        }
+        base64.clear()
+        return null
     }
 
     private fun failed(
@@ -133,21 +155,13 @@ internal object X5uPem {
         var dashes = 0
         var labelEnd = line.end
         // rustls reads on into the prefix, whose space it skips and whose `N` stops it: the same count.
-        for (i in line.end - 1 downTo line.start + BEGIN.length) {
-            when (body[i]) {
-                DASH -> {
-                    dashes++
-                    labelEnd = i
-                }
-
-                SPACE -> {
-                    continue
-                }
-
-                else -> {
-                    break
-                }
+        var i = line.end - 1
+        while (i >= line.start + BEGIN.length && (body[i] == DASH || body[i] == SPACE)) {
+            if (body[i] == DASH) {
+                dashes++
+                labelEnd = i
             }
+            i--
         }
         if (dashes != TRAILER_DASHES) return null
         return text(body, Span(line.start + BEGIN.length, labelEnd))
@@ -184,7 +198,13 @@ internal object Base64Pem {
     private const val GROUP = 8
     private const val HALF = 4
     private const val SEXTET = 6
+    private const val OCTET = 8
     private const val SHIFT_INITIAL = (GROUP - 1) * SEXTET
+    private const val TOP_OCTET_SHIFT = GROUP * SEXTET - OCTET
+    private const val FIRST_HALF_BITS = HALF * SEXTET
+    private const val HALF_MASK = 0b1111
+    private const val ONE_PAD = 0b1000
+    private const val TWO_PADS = 0b1100
     private const val WHITESPACE = -1
     private const val PAD = -2
     private const val INVALID = -3
@@ -203,53 +223,76 @@ internal object Base64Pem {
         body: ByteArray,
         lines: List<Span>,
     ): ByteArray? {
-        val out = ByteArray((lines.sumOf { it.length } + 3) / 4 * 3)
+        val d = Decoder(ByteArray((lines.sumOf { it.length } + 3) / 4 * 3))
+        for (line in lines) {
+            for (p in line.start until line.end) {
+                if (!d.push(CODE_POINTS[body[p].toInt() and 0xff])) return null
+            }
+        }
+        return d.finish()
+    }
+
+    /** `decode`'s state: up to [GROUP] code points in [buffer], from bit 47 down, and which of them were `=`. */
+    private class Decoder(
+        val out: ByteArray,
+    ) {
         var n = 0
         var buffer = 0L
         var used = 0
         var shift = SHIFT_INITIAL
         var padMask = 0
-        for (line in lines) {
-            for (p in line.start until line.end) {
-                val point = CODE_POINTS[body[p].toInt() and 0xff]
-                if (point == WHITESPACE) continue
-                if (point == INVALID) return null
-                if (used == GROUP) {
-                    if (padMask != 0) return null
-                    for (k in 0 until 6) out[n++] = (buffer shr (40 - 8 * k)).toByte()
-                    buffer = 0
-                    used = 0
-                    padMask = 0
-                    shift = SHIFT_INITIAL
-                }
-                val (item, pad) = if (point == PAD) 0 to 1 else point to 0
-                buffer = buffer or (item.toLong() shl shift)
-                shift -= SEXTET
-                padMask = padMask or (pad shl used)
-                used++
+
+        /** Takes one code point; false where the input is invalid. */
+        fun push(point: Int): Boolean {
+            if (point == WHITESPACE) return true
+            if (point == INVALID) return false
+            if (used == GROUP) {
+                if (padMask != 0) return false
+                emit(GROUP / HALF * 3)
+                buffer = 0
+                used = 0
+                padMask = 0
+                shift = SHIFT_INITIAL
             }
+            val pad = if (point == PAD) 1 else 0
+            buffer = buffer or ((if (point == PAD) 0 else point).toLong() shl shift)
+            shift -= SEXTET
+            padMask = padMask or (pad shl used)
+            used++
+            return true
         }
-        if (used > HALF) {
-            if (padMask and 0b1111 != 0) return null
-            for (k in 0 until 3) out[n++] = (buffer shr (40 - 8 * k)).toByte()
-            buffer = buffer shl 24
-            padMask = padMask shr HALF
-            used -= HALF
+
+        /** The octets, or null where the last group is not one of the valid endings. */
+        fun finish(): ByteArray? {
+            if (used > HALF) {
+                if (padMask and HALF_MASK != 0) return null
+                emit(3)
+                buffer = buffer shl FIRST_HALF_BITS
+                padMask = padMask shr HALF
+                used -= HALF
+            }
+            emit(tail() ?: return null)
+            return out.copyOf(n)
         }
-        val tail =
+
+        /** How many octets the last (count, mask) pair carries, or null for an invalid one. */
+        private fun tail(): Int? =
             when {
                 // No code point after the last full group: its mask was reset with it.
                 used == 0 -> 0
 
-                used == 4 && padMask == 0 -> 3
+                used == HALF && padMask == 0 -> 3
 
-                (used == 4 && padMask == 0b1000) || (used == 3 && padMask == 0) -> 2
+                (used == HALF && padMask == ONE_PAD) || (used == 3 && padMask == 0) -> 2
 
-                (used == 4 && padMask == 0b1100) || (used == 2 && padMask == 0) -> 1
+                (used == HALF && padMask == TWO_PADS) || (used == 2 && padMask == 0) -> 1
 
-                else -> return null
+                else -> null
             }
-        for (k in 0 until tail) out[n++] = (buffer shr (40 - 8 * k)).toByte()
-        return out.copyOf(n)
+
+        /** Writes the top [count] octets of [buffer]. */
+        private fun emit(count: Int) {
+            for (k in 0 until count) out[n++] = (buffer shr (TOP_OCTET_SHIFT - OCTET * k)).toByte()
+        }
     }
 }
