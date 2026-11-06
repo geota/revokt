@@ -311,6 +311,8 @@ class X5uChainTest {
         val path = assertLoads(chain(root = garbage), pins = pins, links = 1)
         assertLoads(chain().take(2), pins = setOf(hash(intermediateKey)), links = 1)
         assertLoads(chain().take(2) + listOf(garbage, garbage), pins = setOf(hash(intermediateKey)), links = 1)
+        // An empty CERTIFICATE block (X5uPem returns empty DER for one, as rustls-pki-types does) after the terminal.
+        assertLoads(chain() + listOf(ByteArray(0)))
         assertEquals(X5uValidity.Valid, live(path))
     }
 
@@ -529,6 +531,7 @@ class X5uChainTest {
         assertFails(PARSE, 0, chain(leaf = garbage))
         assertFails(PARSE, 1, chain(intermediate = garbage))
         assertFails(PARSE, 2, chain(root = garbage))
+        assertFails(PARSE, 1, chain(intermediate = ByteArray(0)))
         assertFailsWith<IllegalArgumentException> { validate(emptyList()) }
     }
 
