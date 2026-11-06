@@ -145,17 +145,24 @@ class C2spIndexTest {
 
     @Test
     fun `a name that is a path, or holds any byte outside the C2SP set, is rejected before use`() {
-        for (name in listOf(".", "/", "/x", "../x", "a/../b", "a\\b", "C:x", "x y", "\u00e9", "\u0001")) {
-            val bytes = name.encodeToByteArray()
-            val index =
-                built().also {
-                    bytes.copyInto(it, 14)
-                    ByteArray(32 - bytes.size).copyInto(it, 14 + bytes.size)
-                }
-            assertMalformed(index, "is not 1 to 32 bytes")
-            assertFailsWith<IllegalArgumentException>(name) {
-                C2spIndex.index(listOf(name to mapOf(a to Window(1u, 2u))))
+        fun inSlot0(bytes: ByteArray): ByteArray =
+            built().also {
+                bytes.copyInto(it, 14)
+                ByteArray(32 - bytes.size).copyInto(it, 14 + bytes.size)
             }
+        for (name in listOf(".", "/", "/x", "../x", "a/../b", "a\\b", "C:x", "x y", "\u00e9", "\u0001")) {
+            assertMalformed(inSlot0(name.encodeToByteArray()), "is not 1 to 32 bytes")
+        }
+        // Invalid UTF-8, including the overlong encoding of '/', decodes to U+FFFD and is rejected as well.
+        for (bytes in listOf(byteArrayOf(0xFF.toByte()), byteArrayOf(0xC0.toByte(), 0xAF.toByte()))) {
+            assertMalformed(inSlot0(bytes), "is not 1 to 32 bytes")
+        }
+        for (name in listOf("", ".", "..", "/", "/x", "../x", "a/../b", "a\\b", "C:x", "x y", "\u00e9", "\u0001")) {
+            val e =
+                assertFailsWith<IllegalArgumentException>(name) {
+                    C2spIndex.index(listOf(name to mapOf(a to Window(1u, 2u))))
+                }
+            assertTrue("is not a C2SP filter filename" in e.message!!, e.message)
         }
     }
 

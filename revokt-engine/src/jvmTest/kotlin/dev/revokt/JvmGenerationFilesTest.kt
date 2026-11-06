@@ -175,4 +175,26 @@ class JvmGenerationFilesTest {
             root.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun `a named file that is a symbolic link is rejected, so nothing is read from outside the directory`() {
+        val root = Files.createTempDirectory("c2sp-root")
+        try {
+            val outside = Files.write(root.resolve("outside"), filters.getValue("delta-v4"))
+            val image = Files.createDirectory(root.resolve("image"))
+            Files.write(image.resolve("index.bin"), resource("upki-index.bin"))
+            (filters - "delta-v4").forEach { (name, bytes) -> Files.write(image.resolve(name), bytes) }
+            try {
+                Files.createSymbolicLink(image.resolve("delta-v4"), outside)
+            } catch (_: java.io.IOException) {
+                return // the platform or account cannot create symbolic links, so there is nothing to test
+            } catch (_: UnsupportedOperationException) {
+                return
+            }
+            val e = assertFailsWith<IllegalArgumentException> { read(image) }
+            assertTrue("not a regular file" in e.message!!, e.message)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
 }
