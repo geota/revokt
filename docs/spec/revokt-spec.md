@@ -15,8 +15,8 @@ Status: **draft spec / project proposal, revision 52** · Target: JVM 17+ and An
   - **The hash:** each file's manifest `hash`, the one unsigned string that reaches a storage key (`blobs/<sha256>`,
     looked up before the fetch), is exactly 64 hex characters (32 bytes); the blob key is its lowercase re-encoding.
   - **The URL:** the base is the configured `c2spMirror` URL with a `/` appended when it does not end in one;
-    `manifest.json` and every mirror file are fetched only from the base followed by their name. A `c2spMirror` URL
-    with a query or a fragment is a new R rule (§4): `build()` throws.
+    `manifest.json` and every mirror file are fetched only from the base followed by their name. §4 gains the rule
+    "R: a `c2spMirror` URL with a query or a fragment": `build()` throws `IllegalArgumentException`.
   - **The outcome:** any failing name or hash rejects the whole manifest before any body is fetched or written:
     `SyncOutcome.FAILED` with `INDEX_INCONSISTENT`, stage `INDEX`, the outcome of §6.5's name collision. §4's
     `INDEX_INCONSISTENT` line names it.
@@ -51,7 +51,9 @@ Status: **draft spec / project proposal, revision 52** · Target: JVM 17+ and An
   extra entry, a case variant, a local-header name that differs from the central directory's, a first entry other
   than `seed.json` and a missing attachment are each `SEED_UNREADABLE`.
 - **§10 and Appendix A:** §10's TLS-only mirror item says an unsigned name never names a path outside its generation
-  directory (which covers device names such as `NUL` without a list), and its supply-chain item names the seed rule.
+  directory. A checked name can still be a Windows device name such as `NUL`; that only makes the install fail (the
+  read-back or `prepare()` fails, so the sync is `FAILED`), and full filters are stored under blob keys, not their
+  names. Its supply-chain item names the seed rule.
   Appendix A's C2SP filename entry lists the case-insensitive checks as revokt's own rules.
 - **Omitted as not needed** (the maintainer, on #160), since signed data, the pinned-root chain check, or a check the names
   already pass covers each: engine-side storage-key checks, a store symlink rule, load-time re-checks, the shape of
@@ -2165,7 +2167,7 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
 idempotent; `start()` after `close()` throws. **`start()`, synchronous on both platforms** (may throw;
 performs small disk reads, calls each delegate's `getAcceptedIssuers()` and takes the factory lock
 and the store lock, so call it off the main thread or under `StrictMode.allowThreadDiskReads`;
-`seed.json` is the first, stored entry of the seed zip's central directory, §6.5, so the header read is one small read). **The
+`seed.json` is the first, stored entry of the seed zip's central directory, §6.5, so the header read is a few small reads: the end-of-central-directory record, the central directory, then the first local header). **The
 whole synchronous part runs under the factory lock of "Trust managers per delegate"** (an internal
 `STARTING` flag set under the lock for its duration, released around the sole-seed decode below) and the
 lifecycle flips to `STARTED` as its last step under that lock, so no `trustManager(d)` and no second
