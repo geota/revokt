@@ -40,6 +40,23 @@ internal class FixtureWorld {
     private val links = LinkedHashSet<Pair<CertId, KeyId>>()
     private val labels = HashMap<ByteString, String>()
 
+    /** The `Validity` of the certificates [cert] issues; [withValidity] changes it for a block (a §9.2 K6 failure). */
+    private var validity: ByteArray = TestCert().validity
+
+    /** [block]'s certificates carry [v] as their `Validity`. */
+    fun <T> withValidity(
+        v: ByteArray,
+        block: () -> T,
+    ): T {
+        val before = validity
+        validity = v
+        try {
+            return block()
+        } finally {
+            validity = before
+        }
+    }
+
     /** The links so far, copied: a fixture built now does not see links added later. */
     val ok: Set<Pair<CertId, KeyId>> get() = links.toSet()
 
@@ -63,9 +80,8 @@ internal class FixtureWorld {
 
     /**
      * A certificate. [signer] is the key whose link verifies it (null: a signature no key verifies); the outer
-     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs;
-     * [validity] replaces the default `Validity` (a §9.2 K6 failure, for one). Each call takes a fresh serial, so two
-     * calls never give the same bytes.
+     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs; the
+     * `Validity` is [validity]'s. Each call takes a fresh serial, so two calls never give the same bytes.
      */
     fun cert(
         label: String,
@@ -75,7 +91,6 @@ internal class FixtureWorld {
         signer: SymKey? = null,
         sigOid: String = SymOids.SIGNATURE,
         extensions: List<ByteArray> = emptyList(),
-        validity: ByteArray = TestCert().validity,
     ): FixtureCert {
         val serial = ++serials
         val t =
