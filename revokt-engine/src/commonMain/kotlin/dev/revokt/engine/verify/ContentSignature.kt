@@ -8,6 +8,9 @@ import dev.revokt.VerifyResult
 import dev.revokt.engine.json.CanonicalJson
 import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonBoolean
+import dev.revokt.engine.json.JsonDouble
+import dev.revokt.engine.json.JsonInteger
+import dev.revokt.engine.json.JsonNull
 import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.json.JsonString
 import dev.revokt.verify.verifyClassified
@@ -17,7 +20,7 @@ internal enum class ContentSignatureFailure {
     /** `metadata.signature.mode` is absent or not [ContentSignature.MODE]. */
     MODE,
 
-    /** The `signature` field is absent or not the base64url text of 96 bytes ([RawSignature.decode]). */
+    /** The `signature` field is absent or not the unpadded base64url of an `r ‖ s` pair ([RawSignature.decode]). */
     ENCODING,
 
     /** A record has no string `id`, or two records share one, so there is no payload to verify. */
@@ -56,8 +59,12 @@ internal class ContentSignatureResult private constructor(
  * `{"data": records sorted by id (deleted removed), "last_modified": "<ts>"}`; the bytes after the prefix are the
  * `records.json` a `SIGNED` generation stores and a seed ships (spec §6.5). The signature is checked as
  * `ecdsa-with-SHA384` under the x5u leaf's SPKI through the given [SignatureVerifier], whatever `mode` says beyond
- * equalling [MODE]: the algorithm is never derived from it. Nothing here throws but a fatal error (spec §5.5,
- * [verifyClassified]).
+ * equalling [MODE]: the algorithm is never derived from it; the leaf's curve is not checked (Firefox parity, maintainer
+ * decision on #163). Nothing here throws but a fatal error (spec §5.5, [verifyClassified]).
+ *
+ * ECDSA is malleable: `(r, n − s)` verifies wherever `(r, s)` does, and a high `s` is accepted, as Firefox and Mozilla's
+ * own data need. So the `signature` text is never an identity or a cache key, and `<ts>` is always taken from the
+ * verified bytes, never from anything beside them.
  */
 internal object ContentSignature {
     /** The one `mode` accepted (spec §7.1). */
@@ -71,8 +78,8 @@ internal object ContentSignature {
 
     /**
      * The full record set after a `_since` changeset (spec §7.1 "merge `_since` tombstones first", §6.5): [stored]
-     * keyed by `id`, then each of [changes] in order, a `deleted: true` change removing its id and any other replacing
-     * or adding it. In id order, deleted records removed; null when a record has no string `id`. A full changeset is
+     * keyed by `id`, then each of [changes] in order, a tombstone ([deleted]) removing its id and any other change
+     * replacing or adding it. In id order, deleted records removed; null when a record has no string `id`. A full changeset is
      * merged over no stored records, so the same rule (the last record of an id wins) applies to both.
      */
     fun merge(
@@ -154,7 +161,21 @@ internal object ContentSignature {
 
     private fun id(record: JsonObject): String? = (record["id"] as? JsonString)?.value
 
-    private fun deleted(record: JsonObject): Boolean = record["deleted"] == JsonBoolean.TRUE
+    /**
+     * Whether [record] is a tombstone: its `deleted` is truthy as the signer reads it (`not r.get("deleted", False)` in
+     * Remote Settings' `canonical_json` serializer, Python truthiness), so anything but absent, `null`, `false`, zero,
+     * `""`, `[]` and `{}`. Firefox's `rec.deleted` (JavaScript) agrees except that it also drops `[]` and `{}`.
+     */
+    private fun deleted(record: JsonObject): Boolean =
+        when (val value = record["deleted"]) {
+            null, JsonNull -> false
+            is JsonBoolean -> value.value
+            is JsonInteger -> value.magnitude != 0uL
+            is JsonDouble -> value.value != 0.0
+            is JsonString -> value.value.isNotEmpty()
+            is JsonArray -> value.size > 0
+            is JsonObject -> value.size > 0
+        }
 
     /** [records] in code point order of `id`, or null when one has no string `id`. */
     private fun sortedOrNull(records: List<JsonObject>): List<JsonObject>? {

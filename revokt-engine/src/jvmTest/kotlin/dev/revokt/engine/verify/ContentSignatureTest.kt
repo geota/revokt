@@ -18,13 +18,16 @@ import dev.revokt.verify.JcaFixtures
 import dev.revokt.verify.JcaFixtures.ECDSA_SHA384
 import dev.revokt.verify.JcaFixtures.flip
 import dev.revokt.verify.JcaSignatureVerifier
+import java.math.BigInteger
 import java.security.KeyPair
+import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -165,7 +168,7 @@ class ContentSignatureTest {
     fun `a mutated signature fails`() {
         val signature = signPayload()
         val bytes = Base64.getUrlDecoder().decode(signature)
-        assertEquals(RawSignature.RAW_BYTES, bytes.size)
+        assertEquals(96, bytes.size)
         for (i in bytes.indices) {
             assertFailed(
                 INVALID,
@@ -180,20 +183,23 @@ class ContentSignatureTest {
     }
 
     @Test
-    fun `a signature that is not 128 base64url characters fails as an encoding`() {
+    fun `a signature that is not unpadded base64url of an even 2 to 132 bytes fails as an encoding`() {
         val signature = signPayload()
         val bytes = Base64.getUrlDecoder().decode(signature)
         val encodings =
             mapOf(
                 "absent" to null,
                 "empty" to "",
+                "one character" to "A",
                 "one character short" to signature.dropLast(1),
                 "a group short" to signature.dropLast(4),
                 "95 bytes" to url.encodeToString(bytes.copyOf(95)),
                 "97 bytes" to url.encodeToString(bytes + 0),
+                "134 bytes" to url.encodeToString(ByteArray(38) + bytes),
                 "padded" to "$signature==",
                 "padding inside" to signature.dropLast(1) + "=",
-                "standard alphabet" to Base64.getEncoder().encodeToString(bytes).replace('A', '+'),
+                "standard alphabet +" to "+" + signature.drop(1),
+                "standard alphabet /" to signature.dropLast(1) + "/",
                 "a space" to " " + signature.drop(1),
                 "a non-ASCII digit" to "\u0660" + signature.drop(1),
                 "a trailing newline" to signature + "\n",
@@ -205,13 +211,14 @@ class ContentSignatureTest {
     }
 
     @Test
-    fun `a DER signature where raw r and s belong fails`() {
+    fun `a DER signature where raw r and s belong never verifies`() {
         val body = payload()
-        val der = JcaFixtures.sign("SHA384withECDSA", key.private, prefix + body)
-        // A P-384 ECDSA-Sig-Value is 96 bytes only when r and s lose 4 leading bytes between them (p ≈ 2^-32).
-        if (der.size == RawSignature.RAW_BYTES) return
-        assertFailed(ENCODING, raw(body, url.encodeToString(der)))
-        assertFailed(ENCODING, raw(body, Base64.getEncoder().withoutPadding().encodeToString(der)))
+        repeat(8) {
+            val der = JcaFixtures.sign("SHA384withECDSA", key.private, prefix + body)
+            // Read as raw, an even-length DER is a pair of the wrong integers; an odd one is no pair at all.
+            val expected = if (der.size % 2 == 0) INVALID else ENCODING
+            assertFailed(expected, raw(body, url.encodeToString(der)), "DER of ${der.size} bytes")
+        }
     }
 
     @Test
@@ -226,25 +233,109 @@ class ContentSignatureTest {
         }
     }
 
+    /** Zero-pads each half of [raw] to [half] bytes, as a signer of a larger curve would lay the same integers out. */
+    private fun padded(
+        raw: ByteArray,
+        half: Int,
+    ): ByteArray {
+        val n = raw.size / 2
+        return ByteArray(half - n) + raw.copyOfRange(0, n) + ByteArray(half - n) + raw.copyOfRange(n, raw.size)
+    }
+
     @Test
-    fun `a key on another curve, or not an EC key, fails`() {
+    fun `a P-256 or P-521 leaf verifies its SHA-384 signature, padded or not, as in Firefox`() {
         val message = prefix + payload()
-        // A P-256 or P-521 signature is 64 or 132 bytes raw, never the 96 of P-384.
-        for (curve in listOf("secp256r1", "secp521r1")) {
+        for ((curve, size) in listOf("secp256r1" to 64, "secp521r1" to 132)) {
             val other = JcaFixtures.ec(curve)
-            assertFailed(ENCODING, raw(payload(), sign(message, other)), curve)
+            val leaf = other.public.encoded
+            val rawSignature = JcaFixtures.sign("SHA384withECDSAinP1363Format", other.private, message)
+            assertEquals(size, rawSignature.size, curve)
+            assertTrue(raw(payload(), url.encodeToString(rawSignature), leaf = leaf).verified, curve)
+            assertTrue(
+                raw(payload(), url.encodeToString(padded(rawSignature, 66)), leaf = leaf).verified,
+                "$curve padded",
+            )
             assertFailed(
                 INVALID,
-                raw(payload(), signPayload(), leaf = other.public.encoded),
-                "P-384 signature, $curve leaf",
+                raw(payload(), url.encodeToString(flip(rawSignature, 3)), leaf = leaf),
+                "$curve flipped",
+            )
+            assertFailed(INVALID, raw(payload(), signPayload(), leaf = leaf), "a P-384 signature, $curve leaf")
+            assertFailed(
+                INVALID,
+                raw(payload(), url.encodeToString(rawSignature)),
+                "a $curve signature, the P-384 leaf",
             )
         }
+        val p256 = JcaFixtures.sign("SHA384withECDSAinP1363Format", JcaFixtures.ec("secp256r1").private, message)
+        val leaf256 = JcaFixtures.ec("secp256r1").public.encoded
+        assertTrue(raw(payload(), url.encodeToString(padded(p256, 48)), leaf = leaf256).verified, "P-256 padded to 96")
+        val p384 = Base64.getUrlDecoder().decode(signPayload())
+        assertTrue(raw(payload(), url.encodeToString(padded(p384, 66)), leaf = spki).verified, "P-384 padded to 132")
+    }
+
+    @Test
+    fun `a key that did not sign, or that is not an EC key, fails`() {
         val rsa = JcaFixtures.rsa().public.encoded
         assertFailed(INVALID, raw(payload(), signPayload(), leaf = rsa), "an RSA leaf")
         assertFailed(INVALID, raw(payload(), signPayload(), leaf = ByteArray(0)), "an empty SPKI")
         assertFailed(INVALID, raw(payload(), signPayload(), leaf = spki.copyOf(spki.size - 1)), "a truncated SPKI")
         val otherP384 = JcaFixtures.pair("other-p384") { JcaFixtures.generate("EC", ECGenParameterSpec("secp384r1")) }
         assertFailed(INVALID, raw(payload(), signPayload(), leaf = otherP384.public.encoded), "another P-384 key")
+    }
+
+    @Test
+    fun `a high s verifies, so r with n minus s verifies too`() {
+        val order = (key.public as ECPublicKey).params.order
+        val bytes = Base64.getUrlDecoder().decode(signPayload())
+        val s = BigInteger(1, bytes.copyOfRange(48, 96))
+        val other = order.subtract(s)
+        val flipped = bytes.copyOfRange(0, 48) + fixed(other, 48)
+        assertTrue(raw(payload(), url.encodeToString(flipped)).verified, "(r, n - s)")
+        val high = if (s > order.shiftRight(1)) bytes else flipped
+        assertTrue(raw(payload(), url.encodeToString(high)).verified, "the high-s form of the pair")
+    }
+
+    /** [value] big-endian in exactly [size] bytes. */
+    private fun fixed(
+        value: BigInteger,
+        size: Int,
+    ): ByteArray {
+        val magnitude = value.toByteArray().dropWhile { it == 0.toByte() }.toByteArray()
+        return ByteArray(size - magnitude.size) + magnitude
+    }
+
+    @Test
+    fun `any value the signer reads as true is a tombstone`() {
+        for (value in listOf("true", "1", "-1", "0.5", "\"x\"", "\"0\"", "\"false\"", "[0]", "{\"a\":null}")) {
+            val tombstone = records("""[{"id":"t","deleted":$value}]""")
+            assertEquals(
+                payload(stored).decodeToString(),
+                payload(stored + tombstone).decodeToString(),
+                "deleted: $value",
+            )
+            assertEquals(
+                stored.sortedBy {
+                    id(it)
+                },
+                ContentSignature.merge(stored + tombstone, emptyList()),
+                "stored deleted: $value",
+            )
+            assertEquals(
+                stored.filter { id(it) != "a" }.sortedBy { id(it) },
+                ContentSignature.merge(stored, records("""[{"id":"a","deleted":$value}]""")),
+                "change deleted: $value",
+            )
+        }
+        for (value in listOf("false", "null", "0", "0.0", "-0", "0e5", "\"\"", "[]", "{}")) {
+            val kept = records("""[{"id":"t","deleted":$value}]""")
+            assertNotEquals(
+                payload(stored).decodeToString(),
+                payload(stored + kept).decodeToString(),
+                "deleted: $value",
+            )
+            assertEquals(4, ContentSignature.merge(stored, kept)?.size, "deleted: $value")
+        }
     }
 
     @Test
