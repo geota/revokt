@@ -74,11 +74,15 @@ class X5uChainTest {
 
     // The chains
 
-    /** A signature algorithm: the `AlgorithmIdentifier` written into the certificate and the JCA name that signs. */
+    /**
+     * A signature algorithm: the signed TBS `AlgorithmIdentifier`, the JCA name that signs, and the unsigned outer
+     * `signatureAlgorithm` ([id] unless a test changes it).
+     */
     private class Alg(
         val id: ByteArray,
         val jca: String,
         val params: AlgorithmParameterSpec? = null,
+        val outer: ByteArray = id,
     )
 
     /** A certificate for [spki] named [subject], issued by [issuer] and signed by [signer] under [alg]. */
@@ -90,7 +94,6 @@ class X5uChainTest {
         extensions: List<ByteArray>,
         validity: ByteArray = WIDE,
         alg: Alg = if (signer.algorithm == "RSA") RSA_SHA384 else EC_SHA384,
-        outer: ByteArray = alg.id,
     ): ByteArray {
         fun cert(signature: ByteArray) =
             TestCert(
@@ -100,7 +103,7 @@ class X5uChainTest {
                 subject = subject,
                 spki = spki,
                 extensions = extensions,
-                outerAlgorithm = outer,
+                outerAlgorithm = alg.outer,
                 signature = TestDer.tlv(0x03, TestDer.bytes(0x00), signature),
             )
         return cert(JcaFixtures.sign(alg.jca, signer, cert(ByteArray(0)).tbs, alg.params)).der
@@ -128,8 +131,7 @@ class X5uChainTest {
         spki: ByteArray = leafKey.public.encoded,
         signer: KeyPair = intermediateKey,
         alg: Alg = if (signer.private.algorithm == "RSA") RSA_SHA384 else EC_SHA384,
-        outer: ByteArray = alg.id,
-    ): ByteArray = issue(LEAF, spki, issuer, signer.private, extensions, validity, alg, outer)
+    ): ByteArray = issue(LEAF, spki, issuer, signer.private, extensions, validity, alg)
 
     private fun chain(
         leaf: ByteArray = leaf(),
@@ -495,15 +497,15 @@ class X5uChainTest {
 
     @Test
     fun `links are verified with the signed TBS algorithm, never the unsigned outer one`() {
-        val outer = algId(ECDSA_SHA512)
-        assertLoads(chain(leaf = leaf(outer = outer)))
+        val mismatched = Alg(EC_SHA384.id, EC_SHA384.jca, outer = algId(ECDSA_SHA512))
+        assertLoads(chain(leaf = leaf(alg = mismatched)))
         val calls = ArrayList<List<ByteArray>>()
         val recording =
             stub { sigAlg, spki, message, signature ->
                 calls += listOf(sigAlg, spki, message, signature)
                 verifier.verify(sigAlg, spki, message, signature)
             }
-        val chain = chain(leaf = leaf(outer = outer))
+        val chain = chain(leaf = leaf(alg = mismatched))
         assertIs<X5uChainResult.Valid>(validate(chain, with = recording))
         assertEquals(2, calls.size)
         assertContentEquals(algId(ECDSA_SHA384), calls[0][0])
