@@ -151,4 +151,28 @@ class JvmGenerationFilesTest {
             empty.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun `an index naming a path outside the directory is rejected before any named file is read`() {
+        val root = Files.createTempDirectory("c2sp-root")
+        try {
+            Files.write(root.resolve("outside"), filters.values.first())
+            val image = Files.createDirectory(root.resolve("image"))
+            filters.forEach { (name, bytes) -> Files.write(image.resolve(name), bytes) }
+            // A relative escape to a file that exists, and an absolute name; neither may be resolved against the image.
+            for (name in listOf("../outside", "/outside")) {
+                val index =
+                    resource("upki-index.bin").also {
+                        val bytes = name.encodeToByteArray()
+                        bytes.copyInto(it, 14)
+                        ByteArray(32 - bytes.size).copyInto(it, 14 + bytes.size)
+                    }
+                Files.write(image.resolve("index.bin"), index)
+                val e = assertFailsWith<IllegalArgumentException>(name) { read(image) }
+                assertTrue("is not 1 to 32 bytes" in e.message!!, e.message)
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
 }
