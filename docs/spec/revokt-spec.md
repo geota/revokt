@@ -24,7 +24,9 @@ Status: **draft spec / project proposal, revision 53** · Target: JVM 17+ and An
   - **A built index over 1 MiB** (new): an `index.bin` the loader builds, for a Remote Settings or `MIRROR`
     generation, that is over 1 MiB fails the install before the generation is written: `FAILED`,
     `INDEX_INCONSISTENT`, stage `INDEX`. So the loader never writes a generation its own read cap would refuse at
-    reload, and a mirror's unsigned coverage cannot produce one.
+    reload, and a mirror's unsigned coverage cannot produce one. For signed data the cap only moves earlier a reload
+    failure that revision 48's read cap already guarantees, and real data is far below it: the live mirror's 40
+    files over 81 logs index to about 62 KiB (14 + 32 per file + 42 per log + 18 per log and file, bytes).
   - **The limits table** (§5.1): the 1 MiB note names a system cache's `index.bin`.
 - **Fixtures** (§9):
   - (e) regains the row for a 33-byte manifest name: it installs under its derived name, no `index.bin` is fetched,
@@ -2860,7 +2862,7 @@ values are names, never ordinals:
   (process death; no `meta.json`) is deleted by prune at the next `start()`; a sync-time `prepare()`/`activate()`
   throw and a self-check mismatch increment `storeFailures` and are `SyncOutcome.FAILED` (stage `PREPARE`, `ACTIVATE` or `SELF_CHECK`; cursor and watermark do not advance, so the same changeset is retried under backoff); a store write or pointer-flip failure during an install is `SyncOutcome.STORE_FAILED` (stage `STORE`, `storeFailures++`); "newest" is pointer order, never directory timestamp.
 **Order of an install** (an *install* anywhere in this document means this whole sequence): fetch, verify and write **one body at a time** (hash against the signed
-record or the manifest, write the blob unless the key exists, drop the body) → write the generation
+record or the manifest, write the blob unless the key exists, drop the body) → build `index.bin` (≤ 1 MiB, §3.2) → write the generation
 directory (`meta.json` last) → the §3.2 `index.bin` consistency check for a generation the loader did not build (a `SYSTEM` one; `STORE_UNREADABLE`, §3.2) → `prepared = engine.prepare(files)` (validates and decodes into an inactive
 state; the live generation is untouched) → **engine self-check on `prepared.query`** (deterministic,
 never probabilistic, every input named: the absent issuer hash is `SHA-256("revokt-self-check")`,
