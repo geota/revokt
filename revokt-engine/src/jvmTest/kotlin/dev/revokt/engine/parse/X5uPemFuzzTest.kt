@@ -24,6 +24,9 @@ class X5uPemFuzzTest {
         private const val BEGIN = "-----BEGIN CERTIFICATE-----"
         private const val END = "-----END CERTIFICATE-----"
 
+        /** HT, LF, VT, FF, CR and space. */
+        private val WHITESPACE = setOf(0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20)
+
         /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
@@ -65,15 +68,19 @@ class X5uPemFuzzTest {
 
         /** The grammar of [X5uPem] written independently: the blocks' DER, or null where the body fails. */
         private fun reference(data: ByteArray): List<ByteArray>? {
-            val lines = String(data, Charsets.ISO_8859_1).split(Regex("\r\n|\r|\n")).filter { it.isNotEmpty() }
+            val lines = String(data, Charsets.ISO_8859_1).split('\n', '\r')
             val out = ArrayList<ByteArray>()
             var block: StringBuilder? = null
             for (line in lines) {
                 val open = block
                 if (open == null) {
-                    if (line == BEGIN) block = StringBuilder()
-                } else if (line != END) {
-                    open.append(line)
+                    if (line.startsWith(BEGIN) &&
+                        line.substring(BEGIN.length).all { it == ' ' }
+                    ) {
+                        block = StringBuilder()
+                    }
+                } else if (!line.startsWith(END)) {
+                    open.append(line.filterNot { it.code in WHITESPACE })
                 } else {
                     out += canonical(open.toString()) ?: return null
                     block = null

@@ -189,11 +189,10 @@ class ExtensionValuesTest {
         malformed(seq(tlv(0x84, ascii("x"))), reader)
         malformed(seq(tlv(0xa6, tlv(0x16, ascii("https://a.example/")))), reader)
         malformed(seq(tlv(0xa1, ascii("x"))), reader)
-        // An iPAddress of other than 4 or 16 octets (8 and 32 are nameConstraints' forms), an empty or truncated
-        // registeredID.
-        for (n in listOf(0, 3, 5, 8, 15, 17, 32)) malformed(seq(tlv(0x87, ByteArray(n))), reader)
-        malformed(seq(tlv(0x88)), reader)
-        malformed(seq(tlv(0x88, bytes(0x2b, 0x86))), reader)
+        // As webpki, contents other than a dNSName's are not checked: any iPAddress length, an empty registeredID.
+        for (n in listOf(0, 3, 5, 8, 15, 17, 32)) value(seq(tlv(0x87, ByteArray(n))), reader)
+        value(seq(tlv(0x88)), reader)
+        value(seq(tlv(0x88, bytes(0x2b, 0x86))), reader)
     }
 
     @Test

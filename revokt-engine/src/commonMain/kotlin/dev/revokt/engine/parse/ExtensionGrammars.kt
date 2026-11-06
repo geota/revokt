@@ -169,13 +169,14 @@ internal object ExtensionGrammars {
 
     /**
      * K8 on a read SAN: every name a `dNSName` (ASCII, as the reader requires), an `rfc822Name` of ASCII octets or an
-     * `iPAddress` (4 or 16 octets, as the reader requires).
+     * `iPAddress` of 4 or 16 octets.
      */
     private fun listed(san: SubjectAltNames): Boolean =
         san.names.all {
             when (it.tag) {
-                ExtensionValues.DNS_NAME, ExtensionValues.IP_ADDRESS -> true
+                ExtensionValues.DNS_NAME -> true
                 ExtensionValues.RFC822_NAME -> it.content.toByteArray().all { octet -> octet >= 0 }
+                ExtensionValues.IP_ADDRESS -> it.content.size == 4 || it.content.size == 16
                 else -> false
             }
         }

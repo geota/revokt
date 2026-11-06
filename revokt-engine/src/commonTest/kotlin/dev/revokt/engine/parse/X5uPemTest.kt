@@ -72,10 +72,28 @@ class X5uPemTest {
         assertDers(listOf(intermediate), ders("$bom$pem"))
         assertDers(
             listOf(intermediate),
-            ders(pem.replaceFirst("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE----- ")),
+            ders(pem.replaceFirst("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE-----x")),
+        )
+        assertDers(
+            listOf(intermediate),
+            ders(pem.replaceFirst("-----BEGIN CERTIFICATE-----", " -----BEGIN CERTIFICATE-----")),
         )
         assertDers(listOf(intermediate), ders(pem.replaceFirst("BEGIN CERTIFICATE", "BEGIN X509 CERTIFICATE")))
         assertDers(listOf(intermediate), ders(pem.replaceFirst("BEGIN CERTIFICATE", "BEGIN CERTIFICATX")))
+    }
+
+    @Test
+    fun `spaces after BEGIN and anything after END on its line are allowed, as rustls-pki-types allows them`() {
+        val pem = X5uPemFixtures.pem(leaf, intermediate)
+        val both = listOf(leaf, intermediate)
+        assertDers(both, ders(pem.replace("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE-----   ")))
+        assertDers(both, ders(pem.replace("-----END CERTIFICATE-----", "-----END CERTIFICATE----- ")))
+        assertDers(both, ders(pem.replace("-----END CERTIFICATE-----", "-----END CERTIFICATE-----trailing text")))
+        // A tab after BEGIN is not a space.
+        assertDers(
+            listOf(intermediate),
+            ders(pem.replaceFirst("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE-----\t")),
+        )
     }
 
     @Test
@@ -94,8 +112,16 @@ class X5uPemTest {
         assertEquals(X5uPemFailure.FRAMING, failure(pem.replace("END CERTIFICATE", "END CERTIFICATX")))
         assertEquals(
             X5uPemFailure.FRAMING,
-            failure(pem.replace("-----END CERTIFICATE-----", "-----END CERTIFICATE----- ")),
+            failure(pem.replace("-----END CERTIFICATE-----", " -----END CERTIFICATE-----")),
         )
+        // A boundary cut short by the end of the body.
+        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN CERT"))
+        assertEquals(
+            X5uPemFailure.FRAMING,
+            failure(pem.substringBeforeLast("-----END CERTIFICATE-----") + "-----END CERT"),
+        )
+        // A block of whitespace only is empty.
+        assertEquals(X5uPemFailure.FRAMING, failure("-----BEGIN CERTIFICATE-----\n \t \n-----END CERTIFICATE-----\n"))
     }
 
     @Test
@@ -131,8 +157,12 @@ class X5uPemTest {
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AAB="))))
         // The URL-safe alphabet, whitespace, a NUL, a non-ASCII octet, a header line and a nested BEGIN.
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA-_"))))
+        // Whitespace inside the base64 is skipped: space, HT, VT, FF (rustls-pki-types' set).
+        val vt = Char(0x0b)
+        val ff = Char(0x0c)
+        assertDers(listOf(ByteArray(2)), ders(with(listOf(" A A\tA= ", "$vt$ff"))))
+        assertDers(listOf(leaf), ders(with(body.map { " $it\t" })))
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA A"))))
-        assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA\tA"))))
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AAé"))))
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("AA\u0000A"))))
         assertEquals(X5uPemFailure.BASE64, failure(with(listOf("Proc-Type: 4,ENCRYPTED") + body)))

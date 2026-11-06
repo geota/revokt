@@ -94,17 +94,14 @@ internal object ExtensionValues {
     const val RFC822_NAME = 0x81
     const val DNS_NAME = 0x82
     const val IP_ADDRESS = 0x87
-    private const val REGISTERED_ID = 0x88
 
     /**
-     * The `GeneralName` identifier octets: otherName, rfc822Name, dNSName, x400Address, directoryName, ediPartyName,
-     * uniformResourceIdentifier, iPAddress and registeredID, each in its one form (the implicit tag of a primitive
-     * string is primitive, an explicit or SEQUENCE alternative constructed).
+     * The `GeneralName` identifier octets webpki 0.103 (`subject_name::GeneralName::from_der`) accepts: otherName,
+     * rfc822Name, dNSName, x400Address, directoryName, ediPartyName, uniformResourceIdentifier, iPAddress and
+     * registeredID, each in its one form (the implicit tag of a primitive string is primitive, an explicit or SEQUENCE
+     * alternative constructed).
      */
-    private val GENERAL_NAME_TAGS =
-        setOf(0xa0, RFC822_NAME, DNS_NAME, 0xa3, 0xa4, 0xa5, 0x86, IP_ADDRESS, REGISTERED_ID)
-    private const val IPV4_OCTETS = 4
-    private const val IPV6_OCTETS = 16
+    private val GENERAL_NAME_TAGS = setOf(0xa0, RFC822_NAME, DNS_NAME, 0xa3, 0xa4, 0xa5, 0x86, IP_ADDRESS, 0x88)
     private const val BOOLEAN = 0x01
     private const val INTEGER = 0x02
     private const val BIT_STRING = 0x03
@@ -164,8 +161,9 @@ internal object ExtensionValues {
         }
 
     /**
-     * `GeneralNames ::= SEQUENCE SIZE (1..MAX) OF GeneralName`: each identifier one of [GENERAL_NAME_TAGS], a `dNSName`
-     * ASCII, an `iPAddress` 4 or 16 octets, a `registeredID` OID content that decodes. Other contents are kept as encoded.
+     * `GeneralNames ::= SEQUENCE SIZE (1..MAX) OF GeneralName`: each identifier one of [GENERAL_NAME_TAGS], as webpki
+     * reads it. Contents are kept as encoded and not checked (webpki checks none at parse time), except that a
+     * `dNSName` must be ASCII, so that [SubjectAltNames.dnsNames] are its octets as text.
      */
     fun subjectAltName(
         b: ByteArray,
@@ -233,15 +231,8 @@ internal object ExtensionValues {
         b: ByteArray,
         t: Tlv,
     ) {
-        val ok =
-            when (t.tag) {
-                !in GENERAL_NAME_TAGS -> false
-                DNS_NAME -> ascii(b, t.content)
-                IP_ADDRESS -> t.content.length == IPV4_OCTETS || t.content.length == IPV6_OCTETS
-                REGISTERED_ID -> Oid.dotted(b, t.content) != null
-                else -> true
-            }
-        if (!ok) fail("GeneralName 0x${t.tag.toString(16)} of ${t.content.length} octets")
+        if (t.tag !in GENERAL_NAME_TAGS) fail("GeneralName tag 0x${t.tag.toString(16)}")
+        if (t.tag == DNS_NAME && !ascii(b, t.content)) fail("dNSName is not ASCII")
     }
 
     /** [block]'s value, or [ExtensionFailure.MALFORMED]; with [strict], also when a header's length is not minimal. */

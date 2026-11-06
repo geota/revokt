@@ -29,21 +29,22 @@ internal enum class X5uPemFailure {
 }
 
 /**
- * The x5u body as served (spec §7.1 "x5u chain", §6.5 `x5u.pem`), read as Firefox's content-signature verifier
- * (`ReadChainIntoCertList`) and `rustls-pki-types`' PEM reader read it outside a block, and strictly inside one
- * (maintainer decision on #164). The cap is checked before anything is decoded.
+ * The x5u body as served (spec §7.1 "x5u chain", §6.5 `x5u.pem`), read as `rustls-pki-types` 1.15.1 (`pem.rs`, the
+ * version upki v1.0.1 pins) reads it, with each block's base64 strict (maintainer decision on #164). The cap is checked
+ * before anything is decoded.
  *
- * - **Lines** end at LF, CR or CRLF; a blank line is skipped anywhere.
- * - **Outside a block** every line but exactly `-----BEGIN CERTIFICATE-----` is skipped: text, other labels and
- *   stray boundaries.
- * - **Inside a block** every line up to exactly `-----END CERTIFICATE-----` is base64, of any length (as both
- *   readers accept). Their concatenation is canonical base64: only the standard alphabet, a multiple of 4
- *   characters, `=` padding only at its end, the bits after the last octet zero. Both readers accept more (unpadded
- *   input, non-zero padding bits; `rustls` also whitespace); Go's `pem.Encode`, which Mozilla's signer uses, writes
- *   only this form.
- * - At least one block, none empty, and none left open at the end of the body.
+ * - **Lines** end at LF or CR (so also at CRLF).
+ * - **Outside a block** every line is skipped (text, blank lines, blocks with other labels, stray boundaries) but a
+ *   `BEGIN` line: exactly `-----BEGIN CERTIFICATE-----`, then nothing but spaces.
+ * - **Inside a block** the first line that starts with `-----END CERTIFICATE-----` ends it, whatever follows on that
+ *   line; every line before it is base64 of any length, in which whitespace (HT, LF, VT, FF, CR, space) is skipped.
+ * - **The base64**, joined, is canonical: only the standard alphabet, a multiple of 4 characters, `=` padding only at
+ *   its end, the bits after the last octet zero. `rustls-pki-types` also accepts unpadded input and non-zero padding
+ *   bits; Go's `pem.Encode`, which Mozilla's signer uses, writes only this form.
+ * - Every block is read, in order: at least one, none empty, none left open at the end of the body.
  *
- * The DER is not parsed here.
+ * Firefox's `ReadChainIntoCertList` (at `cac25a6`) agrees outside a block, but wants both boundary lines exact, rejects
+ * whitespace in the base64 and accepts it unpadded. The DER is not parsed here.
  */
 internal object X5uPem {
     private const val BEGIN = "-----BEGIN CERTIFICATE-----"
@@ -51,10 +52,14 @@ internal object X5uPem {
     private const val QUANTUM = 4
     private const val LF = '\n'.code.toByte()
     private const val CR = '\r'.code.toByte()
+    private const val SPACE = ' '.code.toByte()
     private const val PAD = '='.code
     private const val SEXTET = 6
     private const val OCTET = 8
     private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+    /** HT, LF, VT, FF, CR and space: what `rustls-pki-types` skips in base64. */
+    private val WHITESPACE = byteArrayOf(0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20)
 
     /** Each ASCII code's sextet, or -1 outside the alphabet. */
     private val SEXTETS = IntArray(128) { -1 }.also { t -> ALPHABET.forEachIndexed { i, c -> t[c.code] = i } }
@@ -64,18 +69,18 @@ internal object X5uPem {
         maxBytes: Long = RevoktLimits.MAX_X5U_BYTES,
     ): X5uPemRead {
         if (body.size > maxBytes) return failed(X5uPemFailure.OVERSIZE, "${body.size} bytes, cap $maxBytes")
-        val lines = lines(body).filter { it.length > 0 }
+        val lines = lines(body)
         val ders = ArrayList<ByteArray>()
         var i = 0
         while (i < lines.size) {
-            if (!lines[i++].isText(body, BEGIN)) continue
+            if (!lines[i++].isBegin(body)) continue
             val first = i
-            while (i < lines.size && !lines[i].isText(body, END)) i++
-            if (i == lines.size) return failed(X5uPemFailure.FRAMING, "no $END after block ${ders.size + 1}")
-            if (i == first) return failed(X5uPemFailure.FRAMING, "block ${ders.size + 1} is empty")
-            val der =
-                decode(body, lines.subList(first, i)) ?: return failed(X5uPemFailure.BASE64, "block ${ders.size + 1}")
-            ders.add(der)
+            while (i < lines.size && !lines[i].startsWith(body, END)) i++
+            val block = ders.size + 1
+            if (i == lines.size) return failed(X5uPemFailure.FRAMING, "no $END after block $block")
+            val text = base64(body, lines.subList(first, i))
+            if (text.isEmpty()) return failed(X5uPemFailure.FRAMING, "block $block is empty")
+            ders.add(decode(text) ?: return failed(X5uPemFailure.BASE64, "block $block"))
             i++
         }
         if (ders.isEmpty()) return failed(X5uPemFailure.FRAMING, "no block")
@@ -87,7 +92,7 @@ internal object X5uPem {
         detail: String,
     ) = X5uPemRead.Failed(reason, detail)
 
-    /** Each line's span: a line ends at LF or CR, so CRLF ends one line and an empty one, which [read] skips. */
+    /** Each line's span: a line ends at LF or CR, so CRLF ends one line and an empty one. */
     private fun lines(body: ByteArray): List<Span> {
         val out = ArrayList<Span>()
         var start = 0
@@ -101,23 +106,29 @@ internal object X5uPem {
         return out
     }
 
-    private fun Span.isText(
+    private fun Span.startsWith(
         body: ByteArray,
         text: String,
-    ): Boolean = length == text.length && text.indices.all { body[start + it].toInt() == text[it].code }
+    ): Boolean = length >= text.length && text.indices.all { body[start + it].toInt() == text[it].code }
 
-    /** The octets of [lines] taken as one canonical base64 text, or null when it is not one. */
-    private fun decode(
+    private fun Span.isBegin(body: ByteArray): Boolean =
+        startsWith(body, BEGIN) && (start + BEGIN.length until end).all { body[it] == SPACE }
+
+    /** The characters of [lines] but whitespace, joined; at most the body's size, which the cap bounds. */
+    private fun base64(
         body: ByteArray,
         lines: List<Span>,
-    ): ByteArray? {
-        // At most the body's size, which the cap bounds.
-        val text = ByteArray(lines.sumOf { it.length })
-        var at = 0
+    ): ByteArray {
+        val out = ByteArray(lines.sumOf { it.length })
+        var n = 0
         for (line in lines) {
-            body.copyInto(text, at, line.start, line.end)
-            at += line.length
+            for (p in line.start until line.end) if (body[p] !in WHITESPACE) out[n++] = body[p]
         }
+        return out.copyOf(n)
+    }
+
+    /** The octets of [text] as canonical base64, or null when it is not that. */
+    private fun decode(text: ByteArray): ByteArray? {
         if (text.size % QUANTUM != 0) return null
         val pad =
             when {
