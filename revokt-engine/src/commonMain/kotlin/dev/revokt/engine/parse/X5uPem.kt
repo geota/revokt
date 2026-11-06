@@ -6,7 +6,11 @@ package dev.revokt.engine.parse
 import dev.revokt.RevoktLimits
 
 internal sealed class X5uPemRead {
-    /** The DER of each `CERTIFICATE` block, in body order (leaf first, spec §6.5); at least one. */
+    /**
+     * The octets of each `CERTIFICATE` block, in body order (leaf first, spec §6.5); at least one block. A DER may be
+     * empty (an empty block, which `rustls-pki-types` yields as an empty `CertificateDer` too) and none is parsed here,
+     * so the caller must parse each one.
+     */
     class Certificates(
         val ders: List<ByteArray>,
     ) : X5uPemRead()
