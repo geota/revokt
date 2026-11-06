@@ -30,7 +30,8 @@ Status: **draft spec / project proposal, revision 53** · Target: JVM 17+ and An
   - The mirror publishes no index, and `upki fetch` builds one (v1.0.1 `PlanStep::SaveIndex` → `Index::write`).
   - For a filename over 32 bytes, `Index::write` writes no index, while revokt renames the file and builds the index
     under the derived name.
-  - §3.2's open overlapping-windows verification now names upki's `Index::write`, not `upki-mirror`.
+  - The open overlapping-windows verification (§3.2 and the C2SP entry) now names upki's `Index::write`, not
+    `upki-mirror`.
 
 ### Changes in revision 52 (names from unsigned source data, 2026-11-06)
 - **Added** (§7.3, §6.3, §6.5; the maintainer's rules on #160, from the review of #166): a mirror's manifest names.
@@ -4112,7 +4113,7 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
 - Filters begin `03 00` (v3) on both channels; `default` 6,006,419 B, `compat` 1,574,015 B.
 - Firefox: `crlite_channel` `"compat"` on Android; `crlite_mode` 2; `crlite_timestamps_for_coverage` 1;
   OCSP fallback when CRLite is stale or absent.
-- C2SP `upki-revocation@v1.0.0`: the spec says v4; `clubcard-crlite` (the crate upki depends on, `bincode` feature) decodes version bytes 3 and 4, so upki reads Mozilla's v3 filters as served (verified 2026-10-22 in rustls/upki `Cargo.toml` and clubcard-crlite `Encoding::read`); aggregation over covering filters only; selection goes through `index.bin`'s log directory (`Index::check` binary-searches it per SCT and loads only the named filters). **0.2 verification, open**: how `upki-mirror` writes overlapping windows (a full and its deltas sharing boundary timestamps) and how `Index::check` treats overlapping directory entries; the §3.2 selection-equivalence check is stated so that either representation passes.
+- C2SP `upki-revocation@v1.0.0`: the spec says v4; `clubcard-crlite` (the crate upki depends on, `bincode` feature) decodes version bytes 3 and 4, so upki reads Mozilla's v3 filters as served (verified 2026-10-22 in rustls/upki `Cargo.toml` and clubcard-crlite `Encoding::read`); aggregation over covering filters only; selection goes through `index.bin`'s log directory (`Index::check` binary-searches it per SCT and loads only the named filters). **0.2 verification, open**: how upki's `Index::write` writes overlapping windows (a full and its deltas sharing boundary timestamps) and how `Index::check` treats overlapping directory entries; the §3.2 selection-equivalence check is stated so that either representation passes.
 - C2SP `upki-revocation@v1.0.0` filenames, read 2026-11-04 at the pinned commit `7e6ded4` (`upki-revocation.md`, "Revocation cache directory layout", "Header" and "Filename table"): filter filenames "MUST be between 1 and 32 bytes long and MUST consist only of the ASCII characters `A`–`Z`, `a`–`z`, `0`–`9`, hyphen (`-`), period (`.`), and underscore (`_`)"; "The names `.` and `..` MUST NOT be used"; an index naming a file that violates these is malformed; each name slot is 32 bytes, zero-padded; `num_filenames` limits an index to 65535 files. The spec states no uniqueness rule for filenames, does not reserve `index.bin` as a filter name, and sets no size cap on `index.bin`: revokt's derived names (§6.5), its `index.bin` reservation (§6.3) and its 1 MiB cap (§3.2) are its own rules (revision 48), as are a mirror manifest's checks of reserved names and of uniqueness ignoring ASCII case, and its ban on a trailing `.` (§7.3, revision 52). `C2spIndex.isFilename` implements exactly the filename rule.
 - `upki.rustls.dev`: GitHub Pages, `default` only, v4 transcode; `upki-mirror` verifies the
   attachment hash, not the content signature. The mirror publishes only `manifest.json` and the filter files;
