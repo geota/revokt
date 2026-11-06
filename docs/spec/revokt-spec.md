@@ -18,18 +18,27 @@ Status: **draft spec / project proposal, revision 53** · Target: JVM 17+ and An
     than builds: a `SYSTEM` cache, with a seed's rebuilt index byte-compared as before. The 1 MiB cap applies to
     every `index.bin` the loader reads (a system cache's, a seed's, a stored generation's), and revokt fetches
     none. The cross-engine suite's check and §6.5's install order say the same.
+  - **Outcomes per source:** a mismatch or an over-cap read is `STORE_UNREADABLE` for a system cache and
+    `SEED_UNREADABLE` for a seed. `INDEX_INCONSISTENT` there covered a fetched mirror index, which no longer exists;
+    §6.5's install order and §4's `INDEX_INCONSISTENT` line follow.
+  - **A built index over 1 MiB** (new): an `index.bin` the loader builds, for a Remote Settings or `MIRROR`
+    generation, that is over 1 MiB fails the install before the generation is written: `FAILED`,
+    `INDEX_INCONSISTENT`, stage `INDEX`. So the loader never writes a generation its own read cap would refuse at
+    reload, and a mirror's unsigned coverage cannot produce one.
   - **The limits table** (§5.1): the 1 MiB note names a system cache's `index.bin`.
 - **Fixtures** (§9):
   - (e) regains the row for a 33-byte manifest name: it installs under its derived name, no `index.bin` is fetched,
-    and the locally built `index.bin` names the derived name. Revision 52's caveat now points here.
+    and the locally built `index.bin` names the derived name. Revision 52's caveat now points here. Beside it, a
+    mirror whose coverage would build an `index.bin` of 1 MiB + 1 byte fails with `INDEX_INCONSISTENT`, and no
+    generation directory is written.
   - The two [0.3] content-signature rows that expected a mirror's `index.bin` now apply to a system cache, the
     source that still reads one: a log window absent from the filter's coverage, and an `index.bin` of 1 MiB + 1 byte,
-    are each not installed, with `STORE_UNREADABLE`, §3.2's system-cache outcome. Their header and §11's 0.3 row
-    say so.
+    are each not installed at `start()`, with `STORE_UNREADABLE`, §3.2's system-cache outcome. Their header and
+    §11's 0.3 row say so.
 - **Appendix A:** the `upki.rustls.dev` entry records the protocol:
   - The mirror publishes no index, and `upki fetch` builds one (v1.0.1 `PlanStep::SaveIndex` → `Index::write`).
-  - For a filename over 32 bytes, `Index::write` writes no index, while revokt renames the file and builds the index
-    under the derived name.
+  - `upki-mirror` writes only `manifest.json` and the filter files. For a filename over 32 bytes, `Index::write`
+    returns no index, while revokt renames the file and builds the index under the derived name.
   - The open overlapping-windows verification (§3.2 and the C2SP entry) now names upki's `Index::write`, not
     `upki-mirror`.
 
@@ -1649,13 +1658,17 @@ byte-compared instead; a `MIRROR` generation's index is built by the loader, §7
 ends, overlapping windows allowed), the set of filters the `index.bin` log directory names for that
 (log id, timestamp) must equal the set of referenced filters whose own coverage map contains it, i.e. every
 directory entry lies within its filter's window and every filter's window is exactly covered by its entries;
-a mismatch is `SyncOutcome.FAILED` with `INDEX_INCONSISTENT` (stage `INDEX`; `SEED_UNREADABLE` for a seed,
-`STORE_UNREADABLE` for a system cache) and nothing is installed. **Every `index.bin` revokt's loader reads, whatever its
+a mismatch installs nothing, and its outcome is per source: `STORE_UNREADABLE` for a system cache, and
+`SEED_UNREADABLE` for a seed's byte-compare (revision 53; the `INDEX_INCONSISTENT` this sentence named covered a
+fetched mirror index, and revokt now fetches none). **Every `index.bin` revokt's loader reads, whatever its
 source (a system cache's, a seed's, a stored generation's), is at most 1 MiB, checked before it is parsed; revokt
 never fetches an `index.bin`** (the seed's cap, §6.5, applied to every source, revision 48; a mirror has no `index.bin`
 fetch since revision 53; an injected engine's own reads are its concern), with the
-same outcome as a mismatch; a stored generation whose `index.bin` is over the cap is a failed load in the §6.5
-recovery chain (`STORE_UNREADABLE`). This is what makes the Kotlin engine's
+same outcome as a mismatch (`STORE_UNREADABLE` for a system cache, `SEED_UNREADABLE` for a seed); a stored generation whose `index.bin` is over the cap is a failed load in the §6.5
+recovery chain (`STORE_UNREADABLE`). **An `index.bin` the loader builds** (a Remote Settings or `MIRROR` generation's)
+that is over 1 MiB fails the install before the generation directory is written: `SyncOutcome.FAILED` with
+`INDEX_INCONSISTENT`, stage `INDEX` (revision 53), so the loader never writes a generation it could not reload (a
+mirror's coverage, which sizes its index, is unsigned). This is what makes the Kotlin engine's
 coverage-driven filter selection (§6.2, every filter consulted by its own coverage) equal to C2SP's
 `index.bin`-driven selection (upki binary-searches the log directory and loads only the filters it names)
 on every generation the suite admits; how upki's `Index::write` writes overlapping windows and how `Index::check`
@@ -2050,7 +2063,7 @@ remaining a subsequence.
 - `NOT_STARTED` is not a warning: a trust manager or `sslContext()` obtained before `start()` runs step 1 only until `start()` and counts `unevaluated[NOT_STARTED]` (creating trust managers before `start()` is the recommended main-thread pattern, so it cannot be a stuck alert).
 - R `CHANNEL_UNSET`: no `channel` configured while a CRLite source (a seed included) is. R `PLATFORM_TRUST_MISMATCH`: Android runtime with a non-Android `platformTrust`. R `STORAGE_UNSET`: `AndroidPlatformTrust` with no explicit `storage` (§3).
 - R: a `c2spMirror` URL with a query or a fragment (§7.3: every mirror URL is the base followed by a name).
-- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2, §6.5's index-name collision, and §7.3's manifest names), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
+- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2's over-cap built index, §6.5's index-name collision, and §7.3's manifest names), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
 
 ## 5. Trust manager [M1]
 
@@ -2848,7 +2861,7 @@ values are names, never ordinals:
   throw and a self-check mismatch increment `storeFailures` and are `SyncOutcome.FAILED` (stage `PREPARE`, `ACTIVATE` or `SELF_CHECK`; cursor and watermark do not advance, so the same changeset is retried under backoff); a store write or pointer-flip failure during an install is `SyncOutcome.STORE_FAILED` (stage `STORE`, `storeFailures++`); "newest" is pointer order, never directory timestamp.
 **Order of an install** (an *install* anywhere in this document means this whole sequence): fetch, verify and write **one body at a time** (hash against the signed
 record or the manifest, write the blob unless the key exists, drop the body) → write the generation
-directory (`meta.json` last) → the §3.2 `index.bin` consistency check for a generation the loader did not build (a `SYSTEM` one; `INDEX_INCONSISTENT`, stage `INDEX`) → `prepared = engine.prepare(files)` (validates and decodes into an inactive
+directory (`meta.json` last) → the §3.2 `index.bin` consistency check for a generation the loader did not build (a `SYSTEM` one; `STORE_UNREADABLE`, §3.2) → `prepared = engine.prepare(files)` (validates and decodes into an inactive
 state; the live generation is untouched) → **engine self-check on `prepared.query`** (deterministic,
 never probabilistic, every input named: the absent issuer hash is `SHA-256("revokt-self-check")`,
 incremented in its last byte until absent from every filter's index; the inside SCT is (`logId`, `low`)
@@ -3104,7 +3117,7 @@ tests; **live checks** are informational.
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
   disagreement fails the job.
 - **Content-signature fixtures** (0.2 gates, except the three items tagged [0.3], which need the §6.5 store or a `SYSTEM` source; revision 49, the source revision 53) with mutations; incremental fixtures; a seed with an expired signer
-  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); [0.3] a system cache whose `index.bin` names a log window absent from the filter's coverage → not installed, `STORE_UNREADABLE`; [0.3] a system-cache `index.bin` of 1 MiB + 1 byte → not installed, `STORE_UNREADABLE`, before it is parsed (revision 48; a system cache since revision 53, which leaves a mirror no `index.bin` to fetch); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; signature
+  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); [0.3] at `start()`, a system cache whose `index.bin` names a log window absent from the filter's coverage → not installed, `STORE_UNREADABLE`; [0.3] at `start()`, a system-cache `index.bin` of 1 MiB + 1 byte → not installed, `STORE_UNREADABLE`, before it is parsed (revision 48; a system cache since revision 53, which leaves a mirror no `index.bin` to fetch); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; signature
   over records with a tombstone merged vs not merged.
 - **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (c), (e), (f), (h) need the store, mirror, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
   `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
@@ -3141,7 +3154,9 @@ tests; **live checks** are informational.
   52); a `c2spMirror` URL without a trailing `/` → `manifest.json` and each body fetched from the URL, `/` and the
   name; a `c2spMirror` URL with a query or a fragment → `build()` throws `IllegalArgumentException`; a manifest name
   of 33 bytes → installs under its derived name, its body fetched from the base followed by the manifest name, no
-  `index.bin` fetched, and the locally built `index.bin` naming the derived name (revision 53); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
+  `index.bin` fetched, and the locally built `index.bin` naming the derived name (revision 53); a mirror whose
+  coverage would make the built `index.bin` 1 MiB + 1 byte → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no
+  generation directory written (revision 53); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
   `start()` throws on both platforms; stored `MIRROR` with coverage newer than the seed → seed
   installed, `trustClass = SIGNED`, the `MIRROR` directory pruned; stored `SIGNED` newer than the seed
   → seed skipped; corrupt `live` with an evicted `MIRROR` still on disk → recovery goes to seed, never
@@ -4116,10 +4131,11 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
 - C2SP `upki-revocation@v1.0.0`: the spec says v4; `clubcard-crlite` (the crate upki depends on, `bincode` feature) decodes version bytes 3 and 4, so upki reads Mozilla's v3 filters as served (verified 2026-10-22 in rustls/upki `Cargo.toml` and clubcard-crlite `Encoding::read`); aggregation over covering filters only; selection goes through `index.bin`'s log directory (`Index::check` binary-searches it per SCT and loads only the named filters). **0.2 verification, open**: how upki's `Index::write` writes overlapping windows (a full and its deltas sharing boundary timestamps) and how `Index::check` treats overlapping directory entries; the §3.2 selection-equivalence check is stated so that either representation passes.
 - C2SP `upki-revocation@v1.0.0` filenames, read 2026-11-04 at the pinned commit `7e6ded4` (`upki-revocation.md`, "Revocation cache directory layout", "Header" and "Filename table"): filter filenames "MUST be between 1 and 32 bytes long and MUST consist only of the ASCII characters `A`–`Z`, `a`–`z`, `0`–`9`, hyphen (`-`), period (`.`), and underscore (`_`)"; "The names `.` and `..` MUST NOT be used"; an index naming a file that violates these is malformed; each name slot is 32 bytes, zero-padded; `num_filenames` limits an index to 65535 files. The spec states no uniqueness rule for filenames, does not reserve `index.bin` as a filter name, and sets no size cap on `index.bin`: revokt's derived names (§6.5), its `index.bin` reservation (§6.3) and its 1 MiB cap (§3.2) are its own rules (revision 48), as are a mirror manifest's checks of reserved names and of uniqueness ignoring ASCII case, and its ban on a trailing `.` (§7.3, revision 52). `C2spIndex.isFilename` implements exactly the filename rule.
 - `upki.rustls.dev`: GitHub Pages, `default` only, v4 transcode; `upki-mirror` verifies the
-  attachment hash, not the content signature. The mirror publishes only `manifest.json` and the filter files;
-  `upki fetch` builds `index.bin` locally from the files it downloaded (v1.0.1 `upki/src/revocation/fetch.rs`,
-  `PlanStep::SaveIndex` → `Index::write`, read 2026-11-06 at tag v1.0.1, commit `9821cce`; `upki-mirror` there names no `index.bin`). For a filename over 32
-  bytes, `Index::write` writes no index (it logs "skipping index"); revokt instead gives the file its §6.5 derived name
+  attachment hash, not the content signature. `upki-mirror` writes only `manifest.json` and the filter files;
+  `upki fetch` builds `index.bin` locally from the manifest's files in its cache directory (v1.0.1
+  `upki/src/revocation/fetch.rs`, `PlanStep::SaveIndex` → `Index::write`, read 2026-11-06 at tag v1.0.1, commit
+  `9821cce`; `upki-mirror` there names no `index.bin`). For a filename over 32 bytes, `Index::write` returns no
+  index; revokt instead gives the file its §6.5 derived name
   and builds the index under it (§7.3, revision 53). upki FFI: three functions; no Android prebuilt.
   `rustls_upki::Policy` defaults: `missing_data = Error`, `cert_not_covered = Allowed`, `cert_has_no_scts = Allowed`.
 - **Producer key bytes** (`mozilla/crlite` `main`): `PrepareSetMember` in `go/storage/certdatabase.go` (about line 278) calls
