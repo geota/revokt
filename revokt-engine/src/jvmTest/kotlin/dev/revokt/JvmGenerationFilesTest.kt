@@ -6,6 +6,7 @@ package dev.revokt
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.engine.c2sp.C2spIndex
 import okio.ByteString.Companion.toByteString
+import org.junit.jupiter.api.Assumptions
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -149,6 +150,52 @@ class JvmGenerationFilesTest {
             assertFailsWith<java.nio.file.NoSuchFileException> { read(empty) }
         } finally {
             empty.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `an index naming a path outside the directory is rejected before any named file is read`() {
+        val root = Files.createTempDirectory("c2sp-root")
+        try {
+            Files.write(root.resolve("outside"), filters.values.first())
+            val image = Files.createDirectory(root.resolve("image"))
+            filters.forEach { (name, bytes) -> Files.write(image.resolve(name), bytes) }
+            // A relative escape to a file that exists, and an absolute name; neither may be resolved against the image.
+            for (name in listOf("../outside", "/outside")) {
+                val index =
+                    resource("upki-index.bin").also {
+                        val bytes = name.encodeToByteArray()
+                        bytes.copyInto(it, 14)
+                        ByteArray(32 - bytes.size).copyInto(it, 14 + bytes.size)
+                    }
+                Files.write(image.resolve("index.bin"), index)
+                val e = assertFailsWith<IllegalArgumentException>(name) { read(image) }
+                assertTrue("is not 1 to 32 bytes" in e.message!!, e.message)
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a named file that is a symbolic link is rejected, so nothing is read from outside the directory`() {
+        val root = Files.createTempDirectory("c2sp-root")
+        try {
+            val outside = Files.write(root.resolve("outside"), filters.getValue("delta-v4"))
+            val image = Files.createDirectory(root.resolve("image"))
+            Files.write(image.resolve("index.bin"), resource("upki-index.bin"))
+            (filters - "delta-v4").forEach { (name, bytes) -> Files.write(image.resolve(name), bytes) }
+            try {
+                Files.createSymbolicLink(image.resolve("delta-v4"), outside)
+            } catch (e: java.io.IOException) {
+                // Only Windows may refuse a link (the account lacks the privilege): the test is then skipped, never passed.
+                if (!System.getProperty("os.name").startsWith("Windows")) throw e
+                Assumptions.abort<Unit>("cannot create symbolic links here: $e")
+            }
+            val e = assertFailsWith<IllegalArgumentException> { read(image) }
+            assertTrue("not a regular file" in e.message!!, e.message)
+        } finally {
+            root.toFile().deleteRecursively()
         }
     }
 }
