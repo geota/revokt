@@ -40,6 +40,23 @@ internal class FixtureWorld {
     private val links = LinkedHashSet<Pair<CertId, KeyId>>()
     private val labels = HashMap<ByteString, String>()
 
+    /** The `Validity` of the certificates [cert] issues; [withValidity] changes it for a block (a §9.2 K6 failure). */
+    private var validity: ByteArray = TestCert().validity
+
+    /** [block]'s certificates carry [v] as their `Validity`. */
+    fun <T> withValidity(
+        v: ByteArray,
+        block: () -> T,
+    ): T {
+        val before = validity
+        validity = v
+        try {
+            return block()
+        } finally {
+            validity = before
+        }
+    }
+
     /** The links so far, copied: a fixture built now does not see links added later. */
     val ok: Set<Pair<CertId, KeyId>> get() = links.toSet()
 
@@ -47,6 +64,12 @@ internal class FixtureWorld {
         keyOid: String = SymOids.KEY,
         curveOid: String? = null,
     ): SymKey = SymKey(SEED, keys++, keyOid, curveOid)
+
+    /**
+     * A leaf's key: `id-Ed25519`, which §9.2's keyability profile (K7) admits, so decision step 3 queries the leaf
+     * rather than cutting it as `PRODUCER_UNKEYABLE`. It takes the next ordinal, as [key] does.
+     */
+    fun leafKey(): SymKey = key(SymOids.ED25519)
 
     /** A one-RDN name `CN=[cn]`, its value under the string [tag] (UTF8String by default). */
     fun name(
@@ -57,8 +80,8 @@ internal class FixtureWorld {
 
     /**
      * A certificate. [signer] is the key whose link verifies it (null: a signature no key verifies); the outer
-     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs. Each
-     * call takes a fresh serial, so two calls never give the same bytes.
+     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs; the
+     * `Validity` is [validity]'s. Each call takes a fresh serial, so two calls never give the same bytes.
      */
     fun cert(
         label: String,
@@ -75,6 +98,7 @@ internal class FixtureWorld {
                 serial = TestDer.tlv(0x02, TestDer.bytes(0x01, serial shr 8 and 0xff, serial and 0xff)),
                 tbsSignature = TestDer.seq(TestDer.oid(sigOid)),
                 issuer = issuer,
+                validity = validity,
                 subject = subject,
                 spki = key.spki,
                 extensions = extensions,

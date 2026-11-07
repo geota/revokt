@@ -3,10 +3,14 @@
 
 package dev.revokt.engine.walker
 
+import dev.revokt.AnchorSnapshot
 import dev.revokt.Finding
 import dev.revokt.NoIssuerReason
+import dev.revokt.PathBuilderFallback
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
+import dev.revokt.RevoktTestingApi
+import dev.revokt.SignatureVerifier
 import dev.revokt.TerminalKind
 import dev.revokt.VerifyResult
 import dev.revokt.WalkEnd
@@ -83,7 +87,7 @@ internal data class ExpectedWalk(
 }
 
 /** The walker-only harness (spec §9): [reconstruct] over one fixture row, with the cross-call memo cleared. */
-@OptIn(RevoktInternalApi::class)
+@OptIn(RevoktInternalApi::class, RevoktTestingApi::class)
 internal object WalkerHarness {
     fun walk(
         f: WalkerFixture,
@@ -95,6 +99,51 @@ internal object WalkerHarness {
         val verifier = SymVerifier(f.ok, f.unsupported)
         return reconstruct(presented, index, verifier, verifier.unsupportedOids(), crossCallMemo)
     }
+
+    /**
+     * Decision steps 1 to 6 over [f] (spec §5.1, §9): [fallback] null is the harness's disabled path, [platformOnly]
+     * the trust-manager bindings' `PLATFORM_ONLY` promotion (off in the harness), and [harness] false applies step
+     * 3's `MAX_PRESENTED` cut as every trust-manager path does. [verifier] wraps the fixture's [SymVerifier].
+     */
+    fun decide(
+        f: WalkerFixture,
+        fallback: PathBuilderFallback?,
+        platformOnly: Boolean = false,
+        harness: Boolean = true,
+        verifier: (SignatureVerifier) -> SignatureVerifier = { it },
+    ): PathDecision {
+        val index = CandidateIndex(f.snapshot, customCanonicaliser = f.customCanonicaliser)
+        val sym = SymVerifier(f.ok, f.unsupported)
+        val context =
+            DecideContext(
+                verifier(sym),
+                sym.unsupportedOids(),
+                LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
+                fallback,
+                NOW,
+                platformOnly,
+            )
+        val snapshot = snapshot(f.snapshot)
+        return if (harness) {
+            decideWalkerHarness(f.presented, index, snapshot, context)
+        } else {
+            decide(f.presented, index, snapshot, context)
+        }
+    }
+
+    /** The harness's snapshot of [anchors], id [SNAPSHOT_ID]. */
+    @OptIn(RevoktTestingApi::class)
+    fun snapshot(anchors: List<ByteArray>): AnchorSnapshot =
+        AnchorSnapshot
+            .Builder()
+            .id(SNAPSHOT_ID)
+            .sha256(ByteArray(32))
+            .anchors(anchors)
+            .createdMillis(NOW)
+            .build()
+
+    const val SNAPSHOT_ID: Long = 41
+    const val NOW: Long = 1_780_000_000_000
 
     /** Runs [f] and asserts its expected Walk column. */
     fun check(f: WalkerFixture): Walk {
@@ -196,4 +245,35 @@ internal object WalkerHarness {
     fun hex(hashes: Set<ByteString>): Set<String> = hashes.mapTo(LinkedHashSet()) { it.hex() }
 
     fun hash(der: ByteArray): ByteString = der.toByteString().sha256()
+}
+
+/**
+ * A fake [PathBuilderFallback] (spec §9 decide tests): [answer] gives the path for a chain, or null, or throws; [calls]
+ * counts the `build` calls and [seen] keeps the last arguments.
+ */
+internal class FakeFallback(
+    private val answer: (List<ByteArray>) -> List<ByteArray>?,
+) : PathBuilderFallback {
+    var calls = 0
+        private set
+    var seen: Triple<List<ByteArray>, AnchorSnapshot, Long>? = null
+        private set
+
+    override fun build(
+        chainDer: List<ByteArray>,
+        anchors: AnchorSnapshot,
+        nowMillis: Long,
+    ): List<ByteArray>? {
+        calls++
+        seen = Triple(chainDer, anchors, nowMillis)
+        return answer(chainDer)
+    }
+
+    companion object {
+        fun finds(vararg path: FixtureCert): FakeFallback = FakeFallback { path.map { it.der } }
+
+        fun fails(): FakeFallback = FakeFallback { null }
+
+        fun throws(t: Throwable): FakeFallback = FakeFallback { throw t }
+    }
 }

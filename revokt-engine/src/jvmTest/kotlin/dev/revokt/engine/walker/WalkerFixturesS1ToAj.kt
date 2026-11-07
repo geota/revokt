@@ -120,7 +120,7 @@ internal object WalkerFixturesS1ToAj {
                 w.cert("X$a$b", roots[a].subject, roots[b].subject, roots[a].key, signer = roots[b].key)
             }
         val i = w.cert("I", w.name("Intermediate"), roots[0].subject, signer = roots[0].key)
-        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key)
+        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey())
         return listOf(
             w.fixture(
                 "w",
@@ -199,7 +199,7 @@ internal object WalkerFixturesS1ToAj {
     fun aa(): List<WalkerFixture> {
         val w = FixtureWorld()
         val root = w.root("R", "Root")
-        val leaf = w.cert("L", w.name("leaf.example"), root.subject, signer = root.key)
+        val leaf = w.cert("L", w.name("leaf.example"), root.subject, signer = root.key, key = w.leafKey())
         return listOf(
             w.fixture(
                 "aa",
@@ -313,7 +313,7 @@ internal object WalkerFixturesS1ToAj {
         val w = FixtureWorld()
         val root = w.root("R", "Root")
         val i = w.cert("I", w.name("Intermediate"), root.subject) // no link: the walker cannot verify I under R
-        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key)
+        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey())
         val fillers = List(7) { w.cert("F$it", w.name("Filler $it"), w.name("Filler issuer $it")) }
         return listOf(
             w.fixture(
@@ -397,7 +397,7 @@ internal object WalkerFixturesS1ToAj {
                 val r1 = w.root("R1", "Root 1")
                 val r2 = w.root("R2", "Root 2")
                 val missing = w.name("Missing issuer")
-                val leaf = w.cert("L", w.name("leaf.example"), missing, signer = w.key())
+                val leaf = w.cert("L", w.name("leaf.example"), missing, signer = w.key(), key = w.leafKey())
                 val u1 =
                     w
                         .cert(
