@@ -393,7 +393,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         for (serial in listOf(TestDer.bytes(0x80), TestDer.bytes(0x00), TestDer.bytes(0xff, 0x7f))) {
             assertLoads(chain(leaf = parts(tweaks = Tweaks(serial = serial)).der))
         }
-        for (serial in listOf(TestDer.bytes(0x00, 0x01), TestDer.bytes(0xff, 0x80))) {
+        for (serial in listOf(TestDer.bytes(0x00, 0x01), TestDer.bytes(0xff, 0x80), TestDer.bytes())) {
             assertFails(PARSE, 0, chain(leaf = parts(tweaks = Tweaks(serial = serial)).der))
         }
         // An empty Extensions SEQUENCE is read (mozilla::pkix allows it): the leaf then has no EKU, the intermediate no
@@ -411,6 +411,42 @@ internal class X5uChainRulesTest : X5uChainFixture() {
             TestDer.seq(TestDer.oid(OTHER_OID), TestDer.tlvWithLength(0x04, TestDer.bytes(0x81, 0x02), NULL))
         assertLoads(chain(root = root(extensions = caExtensions() + nonMinimal)))
         assertFails(PARSE, 1, chain(intermediate = intermediate(caExtensions() + nonMinimal)))
+    }
+
+    @Test
+    fun `each extension value is parsed before its checks, so a malformed one is EXTENSION (revision 55)`() {
+        val unknownTagSan = TestDer.extension("2.5.29.17", TestDer.seq(TestDer.tlv(0x89, TestDer.bytes(1))))
+        val nonOidEku = TestDer.extension("2.5.29.37", TestDer.seq(TestDer.oid(CODE_SIGNING), NULL))
+        val trailingBc = TestDer.extension("2.5.29.19", TestDer.seq(TestDer.tlv(0x01, TestDer.bytes(0xff))) + NULL)
+        val trailingSan = TestDer.extension("2.5.29.17", TestDer.seq(dns(X5U_LEAF_NAME)) + NULL)
+        val badNc = nameConstraints(TestDer.seq())
+        val ku = ku(DIGITAL_SIGNATURE)
+        // On the leaf: a SAN with an unknown GeneralName tag is EXTENSION, not SAN, even with no EKU.
+        assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, eku(CODE_SIGNING), unknownTagSan))))
+        assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, unknownTagSan))))
+        assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, nonOidEku, san(dns(X5U_LEAF_NAME))))))
+        assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, nonOidEku))))
+        assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, eku(CODE_SIGNING), trailingSan))))
+        assertFails(EXTENSION, 0, chain(leaf = leaf(LEAF_EXTENSIONS + trailingBc)))
+        // On a CA: malformed values come before NOT_CA, KEY_USAGE and EKU.
+        assertFails(EXTENSION, 1, chain(intermediate = intermediate(listOf(bc(ca = false), badNc))))
+        assertFails(EXTENSION, 1, chain(intermediate = intermediate(listOf(bc(ca = true), ku(CRL_SIGN), nonOidEku))))
+        assertFails(EXTENSION, 1, chain(intermediate = intermediate(listOf(trailingBc, ku(KEY_CERT_SIGN)))))
+        // Values revokt does not read are not held to it: a non-minimal length inside SKI or AKI loads, as in Firefox.
+        val ski =
+            TestDer.extension(
+                "2.5.29.14",
+                TestDer.tlvWithLength(0x04, TestDer.bytes(0x81, 0x02), TestDer.bytes(1, 2)),
+            )
+        val akiKeyId = TestDer.seq(TestDer.tlvWithLength(0x80, TestDer.bytes(0x81, 0x02), TestDer.bytes(1, 2)))
+        val aki = TestDer.extension("2.5.29.35", akiKeyId)
+        assertLoads(
+            chain(
+                leaf = leaf(LEAF_EXTENSIONS + ski + aki),
+                intermediate =
+                    intermediate(caExtensions() + ski + aki),
+            ),
+        )
     }
 
     @Test

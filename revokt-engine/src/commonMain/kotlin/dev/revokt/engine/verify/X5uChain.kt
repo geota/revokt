@@ -285,16 +285,17 @@ private fun link(
  * (`CheckBasicConstraints`, `CheckKeyUsage`, `CheckExtendedKeyUsage` for an end entity; spec revision 54).
  */
 private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
+    // Every value the leaf rules read is parsed first (revision 55): a malformed one is EXTENSION, never SAN or EKU.
     val bc = basicConstraints(c, 0) { return it }
-    if (bc?.ca == true) return failed(X5uChainFailure.LEAF_CA, 0, "the leaf has cA TRUE")
     keyUsage(c, 0) { return it }
     val eku = ExtensionValues.extendedKeyUsage(c).valueOr(0, "extKeyUsage") { return it }
+    val san = ExtensionValues.subjectAltName(c).valueOr(0, "subjectAltName") { return it }
+    if (!sctListIsOctetString(c)) return failed(X5uChainFailure.EXTENSION, 0, "SCT list not one OCTET STRING")
+    if (bc?.ca == true) return failed(X5uChainFailure.LEAF_CA, 0, "the leaf has cA TRUE")
     if (eku == null || !eku.contains(CODE_SIGNING)) {
         return failed(X5uChainFailure.EKU, 0, "no codeSigning in extKeyUsage")
     }
     if (eku.contains(OCSP_SIGNING)) return failed(X5uChainFailure.EKU, 0, "OCSPSigning in extKeyUsage")
-    if (!sctListIsOctetString(c)) return failed(X5uChainFailure.EXTENSION, 0, "SCT list not one OCTET STRING")
-    val san = ExtensionValues.subjectAltName(c).valueOr(0, "subjectAltName") { return it }
     val names = san?.names.orEmpty()
     val only = names.singleOrNull()
     if (only == null || only.tag != ExtensionValues.DNS_NAME || only.content.utf8() != X5U_LEAF_NAME) {
@@ -329,7 +330,11 @@ private fun issuer(
     i: Int,
 ): X5uChainResult.Failed? {
     val c = certs[i]
+    // Every value the CA rules read is parsed first (revision 55): a malformed one is EXTENSION.
     val bc = basicConstraints(c, i) { return it }
+    val ku = keyUsage(c, i) { return it }
+    val eku = ExtensionValues.extendedKeyUsage(c).valueOr(i, "extKeyUsage") { return it }
+    val subtrees = nameConstraints(c, i) { return it }
     if (bc == null) return failed(X5uChainFailure.NOT_CA, i, "no basicConstraints")
     if (!bc.ca) return failed(X5uChainFailure.NOT_CA, i, "cA is not TRUE")
     // The non-leaf links under link i are links 1 to i − 1.
@@ -337,26 +342,31 @@ private fun issuer(
     if (pathLen != null && i - 1 > pathLen) {
         return failed(X5uChainFailure.PATH_LEN, i, "pathLenConstraint $pathLen with ${i - 1} CAs under it")
     }
-    if (!chains(certs[i - 1].rawIssuer(), c.rawSubject())) {
+    val child = certs[i - 1]
+    if (!chains(child.rawIssuer(), c.rawSubject())) {
         return failed(X5uChainFailure.NAME, i, "subject is not the issuer of certificate ${i - 1}")
     }
-    val ku = keyUsage(c, i) { return it }
     if (ku?.keyCertSign == false) return failed(X5uChainFailure.KEY_USAGE, i, "keyUsage without keyCertSign")
     // mozilla::pkix and webpki check the required EKU on every certificate that has one (spec revision 54); the
     // terminal is never read.
-    val eku = ExtensionValues.extendedKeyUsage(c).valueOr(i, "extKeyUsage") { return it }
     if (eku?.contains(CODE_SIGNING) == false) return failed(X5uChainFailure.EKU, i, "extKeyUsage without codeSigning")
-    val child = certs[i - 1]
     if (!tlsFeatures(c, child)) return failed(X5uChainFailure.EXTENSION, i, "the child lacks the TLS feature")
-    val constraints = c.tbs.extensions.firstOrNull { Oid.matches(c.tbsBytes, it.oid, NAME_CONSTRAINTS) } ?: return null
     // The leaf's one dNSName is X5U_LEAF_NAME, which leaf() required before any issuer is checked.
-    val subtrees =
-        DnsSubtrees.read(c.tbsBytes, constraints.value)
-            ?: return failed(X5uChainFailure.EXTENSION, i, "nameConstraints that revokt does not evaluate")
-    if (!subtrees.permits(X5U_LEAF_NAME)) {
+    if (subtrees?.permits(X5U_LEAF_NAME) == false) {
         return failed(X5uChainFailure.NAME_CONSTRAINTS, i, "the leaf is outside nameConstraints")
     }
     return null
+}
+
+/** [c]'s nameConstraints, null when absent; one revokt cannot read or evaluate is passed to [reject]. */
+private inline fun nameConstraints(
+    c: ParsedCertificate,
+    i: Int,
+    reject: (X5uChainResult.Failed) -> Nothing,
+): DnsSubtrees? {
+    val e = c.tbs.extensions.firstOrNull { Oid.matches(c.tbsBytes, it.oid, NAME_CONSTRAINTS) } ?: return null
+    return DnsSubtrees.read(c.tbsBytes, e.value)
+        ?: reject(failed(X5uChainFailure.EXTENSION, i, "nameConstraints that revokt does not evaluate"))
 }
 
 /** `id-ce-nameConstraints` (2.5.29.30), as OID content. */
@@ -423,76 +433,6 @@ private val OCSP_SIGNING = byteArrayOf(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03,
 /** `30 00`: a `Name` with no RDN, under the minimal header [notDer] requires. */
 private const val EMPTY_NAME_TLV = 2
 
-private const val MAX_VERSION = 3
-
-/**
- * Why [c] is not DER as mozilla::pkix's `BackCert::Init` reads it (`ERROR_BAD_DER`), or null when it is: every
- * header minimal and definite, nothing the parse skipped (an element after the SPKI or the unique ids, after
- * `Extensions` inside `[3]`, after `extnValue`), no unused bits in `signatureValue`, a version of v1 to v4
- * (`OptionalVersion`: the parser reads `[3]` whatever the version says, as Firefox does), and every critical flag `00`
- * or `FF` (`Boolean`; an explicit FALSE is accepted, as there). The times are [DerTimes]'.
- */
-private fun notDer(c: ParsedCertificate): String? = envelopeNotDer(c) ?: tbsNotDer(c)
-
-/**
- * The envelope's part of [notDer]: minimal definite headers, a definite TBS and outer `signatureAlgorithm` (the parser
- * accepts both indefinite, as the JDK does; mozilla::pkix does not), no unused bits in `signatureValue`.
- */
-private fun envelopeNotDer(c: ParsedCertificate): String? {
-    val signatureValue = c.envelope.signatureValue
-    return when {
-        c.nonMinimalHeaders.isNotEmpty() -> "a non-minimal length at ${c.nonMinimalHeaders[0].site}"
-        c.envelope.tbsIndefinite -> "an indefinite-length TBS"
-        c.der[c.envelope.signatureAlgorithm.start + 1].toInt() and 0xff == INDEFINITE -> "an indefinite outer algorithm"
-        signatureValue.length == 0 || c.der[signatureValue.start].toInt() != 0 -> "signatureValue has unused bits"
-        else -> null
-    }
-}
-
-/**
- * The TBS's part of [notDer]: a minimal serial, nothing the parse skipped, unique ids only in their primitive forms
- * (mozilla::pkix's `SkipOptionalImplicitPrimitiveTag`; the parser also reads `a1` and `a2`), the version, and the
- * critical flags.
- */
-private fun tbsNotDer(c: ParsedCertificate): String? {
-    val version = c.tbs.version
-    return when {
-        !Keyability.minimalInteger(c.tbsBytes, c.tbs.serial) -> "serialNumber is not a minimal INTEGER"
-        c.ignoredElements.isNotEmpty() -> "skipped bytes at ${c.ignoredElements[0].site}"
-        constructedUniqueId(c) -> "a constructed unique id"
-        version != null && (version.length != 1 || c.tbsBytes[version.start] !in 0..MAX_VERSION) -> "version"
-        c.tbs.extensions.any { !criticalIsDer(c.tbsBytes, it) } -> "a critical flag other than 00 or FF"
-        else -> null
-    }
-}
-
-private const val INDEFINITE = 0x80
-private const val CONSTRUCTED_ISSUER_UID = 0xa1
-private const val CONSTRUCTED_SUBJECT_UID = 0xa2
-
-/** Whether a unique id after [c]'s SPKI is in its constructed form; the parser already read these elements. */
-private fun constructedUniqueId(c: ParsedCertificate): Boolean {
-    val r = DerReader(c.tbsBytes, c.tbs.spki.end, c.tbs.tlv.end, ParseContext())
-    while (r.hasMore()) {
-        val tag = r.peekTag()
-        if (tag == CONSTRUCTED_ISSUER_UID || tag == CONSTRUCTED_SUBJECT_UID) return true
-        r.readAny(HeaderSite.TBS_STOP)
-    }
-    return false
-}
-
-/** Whether [e]'s critical BOOLEAN, if written, is `00` or `FF`; the parser already read [e], so nothing here throws. */
-private fun criticalIsDer(
-    b: ByteArray,
-    e: Extension,
-): Boolean {
-    val r = DerReader(b, e.tlv.start, e.tlv.end, ParseContext())
-    val fields = r.child(r.read(SEQUENCE, HeaderSite.EXTENSION))
-    fields.read(OBJECT_IDENTIFIER, HeaderSite.EXTENSION_OID)
-    val flag = fields.readOptional(BOOLEAN, HeaderSite.EXTENSION_CRITICAL) ?: return true
-    return ExtensionValues.boolean(b, flag.content)
-}
-
 /**
  * The extensions mozilla::pkix's `BackCert::RememberExtension` understands (at `cac25a6`), so that a critical copy of any
  * other is `ERROR_UNKNOWN_CRITICAL_EXTENSION` (spec revision 54).
@@ -551,99 +491,4 @@ private object Understood {
     private fun backsNetscape(c: ParsedCertificate): Boolean =
         c.extensions(ExtensionValues.BASIC_CONSTRAINTS).isNotEmpty() &&
             c.extensions(ExtensionValues.EXT_KEY_USAGE).isNotEmpty()
-}
-
-private const val SEQUENCE = 0x30
-private const val OBJECT_IDENTIFIER = 0x06
-private const val BOOLEAN = 0x01
-
-/**
- * A link's validity as mozilla::pkix's `TimeChoice` and `ParseValidity` read it (`ERROR_INVALID_DER_TIME`): each time
- * `YYMMDDHHMMSSZ` (`UTCTime`, years 1950 to 2049) or `YYYYMMDDHHMMSSZ` (`GeneralizedTime`), every field in range for
- * its month and year, seconds below 60, the year 1970 or later, and `notBefore ≤ notAfter`. The parser's lenient
- * [dev.revokt.engine.parse.DerTime] reads more than this; nothing it reads beyond is a DER time.
- */
-@Suppress("MagicNumber") // the field positions and ranges of X.680 times, and days_from_civil's constants
-private object DerTimes {
-    private const val UTC_DIGITS = 12
-    private const val GENERALIZED_DIGITS = 14
-    private const val UTC_PIVOT = 50
-    private const val MIN_YEAR = 1970
-    private const val FEBRUARY = 2
-    private val THIRTY_DAYS = setOf(4, 6, 9, 11)
-
-    /** The window `notBefore..notAfter` in epoch milliseconds, or null when it is not two DER times in order. */
-    fun window(
-        b: ByteArray,
-        v: Validity,
-    ): LongRange? {
-        val notBefore = millis(b, v.notBefore) ?: return null
-        val notAfter = millis(b, v.notAfter) ?: return null
-        return if (notBefore <= notAfter) notBefore..notAfter else null
-    }
-
-    /** The time TLV [tlv] (UTCTime or GeneralizedTime, which the parser checked) in epoch milliseconds, or null. */
-    private fun millis(
-        b: ByteArray,
-        tlv: Span,
-    ): Long? {
-        val utc = b[tlv.start].toInt() == DerTime.UTC_TIME
-        val digits = if (utc) UTC_DIGITS else GENERALIZED_DIGITS
-        if (tlv.length != digits + 3 || b[tlv.end - 1].toInt() != 'Z'.code) return null
-        val p = pairs(b, tlv.start + 2, digits / 2) ?: return null
-        val year = if (utc) (if (p[0] < UTC_PIVOT) 2000 else 1900) + p[0] else p[0] * 100 + p[1]
-        val f = if (utc) 1 else 2
-        val month = p[f]
-        val day = p[f + 1]
-        if (year < MIN_YEAR || month !in 1..12 || day !in 1..days(year, month)) return null
-        val seconds = clock(p[f + 2], p[f + 3], p[f + 4]) ?: return null
-        return civilDays(year, month, day) * 86_400_000L + seconds * 1000L
-    }
-
-    /** [count] two-digit decimal numbers from [from], or null when an octet is not a digit. */
-    private fun pairs(
-        b: ByteArray,
-        from: Int,
-        count: Int,
-    ): IntArray? {
-        val out = IntArray(count)
-        for (k in 0 until count) {
-            val hi = b[from + 2 * k] - '0'.code.toByte()
-            val lo = b[from + 2 * k + 1] - '0'.code.toByte()
-            if (hi !in 0..9 || lo !in 0..9) return null
-            out[k] = hi * 10 + lo
-        }
-        return out
-    }
-
-    /** Seconds into the day of [hour]:[minute]:[second], or null when one is out of range (no leap second, as there). */
-    private fun clock(
-        hour: Int,
-        minute: Int,
-        second: Int,
-    ): Int? = if (hour > 23 || minute > 59 || second > 59) null else (hour * 60 + minute) * 60 + second
-
-    private fun days(
-        year: Int,
-        month: Int,
-    ): Int =
-        when (month) {
-            FEBRUARY -> if (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) 29 else 28
-            in THIRTY_DAYS -> 30
-            else -> 31
-        }
-
-    /** Days since 1970-01-01 of a Gregorian date from 1970 on (Howard Hinnant's `days_from_civil`). */
-    private fun civilDays(
-        year: Int,
-        month: Int,
-        day: Int,
-    ): Long {
-        val y = if (month <= FEBRUARY) year - 1 else year
-        val era = y / 400
-        val yoe = y - era * 400
-        val doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1
-        val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
-        return era * 146_097L + doe - 719_468
-    }
 }
