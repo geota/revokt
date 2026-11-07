@@ -346,6 +346,7 @@ private class DnsSubtrees(
         private const val PERMITTED = 0xa0
         private const val EXCLUDED = 0xa1
         private val SITE = HeaderSite.EXTENSION_VALUE
+        private val DNS_CHARACTERS = (('a'..'z') + ('A'..'Z') + ('0'..'9') + "-_.".toList()).toSet()
 
         /**
          * The subtrees in the `extnValue` content [value], or null when revokt cannot evaluate them, so that the chain
@@ -390,7 +391,7 @@ private class DnsSubtrees(
                 val base = subtree.readAny(SITE)
                 if (base.tag != ExtensionValues.DNS_NAME || subtree.hasMore()) return null
                 val text = base.content.bytes(b).decodeToString()
-                if (!text.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it in "-_." }) return null
+                if (!text.all { it in DNS_CHARACTERS }) return null
                 out += text
             }
             return out

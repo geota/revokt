@@ -332,7 +332,9 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         }
         // What mozilla::pkix accepts: v1 (absent, or explicit as bug 1031093 allows), v2 and v4 read like v3, and an
         // explicit critical FALSE.
-        for (v in listOf(ByteArray(0), version(TestDer.bytes(0)), version(TestDer.bytes(1)), version(TestDer.bytes(3)))) {
+        val accepted =
+            listOf(ByteArray(0), version(TestDer.bytes(0)), version(TestDer.bytes(1)), version(TestDer.bytes(3)))
+        for (v in accepted) {
             assertLoads(chain(leaf = leafParts(version = v).der))
         }
         assertLoads(
