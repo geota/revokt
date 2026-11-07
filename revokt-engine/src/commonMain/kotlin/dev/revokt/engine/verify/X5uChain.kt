@@ -360,7 +360,7 @@ private inline fun keyUsage(
     reject: (X5uChainResult.Failed) -> Nothing,
 ): KeyUsage? {
     val ku = ExtensionValues.keyUsage(c).valueOr(i, "keyUsage", reject)
-    if (ku?.bits?.isEmpty() == true) reject(failed(X5uChainFailure.EXTENSION, i, "keyUsage with no bits"))
+    if (ku != null && ku.bits.isEmpty()) reject(failed(X5uChainFailure.EXTENSION, i, "keyUsage with no bits"))
     return ku
 }
 

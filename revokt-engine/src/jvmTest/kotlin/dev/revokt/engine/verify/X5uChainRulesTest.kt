@@ -292,7 +292,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
             chain(intermediate = intermediate(caExtensions() + nameConstraints(constraints(null, listOf(email))))),
         )
         // An underscore is a valid name-constraint DNS ID character (IsValidDNSID).
-        val underscore = constraints(null, listOf(dnsTree("_acme.other.example")))
+        val underscore = constraints(null, listOf(dnsTree("_acme.other.example"), dnsTree("a.co-op")))
         assertLoads(chain(intermediate = intermediate(caExtensions() + nameConstraints(underscore))))
         assertFails(
             NAME_CONSTRAINTS,
