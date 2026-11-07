@@ -1675,7 +1675,7 @@ decoded the key and before `Signature` is called, the verifier decodes the signa
 - **Scope:** every standalone ECDSA signature that reaches the verifier: a TLS chain's links, the x5u chain's links
   (§7.1) and the content signature after its raw-to-DER conversion. A composite ML-DSA + ECDSA signature verifies as
   one provider operation, so its ECDSA component is the owning provider's responsibility (revision 55, the #160
-  comment); both owning providers range-check it (BC's `ECDSASigner`, and BoringSSL under Conscrypt).
+  comment); both owning providers range-check it (BC's `ECDSASigner`, and BoringSSL under Conscrypt; Appendix A).
 
 **From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
 signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
@@ -4706,6 +4706,12 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     redundant leading `00` did not (0 of 20). revokt's profile rejects both, so it is stricter than SunEC there.
   - **High s:** the #163 review found Mozilla's `ct-logs` collection signature with s > n/2; SEC 1 and NSS accept a
     high s, so revokt does too.
+  - **Composite owners range-check their ECDSA component** (revision 55, §3), read at each project's main branch on
+    2026-11-07, not at the versions revokt tests:
+    - BC: bc-java `core/src/main/java/org/bouncycastle/crypto/signers/ECDSASigner.java` `verifySignature` returns
+      false unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1 ("r in the range [1,n-1]");
+    - BoringSSL: `crypto/fipsmodule/ecdsa/ecdsa.cc.inc` lines 74 to 81 reject a zero r or s (`ec_scalar_is_zero`),
+      and `crypto/fipsmodule/ec/scalar.cc.inc` `ec_scalar_from_bytes` (lines 73 to 85) rejects a value ≥ n.
 - **Revision 54, the x5u chain follows mozilla::pkix at Firefox `cac25a6fa321b0051932359b84c4e2fe3caabdc5`**
   (tag `FIREFOX_BETA_161_BASE`, 2026-11-05), with rustls-webpki 0.103.15 consulted, read 2026-11-07 (Firefox through
   the GitHub contents API; webpki from the local cargo registry):
