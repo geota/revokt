@@ -35,7 +35,12 @@ Status: **draft spec / project proposal, revision 54** · Target: JVM 17+ and An
   and Mozilla's committed chain.
 - **§10 and Appendix A:** §10's feed-path item names the strict chain checks. Appendix A records the Firefox and
   webpki sources read, and the differences that remain by §7.1's own text.
-- **Not included:** the ECDSA r and s range check, which is still undecided.
+- **Added** (§3, the maintainer's decision; #172): the ECDSA range check. Before the provider is called, every ECDSA
+  signature's DER `ECDSA-Sig-Value` is decoded, and it is `INVALID` unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1 for the
+  curve order n (SEC 1 §4.1.4 step 1, which ring's verifier also performs; JDK 17.0.0 to 17.0.2 skipped it,
+  CVE-2022-21449). A malformed `ECDSA-Sig-Value` is `INVALID` too, and a high s stays accepted. It covers every
+  ECDSA signature that reaches the verifier, the x5u links and the content signature included. §9's verifier tests
+  and Appendix A follow.
 
 ### Changes in revision 53 (a mirror's `index.bin` is built locally, 2026-11-06)
 - **Decided** (§7.3, §3.2; the maintainer's decision on #160): revokt never fetches an `index.bin` from a mirror.
@@ -1591,6 +1596,14 @@ A PSS signature with other parameters is `INVALID`, whatever the provider would 
 The probe decides first. When `id-RSASSA-PSS` is in `unsupportedOids()`, every PSS signature is `UNSUPPORTED`,
 whatever its parameters, a SHA-1 one included. A verifier over the Conscrypt provider alone is such a case
 (Appendix A).
+
+**ECDSA range check** (revision 54, the maintainer's decision; #172). Before the provider is called, the verifier
+decodes every ECDSA signature's DER `ECDSA-Sig-Value` and answers `INVALID` unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1,
+where n is the order of the key's curve. This is SEC 1 §4.1.4 step 1, which ring's verifier also performs; JDK
+17.0.0 to 17.0.2 skipped it (CVE-2022-21449). An `ECDSA-Sig-Value` that does not decode is `INVALID` too. A high s
+(s > n/2) stays accepted: real Mozilla content signatures carry one. The check covers every ECDSA signature that
+reaches the verifier: a TLS chain's links, the x5u chain's links (§7.1) and the content signature after its
+raw-to-DER conversion.
 
 **From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
 signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
@@ -3271,7 +3284,10 @@ tests; **live checks** are informational.
   parameters included; a SHA-256 message hash with MGF1 over SHA-1, which the JDK verifies; a mask generation
   function other than `id-mgf1`; each `UNSUPPORTED` instead under a provider without `id-RSASSA-PSS`); raw-to-DER
   edge cases; an off-curve point
-  on a supported OID → `INVALID`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
+  on a supported OID → `INVALID`; ECDSA range (revision 54, #172), on P-256, P-384 and P-521: r or s of 0, r or s
+  equal to n, and r or s of n + 1 → `INVALID` before the provider is called; r = s = 0, the CVE-2022-21449 form, →
+  `INVALID` on every JDK of the matrix; an `ECDSA-Sig-Value` with trailing bytes, a negative INTEGER or a missing s →
+  `INVALID`; a valid signature rewritten to its high s (n − s) → `VERIFIED`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
 - **Parser corpus** and the §9.2 differential parser oracle; **Android instrumented** (API 26, 31,
   34, 36) including the PKIX fallback (the jvmMain `PkixPathBuilderFallback` through ojluni, JVM-tested in 0.2), the
   null-host extension-call probe and the §9.2 corpus replay against the
@@ -4520,6 +4536,11 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
   outside the count (their issuer is not an index issuer). crt.sh's server certificate (CN=crt.sh, Sectigo) had expired
   on 2026-06-21, and its `ca.last_not_after` showed no update after 2026-10-24 (both seen on 2026-10-29), so CAs were
   selected by key, not by recorded activity.
+- **Revision 54, the ECDSA range check** (§3, #172): SEC 1 v2 §4.1.4 ("Verifying Operation") step 1 rejects a
+  signature unless r and s are integers in [1, n − 1]. The JDK's ECDSA from 15 until the April 2022 updates (17.0.3 and
+  18.0.1) skipped the check, so r = s = 0 verified under any key (CVE-2022-21449). Every JDK revokt tests on (17.0.21,
+  21, 25 and 27) has the fix; revokt checks the range itself, so neither an older JDK nor an injected provider can
+  bring the gap back.
 - **Revision 54, the x5u chain against mozilla::pkix at Firefox `cac25a6` and rustls-webpki 0.103.15**, read
   2026-11-06 (Firefox through the GitHub contents API; webpki from the local cargo registry):
   - `pkixcert.cpp` `BackCert::RememberExtension` understands keyUsage, subjectAltName, basicConstraints,
