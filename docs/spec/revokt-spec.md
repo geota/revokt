@@ -1,10 +1,144 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 52** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-06
+Status: **draft spec / project proposal, revision 55** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-07
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 55 (x5u failure reasons, the leaf's SCT list, the ECDSA scope, 2026-11-07)
+- **Clarified** (§7.1, from the #170 and #174 reviews): which failure reason a malformed encoding gets.
+  - `PARSE` covers the certificate's outer structure: the TBS and the outer `signatureAlgorithm`, an indefinite length
+    included; the serial's minimal encoding; the primitive unique IDs; the `critical` BOOLEAN.
+  - Each extension value revokt reads (basicConstraints, keyUsage, extKeyUsage, subjectAltName, nameConstraints,
+    the leaf's SCT list) is parsed first, and anything malformed is `EXTENSION`: bytes after the value, a BOOLEAN such
+    as `cA` of `01`, a non-minimal length, an empty keyUsage (`03 00`, `03 01 00`), an empty extKeyUsage (`30 00`) or
+    a non-OID element in it, an unknown GeneralName tag. Only a well-formed value reaches the `SAN`, `EKU` and
+    `KEY_USAGE` checks. The TLS feature is compared byte for byte and never parsed. Before, the "DER" bullet said
+    `PARSE` for these, which contradicted the "Extensions" bullet.
+- **Added** (§7.1, matching Firefox): when the leaf carries the embedded SCT list, its `extnValue` is exactly one
+  OCTET STRING with nothing after it, else `EXTENSION` (`pkixbuild.cpp` lines 218 to 229 at
+  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`). The list's content is not read.
+- **Fixtures** (§9 (d)):
+  - the extension-internal rows now expect `EXTENSION`;
+  - new rows: the empty keyUsage and extKeyUsage forms, a non-OID extKeyUsage element and a SAN with an unknown
+    GeneralName tag → `EXTENSION`; a serial with a redundant leading `00` or `FF`, or an empty serial (`02 00`), →
+    `PARSE`, beside "a zero or negative serial loads"; a constructed unique ID → `PARSE`; `rsaEncryption` NULL
+    parameters with content → `ALGORITHM`; an empty critical Netscape certificate type → `EXTENSION`, and an empty
+    non-critical one → loads; the SCT list cases.
+- **Scoped** (§3, the #160 comment): the ECDSA range check covers standalone ECDSA. A composite ML-DSA + ECDSA
+  signature verifies as one provider operation, so its ECDSA component is the owning provider's responsibility;
+  both owning providers (BC's `ECDSASigner`, BoringSSL under Conscrypt) range-check it.
+- **Gated** (§9 verifier row): the brainpool cases under BC wait on #175, the BC dependency decision, instead of
+  being [0.2, #172]. The NIST-curve cases stay [0.2, #172].
+
+### Changes in revision 54 (the x5u chain follows mozilla::pkix, and the ECDSA range check, 2026-11-07)
+- **Added** (§7.1, the maintainer's decision on #126): the x5u chain follows mozilla::pkix at Firefox
+  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki 0.103.15 consulted and its divergences listed
+  (Appendix A). Each failure is `SyncOutcome.FAILED`, and §7.1 names the chain's failure reason for each. The rules,
+  now after §7.1's `CLOCK_SKEW` sentence, cover every link below the terminal:
+  - **DER as mozilla::pkix reads it** (`PARSE`): non-minimal headers, elements the grammar does not place, an
+    indefinite-length TBS, a BOOLEAN other than `00` or `FF`, unused bits in the signature BIT STRING, and times
+    other than `YYMMDDHHMMSSZ` or `YYYYMMDDHHMMSSZ` (either type for any year, from 1970, notBefore ≤ notAfter) fail.
+    Each extension value revokt reads is parsed to its end. What mozilla::pkix accepts against DER or RFC 5280,
+    revokt accepts too: an explicit v1 version, an explicit DEFAULT FALSE for `critical` and `cA`, an empty Extensions
+    SEQUENCE, a negative or zero serial, and a keyUsage without the minimal named-bit encoding. §9.2's TLS parser is
+    unchanged.
+  - **Version and issuer:** the version INTEGER is 0 to 3 (`PARSE`), and `[3]` is read whatever the version. An issuer
+    with no RDN fails (`NAME`). The outer `signatureAlgorithm` equals the TBS one as parsed (`ALGORITHM`).
+  - **SubjectPublicKeyInfo** (`ALGORITHM`), as `CheckSubjectPublicKeyInfo`: a namedCurve with an uncompressed point
+    of exact length, `rsaEncryption` with NULL parameters and a minimal positive modulus and exponent, and no unused
+    bits.
+  - **Extensions** (`EXTENSION`): any repeated OID (stricter than mozilla::pkix, Appendix A); an empty value for an
+    understood extension, `id-pkix-ocsp-nocheck` excepted; a `pathLenConstraint` above 127; a critical extension
+    outside `BackCert::RememberExtension`'s set; a critical Netscape certificate type without basicConstraints and
+    extKeyUsage (Firefox's actual rule; it does not read the type bits); and, enforced between the links below the
+    terminal, a link's TLS feature that its child does not carry with the same value (the terminal's is not read,
+    a remaining difference).
+  - **Leaf basicConstraints:** `cA = TRUE` fails (`LEAF_CA`, a new reason).
+  - **EKU** (`EKU`): every non-leaf link below the terminal with an extKeyUsage includes codeSigning
+    (anyExtendedKeyUsage alone does not), and the terminal is never checked. The leaf also rejects
+    `id-kp-OCSPSigning`.
+  - **nameConstraints**, critical or not, as `pkixnames.cpp`: dNSName subtrees against the leaf's dNSName on label
+    boundaries ignoring case, permitted applying per name type, `""` matching every name. A name outside fails
+    (`NAME_CONSTRAINTS`, a new reason). A malformed or unsupported constraint fails (`EXTENSION`): an invalid base, an
+    encoded `minimum` or `maximum`, an empty NameConstraints or GeneralSubtrees, and a directoryName subtree
+    (fail closed, stricter than mozilla::pkix). Every GeneralSubtree is still parsed (an unknown tag is malformed,
+    and a `minimum` or `maximum` fails whatever the form); only the base of a form revokt does not evaluate is left
+    alone. An rfc822Name subtree has no effect, as in mozilla::pkix, since the leaf carries a subjectAltName. Only the leaf's name is checked, a remaining difference.
+  - **Algorithm floor** (`ALGORITHM`): `id-RSASSA-PSS` only in mozilla::pkix's three byte-exact encodings, only
+    `rsaEncryption` and `id-ecPublicKey` keys, and ECDSA AlgorithmIdentifiers with NULL or absent parameters.
+    **§3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged.**
+- **Confirmed** (§7.1): the terminal is the first certificate *after the leaf* whose SPKI is pinned, so a pinned leaf
+  SPKI pins nothing (`NOT_PINNED`). The pin lookup runs before the strict parse, and the terminal is read for its SPKI
+  alone. §7.1's rationale now says that this is revokt's rule: Firefox matches the anchor by its
+  whole DER.
+- **Added** (§3, the maintainer's decision; #172): the ECDSA range check.
+  - The curve probe decides first, as for PSS: an unsupported curve is `UNSUPPORTED`, never `INVALID`. Then, after
+    the provider's `KeyFactory` has decoded the key and before `Signature`, every ECDSA signature's `ECDSA-Sig-Value`
+    is decoded, and the signature is `INVALID` unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1.
+  - n comes from the decoded key's curve (`ECPublicKey.params.order`), so the brainpool curves under BC are covered;
+    a key whose order cannot be read is `INVALID`.
+  - The value is a SEQUENCE of exactly two minimal positive INTEGERs with no trailing bytes, else `INVALID`, which
+    can be stricter than SunEC.
+  - The reasons: SEC 1 §4.1.4 step 1, as ring does, and CVE-2022-21449 (JDK 15 to 17.0.2 and 18 GA).
+  - High s stays accepted (the #163 review; SEC 1 and NSS).
+  - It covers every ECDSA signature through the verifier, the x5u links and the content signature included, and
+    §10's list of crypto written in Kotlin gains the decode and the comparison.
+- **Fixtures** (§9):
+  - (d) has a row for each rule, in the leaf and the intermediate where both apply. The accepting counterparts are
+    there too: mozilla::pkix's accepted encodings, a non-critical unknown extension, a critical certificatePolicies,
+    an intermediate without extKeyUsage, a terminal without codeSigning, NULL against absent parameters, a version 3
+    (v4) and an implicit v1 with `[3]`. So are the nameConstraints cases (`""` permitted and excluded, a leading-dot
+    base, a suffix off a label boundary, upper case, an excluded `mozilla.org`, an encoded minimum, Mozilla's real
+    intermediate), a leaf-only pin, a pinned terminal with a non-minimal length, and Mozilla's committed chain.
+  - The verifier row, tagged [0.2, #172], has the range check on the NIST curves and under BC on brainpool, the
+    CVE form against a stub provider that answers `VERIFIED`, and the `ECDSA-Sig-Value` profile (a redundant leading
+    `00` included).
+- **§10 and Appendix A:**
+  - §10's feed-path item names the chain checks.
+  - Appendix A records the mozilla::pkix and webpki sources read, webpki's divergences, the differences that remain,
+    and the two places revokt is stricter.
+  - It also gives the CVE's affected versions from the reporter's write-up, with Oracle's advisory revision log and
+    NVD's, and the SunEC check of a negative INTEGER.
+
+### Changes in revision 53 (a mirror's `index.bin` is built locally, 2026-11-06)
+- **Decided** (§7.3, §3.2; the maintainer's decision on #160): revokt never fetches an `index.bin` from a mirror.
+  - **Before:** §3.2 capped "a mirror's `index.bin` fetch" and ran the selection-equivalence check on `MIRROR`
+    generations, and the content-signature fixtures expected a mirror to serve an index. Revision 52 left open
+    whether a mirror's index is fetched or built.
+  - **Now:** as `upki fetch` does, a mirror publishes only `manifest.json` and the filter files. The loader builds
+    the generation's `index.bin` with its own index writer from each downloaded filter's coverage, under the
+    generation's names, including the derived name of a manifest name over 32 bytes.
+  - **§3.2:** the selection-equivalence check runs on every generation whose `index.bin` the loader reads rather
+    than builds: a `SYSTEM` cache, with a seed's rebuilt index byte-compared as before. The 1 MiB cap applies to
+    every `index.bin` the loader reads (a system cache's, a seed's, a stored generation's), and revokt fetches
+    none. The cross-engine suite's check and §6.5's install order say the same.
+  - **Outcomes per source:** a mismatch or an over-cap read is `STORE_UNREADABLE` for a system cache and
+    `SEED_UNREADABLE` for a seed. `INDEX_INCONSISTENT` there covered a fetched mirror index, which no longer exists;
+    §6.5's install order and §4's `INDEX_INCONSISTENT` line follow.
+  - **A built index over 1 MiB** (new): an `index.bin` the loader builds, for a Remote Settings or `MIRROR`
+    generation, that is over 1 MiB fails the install before the generation is written: `FAILED`,
+    `INDEX_INCONSISTENT`, stage `INDEX`. So the loader never writes a generation its own read cap would refuse at
+    reload, and a mirror's unsigned coverage cannot produce one. For signed data the cap only moves earlier a reload
+    failure that revision 48's read cap already guarantees, and real data is far below it: the live mirror's 40
+    files over 81 logs index to about 62 KiB (14 + 32 per file + 42 per log + 18 per log and file, bytes).
+  - **The limits table** (§5.1): the 1 MiB note names a system cache's `index.bin`.
+- **Fixtures** (§9):
+  - (e) regains the row for a 33-byte manifest name: it installs under its derived name, no `index.bin` is fetched,
+    and the locally built `index.bin` names the derived name. Revision 52's caveat now points here. Beside it, a
+    mirror whose coverage would build an `index.bin` of 1 MiB + 1 byte fails with `INDEX_INCONSISTENT`, and no
+    generation directory is written.
+  - The two [0.3] content-signature rows that expected a mirror's `index.bin` now apply to a system cache, the
+    source that still reads one: a log window absent from the filter's coverage, and an `index.bin` of 1 MiB + 1 byte,
+    are each not installed at `start()`, with `STORE_UNREADABLE`, §3.2's system-cache outcome. Their header and
+    §11's 0.3 row say so.
+- **Appendix A:** the `upki.rustls.dev` entry records the protocol:
+  - The mirror publishes no index, and `upki fetch` builds one (v1.0.1 `PlanStep::SaveIndex` → `Index::write`).
+  - `upki-mirror` writes only `manifest.json` and the filter files. For a filename over 32 bytes, `Index::write`
+    returns no index, while revokt renames the file and builds the index under the derived name.
+  - The open overlapping-windows verification (§3.2 and the C2SP entry) now names upki's `Index::write`, not
+    `upki-mirror`.
 
 ### Changes in revision 52 (names from unsigned source data, 2026-11-06)
 - **Added** (§7.3, §6.3, §6.5; the maintainer's rules on #160, from the review of #166): a mirror's manifest names.
@@ -45,8 +179,8 @@ Status: **draft spec / project proposal, revision 52** · Target: JVM 17+ and An
 - **Fixtures** (§9): the manifest rows join (e), beside the manifest cap: `.`, `..`, `../x`, `/x`, `a/b`,
   `META.JSON`, `meta.json.`, two names equal ignoring case and a hash of 63 or 65 or non-hex characters each fail the
   sync with nothing fetched or written; a mirror URL without a trailing `/` gets one, and one with a query or a
-  fragment throws at `build()`. No row tests a name over 32 bytes yet: whether a mirror's `index.bin` is fetched or
-  built locally is still open on #160, and a C2SP `index.bin` cannot name such a file. The seed rows join the
+  fragment throws at `build()`. No row tested a name over 32 bytes in this revision, since whether a mirror's
+  `index.bin` is fetched or built locally was still open on #160; revision 53 decides it and adds the row. The seed rows join the
   content-signature fixtures, beside the seed's entry cap, as 0.2 gates: `attachments/../x`, a duplicate entry, an
   extra entry, a case variant, a local-header name that differs from the central directory's, a first entry other
   than `seed.json` and a missing attachment are each `SEED_UNREADABLE`.
@@ -1523,6 +1657,26 @@ The probe decides first. When `id-RSASSA-PSS` is in `unsupportedOids()`, every P
 whatever its parameters, a SHA-1 one included. A verifier over the Conscrypt provider alone is such a case
 (Appendix A).
 
+**ECDSA range check** (revision 54, the maintainer's decision; #172). The curve probe decides first, as for PSS: a
+curve the provider does not support is `UNSUPPORTED`, never `INVALID`. Then, after the provider's `KeyFactory` has
+decoded the key and before `Signature` is called, the verifier decodes the signature's `ECDSA-Sig-Value` and answers
+`INVALID` unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1.
+- **n** is the order of the decoded key's own curve, `ECPublicKey.params.order`, so every curve the provider supports
+  is covered: P-256, P-384 and P-521, and the brainpool curves under BC (whether revokt's tests take BC is #175). A key whose order cannot be read is
+  `INVALID`.
+- **The `ECDSA-Sig-Value` profile:** a SEQUENCE of exactly two INTEGERs, with minimal definite lengths, each INTEGER
+  in minimal two's complement and positive, and no bytes after the SEQUENCE. Anything else is `INVALID`. This can be
+  stricter than the provider: SunEC verifies a negative INTEGER read as unsigned (checked on JDK 17.0.21, 21.0.13
+  and 27, Appendix A).
+- **Why:** SEC 1 §4.1.4 step 1, which ring's verifier also performs. The JDK's own check was missing from JDK 15 to
+  17.0.2 and in 18 GA (CVE-2022-21449), which within revokt's JVM 17+ target is 17.0.0 to 17.0.2 and 18 GA.
+- **High s** (s > n/2) stays accepted: the #163 review found Mozilla's `ct-logs` collection signature with s > n/2,
+  and SEC 1 and NSS accept it.
+- **Scope:** every standalone ECDSA signature that reaches the verifier: a TLS chain's links, the x5u chain's links
+  (§7.1) and the content signature after its raw-to-DER conversion. A composite ML-DSA + ECDSA signature verifies as
+  one provider operation, so its ECDSA component is the owning provider's responsibility (revision 55, the #160
+  comment); both owning providers range-check it (BC's `ECDSASigner`, and BoringSSL under Conscrypt; Appendix A).
+
 **From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
 signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
 OID unsupported when the provider has no service under that name. A named curve is probed separately: it is
@@ -1617,20 +1771,25 @@ defaults to the Kotlin engine (`formats = {V3, V4}`, `name = "kotlin"`). The
 updater builds `index.bin` itself for Remote Settings generations (full, deltas and their
 parentage, coverage), so every `GenerationFiles` is a directory image any C2SP reader accepts; the
 only engine-specific property is `format`. **`index.bin` consistency, verified by the loader before
-`prepare()` for every generation it did not build** (`MIRROR`, `SYSTEM`, a seed's rebuilt index being
-byte-compared instead): **selection equivalence**: for every log id and every timestamp (inclusive at both
+`prepare()` for every generation whose `index.bin` it reads rather than builds** (`SYSTEM`, a seed's rebuilt index being
+byte-compared instead; a `MIRROR` generation's index is built by the loader, §7.3, revision 53): **selection equivalence**: for every log id and every timestamp (inclusive at both
 ends, overlapping windows allowed), the set of filters the `index.bin` log directory names for that
 (log id, timestamp) must equal the set of referenced filters whose own coverage map contains it, i.e. every
 directory entry lies within its filter's window and every filter's window is exactly covered by its entries;
-a mismatch is `SyncOutcome.FAILED` with `INDEX_INCONSISTENT` (stage `INDEX`; `SEED_UNREADABLE` for a seed,
-`STORE_UNREADABLE` for a system cache) and nothing is installed. **Every `index.bin` revokt's loader reads, whatever its
-source, is at most 1 MiB, checked before it is parsed, and a mirror's `index.bin` fetch is capped there too** (the
-seed's cap, §6.5, applied to every source, revision 48; an injected engine's own reads are its concern), with the
-same outcome as a mismatch; a stored generation whose `index.bin` is over the cap is a failed load in the §6.5
-recovery chain (`STORE_UNREADABLE`). This is what makes the Kotlin engine's
+a mismatch installs nothing, and its outcome is per source: `STORE_UNREADABLE` for a system cache, and
+`SEED_UNREADABLE` for a seed's byte-compare (revision 53; the `INDEX_INCONSISTENT` this sentence named covered a
+fetched mirror index, and revokt now fetches none). **Every `index.bin` revokt's loader reads, whatever its
+source (a system cache's, a seed's, a stored generation's), is at most 1 MiB, checked before it is parsed; revokt
+never fetches an `index.bin`** (the seed's cap, §6.5, applied to every source, revision 48; a mirror has no `index.bin`
+fetch since revision 53; an injected engine's own reads are its concern), with the
+same outcome as a mismatch (`STORE_UNREADABLE` for a system cache, `SEED_UNREADABLE` for a seed); a stored generation whose `index.bin` is over the cap is a failed load in the §6.5
+recovery chain (`STORE_UNREADABLE`). **An `index.bin` the loader builds** (a Remote Settings or `MIRROR` generation's)
+that is over 1 MiB fails the install before the generation directory is written: `SyncOutcome.FAILED` with
+`INDEX_INCONSISTENT`, stage `INDEX` (revision 53), so the loader never writes a generation it could not reload (a
+mirror's coverage, which sizes its index, is unsigned). This is what makes the Kotlin engine's
 coverage-driven filter selection (§6.2, every filter consulted by its own coverage) equal to C2SP's
 `index.bin`-driven selection (upki binary-searches the log directory and loads only the filters it names)
-on every generation the suite admits; how `upki-mirror` writes overlapping windows and how `Index::check`
+on every generation the suite admits; how upki's `Index::write` writes overlapping windows and how `Index::check`
 treats them is a named 0.2 verification (Appendix A) before the suite's `MIRROR` leg lands, and a legitimate
 Mozilla generation (a full and its deltas sharing boundary timestamps) passes by construction. **A fetched generation whose format the engine does not list is
 `SyncOutcome.FAILED` with `DiagnosticCode.FORMAT_UNSUPPORTED`** (stage `PREPARE`), counts toward `consecutiveFailures`
@@ -1698,7 +1857,7 @@ list parses under §9.2 (otherwise it queries the items §9.2 keeps) and `PARSE_
 `DEFAULT` by decision. Generations: (i) Mozilla `SIGNED` v3 generations as served, both engines directly (no transcoder
 in the oracle path); (ii) `MIRROR` v4 generations as fetched from `upki.rustls.dev`; (iii) the v3
 generations transcoded to v4 by `revokt-oracle` (`upki-mirror`'s transcoder), a third leg that pins the
-transcoder; every generation passes the `index.bin` consistency check above before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
+transcoder; every generation whose `index.bin` revokt did not write passes the `index.bin` consistency check above before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
 engine-side type above is public from 0.1.
 
 ## 4. Public API (sketch, M1 surface)
@@ -2022,7 +2181,7 @@ remaining a subsequence.
 - `NOT_STARTED` is not a warning: a trust manager or `sslContext()` obtained before `start()` runs step 1 only until `start()` and counts `unevaluated[NOT_STARTED]` (creating trust managers before `start()` is the recommended main-thread pattern, so it cannot be a stuck alert).
 - R `CHANNEL_UNSET`: no `channel` configured while a CRLite source (a seed included) is. R `PLATFORM_TRUST_MISMATCH`: Android runtime with a non-Android `platformTrust`. R `STORAGE_UNSET`: `AndroidPlatformTrust` with no explicit `storage` (§3).
 - R: a `c2spMirror` URL with a query or a fragment (§7.3: every mirror URL is the base followed by a name).
-- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2, §6.5's index-name collision, and §7.3's manifest names), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
+- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2's over-cap built index, §6.5's index-name collision, and §7.3's manifest names), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
 
 ## 5. Trust manager [M1]
 
@@ -2049,7 +2208,7 @@ remaining a subsequence.
 | `EVENT_RING_CAPACITY` / `REJECTED_QUEUE_CAPACITY` | 64 / 4,096 | |
 | `MAX_TRUST_MANAGERS` | 16 | live instances per `Revokt`, builder-overridable in both directions, ≥ 1 (`limits { maxTrustManagers }`); live referents are counted through `WeakReference`, and before the cap throws every entry whose referent has cleared is evicted regardless of `ReferenceQueue` delivery, so a rebuilt client's dropped instance never counts |
 | `MAX_CERT_BYTES` | 262144 | per-certificate DER size (measured max over the seed corpus with margin), of `getEncoded()` before any parse and again of the bytes read (§5.3, §9.2); a larger certificate is a dropped candidate (`candidatesDropped`; leaf: `PARSE_FAILED(OVERSIZE)`); §9.2 fuzzes to the cap + 1 and asserts the over-cap behaviour |
-| `MAX_FILTER_BYTES`, `MAX_JSON_BYTES`, `MAX_X5U_BYTES` | 16 MiB, 4 MiB, 64 KiB | caps for **unsigned** bodies (mirror and system-cache files, the changeset JSON itself, x5u; a mirror's `index.bin` is capped at 1 MiB, §3.2); for a `SIGNED` attachment the cap is `min(attachment.size, MAX_FILTER_BYTES)` (hash and size both verified; a signed record declaring more is `SyncOutcome.FAILED` with `CAP_NEAR_LIMIT` (stage `ATTACHMENT`) and advances nothing: a 16 MiB freeze is recoverable by raising the cap, a crash loop from one bad signed record is not); enforced while inflating; bodies are fetched, verified and written **one at a time**, so heap peak is one body plus its decode |
+| `MAX_FILTER_BYTES`, `MAX_JSON_BYTES`, `MAX_X5U_BYTES` | 16 MiB, 4 MiB, 64 KiB | caps for **unsigned** bodies (mirror and system-cache files, the changeset JSON itself, x5u; a system cache's `index.bin` is read only up to 1 MiB, §3.2); for a `SIGNED` attachment the cap is `min(attachment.size, MAX_FILTER_BYTES)` (hash and size both verified; a signed record declaring more is `SyncOutcome.FAILED` with `CAP_NEAR_LIMIT` (stage `ATTACHMENT`) and advances nothing: a 16 MiB freeze is recoverable by raising the cap, a crash loop from one bad signed record is not); enforced while inflating; bodies are fetched, verified and written **one at a time**, so heap peak is one body plus its decode |
 | `MAX_MANIFEST_ENTRIES`, `MAX_CHANGESET_RECORDS`, `MAX_SYNC_BYTES` | 32, 256, 128 MiB | manifest cap over C2SP attachments to fetch; record cap per changeset after channel filtering; per-sync total bounds bandwidth and disk; a manifest or changeset over its cap is rejected before any body fetch |
 | `READONLY_POLL_INTERVAL` | 60 s | a read-only instance's pointer re-read and lock retry |
 | `MAX_BACKOFF` | 24 h | cap on honoured `Backoff`/`Retry-After` and on persisted `backoffUntilMillis`; computed failure backoff ≤ the 6 h poll interval |
@@ -2819,8 +2978,8 @@ values are names, never ordinals:
   (process death; no `meta.json`) is deleted by prune at the next `start()`; a sync-time `prepare()`/`activate()`
   throw and a self-check mismatch increment `storeFailures` and are `SyncOutcome.FAILED` (stage `PREPARE`, `ACTIVATE` or `SELF_CHECK`; cursor and watermark do not advance, so the same changeset is retried under backoff); a store write or pointer-flip failure during an install is `SyncOutcome.STORE_FAILED` (stage `STORE`, `storeFailures++`); "newest" is pointer order, never directory timestamp.
 **Order of an install** (an *install* anywhere in this document means this whole sequence): fetch, verify and write **one body at a time** (hash against the signed
-record or the manifest, write the blob unless the key exists, drop the body) → write the generation
-directory (`meta.json` last) → the §3.2 `index.bin` consistency check for a generation the loader did not build (`INDEX_INCONSISTENT`, stage `INDEX`) → `prepared = engine.prepare(files)` (validates and decodes into an inactive
+record or the manifest, write the blob unless the key exists, drop the body) → build `index.bin` (≤ 1 MiB, §3.2) → write the generation
+directory (`meta.json` last) → the §3.2 `index.bin` consistency check for a generation the loader did not build (a `SYSTEM` one; `STORE_UNREADABLE`, §3.2) → `prepared = engine.prepare(files)` (validates and decodes into an inactive
 state; the live generation is untouched) → **engine self-check on `prepared.query`** (deterministic,
 never probabilistic, every input named: the absent issuer hash is `SHA-256("revokt-self-check")`,
 incremented in its last byte until absent from every filter's index; the inside SCT is (`logId`, `low`)
@@ -2905,19 +3064,95 @@ schemas likewise); a verified changeset whose records fail validation is `SyncOu
 engine's own tree and tokenizer; duplicate keys and unpaired surrogates rejected; keys sorted by code
 point. **Content signature**: `mode` is read and must equal `p384ecdsa` (else `FAILED`, stage `SIGNATURE`); the algorithm is never derived from it; the attachment
 base URL pinned in `MozillaRemoteSettings`, never taken from the server root response. **x5u chain**:
-HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; `_expected` is validated as an integer before it enters a query string), `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal: SHA-256 or stronger, RSA ≥ 2048, P-256 or stronger, anything else `FAILED` (the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply); validity at verification time for the leaf
+HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; `_expected` is validated as an integer before it enters a query string), `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal (revision 54: Firefox's `AppTrustDomain` set): a signature is RSA PKCS#1 v1.5 or ECDSA with SHA-256, SHA-384 or SHA-512 (an ECDSA AlgorithmIdentifier with NULL or absent parameters, as mozilla::pkix reads it), or `id-RSASSA-PSS` whose parameters are byte for byte one of mozilla::pkix's three encodings (SHA-256, SHA-384 or SHA-512 with NULL hash parameters, MGF1 with the same hash, a salt length equal to the hash length, `trailerField` omitted for its default 1); a link's key is `rsaEncryption` of at least 2048 bits or `id-ecPublicKey` on P-256, P-384 or P-521, so an `id-RSASSA-PSS` key fails; anything else `FAILED` (`ALGORITHM`; the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply). This floor is the x5u chain's own: §3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged; validity at verification time for the leaf
 and every non-terminal link; for every non-leaf link below the terminal: basicConstraints `cA = TRUE`,
 `pathLenConstraint` honoured, subject name equal to the child's issuer (raw or canonical), keyUsage
-`keyCertSign` when present;
+`keyCertSign` when present (`KEY_USAGE`);
 links verified with the signed TBS algorithm; root SPKI hash in the pinned set (today one entry, the SPKI SHA-256 of
 `CN=root-ca-production-amo`, `3317FA45154AC7DA55694D3782316056471FC147C04AED3E03FFE99565B1E2E7`, which
 `MozillaRemoteSettings.DEFAULT` pins; certificate SHA-256 `C8A80E9A…A106DB`; both verified in Appendix A, revision 49;
-the set is additive while any seed references a root); **the terminal is a trust anchor**: the first certificate on the path whose SPKI is
-pinned, anything after it ignored; only its SPKI is checked, never its validity, CA bits, key usage
-or subject (mozilla::pkix semantics; the wrapper around a pinned key is attacker-choosable, so a
-check on it stops nothing, while root expiry would freeze every deployed client and seed); leaf EKU
-codeSigning; leaf SAN exactly `onecrl.content-signature.mozilla.org`. Any non-terminal certificate
-on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stage `X5U`). **Rollback guard**: high-water mark on
+the set is additive while any seed references a root); **the terminal is a trust anchor**: the first certificate after the leaf whose SPKI is
+pinned, anything after it ignored (a pinned SPKI on the leaf pins nothing, so a chain pinned only there is `FAILED`,
+`NOT_PINNED`; confirmed in revision 54: mozilla::pkix fails a pinned root used as the end entity with
+`ERROR_CA_CERT_USED_AS_END_ENTITY`, and rustls-webpki never takes the end entity as an anchor); only its SPKI is checked, never its validity, CA bits, key usage
+or subject. This is revokt's own rule, not Firefox's: `AppTrustDomain` matches the anchor by its whole DER and
+mozilla::pkix still checks it. Pinning the key alone keeps a re-issued root working, and the wrapper around a pinned
+key is attacker-choosable, so a check on it stops nothing, while root expiry would freeze every deployed client and
+seed. **Order:** the pin lookup runs first, over each certificate after the leaf as read leniently (§9.2's parser);
+the strict profile below then applies only to the links below the terminal, and the terminal is read for its SPKI
+alone. Leaf EKU
+codeSigning and never `id-kp-OCSPSigning` (`EKU`); leaf SAN exactly `onecrl.content-signature.mozilla.org` (`SAN`). Any non-terminal certificate
+on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stage `X5U`).
+
+**The chain follows mozilla::pkix** (revision 54, the maintainer's decision on #126: mozilla::pkix at Firefox
+`cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki 0.103.15 consulted and its divergences listed in Appendix A). Every failure is
+`SyncOutcome.FAILED`, and the parenthesis names the chain's failure reason. For every link below the terminal:
+- **DER as mozilla::pkix reads it** (`PARSE` for the certificate's outer structure, `EXTENSION` inside an
+  extension value; revision 55): in the outer structure, minimal tag and length headers; no indefinite length, the
+  TBS and the outer `signatureAlgorithm` included; no element the certificate grammar does not place (a TLV after the
+  SPKI other than the optional unique IDs, which are primitive, and `[3]`, a second SEQUENCE inside `[3]`, bytes after
+  an extension's `extnValue`); a minimally encoded serial; the `critical` BOOLEAN `00` or `FF`; zero unused bits in
+  the signature BIT STRING. Each extension value revokt reads (basicConstraints, keyUsage, extKeyUsage, subjectAltName,
+  nameConstraints, the leaf's embedded SCT list) is parsed first and to its end, and anything malformed is
+  `EXTENSION`: bytes after the value, a BOOLEAN other than `00` or `FF`, a non-minimal length, an empty keyUsage BIT
+  STRING (`03 00`) or one with no named-bit byte (`03 01 00`), an empty extKeyUsage SEQUENCE (`30 00`) or a non-OID
+  element in it, an unknown GeneralName tag. Only a well-formed value reaches the `SAN`, `EKU` and `KEY_USAGE` checks,
+  so a SAN with an unknown GeneralName tag is `EXTENSION`, not `SAN`. An empty `extnValue` is the understood-empty rule
+  below. The TLS feature is compared byte for byte and never parsed. Times are read
+  as mozilla::pkix reads them: `UTCTime` as `YYMMDDHHMMSSZ` and `GeneralizedTime` as `YYYYMMDDHHMMSSZ`, either type
+  for any year (Mozilla's `Content Signing Intermediate` uses GeneralizedTime `20150317000000Z`), a year of 1970 or
+  later, and notBefore ≤ notAfter. **What mozilla::pkix accepts and revokt accepts too, although DER or RFC 5280
+  forbids it:** an explicitly encoded v1 version (bug 1031093), an explicit DEFAULT FALSE for `critical` and for
+  `cA`, an empty Extensions SEQUENCE, a negative or zero serial, and a keyUsage BIT STRING without the minimal
+  named-bit encoding. This is the x5u chain's profile only: §9.2's TLS parser stays as lenient as the platforms.
+- **Version and names:** the version INTEGER is 0 to 3 (`PARSE` otherwise; 3 is v4), and `[3]` is read whatever the
+  version, an implicit v1 included, as mozilla::pkix does; an issuer name with no RDN fails (`NAME`).
+- **Outer algorithm** (`ALGORITHM`): the outer `signatureAlgorithm` equals the TBS `signature` as parsed algorithms,
+  with a NULL and an absent parameter comparing equal. The link is still verified with the signed TBS algorithm.
+- **SubjectPublicKeyInfo** (`ALGORITHM`), as mozilla::pkix's `CheckSubjectPublicKeyInfo`: zero unused bits in its
+  BIT STRING; `id-ecPublicKey` with a namedCurve OID only and an uncompressed point, the bytes after `04` exactly twice the
+  field length in bytes; `rsaEncryption` with NULL parameters (absent fails) and a minimally encoded positive modulus and
+  exponent.
+- **Extensions** (`EXTENSION`): an OID that occurs twice fails, whatever it is (RFC 5280's MUST NOT; stricter than
+  mozilla::pkix, which rejects only a repeated extension it understands, Appendix A); an understood extension with
+  an empty value fails, except `id-pkix-ocsp-nocheck`; a malformed basicConstraints or keyUsage on the leaf fails as
+  on every link; a `pathLenConstraint` above 127 fails, as mozilla::pkix's integer reader does. **The leaf's
+  embedded SCT list** (revision 55, as Firefox): when the leaf carries the extension, its `extnValue` is exactly one
+  OCTET STRING with nothing after it (`pkixbuild.cpp` lines 218 to 229 at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`,
+  `ExtractSignedCertificateTimestampListFromExtension`); anything else fails. The list's content is not read.
+- **Critical extensions** (`EXTENSION`): a critical extension outside mozilla::pkix's understood set
+  (`BackCert::RememberExtension`: keyUsage, subjectAltName, basicConstraints, nameConstraints, certificatePolicies,
+  policyConstraints, extKeyUsage, inhibitAnyPolicy, authorityInfoAccess, the TLS feature extension, the embedded SCT
+  list and qcStatements, and, when critical, `id-pkix-ocsp-nocheck` and the Netscape certificate type) fails on any
+  link. A critical Netscape certificate type is accepted only when basicConstraints and extKeyUsage are both present,
+  whose own checks then decide (mozilla::pkix does not read the type bits).
+- **TLS feature** (`EXTENSION`), enforced between the links below the terminal, as mozilla::pkix's
+  `CheckTLSFeatures`: when a non-leaf link below the terminal carries the TLS feature extension, its child carries one
+  with the same value, its `extnValue` compared byte for byte. The terminal's TLS feature is never read: the root is pinned, and a TLS feature there could only
+  add a constraint.
+- **Leaf basicConstraints:** `cA = TRUE` on the leaf fails (`LEAF_CA`; Firefox `ERROR_CA_CERT_USED_AS_END_ENTITY`,
+  webpki `CaUsedAsEndEntity`).
+- **EKU below the leaf** (`EKU`): every non-leaf link below the terminal that has an extKeyUsage includes codeSigning
+  (anyExtendedKeyUsage alone does not). The terminal's is never read.
+- **nameConstraints**, critical or not, as mozilla::pkix enforces them (`pkixbuild.cpp`, `pkixnames.cpp`), on every
+  non-leaf link below the terminal and checked against the leaf's one dNSName:
+  - a dNSName in no permitted dNSName subtree, when any permitted dNSName subtree is listed, or in an excluded one,
+    fails (`NAME_CONSTRAINTS`). Permitted applies per name type, so permitted subtrees of other types alone do not
+    restrict the dNSName;
+  - a subtree matches on label boundaries, ignoring ASCII case: a base without a leading dot covers the name and its
+    subdomains (`bigfoo.bar.com` is not under `foo.bar.com`), one with a leading dot only the subdomains, and the
+    empty base `""` matches every name, so it permits all when permitted and rejects all when excluded;
+  - a malformed or unsupported constraint fails (`EXTENSION`): an invalid dNSName base (an absolute `x.`, `.`, a
+    wildcard), an encoded `minimum` or `maximum`, an empty NameConstraints, an empty GeneralSubtrees, and any
+    directoryName subtree, which mozilla::pkix checks against the subject and revokt does not evaluate (fail closed).
+    Each GeneralSubtree is still parsed: an unknown GeneralName tag is malformed (`EXTENSION`), and an encoded
+    `minimum` or `maximum` fails whatever the form. Only the base of a form revokt does not evaluate is left
+    unevaluated: such a subtree cannot affect a leaf whose only name is a dNSName. An rfc822Name subtree has no
+    effect, as in mozilla::pkix: its fallback to the subject's emailAddress (`pkixnames.cpp` `SearchNames`) runs
+    only for a certificate with no subjectAltName, and the leaf must carry one.
+  - Only the leaf's name is checked; mozilla::pkix and webpki check every descendant (Appendix A).
+
+**Rollback guard**: high-water mark on
 the signed `last_modified` (`<ts>` of the verified payload, never the unsigned envelope `timestamp`), persisted in `updater.json`; older by less than `rollbackWindow`
 (default = `clockSkew`, 24 h; collection timestamps are server-assigned and monotone) may still
 install subject to the §6.3 coverage-monotonic rule, which applies only inside the window;
@@ -2952,7 +3187,11 @@ characters (32 bytes), since it is the one unsigned string that reaches a storag
 appended when it does not end in one, and `manifest.json` and every mirror file are fetched only from the base
 followed by their name (a `c2spMirror` URL with a query or a fragment throws at `build()`, §4). A manifest with any
 failing name or hash is rejected whole before any body is fetched or written: `SyncOutcome.FAILED` with
-`INDEX_INCONSISTENT`, stage `INDEX`, as for §6.5's name collision. **Bootstrap only.** A `MIRROR` or `SYSTEM` generation installs **only when
+`INDEX_INCONSISTENT`, stage `INDEX`, as for §6.5's name collision. **The index is built locally** (revision 53, the
+maintainer's decision, as `upki fetch` does): a mirror publishes only `manifest.json` and the filter files, and revokt
+never fetches an `index.bin` from it. The loader builds the generation's `index.bin` with its own index writer
+(§3.2) from each downloaded filter's coverage, under the generation's names, the derived name of a manifest name
+over 32 bytes included. **Bootstrap only.** A `MIRROR` or `SYSTEM` generation installs **only when
 the dataset has no generation of a higher trust class at all** (no seed, no stored `SIGNED`
 generation), its trust class is not below the dataset's `minTrustClass` while
 `outcome(UNSIGNED_DATA) == REJECT`, and its coverage passes §6.3; it is evicted by the first
@@ -3071,8 +3310,8 @@ tests; **live checks** are informational.
   the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
   disagreement fails the job.
-- **Content-signature fixtures** (0.2 gates, except the three items tagged [0.3], which need the §6.5 store or a `MIRROR` source; revision 49) with mutations; incremental fixtures; a seed with an expired signer
-  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); [0.3] a mirror generation whose `index.bin` names a log window absent from the filter's coverage → `FAILED`, `INDEX_INCONSISTENT`; [0.3] a mirror `index.bin` of 1 MiB + 1 byte → `FAILED`, `INDEX_INCONSISTENT`, before it is parsed (revision 48); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; signature
+- **Content-signature fixtures** (0.2 gates, except the three items tagged [0.3], which need the §6.5 store or a `SYSTEM` source; revision 49, the source revision 53) with mutations; incremental fixtures; a seed with an expired signer
+  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); [0.3] at `start()`, a system cache whose `index.bin` names a log window absent from the filter's coverage → not installed, `STORE_UNREADABLE`; [0.3] at `start()`, a system-cache `index.bin` of 1 MiB + 1 byte → not installed, `STORE_UNREADABLE`, before it is parsed (revision 48; a system cache since revision 53, which leaves a mirror no `index.bin` to fetch); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; signature
   over records with a tombstone merged vs not merged.
 - **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (c), (e), (f), (h) need the store, mirror, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
   `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
@@ -3089,7 +3328,48 @@ tests; **live checks** are informational.
   `keyCertSign`, an x5u URL on a non-allowlisted host, an x5u over 64 KiB, expired intermediate or
   leaf at live fetch → `CLOCK_SKEW`, expired leaf in seed → loads; a pinned SPKI as a non-terminal
   link → loads with the path truncated there; the pinned terminal expired, or wrapped in a
-  self-signed certificate with another subject → loads; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
+  self-signed certificate with another subject → loads; (revision 54, each in the leaf and in the intermediate where both apply) a
+  non-minimal length in the outer structure, a TLV after the SPKI, a second SEQUENCE inside `[3]`, bytes after an
+  `extnValue`, an indefinite-length TBS or outer `signatureAlgorithm`, a constructed unique ID, a `UTCTime` without
+  seconds, a time with a fraction or an offset, a year before 1970, notBefore after notAfter, a `critical` BOOLEAN of
+  `01` and a signature BIT STRING with unused bits → `FAILED` (`PARSE`); (revision 55) trailing bytes inside an
+  extension value revokt reads, a BOOLEAN `cA` of `01`, a non-minimal length inside basicConstraints, keyUsage,
+  extKeyUsage, subjectAltName or nameConstraints, an empty keyUsage BIT STRING (`03 00`) or one with no named-bit byte (`03 01 00`), an empty extKeyUsage
+  SEQUENCE (`30 00`), an extKeyUsage with a non-OID element, and a SAN with an unknown GeneralName tag → `EXTENSION`
+  (the SAN case not `SAN`); a GeneralizedTime before 2050
+  (Mozilla's intermediate's `20150317000000Z`), an explicitly encoded v1 version, an explicit FALSE `critical` or `cA`,
+  an empty Extensions SEQUENCE, a zero or negative serial and a keyUsage with a non-minimal named-bit encoding →
+  loads; a serial with a redundant leading `00` or `FF`, or an empty serial (`02 00`), → `PARSE`; a version INTEGER
+  of 4 → `PARSE`, a version of 3, which is v4 → loads, and an implicit v1 with `[3]` → loads; an issuer with no RDN → `NAME`;
+  an outer `signatureAlgorithm` that differs from the TBS one → `ALGORITHM`, and one that differs only by a NULL
+  against an absent parameter → loads; an EC key with explicit curve parameters, a compressed point or a point one
+  byte short, an `rsaEncryption` key with absent parameters or with NULL parameters that
+  have content, a modulus with a redundant leading `00`, and an SPKI BIT
+  STRING with unused bits → `ALGORITHM`; an ECDSA signature AlgorithmIdentifier with NULL parameters → loads; an
+  extension OID twice, critical or not and understood or not → `EXTENSION`; an empty subjectAltName value →
+  `EXTENSION`, and an empty critical `id-pkix-ocsp-nocheck` → loads; a `pathLenConstraint` of 128 → `EXTENSION`; an
+  unknown critical extension → `EXTENSION`, and the same extension not critical → loads; a critical
+  certificatePolicies → loads; a critical Netscape certificate type with basicConstraints and extKeyUsage → loads,
+  without extKeyUsage → `EXTENSION`, and with an empty value → `EXTENSION`, while an empty non-critical Netscape certificate type → loads; (revision 55) a leaf whose embedded SCT
+  list `extnValue` is an OCTET STRING followed by a byte, or is not an OCTET STRING → `EXTENSION`, and a well-formed
+  one → loads; an intermediate with the TLS feature extension over a leaf without it, or with
+  another value → `EXTENSION`, and the same value on both → loads; a terminal with the TLS feature over an
+  intermediate without it → loads; a leaf with `cA = TRUE` → `LEAF_CA`; a
+  malformed leaf basicConstraints or keyUsage → `EXTENSION`; a leaf extKeyUsage of codeSigning and
+  `id-kp-OCSPSigning` → `EKU`; an intermediate extKeyUsage without codeSigning, or of anyExtendedKeyUsage alone →
+  `EKU`, an intermediate with no extKeyUsage → loads, and a terminal extKeyUsage without codeSigning → loads; a PSS
+  link whose salt is not the hash length, whose MGF1 hash differs from the message hash, whose hash is SHA-224, that
+  encodes `trailerField` explicitly, or whose hash parameters are absent → `ALGORITHM`; an `id-RSASSA-PSS` key on a
+  link → `ALGORITHM`; a chain whose only pinned SPKI is the leaf's → `NOT_PINNED`; the pinned terminal with a
+  non-minimal length → loads; Mozilla's committed chain → loads, its intermediate's non-critical nameConstraints
+  (`content-signature.mozilla.org` and `.content-signature.mozilla.org`) passing for the leaf; nameConstraints on the
+  intermediate, critical or not: a permitted `""` → loads, an excluded `""` → `NAME_CONSTRAINTS`, a permitted
+  `.onecrl.content-signature.mozilla.org` → `NAME_CONSTRAINTS` (a leading dot covers subdomains only), a permitted
+  `ignature.mozilla.org` (a suffix off a label boundary) → `NAME_CONSTRAINTS`, a permitted
+  `CONTENT-SIGNATURE.MOZILLA.ORG` → loads, an excluded `mozilla.org` → `NAME_CONSTRAINTS`, a permitted rfc822Name
+  subtree alone → loads, a leaf outside the permitted subtree → `NAME_CONSTRAINTS`, an encoded `minimum` →
+  `EXTENSION`, a wildcard or absolute base → `EXTENSION`, an empty NameConstraints → `EXTENSION`, and a directoryName
+  subtree → `EXTENSION`; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
   falls to `previous`, `storeFailures = 1`; a crash before `meta.json` leaves an incomplete directory
   that prune deletes; a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → migrates within one `READONLY_POLL_INTERVAL`, `storageFallback = false`, the in-memory generation on disk; an empty
   directory → `storeFailures = 0`; a `MIRROR` `meta.json` reloads as `MIRROR`; a `meta.json` with the
@@ -3107,7 +3387,11 @@ tests; **live checks** are informational.
   are equal ignoring ASCII case (`a.filter`, `A.FILTER`), or a file whose `hash` is 63 or 65 hex characters or holds a
   non-hex character → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched and nothing written (revision
   52); a `c2spMirror` URL without a trailing `/` → `manifest.json` and each body fetched from the URL, `/` and the
-  name; a `c2spMirror` URL with a query or a fragment → `build()` throws `IllegalArgumentException`; (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
+  name; a `c2spMirror` URL with a query or a fragment → `build()` throws `IllegalArgumentException`; a manifest name
+  of 33 bytes → installs under its derived name, its body fetched from the base followed by the manifest name, no
+  `index.bin` fetched, and the locally built `index.bin` naming the derived name (revision 53); a mirror whose
+  coverage would make the built `index.bin` 1 MiB + 1 byte → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no
+  generation directory written (revision 53); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
   `start()` throws on both platforms; stored `MIRROR` with coverage newer than the seed → seed
   installed, `trustClass = SIGNED`, the `MIRROR` directory pruned; stored `SIGNED` newer than the seed
   → seed skipped; corrupt `live` with an evicted `MIRROR` still on disk → recovery goes to seed, never
@@ -3150,7 +3434,12 @@ tests; **live checks** are informational.
   parameters included; a SHA-256 message hash with MGF1 over SHA-1, which the JDK verifies; a mask generation
   function other than `id-mgf1`; each `UNSUPPORTED` instead under a provider without `id-RSASSA-PSS`); raw-to-DER
   edge cases; an off-curve point
-  on a supported OID → `INVALID`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
+  on a supported OID → `INVALID`; [0.2, #172] ECDSA range (revision 54), on P-256, P-384 and P-521, and, gated on #175
+  (the BC dependency decision; revision 55), on brainpoolP256r1 and brainpoolP384r1 under BC: r or s of 0, of n and of n + 1 → `INVALID` before `Signature` is
+  called; an ECDSA signature on a curve the probe marks unsupported → `UNSUPPORTED`, whatever its r and s; r = s = 0, the CVE-2022-21449 form, → `INVALID` against a stub provider that answers `VERIFIED` to every
+  signature, so the row tests revokt's check and not the JDK's; an `ECDSA-Sig-Value` with trailing bytes, a negative
+  INTEGER, a redundant leading `00`, a non-minimal length or a missing s → `INVALID`; a key whose curve order cannot be
+  read → `INVALID`; a valid signature rewritten to its high s (n − s) → `VERIFIED`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
 - **Parser corpus** and the §9.2 differential parser oracle; **Android instrumented** (API 26, 31,
   34, 36) including the PKIX fallback (the jvmMain `PkixPathBuilderFallback` through ojluni, JVM-tested in 0.2), the
   null-host extension-call probe and the §9.2 corpus replay against the
@@ -3975,9 +4264,10 @@ justified in writing.
   so an unsigned manifest bounds neither heap nor disk nor metered bandwidth; its names are checked and a body is
   fetched only from the configured mirror URL followed by a checked name (§7.3), so an unsigned name never names a
   path outside its generation directory or another URL;
-  x5u allowlisted, capped and path-validated; the parser is at least as lenient as the platforms,
+  x5u allowlisted, capped and path-validated, following mozilla::pkix's chain checks (§7.1, revision 54); the
+  TLS parser is at least as lenient as the platforms,
   verified differentially (§9.2), and `PARSE_FAILED` applies to the leaf only.
-- Crypto never implemented in Kotlin except the raw-to-DER ECDSA conversion and the §9.2 profile's EC on-curve check (public field arithmetic over P-256, P-384 and P-521, no secret data); `UNSUPPORTED` is decided
+- Crypto never implemented in Kotlin except the raw-to-DER ECDSA conversion, the `ECDSA-Sig-Value` decode and the r and s range comparison (§3, revision 54) and the §9.2 profile's EC on-curve check (public field arithmetic over P-256, P-384 and P-521, no secret data); `UNSUPPORTED` is decided
   by a startup probe, never by a server-chosen exception; provider exceptions never escape the
   trust manager.
 - Privacy: no per-connection lookups. Blast radius mitigated by `Enforcement.OBSERVE`, `shadowPolicy`, the runtime
@@ -4000,7 +4290,7 @@ APIs outside the promise, the growability contract in §4.
 |---|---|---|
 | 0.1 | engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3; the walker fuzzer itself is 0.2, with the walker); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8 (gated direction; D8 gap reported)); JSON tree and canonical JSON (§7.1; the content-signature payload builder is 0.2); clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; oracle CI | 5 weeks |
 | 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists; `start()` over an empty or throwing default trust store succeeds, and `evaluator.evaluate` throws `IllegalStateException` until an index exists; `sync()`, `syncAsync()` and `syncBlocking()` are internal and the updater syncs only on its schedule, while `SyncResult`, `SyncOutcome` and `SyncStage` ship public; each source's `FetcherTls` carries the platform `fetcherDelegate` only, so the §8 fetcher policy does not run in 0.2); candidate index and walker per §5.1, the PKIX fallback (the jvmMain `PkixPathBuilderFallback`, which Android also runs through ojluni, tested on the JVM; the Android instrumented run is 0.3), the §9.2 read fallback in the JVM binding, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3) with the §9 `Rule` model's [0.2] tests; **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation (the §9 content-signature fixtures less the three tagged [0.3]); CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its Android and OkHttp fetcher halves; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
-| 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2 (`BLOCKED_BY_SELF`, `MIRROR`, and the Android and OkHttp fetcher halves); the §9 content-signature fixtures tagged [0.3] (the restart with the clock behind, and the two mirror `index.bin` items); caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; the fetcher trust managers (`fetcherTrustManager` and the per-source instances in `FetcherTls`) with the §8 fetcher policy, `FETCHER_TRUST_UNAVAILABLE` and the `BLOCKED_BY_SELF` hold; public `sync()`, `syncAsync()` and `syncBlocking()`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `shadowPolicy`, `status()` and `state`, with the §9 `Rule` model's [0.3] tests; Android instrumented suite including the PKIX fallback, the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (revision 38's Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
+| 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2 (`BLOCKED_BY_SELF`, `MIRROR`, and the Android and OkHttp fetcher halves); the §9 content-signature fixtures tagged [0.3] (the restart with the clock behind, and the two system-cache `index.bin` items); caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; the fetcher trust managers (`fetcherTrustManager` and the per-source instances in `FetcherTls`) with the §8 fetcher policy, `FETCHER_TRUST_UNAVAILABLE` and the `BLOCKED_BY_SELF` hold; public `sync()`, `syncAsync()` and `syncBlocking()`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `shadowPolicy`, `status()` and `state`, with the §9 `Rule` model's [0.3] tests; Android instrumented suite including the PKIX fallback, the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (revision 38's Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
 
 About 14 weeks. **M2** (0.4, then 1.0): preloading as a second candidate set, exhaustive re-walk on L1/L2
 hits, OneCRL including anchors, denylist, CRLSet, `NOT_ENROLLED` split, the §5.2 residual closed,
@@ -4079,10 +4369,15 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
 - Filters begin `03 00` (v3) on both channels; `default` 6,006,419 B, `compat` 1,574,015 B.
 - Firefox: `crlite_channel` `"compat"` on Android; `crlite_mode` 2; `crlite_timestamps_for_coverage` 1;
   OCSP fallback when CRLite is stale or absent.
-- C2SP `upki-revocation@v1.0.0`: the spec says v4; `clubcard-crlite` (the crate upki depends on, `bincode` feature) decodes version bytes 3 and 4, so upki reads Mozilla's v3 filters as served (verified 2026-10-22 in rustls/upki `Cargo.toml` and clubcard-crlite `Encoding::read`); aggregation over covering filters only; selection goes through `index.bin`'s log directory (`Index::check` binary-searches it per SCT and loads only the named filters). **0.2 verification, open**: how `upki-mirror` writes overlapping windows (a full and its deltas sharing boundary timestamps) and how `Index::check` treats overlapping directory entries; the §3.2 selection-equivalence check is stated so that either representation passes.
+- C2SP `upki-revocation@v1.0.0`: the spec says v4; `clubcard-crlite` (the crate upki depends on, `bincode` feature) decodes version bytes 3 and 4, so upki reads Mozilla's v3 filters as served (verified 2026-10-22 in rustls/upki `Cargo.toml` and clubcard-crlite `Encoding::read`); aggregation over covering filters only; selection goes through `index.bin`'s log directory (`Index::check` binary-searches it per SCT and loads only the named filters). **0.2 verification, open**: how upki's `Index::write` writes overlapping windows (a full and its deltas sharing boundary timestamps) and how `Index::check` treats overlapping directory entries; the §3.2 selection-equivalence check is stated so that either representation passes.
 - C2SP `upki-revocation@v1.0.0` filenames, read 2026-11-04 at the pinned commit `7e6ded4` (`upki-revocation.md`, "Revocation cache directory layout", "Header" and "Filename table"): filter filenames "MUST be between 1 and 32 bytes long and MUST consist only of the ASCII characters `A`–`Z`, `a`–`z`, `0`–`9`, hyphen (`-`), period (`.`), and underscore (`_`)"; "The names `.` and `..` MUST NOT be used"; an index naming a file that violates these is malformed; each name slot is 32 bytes, zero-padded; `num_filenames` limits an index to 65535 files. The spec states no uniqueness rule for filenames, does not reserve `index.bin` as a filter name, and sets no size cap on `index.bin`: revokt's derived names (§6.5), its `index.bin` reservation (§6.3) and its 1 MiB cap (§3.2) are its own rules (revision 48), as are a mirror manifest's checks of reserved names and of uniqueness ignoring ASCII case, and its ban on a trailing `.` (§7.3, revision 52). `C2spIndex.isFilename` implements exactly the filename rule.
 - `upki.rustls.dev`: GitHub Pages, `default` only, v4 transcode; `upki-mirror` verifies the
-  attachment hash, not the content signature. upki FFI: three functions; no Android prebuilt.
+  attachment hash, not the content signature. `upki-mirror` writes only `manifest.json` and the filter files;
+  `upki fetch` builds `index.bin` locally from the manifest's files in its cache directory (v1.0.1
+  `upki/src/revocation/fetch.rs`, `PlanStep::SaveIndex` → `Index::write`, read 2026-11-06 at tag v1.0.1, commit
+  `9821cce`; `upki-mirror` there names no `index.bin`). For a filename over 32 bytes, `Index::write` returns no
+  index; revokt instead gives the file its §6.5 derived name
+  and builds the index under it (§7.3, revision 53). upki FFI: three functions; no Android prebuilt.
   `rustls_upki::Policy` defaults: `missing_data = Error`, `cert_not_covered = Allowed`, `cert_has_no_scts = Allowed`.
 - **Producer key bytes** (`mozilla/crlite` `main`): `PrepareSetMember` in `go/storage/certdatabase.go` (about line 278) calls
   `types.NewSerialFromCertificate`, which unmarshals the raw TBS with Go `encoding/asn1` into a
@@ -4393,6 +4688,86 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
   outside the count (their issuer is not an index issuer). crt.sh's server certificate (CN=crt.sh, Sectigo) had expired
   on 2026-06-21, and its `ca.last_not_after` showed no update after 2026-10-24 (both seen on 2026-10-29), so CAs were
   selected by key, not by recorded activity.
+- **Revision 54, the ECDSA range check** (§3, #172): SEC 1 v2 §4.1.4 ("Verifying Operation") step 1 rejects a
+  signature unless r and s are integers in [1, n − 1]. CVE-2022-21449 is the JDK skipping it, so that r = s = 0
+  verified under any key.
+  - **Affected versions:** the reporter's write-up (Neil Madden, "Psychic Signatures in Java", 2022-04-19, read
+    2026-11-07) gives Java 15 to 18 before the April 2022 Critical Patch Update, since JDK 15 rewrote ECDSA in Java;
+    the 15 to 18 range rests on it. Oracle's advisory (`cpuapr2022.html`) still lists "Oracle Java SE: 17.0.2, 18"
+    in its risk matrix; its revision log records Rev 2 (2022-04-21), "Updated the affected versions for
+    CVE-2022-21449", and Rev 4, "Note Removed". NVD (CVE-2022-21449, read 2026-11-07) lists only the then-supported
+    versions: "Oracle Java SE: 17.0.2 and 18; Oracle GraalVM Enterprise Edition: 21.3.1 and 22.0.0.2". The fix is in
+    17.0.3 and 18.0.1. Within revokt's JVM 17+ target that is 17.0.0 to 17.0.2 and 18 GA. Every JDK revokt tests on
+    (17.0.21, 21, 25 and 27) has the fix; revokt checks the range itself, so neither an older JDK nor an injected
+    provider can bring the gap back.
+  - **SunEC reads a negative INTEGER as unsigned** (checked 2026-11-07 on Temurin 17.0.21, 21.0.13 and 27 with a
+    single-file Java program, not committed): for 20 P-256 `SHA256withECDSA` signatures each, an r re-encoded without
+    its required leading `00`, so that it reads as negative, still verified (20 of 20 on each JDK), while an r with a
+    redundant leading `00` did not (0 of 20). revokt's profile rejects both, so it is stricter than SunEC there.
+  - **High s:** the #163 review found Mozilla's `ct-logs` collection signature with s > n/2; SEC 1 and NSS accept a
+    high s, so revokt does too.
+  - **Composite owners range-check their ECDSA component** (revision 55, §3), read at each project's main branch on
+    2026-11-07, not at the versions revokt tests:
+    - BC: bc-java `core/src/main/java/org/bouncycastle/crypto/signers/ECDSASigner.java` `verifySignature` returns
+      false unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1 ("r in the range [1,n-1]");
+    - BoringSSL: `crypto/fipsmodule/ecdsa/ecdsa.cc.inc` lines 74 to 81 reject a zero r or s (`ec_scalar_is_zero`),
+      and `crypto/fipsmodule/ec/scalar.cc.inc` `ec_scalar_from_bytes` (lines 73 to 85) rejects a value ≥ n.
+- **Revision 54, the x5u chain follows mozilla::pkix at Firefox `cac25a6fa321b0051932359b84c4e2fe3caabdc5`**
+  (tag `FIREFOX_BETA_161_BASE`, 2026-11-05), with rustls-webpki 0.103.15 consulted, read 2026-11-07 (Firefox through
+  the GitHub contents API; webpki from the local cargo registry):
+  - `pkixcert.cpp` `BackCert::RememberExtension` understands keyUsage, subjectAltName, basicConstraints,
+    nameConstraints, certificatePolicies, policyConstraints, extKeyUsage, inhibitAnyPolicy, authorityInfoAccess, the
+    TLS feature extension, the embedded SCT list and qcStatements, plus `id-pkix-ocsp-nocheck` (whose value may be
+    empty) and the Netscape certificate type only when critical. Any other critical extension is
+    `ERROR_UNKNOWN_CRITICAL_EXTENSION` (`pkixder.h` `OptionalExtensions`, and `pkixcert.cpp` line 161 for the
+    Netscape type, understood only when basicConstraints and extKeyUsage are both present). An understood
+    extension with an empty value is `ERROR_EXTENSION_VALUE_INVALID`.
+  - `pkixder.h`: `Boolean` takes `00` or `FF` only; `OptionalBoolean` accepts an explicit FALSE; `OptionalExtensions`
+    accepts an empty Extensions SEQUENCE (bug 997994); `CertificateSerialNumber` accepts a negative or zero serial;
+    `OptionalInteger` reads 0 to 127 only, which bounds `pathLenConstraint`. `pkixder.cpp` `OptionalVersion` accepts
+    0 to 3 and an explicitly encoded v1 (bug 1031093); `TimeChoice` reads `YYMMDDHHMMSSZ` and `YYYYMMDDHHMMSSZ`
+    for either type, with no year rule between them, and rejects a year before 1970. `pkixcert.cpp` parses the
+    extensions of v1 and v2 certificates as of v3. `pkixcheck.cpp` `ParseValidity` rejects notBefore > notAfter (line 170), and
+    `CheckKeyUsage` reads the keyUsage bits without requiring the minimal named-bit encoding.
+  - `pkixcheck.cpp`: `ERROR_SIGNATURE_ALGORITHM_MISMATCH` compares the parsed outer and TBS algorithms, so a NULL and
+    an absent parameter are equal (line 82); `ERROR_EMPTY_ISSUER_NAME` for an issuer with no RDN (line 143);
+    `ERROR_CA_CERT_USED_AS_END_ENTITY` (line 705); `CheckExtendedKeyUsage` requires the purpose in every present
+    extKeyUsage, anyExtendedKeyUsage not counting, and rejects `id-kp-OCSPSigning` in an end entity (line 864);
+    `CheckSubjectPublicKeyInfo` takes a namedCurve P-256, P-384 or P-521 with an uncompressed point of exact length,
+    or `rsaEncryption` with NULL parameters and positive modulus and exponent, and a BIT STRING without unused bits;
+    `CheckTLSFeatures` (line 885) requires a child to carry its issuer's TLS feature value.
+  - `pkixder.cpp` accepts `id-RSASSA-PSS` only with one of three parameter encodings, matched byte for byte (lines
+    186 to 250, NULL hash parameters and no explicit `trailerField`), and NULL or absent parameters for the other
+    signature algorithms (line 259).
+  - `pkixbuild.cpp` checks an issuer's nameConstraints whenever they are present, critical or not (line 173), and
+    `pkixnames.cpp` matches a dNSName subtree on label boundaries, ignoring case, with `""` matching every name; it
+    rejects an empty NameConstraints, an encoded `minimum` or `maximum` and an invalid base, and applies a permitted
+    subtree only to names of its own type.
+  - **Revision 55:** at the same commit, `pkixbuild.cpp` lines 218 to 229 extract an end entity's embedded SCT list
+    with `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` (lines 312 to 322:
+    `ExpectTagAndGetValueAtEnd(extnValue, OCTET_STRING, …)`), and a failure fails every path through the
+    certificate, as revision 46 recorded at `86136a5`.
+  - **webpki's divergences**, consulted and not followed: its understood critical set is only id-ce 15, 17, 19, 30, 31
+    and 37 (keyUsage, subjectAltName, basicConstraints, nameConstraints, cRLDistributionPoints, extKeyUsage;
+    `cert.rs` lines 302 to 317); it rejects any certificate with unique IDs (`cert.rs` line 98); it does not require
+    keyCertSign on a CA, reading keyUsage only for CRL checks; it requires v3 (`UnsupportedCertVersion`); it compares
+    the outer and TBS algorithms by bytes (`SignatureAlgorithmMismatch`); and it checks every descendant's names
+    against nameConstraints.
+  - **Differences from mozilla::pkix that remain, each by §7.1's own text:** the terminal is its pinned SPKI only
+    (Firefox matches the root's DER and checks it), so the terminal's nameConstraints are never read, and neither is its
+    TLS feature, which Firefox also checks against the anchor's child; the path is the
+    x5u order with no depth cap (both references build by name, at most six sub-CAs); name chaining also accepts the
+    canonical form; the leaf SAN is exactly one dNSName and its EKU must be present; RSA size counts significant bits
+    (Firefox rounds to bytes); a seed's chain validity is checked at its signed time; links are not checked against
+    OneCRL; nameConstraints are checked against the leaf's name only, where mozilla::pkix and webpki check every
+    descendant.
+  - **Stricter than mozilla::pkix:** any repeated extension OID fails (RFC 5280's MUST NOT), where mozilla::pkix
+    rejects only a repeated extension it understands; a nameConstraints with a directoryName subtree fails closed,
+    where mozilla::pkix checks it against the subject. (mozilla::pkix's check of the subject's emailAddress against
+    rfc822Name subtrees runs only for a certificate with no subjectAltName, so it cannot apply to the leaf, which
+    must carry one.) Mozilla's `Content Signing Intermediate` carries a
+    non-critical nameConstraints with two dNSName subtrees only (`content-signature.mozilla.org` and
+    `.content-signature.mozilla.org`), which the leaf satisfies.
 - Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
   2026-10-30: `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` reads the SCT extension's
   `extnValue` with `der::ExpectTagAndGetValueAtEnd(extnValue, der::OCTET_STRING, …)`, which requires the tag `0x04`
