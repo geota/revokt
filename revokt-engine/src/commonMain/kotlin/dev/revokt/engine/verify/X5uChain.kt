@@ -94,54 +94,16 @@ internal class X5uPath private constructor(
         ): X5uChainResult {
             require(chain.isNotEmpty()) { "an x5u chain has at least the leaf" }
             val certs = ArrayList<ParsedCertificate>()
-            var terminal = -1
-            for ((i, der) in chain.withIndex()) {
-                val parsed =
-                    when (val r = CertificateParser.parse(der)) {
-                        is CertificateParse.Parsed -> r.certificate
-
-                        is CertificateParse.Failed -> return failed(
-                            X5uChainFailure.PARSE,
-                            i,
-                            "${r.reason}: ${r.detail}",
-                        )
-                    }
-                certs.add(parsed)
-                if (i > 0 && parsed.rawSpki().toByteString().sha256() in pinned) {
-                    terminal = i
-                    break
-                }
-            }
-            if (terminal <
-                0
-            ) {
-                return failed(X5uChainFailure.NOT_PINNED, chain.lastIndex, "no pinned SPKI after the leaf")
-            }
-            val windows = ArrayList<LongRange>()
+            parseToTerminal(chain, pinned, certs)?.let { return it }
+            val terminal = certs.lastIndex
+            val windows = ArrayList<LongRange>(terminal)
             for (i in 0 until terminal) {
                 val c = certs[i]
                 (link(c, i) ?: if (i == 0) leaf(c) else issuer(certs, i))?.let { return it }
                 windows +=
-                    DerTimes.window(c.tbsBytes, c.tbs.validity) ?: return failed(X5uChainFailure.PARSE, i, "validity")
+                    DerTimes.window(c.tbsBytes, c.tbs.validity) ?: return failed(X5uChainFailure.PARSE, i, "times")
             }
-            for (i in 0 until terminal) {
-                val c = certs[i]
-                val checked =
-                    verifier.verifyClassified(
-                        c.tbs.signature.bytes(c.tbsBytes),
-                        certs[i + 1].rawSpki(),
-                        c.tbsBytes,
-                        c.envelope.signature,
-                    )
-                if (checked.result != VerifyResult.VERIFIED) {
-                    return failed(
-                        X5uChainFailure.SIGNATURE,
-                        i,
-                        "${checked.result} under certificate ${i + 1}",
-                        checked.error,
-                    )
-                }
-            }
+            signatures(certs, verifier)?.let { return it }
             return X5uChainResult.Valid(X5uPath(certs.subList(0, terminal).toList(), windows))
         }
     }
@@ -217,6 +179,49 @@ internal fun checkValidity(
         if (at !in window) return X5uValidity.ClockSkew(i, "$at outside $window")
     }
     return X5uValidity.Valid
+}
+
+/**
+ * Parses [chain] into [certs] up to and including the terminal, the first certificate after the leaf whose SPKI SHA-256
+ * is in [pinned]; nothing after it is parsed. Null when the terminal was found.
+ */
+private fun parseToTerminal(
+    chain: List<ByteArray>,
+    pinned: Set<ByteString>,
+    certs: MutableList<ParsedCertificate>,
+): X5uChainResult.Failed? {
+    for ((i, der) in chain.withIndex()) {
+        val parsed =
+            when (val r = CertificateParser.parse(der)) {
+                is CertificateParse.Parsed -> r.certificate
+                is CertificateParse.Failed -> return failed(X5uChainFailure.PARSE, i, "${r.reason}: ${r.detail}")
+            }
+        certs.add(parsed)
+        if (i > 0 && parsed.rawSpki().toByteString().sha256() in pinned) return null
+    }
+    return failed(X5uChainFailure.NOT_PINNED, chain.lastIndex, "no pinned SPKI after the leaf")
+}
+
+/** Each link of [certs] below the terminal (the last) verified under the next one's SPKI, leaf first. */
+private fun signatures(
+    certs: List<ParsedCertificate>,
+    verifier: SignatureVerifier,
+): X5uChainResult.Failed? {
+    for (i in 0 until certs.lastIndex) {
+        val c = certs[i]
+        val issuerSpki = certs[i + 1].rawSpki()
+        val checked =
+            verifier.verifyClassified(
+                c.tbs.signature.bytes(c.tbsBytes),
+                issuerSpki,
+                c.tbsBytes,
+                c.envelope.signature,
+            )
+        if (checked.result != VerifyResult.VERIFIED) {
+            return failed(X5uChainFailure.SIGNATURE, i, "${checked.result} under certificate ${i + 1}", checked.error)
+        }
+    }
+    return null
 }
 
 private fun failed(
@@ -413,11 +418,8 @@ private object Understood {
             val accepted = ACCEPTED.any(::isOid)
             val enforced = ENFORCED.any(::isOid)
             if ((accepted || enforced) && e.value.length == 0) return "an empty ${e.oidDotted}"
-            if (!e.critical || accepted || isOid(OCSP_NOCHECK) ||
-                (isOid(NETSCAPE_CERT_TYPE) && backsNetscape(c))
-            ) {
-                continue
-            }
+            val alsoUnderstood = isOid(OCSP_NOCHECK) || (isOid(NETSCAPE_CERT_TYPE) && backsNetscape(c))
+            if (!e.critical || accepted || alsoUnderstood) continue
             return "${if (enforced) "an unenforced" else "an unknown"} critical ${e.oidDotted}"
         }
         return null
@@ -439,6 +441,7 @@ private const val BOOLEAN = 0x01
  * its month and year, seconds below 60, the year 1970 or later, and `notBefore ≤ notAfter`. The parser's lenient
  * [dev.revokt.engine.parse.DerTime] reads more than this; nothing it reads beyond is a DER time.
  */
+@Suppress("MagicNumber") // the field positions and ranges of X.680 times, and days_from_civil's constants
 private object DerTimes {
     private const val UTC_DIGITS = 12
     private const val GENERALIZED_DIGITS = 14
@@ -458,7 +461,6 @@ private object DerTimes {
     }
 
     /** The time TLV [tlv] (UTCTime or GeneralizedTime, which the parser checked) in epoch milliseconds, or null. */
-    @Suppress("MagicNumber") // the field positions and ranges of X.680 §46-47 times
     private fun millis(
         b: ByteArray,
         tlv: Span,
@@ -466,27 +468,38 @@ private object DerTimes {
         val utc = b[tlv.start].toInt() == DerTime.UTC_TIME
         val digits = if (utc) UTC_DIGITS else GENERALIZED_DIGITS
         if (tlv.length != digits + 3 || b[tlv.end - 1].toInt() != 'Z'.code) return null
-        val pairs = IntArray(digits / 2)
-        for (k in pairs.indices) {
-            val hi = b[tlv.start + 2 + 2 * k] - '0'.code.toByte()
-            val lo = b[tlv.start + 3 + 2 * k] - '0'.code.toByte()
-            if (hi !in 0..9 || lo !in 0..9) return null
-            pairs[k] = hi * 10 + lo
-        }
-        val year = if (utc) (if (pairs[0] < UTC_PIVOT) 2000 else 1900) + pairs[0] else pairs[0] * 100 + pairs[1]
+        val p = pairs(b, tlv.start + 2, digits / 2) ?: return null
+        val year = if (utc) (if (p[0] < UTC_PIVOT) 2000 else 1900) + p[0] else p[0] * 100 + p[1]
         val f = if (utc) 1 else 2
-        val (month, day, hour, minute, second) =
-            listOf(
-                pairs[f],
-                pairs[f + 1],
-                pairs[f + 2],
-                pairs[f + 3],
-                pairs[f + 4],
-            )
+        val month = p[f]
+        val day = p[f + 1]
         if (year < MIN_YEAR || month !in 1..12 || day !in 1..days(year, month)) return null
-        if (hour > 23 || minute > 59 || second > 59) return null
-        return ((civilDays(year, month, day) * 24 + hour) * 60 + minute) * 60_000L + second * 1000L
+        val seconds = clock(p[f + 2], p[f + 3], p[f + 4]) ?: return null
+        return civilDays(year, month, day) * 86_400_000L + seconds * 1000L
     }
+
+    /** [count] two-digit decimal numbers from [from], or null when an octet is not a digit. */
+    private fun pairs(
+        b: ByteArray,
+        from: Int,
+        count: Int,
+    ): IntArray? {
+        val out = IntArray(count)
+        for (k in 0 until count) {
+            val hi = b[from + 2 * k] - '0'.code.toByte()
+            val lo = b[from + 2 * k + 1] - '0'.code.toByte()
+            if (hi !in 0..9 || lo !in 0..9) return null
+            out[k] = hi * 10 + lo
+        }
+        return out
+    }
+
+    /** Seconds into the day of [hour]:[minute]:[second], or null when one is out of range (no leap second, as there). */
+    private fun clock(
+        hour: Int,
+        minute: Int,
+        second: Int,
+    ): Int? = if (hour > 23 || minute > 59 || second > 59) null else (hour * 60 + minute) * 60 + second
 
     private fun days(
         year: Int,
@@ -499,7 +512,6 @@ private object DerTimes {
         }
 
     /** Days since 1970-01-01 of a Gregorian date from 1970 on (Howard Hinnant's `days_from_civil`). */
-    @Suppress("MagicNumber") // the algorithm's constants
     private fun civilDays(
         year: Int,
         month: Int,
