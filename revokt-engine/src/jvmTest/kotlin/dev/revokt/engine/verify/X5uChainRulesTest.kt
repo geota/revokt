@@ -298,6 +298,9 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         assertLoads(
             chain(intermediate = intermediate(caExtensions() + nameConstraints(constraints(null, listOf(email))))),
         )
+        // An underscore is a valid name-constraint DNS ID character (IsValidDNSID).
+        val underscore = constraints(null, listOf(dnsTree("_acme.other.example")))
+        assertLoads(chain(intermediate = intermediate(caExtensions() + nameConstraints(underscore))))
         assertFails(
             NAME_CONSTRAINTS,
             1,
@@ -331,6 +334,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
             constraints(listOf(dnsTree("mozilla-.org"))),
             constraints(listOf(dnsTree("mozilla.123"))),
             constraints(listOf(dnsTree("a".repeat(64) + ".org"))),
+            constraints(listOf(dnsTree(List(4) { "a".repeat(63) }.joinToString(".") + ".org"))),
             constraints(listOf(TestDer.seq(TestDer.tlv(0x89, TestDer.bytes(1))))),
             constraints(listOf()),
             TestDer.seq(),

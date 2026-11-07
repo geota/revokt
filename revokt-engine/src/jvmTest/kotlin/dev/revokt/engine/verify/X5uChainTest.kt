@@ -345,6 +345,11 @@ internal class X5uChainTest : X5uChainFixture() {
             rsaBits(TestDer.bytes(0x00) + rsaPublicKey(2048) + NULL),
             // id-ecPublicKey: a compressed point, a point one octet short or long, a parameter after the curve.
             ecSpki(P256, TestDer.bytes(0x02, *IntArray(32) { 1 })),
+            ecSpki(P256, TestDer.bytes(0x02, *IntArray(64) { 1 })),
+            JcaFixtures.spki(
+                TestDer.seq(TestDer.oid(EC_KEY), TestDer.tlv(0x04, TestDer.oidContent(P256))),
+                TestDer.bytes(0x04, *IntArray(64) { 1 }),
+            ),
             ecSpki(P256, TestDer.bytes(0x04, *IntArray(63) { 1 })),
             ecSpki(P256, TestDer.bytes(0x04, *IntArray(65) { 1 })),
             JcaFixtures.spki(
