@@ -401,6 +401,24 @@ internal open class X5uChainFixture {
                 ),
             )
 
+        /** A `GeneralSubtree` whose base is the dNSName [name]. */
+        fun dnsTree(name: String): ByteArray = TestDer.seq(dns(name))
+
+        /** `NameConstraints` with each subtree list written when not null. */
+        fun constraints(
+            permitted: List<ByteArray>?,
+            excluded: List<ByteArray>? = null,
+        ): ByteArray =
+            TestDer.seq(
+                permitted?.let { TestDer.tlv(0xa0, *it.toTypedArray()) } ?: ByteArray(0),
+                excluded?.let { TestDer.tlv(0xa1, *it.toTypedArray()) } ?: ByteArray(0),
+            )
+
+        fun nameConstraints(
+            value: ByteArray,
+            critical: Boolean = false,
+        ): ByteArray = TestDer.extension(NAME_CONSTRAINTS, value, critical.takeIf { it })
+
         /** An `rsaEncryption` SPKI whose BIT STRING content is [content]. */
         fun rsaBits(content: ByteArray): ByteArray = TestDer.seq(algId(RSA_KEY, NULL), TestDer.tlv(0x03, content))
 

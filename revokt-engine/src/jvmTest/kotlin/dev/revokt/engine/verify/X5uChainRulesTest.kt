@@ -141,7 +141,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
     @Test
     fun `a critical extension mozilla pkix does not understand, or enforces, is FAILED`() {
         val value = TestDer.seq()
-        for (oid in listOf(OTHER_OID, "2.5.29.14", "2.5.29.35", "2.5.29.31", NAME_CONSTRAINTS)) {
+        for (oid in listOf(OTHER_OID, "2.5.29.14", "2.5.29.35", "2.5.29.31")) {
             val critical = TestDer.extension(oid, value, critical = true)
             assertFails(EXTENSION, 0, chain(leaf = leaf(LEAF_EXTENSIONS + critical)))
             assertFails(EXTENSION, 1, chain(intermediate = intermediate(caExtensions() + critical)))
@@ -230,6 +230,85 @@ internal class X5uChainRulesTest : X5uChainFixture() {
     }
 
     @Test
+    fun `nameConstraints are enforced on every CA below the terminal, critical or not`() {
+        val mozilla =
+            constraints(
+                permitted = listOf(dnsTree(".content-signature.mozilla.org"), dnsTree("content-signature.mozilla.org")),
+            )
+        for (critical in listOf(false, true)) {
+            assertLoads(chain(intermediate = intermediate(caExtensions() + nameConstraints(mozilla, critical))))
+        }
+        for (permitted in listOf(
+            "onecrl.content-signature.mozilla.org",
+            "ONECRL.Content-Signature.Mozilla.ORG",
+            "mozilla.org",
+            "",
+        )) {
+            assertLoads(
+                chain(
+                    intermediate =
+                        intermediate(caExtensions() + nameConstraints(constraints(listOf(dnsTree(permitted))))),
+                ),
+            )
+        }
+        // Outside: another name, a leading-dot subtree of the name itself, a suffix that is not a label boundary.
+        for (permitted in listOf("other.example", ".onecrl.content-signature.mozilla.org", "signature.mozilla.org")) {
+            assertFails(
+                NAME,
+                1,
+                chain(
+                    intermediate =
+                        intermediate(caExtensions() + nameConstraints(constraints(listOf(dnsTree(permitted))))),
+                ),
+            )
+        }
+        for (excluded in listOf("content-signature.mozilla.org", ".mozilla.org", "")) {
+            val tree = constraints(permitted = null, excluded = listOf(dnsTree(excluded)))
+            assertFails(NAME, 1, chain(intermediate = intermediate(caExtensions() + nameConstraints(tree))))
+        }
+        assertLoads(
+            chain(
+                intermediate =
+                    intermediate(caExtensions() + nameConstraints(constraints(null, listOf(dnsTree("other.example"))))),
+            ),
+        )
+        // Any form revokt does not evaluate fails closed.
+        val email = TestDer.seq(TestDer.tlv(0x81, TestDer.ascii("a@content-signature.mozilla.org")))
+        val directory = TestDer.seq(TestDer.tlv(0xa4, TestCert.name("x")))
+        val withMinimum = TestDer.seq(dns("content-signature.mozilla.org"), TestDer.tlv(0x80, TestDer.bytes(0)))
+        for (value in listOf(
+            constraints(listOf(email)),
+            constraints(listOf(dnsTree("content-signature.mozilla.org")), listOf(directory)),
+            constraints(listOf(withMinimum)),
+            constraints(listOf(dnsTree("*.mozilla.org"))),
+            constraints(listOf()),
+            TestDer.seq(),
+            TestDer.seq(TestDer.tlv(0xa0, TestDer.seq(dns("content-signature.mozilla.org"))), NULL),
+            TestDer.seq(
+                TestDer.tlvWithLength(0xa0, TestDer.bytes(0x81, 0x21), dnsTree("content-signature.mozilla.org")),
+            ),
+        )) {
+            assertFails(EXTENSION, 1, chain(intermediate = intermediate(caExtensions() + nameConstraints(value))))
+        }
+        // An upper CA's constraints bind the leaf too; the leaf's own and the terminal's are never read.
+        val subKey = ecPair("x5u-sub")
+        val sub = TestCert.name("Sub Intermediate")
+        val outside = nameConstraints(constraints(listOf(dnsTree("other.example"))))
+        assertFails(
+            NAME,
+            2,
+            listOf(
+                issue(LEAF, leafKey.public.encoded, sub, subKey.private, LEAF_EXTENSIONS),
+                issue(sub, subKey.public.encoded, INTERMEDIATE, intermediateKey.private, caExtensions()),
+                intermediate(caExtensions() + outside),
+                root(),
+            ),
+        )
+        assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + outside)))
+        assertLoads(chain(root = root(extensions = caExtensions() + outside)))
+    }
+
+    @Test
     fun `a link that is not DER as mozilla pkix reads it is FAILED`() {
         val nonMinimalValue =
             TestDer.seq(TestDer.oid(OTHER_OID), TestDer.tlvWithLength(0x04, TestDer.bytes(0x81, 0x02), NULL))
@@ -251,8 +330,9 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         )) {
             assertFails(PARSE, 0, chain(leaf = der))
         }
-        // What mozilla::pkix accepts: v1, v2 and v4 read like v3, and an explicit critical FALSE.
-        for (v in listOf(ByteArray(0), version(TestDer.bytes(1)), version(TestDer.bytes(3)))) {
+        // What mozilla::pkix accepts: v1 (absent, or explicit as bug 1031093 allows), v2 and v4 read like v3, and an
+        // explicit critical FALSE.
+        for (v in listOf(ByteArray(0), version(TestDer.bytes(0)), version(TestDer.bytes(1)), version(TestDer.bytes(3)))) {
             assertLoads(chain(leaf = leafParts(version = v).der))
         }
         assertLoads(

@@ -316,7 +316,99 @@ private fun issuer(
     if (eku?.contains(CODE_SIGNING) == false) return failed(X5uChainFailure.EKU, i, "extKeyUsage without codeSigning")
     val child = certs[i - 1]
     if (!tlsFeatures(c, child)) return failed(X5uChainFailure.EXTENSION, i, "the child lacks the TLS feature")
+    val constraints = c.tbs.extensions.firstOrNull { Oid.matches(c.tbsBytes, it.oid, NAME_CONSTRAINTS) } ?: return null
+    // The leaf's one dNSName is X5U_LEAF_NAME, which leaf() required before any issuer is checked.
+    val subtrees =
+        DnsSubtrees.read(c.tbsBytes, constraints.value)
+            ?: return failed(X5uChainFailure.EXTENSION, i, "nameConstraints that revokt does not evaluate")
+    if (!subtrees.permits(X5U_LEAF_NAME)) return failed(X5uChainFailure.NAME, i, "the leaf is outside nameConstraints")
     return null
+}
+
+/** `id-ce-nameConstraints` (2.5.29.30), as OID content. */
+private val NAME_CONSTRAINTS = byteArrayOf(0x55, 0x1d, 0x1e)
+
+/**
+ * A nameConstraints of dNSName subtrees only, as mozilla::pkix's `CheckNameConstraints` checks it against the leaf's
+ * dNSName (`pkixnames.cpp`, at `cac25a6`; revision 54, pending): critical or not, the name must lie in a [permitted]
+ * subtree when any is listed and in no [excluded] one. A subtree without a leading dot covers the name and its
+ * subdomains, one with a leading dot only the subdomains, and an empty one everything, compared ignoring ASCII case
+ * (`MatchPresentedDNSIDWithReferenceDNSID` in the name-constraint role).
+ */
+private class DnsSubtrees(
+    val permitted: List<String>?,
+    val excluded: List<String>,
+) {
+    fun permits(name: String): Boolean =
+        (permitted == null || permitted.any { covers(it, name) }) && excluded.none { covers(it, name) }
+
+    companion object {
+        private const val PERMITTED = 0xa0
+        private const val EXCLUDED = 0xa1
+        private val SITE = HeaderSite.EXTENSION_VALUE
+
+        /**
+         * The subtrees in the `extnValue` content [value], or null when revokt cannot evaluate them, so that the chain
+         * fails closed: not DER, neither field present, an empty `GeneralSubtrees`, a base other than a dNSName, a
+         * `minimum` or `maximum` written (RFC 5280 §4.2.1.10: zero and absent), or a dNSName with an octet outside
+         * letters, digits, `-`, `_` and `.` (mozilla::pkix rejects an invalid DNS ID as `ERROR_BAD_DER`).
+         */
+        fun read(
+            b: ByteArray,
+            value: Span,
+        ): DnsSubtrees? =
+            try {
+                val ctx = ParseContext()
+                val r = DerReader(b, value.start, value.end, ctx)
+                val fields = r.child(r.read(SEQUENCE, SITE))
+                r.requireEnd("nameConstraints")
+                val permitted =
+                    fields
+                        .readOptional(
+                            PERMITTED,
+                            SITE,
+                        )?.let { subtrees(b, fields.child(it)) ?: return null }
+                val excluded = fields.readOptional(EXCLUDED, SITE)?.let { subtrees(b, fields.child(it)) ?: return null }
+                fields.requireEnd("nameConstraints")
+                if (ctx.nonMinimal.isNotEmpty() || (permitted == null && excluded == null)) {
+                    null
+                } else {
+                    DnsSubtrees(permitted, excluded.orEmpty())
+                }
+            } catch (_: DerException) {
+                null
+            }
+
+        private fun subtrees(
+            b: ByteArray,
+            r: DerReader,
+        ): List<String>? {
+            val out = ArrayList<String>()
+            if (!r.hasMore()) return null
+            while (r.hasMore()) {
+                val subtree = r.child(r.read(SEQUENCE, SITE))
+                val base = subtree.readAny(SITE)
+                if (base.tag != ExtensionValues.DNS_NAME || subtree.hasMore()) return null
+                val text = base.content.bytes(b).decodeToString()
+                if (!text.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it in "-_." }) return null
+                out += text
+            }
+            return out
+        }
+
+        private fun covers(
+            constraint: String,
+            name: String,
+        ): Boolean {
+            val c = constraint.lowercase()
+            val n = name.lowercase()
+            return when {
+                c.isEmpty() -> true
+                c.startsWith('.') -> n.length > c.length && n.endsWith(c)
+                else -> n == c || n.endsWith(".$c")
+            }
+        }
+    }
 }
 
 /**
@@ -398,11 +490,10 @@ private fun criticalIsDer(
  * - Understood and checked here, or ignored by Firefox for an any-policy content signature (so a critical copy is
  *   accepted): keyUsage, subjectAltName, basicConstraints, extKeyUsage, certificatePolicies (`CheckCertificatePolicies`
  *   returns at once for anyPolicy), policyConstraints, inhibitAnyPolicy, authorityInfoAccess, the embedded SCT list,
- *   qcStatements, and a critical `id-pkix-ocsp-nocheck`.
- * - Netscape certificate type, when critical, only with basicConstraints and extKeyUsage present, as `BackCert::Init`.
- * - Understood and *enforced* by Firefox but not here: nameConstraints (`CheckNameConstraints`). A critical copy is
- *   rejected rather than ignored; a non-critical one is ignored. The TLS feature, which Firefox also enforces, is
- *   enforced here too ([tlsFeatures]), so it is understood.
+ *   qcStatements, nameConstraints ([DnsSubtrees]), the TLS feature ([tlsFeatures]), and a critical
+ *   `id-pkix-ocsp-nocheck`.
+ * - Netscape certificate type, when critical, only with basicConstraints and extKeyUsage present, as `BackCert::Init`:
+ *   its type bits are not read, and those two then decide.
  * - An understood extension with an empty value is rejected (`ERROR_EXTENSION_VALUE_INVALID`), but `ocsp-nocheck`.
  */
 private object Understood {
@@ -418,11 +509,9 @@ private object Understood {
             pkix(0x01, 0x01), // authorityInfoAccess
             pkix(0x01, 0x03), // qcStatements
             TLS_FEATURE, // enforced by [tlsFeatures]
+            NAME_CONSTRAINTS, // enforced by [DnsSubtrees]
             byteArrayOf(0x2b, 0x06, 0x01, 0x04, 0x01, 0xd6.toByte(), 0x79, 0x02, 0x04, 0x02), // embedded SCT list
         )
-
-    /** Understood, and enforced by Firefox only: a critical copy cannot be honoured here. */
-    private val ENFORCED = listOf(byteArrayOf(0x55, 0x1d, 0x1e)) // nameConstraints
 
     private val OCSP_NOCHECK = pkix(0x30, 0x01, 0x05)
     private val NETSCAPE_CERT_TYPE =
@@ -437,11 +526,10 @@ private object Understood {
         for (e in c.tbs.extensions) {
             fun isOid(oid: ByteArray) = Oid.matches(c.tbsBytes, e.oid, oid)
             val accepted = ACCEPTED.any(::isOid)
-            val enforced = ENFORCED.any(::isOid)
-            if ((accepted || enforced) && e.value.length == 0) return "an empty ${e.oidDotted}"
+            if (accepted && e.value.length == 0) return "an empty ${e.oidDotted}"
             val alsoUnderstood = isOid(OCSP_NOCHECK) || (isOid(NETSCAPE_CERT_TYPE) && backsNetscape(c))
             if (!e.critical || accepted || alsoUnderstood) continue
-            return "${if (enforced) "an unenforced" else "an unknown"} critical ${e.oidDotted}"
+            return "an unknown critical ${e.oidDotted}"
         }
         return null
     }
