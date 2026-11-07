@@ -3067,7 +3067,7 @@ base URL pinned in `MozillaRemoteSettings`, never taken from the server root res
 HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; `_expected` is validated as an integer before it enters a query string), `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal (revision 54: Firefox's `AppTrustDomain` set): a signature is RSA PKCS#1 v1.5 or ECDSA with SHA-256, SHA-384 or SHA-512 (an ECDSA AlgorithmIdentifier with NULL or absent parameters, as mozilla::pkix reads it), or `id-RSASSA-PSS` whose parameters are byte for byte one of mozilla::pkix's three encodings (SHA-256, SHA-384 or SHA-512 with NULL hash parameters, MGF1 with the same hash, a salt length equal to the hash length, `trailerField` omitted for its default 1); a link's key is `rsaEncryption` of at least 2048 bits or `id-ecPublicKey` on P-256, P-384 or P-521, so an `id-RSASSA-PSS` key fails; anything else `FAILED` (`ALGORITHM`; the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply). This floor is the x5u chain's own: §3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged; validity at verification time for the leaf
 and every non-terminal link; for every non-leaf link below the terminal: basicConstraints `cA = TRUE`,
 `pathLenConstraint` honoured, subject name equal to the child's issuer (raw or canonical), keyUsage
-`keyCertSign` when present;
+`keyCertSign` when present (`KEY_USAGE`);
 links verified with the signed TBS algorithm; root SPKI hash in the pinned set (today one entry, the SPKI SHA-256 of
 `CN=root-ca-production-amo`, `3317FA45154AC7DA55694D3782316056471FC147C04AED3E03FFE99565B1E2E7`, which
 `MozillaRemoteSettings.DEFAULT` pins; certificate SHA-256 `C8A80E9A…A106DB`; both verified in Appendix A, revision 49;
@@ -3081,7 +3081,7 @@ key is attacker-choosable, so a check on it stops nothing, while root expiry wou
 seed. **Order:** the pin lookup runs first, over each certificate after the leaf as read leniently (§9.2's parser);
 the strict profile below then applies only to the links below the terminal, and the terminal is read for its SPKI
 alone. Leaf EKU
-codeSigning and never `id-kp-OCSPSigning` (`EKU`); leaf SAN exactly `onecrl.content-signature.mozilla.org`. Any non-terminal certificate
+codeSigning and never `id-kp-OCSPSigning` (`EKU`); leaf SAN exactly `onecrl.content-signature.mozilla.org` (`SAN`). Any non-terminal certificate
 on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stage `X5U`).
 
 **The chain follows mozilla::pkix** (revision 54, the maintainer's decision on #126: mozilla::pkix at Firefox
