@@ -28,6 +28,8 @@ revokt:
       - 'dev.revokt.ktor.KtorHttpFetcher.Factory'
       - 'dev.revokt.android.work.RevoktSyncWorker'
       - 'dev.revokt.testing.SymVerifier'
+      # A handle on one source's TLS objects (spec §3), not a value type: revokt constructs it (@RevoktInternalApi).
+      - 'dev.revokt.FetcherTls'
   NoDataOrValueClassOnPublicSurface:
     active: true
     excludes: ['**/test/**', '**/jvmTest/**', '**/commonTest/**']
