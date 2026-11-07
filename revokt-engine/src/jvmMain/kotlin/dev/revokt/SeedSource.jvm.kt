@@ -63,7 +63,14 @@ internal class ResourceOpening(
     private val name: String,
     private val loaders: List<ClassLoader>,
 ) : SeedOpening {
-    override fun open(): Source? = url()?.openStream()?.source()
+    // Not url.openStream(): on a jar: URL that caches the JarFile, which keeps the seed jar locked across an app
+    // server's redeploys.
+    override fun open(): Source? =
+        url()
+            ?.openConnection()
+            ?.apply { useCaches = false }
+            ?.getInputStream()
+            ?.source()
 
     private fun url(): URL? = loaders.firstNotNullOfOrNull { it.getResource(name) }
 

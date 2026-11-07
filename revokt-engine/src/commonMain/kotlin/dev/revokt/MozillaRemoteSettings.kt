@@ -45,8 +45,8 @@ public class MozillaRemoteSettings private constructor(
 
     /**
      * The hosts an x5u URL may name, after [x5uHostRewrites]: default `content-signature-2.cdn.mozilla.net`. Hosts are
-     * compared exactly, ASCII case included, so an entry is a bare lowercase host: one with a port, userinfo or a path
-     * matches no parsed host.
+     * compared exactly, ASCII case included, so an entry should be a bare host, lowercase as Mozilla's are: one with a
+     * port, userinfo or a path matches no parsed host.
      */
     public val x5uHosts: Set<String> = buildSet { addAll(builder.x5uHosts) }
 
