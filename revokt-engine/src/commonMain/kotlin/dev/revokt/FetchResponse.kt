@@ -24,6 +24,13 @@ public class FetchResponse private constructor(
 
     internal val bodyBytes: ByteString = builder.body
 
+    /**
+     * Every value of header [name], compared ignoring case (HTTP/2 and `java.net.http` lowercase names), in the
+     * order [headers] holds them.
+     */
+    internal fun headerValues(name: String): List<String> =
+        headers.entries.filter { it.key.equals(name, ignoreCase = true) }.flatMap { it.value }
+
     /** The decoded body, as a fresh copy. */
     public val body: ByteArray get() = bodyBytes.toByteArray()
 

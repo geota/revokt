@@ -14,7 +14,10 @@ import kotlin.jvm.JvmStatic
 public expect class SeedSource internal constructor(
     opening: SeedOpening,
 ) {
-    /** A fresh stream over the archive, or null when there is none to open. Okio never appears in a public signature. */
+    /**
+     * A fresh stream over the archive, or null when there is none to open; a throw means it is there but unreadable.
+     * Okio never appears in a public signature.
+     */
     internal fun open(): Source?
 
     /**

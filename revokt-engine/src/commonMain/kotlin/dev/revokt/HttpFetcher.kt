@@ -7,7 +7,7 @@ package dev.revokt
  * The transport seam every fetching source fetches through (spec §3). Synchronous: the engine calls [fetch] on its I/O
  * dispatcher, never the loader, and enforces [FetchRequest.timeoutMillis] itself, so an implementation must honour
  * thread interruption. The body is handed to the loader, which alone writes the store. Any `Throwable` from [fetch] is
- * a `FAILED` sync. A redirect (3xx) is never followed and is `FAILED`; a 401 or 407 is `FAILED` on every platform, and
+ * a `FAILED` sync. Redirects are never followed; a 304 is `UNCHANGED`. A 401 or 407 is `FAILED` on every platform, and
  * no fetcher ever answers a challenge.
  */
 public fun interface HttpFetcher {

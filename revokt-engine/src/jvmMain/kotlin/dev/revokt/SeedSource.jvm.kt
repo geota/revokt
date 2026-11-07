@@ -5,7 +5,7 @@ package dev.revokt
 
 import okio.Source
 import okio.source
-import java.io.InputStream
+import java.net.URL
 
 /**
  * The JVM's [SeedSource] (spec §4): the common [none] plus [of], [fromResource] and [bundled]; a file is
@@ -34,7 +34,8 @@ public actual class SeedSource internal actual constructor(
 
         /**
          * The class-path resource [path] (`/revokt/seed-compat.zip`; a leading `/` is optional, since a class loader
-         * reads every name from the root). Absent from both class loaders, it opens null.
+         * reads every name from the root). Absent from both class loaders, it opens null; present but unreadable, it
+         * throws.
          */
         @JvmStatic
         public fun fromResource(path: String): SeedSource =
@@ -43,7 +44,8 @@ public actual class SeedSource internal actual constructor(
         /**
          * The seed artifact on the class path, `/revokt/seed-<channel>.zip` from `revokt-seed-<channel>` (spec §6.5),
          * resolved for the configured channel when the `Revokt` is built; with no such resource there is no seed
-         * source. The default when no seed is configured.
+         * source. The default when no seed is configured. Opened before it is resolved, it throws
+         * [IllegalStateException].
          */
         @JvmStatic
         public fun bundled(): SeedSource = SeedSource(BundledOpening(loaders()))
@@ -53,24 +55,31 @@ public actual class SeedSource internal actual constructor(
     }
 }
 
-/** A class-path resource, looked up in [loaders] in order on every open. */
+/**
+ * A class-path resource, looked up in [loaders] in order on every open. Presence is `getResource`, and the stream is the
+ * URL's own, so a resource that is present but cannot be read throws (an unreadable seed) rather than opening null.
+ */
 internal class ResourceOpening(
     private val name: String,
     private val loaders: List<ClassLoader>,
 ) : SeedOpening {
-    override fun open(): Source? = stream()?.source()
+    override fun open(): Source? = url()?.openStream()?.source()
 
-    private fun stream(): InputStream? = loaders.firstNotNullOfOrNull { it.getResourceAsStream(name) }
+    private fun url(): URL? = loaders.firstNotNullOfOrNull { it.getResource(name) }
 
-    /** Whether a class loader has the resource now: opens and closes it, since a loader may serve streams only. */
-    fun exists(): Boolean = stream()?.use { true } ?: false
+    /** Whether a class loader has the resource now. */
+    fun exists(): Boolean = url() != null
 }
 
-/** `SeedSource.bundled()` before a channel is known: opens nothing until [resolve] names the channel's resource. */
+/**
+ * `SeedSource.bundled()` before a channel is known. Building the `Revokt` resolves it; opening it unresolved is a wiring
+ * bug and throws, so it surfaces as an unreadable seed rather than as no seed.
+ */
 internal class BundledOpening(
     private val loaders: List<ClassLoader>,
 ) : SeedOpening {
-    override fun open(): Source? = null
+    override fun open(): Source? =
+        error("SeedSource.bundled() was opened before resolve(channel): resolve it for the configured channel first")
 
     override fun resolve(channel: CrliteChannel): SeedOpening? =
         ResourceOpening("revokt/seed-${channel.name.lowercase()}.zip", loaders).takeIf { it.exists() }

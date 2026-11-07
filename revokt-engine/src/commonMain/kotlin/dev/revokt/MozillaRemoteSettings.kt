@@ -10,8 +10,9 @@ import kotlin.jvm.JvmField
 
 /**
  * One Mozilla Remote Settings source (spec §4, §7.1): where the changesets, attachments and x5u chains come from, and the
- * pinned roots the x5u chain must end in. Every §7.1 constant lives here, per source and overridable; [DEFAULT] is
- * Mozilla's production service.
+ * pinned roots the x5u chain must end in. §7.1's per-source values live here, each overridable: the base URLs, the bucket
+ * and collections, the x5u host allowlist and rewrites, the pinned root set, the `User-Agent` and the source id. The
+ * protocol's fixed rules and the `RevoktLimits` caps do not. [DEFAULT] is Mozilla's production service.
  *
  * A private mirror that serves the three Mozilla hosts' bytes unchanged is configured with [Builder.baseUrl],
  * [Builder.attachmentBaseUrl] and `x5uHostRewrite("content-signature-2.cdn.mozilla.net", mirrorHost)`, and verifies
@@ -25,7 +26,10 @@ public class MozillaRemoteSettings private constructor(
     // The constructor takes its Builder, so the accessor Kotlin emits for the nested Builder keeps one signature as
     // fields are added (the class is growable).
 
-    /** The Kinto API base, without a trailing `/`: default `…/v1`; `…/v2` is the documented alternative (spec §7.1). */
+    /**
+     * The Kinto API base: default `…/v1`; `…/v2` is the documented alternative (spec §7.1). The client joins it to each
+     * path with exactly one `/`, so a trailing `/` here makes no difference.
+     */
     public val baseUrl: String = builder.baseUrl
 
     /** The bucket every collection lives in: default `security-state`. */
@@ -33,15 +37,24 @@ public class MozillaRemoteSettings private constructor(
 
     private val collections: Map<Dataset, String> = buildMap { putAll(builder.collections) }
 
-    /** The base every relative `attachment.location` is resolved against; pinned here, never taken from the server. */
+    /**
+     * The base every relative `attachment.location` is resolved against; pinned here, never taken from the server. The
+     * client joins it to the location with exactly one `/`, as for [baseUrl].
+     */
     public val attachmentBaseUrl: String = builder.attachmentBaseUrl
 
-    /** The hosts an x5u URL may name, after [x5uHostRewrites]: default `content-signature-2.cdn.mozilla.net`. */
+    /**
+     * The hosts an x5u URL may name, after [x5uHostRewrites]: default `content-signature-2.cdn.mozilla.net`. Hosts are
+     * compared exactly, ASCII case included, so an entry is a bare lowercase host: one with a port, userinfo or a path
+     * matches no parsed host.
+     */
     public val x5uHosts: Set<String> = buildSet { addAll(builder.x5uHosts) }
 
     /**
      * The x5u host rewrites, from a host to the one fetched instead: applied once to the parsed x5u URI host before the
-     * [x5uHosts] check. Every target is in [x5uHosts]. Default none.
+     * [x5uHosts] check. Every target is in [x5uHosts]. Default none. Hosts are compared exactly, ASCII case included.
+     * The client re-parses the rewritten URI, re-applies the scheme, userinfo and port rules to it, and requires its
+     * parsed host to equal the target, so a target carrying a port, userinfo or a path fails there (spec §7.1).
      */
     public val x5uHostRewrites: Map<String, String> = buildMap { putAll(builder.x5uHostRewrites) }
 
@@ -137,7 +150,8 @@ public class MozillaRemoteSettings private constructor(
 
         /**
          * Rewrites the x5u URI host [from] to [to] before the [x5uHosts] check, so no JSON is rewritten on the wire;
-         * replaces an earlier rewrite of [from]. [to] must be in [x5uHosts] when [build] runs.
+         * replaces an earlier rewrite of [from]. [to] must be in [x5uHosts] when [build] runs. Both are bare hosts,
+         * compared exactly, ASCII case included; the client re-checks the rewritten URI ([x5uHostRewrites]).
          */
         public fun x5uHostRewrite(
             from: String,

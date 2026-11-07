@@ -151,6 +151,26 @@ class FetchSeamTest {
     }
 
     @Test
+    fun `a header is looked up ignoring case, every value in order`() {
+        // HTTP/2 and java.net.http give lowercase names; HttpURLConnection keeps the server's.
+        val r =
+            FetchResponse.of(
+                503,
+                linkedMapOf(
+                    "retry-after" to listOf("120"),
+                    "Backoff" to listOf("60"),
+                    "BACKOFF" to listOf("90"),
+                ),
+                ByteArray(0),
+            )
+        assertEquals(listOf("120"), r.headerValues("Retry-After"))
+        assertEquals(listOf("60", "90"), r.headerValues("backoff"))
+        assertEquals(emptyList(), r.headerValues("ETag"))
+        // The public map keeps the names as given.
+        assertEquals(listOf("retry-after", "Backoff", "BACKOFF"), r.headers.keys.toList())
+    }
+
+    @Test
     fun `an HttpFetcher is a lambda`() {
         val seen = mutableListOf<FetchRequest>()
         val fetcher =
