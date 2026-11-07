@@ -26,6 +26,14 @@ public final class dev/revokt/CredentialType : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/CredentialType;
 }
 
+public final class dev/revokt/CrliteChannel : java/lang/Enum {
+	public static final field COMPAT Ldev/revokt/CrliteChannel;
+	public static final field DEFAULT Ldev/revokt/CrliteChannel;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/CrliteChannel;
+	public static fun values ()[Ldev/revokt/CrliteChannel;
+}
+
 public final class dev/revokt/CrliteQuery {
 	public synthetic fun <init> (Ldev/revokt/CrliteQuery$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
@@ -65,6 +73,57 @@ public final class dev/revokt/Dataset : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/Dataset;
 }
 
+public final class dev/revokt/DiagnosticCode : java/lang/Enum {
+	public static final field BUDGET_ALLOWS Ldev/revokt/DiagnosticCode;
+	public static final field CAP_NEAR_LIMIT Ldev/revokt/DiagnosticCode;
+	public static final field CHANNEL_UNSET Ldev/revokt/DiagnosticCode;
+	public static final field CLOCK_BEHIND Ldev/revokt/DiagnosticCode;
+	public static final field ENGINE_SELF_CHECK_FAILED Ldev/revokt/DiagnosticCode;
+	public static final field EVIDENCE_LOWERED_BELOW_PRESET Ldev/revokt/DiagnosticCode;
+	public static final field EXEMPTION_ON_EVIDENCE_RULE Ldev/revokt/DiagnosticCode;
+	public static final field EXEMPT_ON_ALLOW Ldev/revokt/DiagnosticCode;
+	public static final field FEED_HOST_REVOKED Ldev/revokt/DiagnosticCode;
+	public static final field FETCHER_TRUST_UNAVAILABLE Ldev/revokt/DiagnosticCode;
+	public static final field FORMAT_UNSUPPORTED Ldev/revokt/DiagnosticCode;
+	public static final field INDEX_INCONSISTENT Ldev/revokt/DiagnosticCode;
+	public static final field IN_MEMORY_STORE_WITH_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
+	public static final field LOWER_CLASS_SOURCE_NEVER_INSTALLED Ldev/revokt/DiagnosticCode;
+	public static final field METERED_DEFERRED Ldev/revokt/DiagnosticCode;
+	public static final field MIRROR_WITH_SEED_NEVER_INSTALLED Ldev/revokt/DiagnosticCode;
+	public static final field NO_DATA_AT_FLIP Ldev/revokt/DiagnosticCode;
+	public static final field NO_DATA_REJECTS_WITHOUT_LOCAL_DATA Ldev/revokt/DiagnosticCode;
+	public static final field NO_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
+	public static final field NO_REQUIRED_DATASETS Ldev/revokt/DiagnosticCode;
+	public static final field PLATFORM_TRUST_MISMATCH Ldev/revokt/DiagnosticCode;
+	public static final field RULE_FLIPPED_THIS_MINOR Ldev/revokt/DiagnosticCode;
+	public static final field SEED_CHANNEL_MISMATCH Ldev/revokt/DiagnosticCode;
+	public static final field SEED_PAST_REJECT_THRESHOLD Ldev/revokt/DiagnosticCode;
+	public static final field SEED_UNREADABLE Ldev/revokt/DiagnosticCode;
+	public static final field STALENESS_CLEARED_FOR_REQUIRED_DATASET Ldev/revokt/DiagnosticCode;
+	public static final field STALE_REJECTS_WITHOUT_THRESHOLD Ldev/revokt/DiagnosticCode;
+	public static final field STORAGE_UNSET Ldev/revokt/DiagnosticCode;
+	public static final field STORE_LOCKED Ldev/revokt/DiagnosticCode;
+	public static final field STORE_MIGRATED Ldev/revokt/DiagnosticCode;
+	public static final field STORE_NEWER_LAYOUT Ldev/revokt/DiagnosticCode;
+	public static final field STORE_UNREADABLE Ldev/revokt/DiagnosticCode;
+	public static final field STRICT_ON_ANDROID_WITHOUT_NO_ISSUER_EXEMPTION Ldev/revokt/DiagnosticCode;
+	public static final field SYNC_FAILED Ldev/revokt/DiagnosticCode;
+	public static final field SYNC_SCHEMA_REJECTED Ldev/revokt/DiagnosticCode;
+	public static final field UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP Ldev/revokt/DiagnosticCode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/DiagnosticCode;
+	public static fun values ()[Ldev/revokt/DiagnosticCode;
+}
+
+public final class dev/revokt/Enforcement : java/lang/Enum {
+	public static final field ENFORCE Ldev/revokt/Enforcement;
+	public static final field OBSERVE Ldev/revokt/Enforcement;
+	public static final field OFF Ldev/revokt/Enforcement;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Enforcement;
+	public static fun values ()[Ldev/revokt/Enforcement;
+}
+
 public final class dev/revokt/EngineErrorProducer : java/lang/Enum {
 	public static final field BOUNDARY Ldev/revokt/EngineErrorProducer;
 	public static final field ENGINE Ldev/revokt/EngineErrorProducer;
@@ -81,6 +140,48 @@ public final class dev/revokt/FallbackReason : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/FallbackReason;
 	public static fun values ()[Ldev/revokt/FallbackReason;
+}
+
+public final class dev/revokt/FetchRequest {
+	public synthetic fun <init> (Ldev/revokt/FetchRequest$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHeaders ()Ljava/util/Map;
+	public final fun getMaxBodyBytes ()J
+	public final fun getTimeoutMillis ()J
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/FetchResponse {
+	public static final field Companion Ldev/revokt/FetchResponse$Companion;
+	public synthetic fun <init> (Ldev/revokt/FetchResponse$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBody ()[B
+	public final fun getHeaders ()Ljava/util/Map;
+	public final fun getStatus ()I
+	public fun hashCode ()I
+	public final fun newBuilder ()Ldev/revokt/FetchResponse$Builder;
+	public static final fun of (ILjava/util/Map;[B)Ldev/revokt/FetchResponse;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/FetchResponse$Builder {
+	public fun <init> ()V
+	public final fun body ([B)Ldev/revokt/FetchResponse$Builder;
+	public final fun build ()Ldev/revokt/FetchResponse;
+	public final fun header (Ljava/lang/String;Ljava/lang/String;)Ldev/revokt/FetchResponse$Builder;
+	public final fun headers (Ljava/util/Map;)Ldev/revokt/FetchResponse$Builder;
+	public final fun status (I)Ldev/revokt/FetchResponse$Builder;
+}
+
+public final class dev/revokt/FetchResponse$Companion {
+	public final fun of (ILjava/util/Map;[B)Ldev/revokt/FetchResponse;
+}
+
+public final class dev/revokt/FetcherTls {
+	public final fun getSslSocketFactory ()Ljavax/net/ssl/SSLSocketFactory;
+	public final fun getTrustManager ()Ljavax/net/ssl/X509TrustManager;
 }
 
 public final class dev/revokt/FilterFormat : java/lang/Enum {
@@ -181,8 +282,21 @@ public final class dev/revokt/GenerationFiles {
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface class dev/revokt/HttpFetcher {
+	public abstract fun fetch (Ldev/revokt/FetchRequest;)Ldev/revokt/FetchResponse;
+}
+
+public abstract interface class dev/revokt/HttpFetcher$Factory {
+	public abstract fun create (Ldev/revokt/FetcherTls;)Ldev/revokt/HttpFetcher;
+}
+
 public final class dev/revokt/JvmGenerationFiles {
 	public static final field INSTANCE Ldev/revokt/JvmGenerationFiles;
+}
+
+public final class dev/revokt/JvmSeedSource {
+	public static final field INSTANCE Ldev/revokt/JvmSeedSource;
+	public static final fun fromPath (Ljava/nio/file/Path;)Ldev/revokt/SeedSource;
 }
 
 public final class dev/revokt/KeyabilityClause : java/lang/Enum {
@@ -218,6 +332,52 @@ public final class dev/revokt/Layer : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Layer;
 	public static fun values ()[Ldev/revokt/Layer;
+}
+
+public final class dev/revokt/LogLevel : java/lang/Enum {
+	public static final field DEBUG Ldev/revokt/LogLevel;
+	public static final field ERROR Ldev/revokt/LogLevel;
+	public static final field INFO Ldev/revokt/LogLevel;
+	public static final field WARN Ldev/revokt/LogLevel;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/LogLevel;
+	public static fun values ()[Ldev/revokt/LogLevel;
+}
+
+public final class dev/revokt/MozillaRemoteSettings {
+	public static final field Companion Ldev/revokt/MozillaRemoteSettings$Companion;
+	public static final field DEFAULT Ldev/revokt/MozillaRemoteSettings;
+	public synthetic fun <init> (Ldev/revokt/MozillaRemoteSettings$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun collection (Ldev/revokt/Dataset;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttachmentBaseUrl ()Ljava/lang/String;
+	public final fun getBaseUrl ()Ljava/lang/String;
+	public final fun getBucket ()Ljava/lang/String;
+	public final fun getPinnedRootSpkiSha256s ()Ljava/util/List;
+	public final fun getSourceId ()Ljava/lang/String;
+	public final fun getUserAgent ()Ljava/lang/String;
+	public final fun getX5uHostRewrites ()Ljava/util/Map;
+	public final fun getX5uHosts ()Ljava/util/Set;
+	public fun hashCode ()I
+	public final fun newBuilder ()Ldev/revokt/MozillaRemoteSettings$Builder;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/MozillaRemoteSettings$Builder {
+	public fun <init> ()V
+	public final fun attachmentBaseUrl (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun baseUrl (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun bucket (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun build ()Ldev/revokt/MozillaRemoteSettings;
+	public final fun collection (Ldev/revokt/Dataset;Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun pinnedRootSpkiSha256s (Ljava/util/Collection;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun sourceId (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun userAgent (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun x5uHostRewrite (Ljava/lang/String;Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun x5uHosts (Ljava/util/Set;)Ldev/revokt/MozillaRemoteSettings$Builder;
+}
+
+public final class dev/revokt/MozillaRemoteSettings$Companion {
 }
 
 public final class dev/revokt/NoIssuerReason : java/lang/Enum {
@@ -261,6 +421,18 @@ public final class dev/revokt/PathStatus : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/PathStatus;
 	public static fun values ()[Ldev/revokt/PathStatus;
+}
+
+public final class dev/revokt/PolicyDiagnostic {
+	public synthetic fun <init> (Ldev/revokt/PolicyDiagnostic$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ldev/revokt/DiagnosticCode;
+	public final fun getDataset ()Ldev/revokt/Dataset;
+	public final fun getMessage ()Ljava/lang/String;
+	public final fun getRule ()Ldev/revokt/Rule;
+	public final fun getSeverity ()Ldev/revokt/Severity;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public abstract interface class dev/revokt/PreparedGeneration : java/lang/AutoCloseable {
@@ -330,6 +502,15 @@ public final class dev/revokt/RevoktLimits {
 	public static final field VERDICT_CACHE_TTL J
 }
 
+public abstract interface class dev/revokt/RevoktLogger {
+	public abstract fun log (Ldev/revokt/LogLevel;Ljava/lang/String;Ljava/lang/Throwable;)V
+}
+
+public final class dev/revokt/RevoktLoggers {
+	public static final field INSTANCE Ldev/revokt/RevoktLoggers;
+	public static final fun jul ()Ldev/revokt/RevoktLogger;
+}
+
 public abstract interface class dev/revokt/RevoktStorage {
 	public static final field Companion Ldev/revokt/RevoktStorage$Companion;
 	public abstract fun delete (Ljava/lang/String;)V
@@ -388,6 +569,33 @@ public final class dev/revokt/RuleClass : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/RuleClass;
 }
 
+public abstract interface class dev/revokt/SeedOpener {
+	public abstract fun open ()Ljava/io/InputStream;
+}
+
+public final class dev/revokt/SeedSource {
+	public static final field Companion Ldev/revokt/SeedSource$Companion;
+	public static final fun bundled ()Ldev/revokt/SeedSource;
+	public static final fun fromResource (Ljava/lang/String;)Ldev/revokt/SeedSource;
+	public static final fun none ()Ldev/revokt/SeedSource;
+	public static final fun of (Ldev/revokt/SeedOpener;)Ldev/revokt/SeedSource;
+}
+
+public final class dev/revokt/SeedSource$Companion {
+	public final fun bundled ()Ldev/revokt/SeedSource;
+	public final fun fromResource (Ljava/lang/String;)Ldev/revokt/SeedSource;
+	public final fun none ()Ldev/revokt/SeedSource;
+	public final fun of (Ldev/revokt/SeedOpener;)Ldev/revokt/SeedSource;
+}
+
+public final class dev/revokt/Severity : java/lang/Enum {
+	public static final field ERROR Ldev/revokt/Severity;
+	public static final field WARNING Ldev/revokt/Severity;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Severity;
+	public static fun values ()[Ldev/revokt/Severity;
+}
+
 public abstract interface class dev/revokt/SignatureVerifier {
 	public abstract fun unsupportedOids ()Ljava/util/Set;
 	public abstract fun verify ([B[B[B[B)Ldev/revokt/VerifyResult;
@@ -397,6 +605,57 @@ public final class dev/revokt/StoreLockedException : java/lang/RuntimeException 
 	public fun <init> (Ljava/lang/String;)V
 	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class dev/revokt/SyncOutcome : java/lang/Enum {
+	public static final field BACKOFF Ldev/revokt/SyncOutcome;
+	public static final field BLOCKED_BY_SELF Ldev/revokt/SyncOutcome;
+	public static final field CLOCK_SKEW Ldev/revokt/SyncOutcome;
+	public static final field DEFERRED Ldev/revokt/SyncOutcome;
+	public static final field FAILED Ldev/revokt/SyncOutcome;
+	public static final field INSTALLED Ldev/revokt/SyncOutcome;
+	public static final field ROLLBACK_REFUSED Ldev/revokt/SyncOutcome;
+	public static final field STORE_FAILED Ldev/revokt/SyncOutcome;
+	public static final field STORE_LOCKED Ldev/revokt/SyncOutcome;
+	public static final field UNCHANGED Ldev/revokt/SyncOutcome;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/SyncOutcome;
+	public static fun values ()[Ldev/revokt/SyncOutcome;
+}
+
+public final class dev/revokt/SyncResult {
+	public synthetic fun <init> (Ldev/revokt/SyncResult$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAtMillis ()J
+	public final fun getBlockedChainSha256 ()[B
+	public final fun getBlockedLeafSerial ()[B
+	public final fun getBlockedSource ()Ljava/lang/String;
+	public final fun getCause ()Ljava/lang/Throwable;
+	public final fun getHttpStatus ()Ljava/lang/Integer;
+	public final fun getInstalled ()Ljava/util/Map;
+	public final fun getOutcome ()Ldev/revokt/SyncOutcome;
+	public final fun getSourceId ()Ljava/lang/String;
+	public final fun getStage ()Ldev/revokt/SyncStage;
+	public final fun getWarnings ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/SyncStage : java/lang/Enum {
+	public static final field ACTIVATE Ldev/revokt/SyncStage;
+	public static final field ATTACHMENT Ldev/revokt/SyncStage;
+	public static final field CHANGESET Ldev/revokt/SyncStage;
+	public static final field FETCHER_TRUST Ldev/revokt/SyncStage;
+	public static final field INDEX Ldev/revokt/SyncStage;
+	public static final field PREPARE Ldev/revokt/SyncStage;
+	public static final field SCHEMA Ldev/revokt/SyncStage;
+	public static final field SELF_CHECK Ldev/revokt/SyncStage;
+	public static final field SIGNATURE Ldev/revokt/SyncStage;
+	public static final field STORE Ldev/revokt/SyncStage;
+	public static final field X5U Ldev/revokt/SyncStage;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/SyncStage;
+	public static fun values ()[Ldev/revokt/SyncStage;
 }
 
 public final class dev/revokt/TerminalKind : java/lang/Enum {

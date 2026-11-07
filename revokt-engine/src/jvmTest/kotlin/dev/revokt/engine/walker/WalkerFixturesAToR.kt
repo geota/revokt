@@ -141,7 +141,7 @@ internal object WalkerFixturesAToR {
         val r1 = w.root("R1", "Root 1")
         val r2 = w.root("R2", "Root 2")
         val i = w.cert("I", w.name("Intermediate"), r1.subject, signer = r1.key)
-        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key)
+        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey())
         val cross = w.cert("X", r1.subject, r2.subject, r1.key, signer = r2.key)
         return listOf(listOf(leaf, i, cross), listOf(leaf, cross, i)).mapIndexed { n, presented ->
             w.fixture(
@@ -387,7 +387,11 @@ internal object WalkerFixturesAToR {
             val w = FixtureWorld()
             val root = w.root("R", "Root")
             val i = w.cert("I", w.name("Intermediate"), root.subject, signer = root.key)
-            val leaf = w.withOuterAlgorithm(w.cert("L", w.name("leaf.example"), i.subject, signer = i.key), outer)
+            val leaf =
+                w.withOuterAlgorithm(
+                    w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey()),
+                    outer,
+                )
             w.fixture(
                 "r",
                 variant,

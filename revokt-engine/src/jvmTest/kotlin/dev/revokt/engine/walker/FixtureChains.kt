@@ -23,15 +23,17 @@ internal class Honest(
     val w: FixtureWorld = FixtureWorld(),
     leafIssuer: ByteArray? = null,
     intermediateIssuer: ByteArray? = null,
+    intermediateSubject: ByteArray? = null,
     rsa: Boolean = false,
     leafAki: ByteArray? = null,
+    leafExtensions: List<ByteArray> = emptyList(),
 ) {
     private val sig = if (rsa) WalkerCerts.SHA256_RSA else SymOids.SIGNATURE
     val root: FixtureCert = w.root("R", "Root", if (rsa) w.key(WalkerCerts.RSA_KEY) else w.key(), sig)
     val intermediate: FixtureCert =
         w.cert(
             "I",
-            w.name("Intermediate"),
+            intermediateSubject ?: w.name("Intermediate"),
             intermediateIssuer ?: root.subject,
             if (rsa) w.key(WalkerCerts.RSA_KEY) else w.key(),
             signer = root.key,
@@ -44,7 +46,8 @@ internal class Honest(
             leafIssuer ?: intermediate.subject,
             signer = intermediate.key,
             sigOid = sig,
-            extensions = listOfNotNull(leafAki?.let { FixtureWorld.aki(it) }),
+            extensions = listOfNotNull(leafAki?.let { FixtureWorld.aki(it) }) + leafExtensions,
+            key = w.leafKey(),
         )
 
     /** The honest path. */
@@ -106,7 +109,7 @@ internal class Deep(
             chain.add(0, parent)
         }
         intermediates = chain
-        leaf = w.cert("L", w.name("leaf.example"), parent.subject, signer = parent.key)
+        leaf = w.cert("L", w.name("leaf.example"), parent.subject, signer = parent.key, key = w.leafKey())
     }
 
     val path: List<FixtureCert> get() = listOf(leaf) + intermediates + root

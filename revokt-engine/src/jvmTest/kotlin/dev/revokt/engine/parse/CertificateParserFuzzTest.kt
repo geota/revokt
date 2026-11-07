@@ -4,11 +4,13 @@
 package dev.revokt.engine.parse
 
 import com.code_intelligence.jazzer.junit.FuzzTest
+import dev.revokt.engine.walker.CandidateIndex
 
 /**
  * Spec §9.1 target "the TBS/DER parser", §9.2 D5 and D6: the parser's only results are `Parsed` and `Failed`; a parse
  * stays within 8·len + 1024 steps; every span lies inside the input and every TLV span re-reads to itself; two parses
- * of the same input agree. With `JAZZER_FUZZ` unset JUnit replays `CertificateParserFuzzTestInputs/`; the nightly job
+ * of the same input agree; the walker's view of a parsed certificate (`CandidateIndex.cert`: `Cert.of` and the §9.2
+ * keyability profile, which decision step 3 runs on every presented leaf) never throws and agrees with itself. With `JAZZER_FUZZ` unset JUnit replays `CertificateParserFuzzTestInputs/`; the nightly job
  * runs it with `-max_len=262145 -timeout=1`.
  */
 class CertificateParserFuzzTest {
@@ -18,6 +20,9 @@ class CertificateParserFuzzTest {
     }
 
     companion object {
+        /** An empty index: only its canonicaliser (the platform's, §3) is used, to build each `Cert`. */
+        private val index = CandidateIndex(emptyList())
+
         /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
@@ -45,6 +50,10 @@ class CertificateParserFuzzTest {
                 }
                 val outer = c.envelope.signatureAlgorithm
                 check(outer.start >= 0 && outer.end <= data.size) { "D6: span $outer outside ${data.size} bytes" }
+                val cert = index.cert(c)
+                check(cert.canonicalIssuer == index.cert(c).canonicalIssuer) { "walker view: canonical issuer differs" }
+                check(cert.keyabilityClause == Keyability.firstFailing(c)) { "walker view: keyability differs" }
+                check(cert.producerKeyable == (cert.keyabilityClause == null)) { "walker view: producerKeyable" }
             } else {
                 first as CertificateParse.Failed
                 check(
