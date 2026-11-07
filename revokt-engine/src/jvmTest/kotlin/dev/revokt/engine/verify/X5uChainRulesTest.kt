@@ -290,7 +290,21 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         assertLoads(
             chain(intermediate = intermediate(caExtensions() + nameConstraints(constraints(null, listOf(email))))),
         )
-        // An underscore is a valid name-constraint DNS ID character (IsValidDNSID).
+        assertFails(
+            NAME_CONSTRAINTS,
+            1,
+            chain(
+                intermediate =
+                    intermediate(
+                        caExtensions() + nameConstraints(constraints(listOf(email, dnsTree("other.example")))),
+                    ),
+            ),
+        )
+    }
+
+    @Test
+    fun `valid name-constraint DNS IDs load, up to the label and name limits`() {
+        // An underscore and inner hyphens are valid (IsValidDNSID); none of these excluded bases matches the leaf.
         val underscore =
             constraints(
                 null,
@@ -303,16 +317,6 @@ internal class X5uChainRulesTest : X5uChainFixture() {
                 ),
             )
         assertLoads(chain(intermediate = intermediate(caExtensions() + nameConstraints(underscore))))
-        assertFails(
-            NAME_CONSTRAINTS,
-            1,
-            chain(
-                intermediate =
-                    intermediate(
-                        caExtensions() + nameConstraints(constraints(listOf(email, dnsTree("other.example")))),
-                    ),
-            ),
-        )
     }
 
     @Test
