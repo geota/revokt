@@ -448,7 +448,7 @@ private fun envelopeNotDer(c: ParsedCertificate): String? {
     return when {
         c.nonMinimalHeaders.isNotEmpty() -> "a non-minimal length at ${c.nonMinimalHeaders[0].site}"
         c.envelope.tbsIndefinite -> "an indefinite-length TBS"
-        c.der[c.envelope.signatureAlgorithm.start + 1].toInt() and 0xff == INDEFINITE -> "an indefinite signatureAlgorithm"
+        c.der[c.envelope.signatureAlgorithm.start + 1].toInt() and 0xff == INDEFINITE -> "an indefinite outer algorithm"
         signatureValue.length == 0 || c.der[signatureValue.start].toInt() != 0 -> "signatureValue has unused bits"
         else -> null
     }
