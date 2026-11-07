@@ -149,25 +149,28 @@ internal sealed class X5uValidity {
 internal const val X5U_LEAF_NAME: String = "onecrl.content-signature.mozilla.org"
 
 /**
- * Every check of the x5u chain but the validity periods (spec §7.1 "x5u chain", §6.5): a seed runs it before its
- * `records.json` is decoded and [checkValidity] after, at the decoded `<ts>`; a live sync runs both, at the local
- * clock. [chain] is the x5u body's DER, leaf first ([dev.revokt.engine.parse.X5uPem]); [pinned] holds SPKI SHA-256s.
+ * Every check of the x5u chain but the validity periods (spec revision 54, §7.1 "x5u chain"; §6.5): a seed runs it
+ * before its `records.json` is decoded and [checkValidity] after, at the decoded `<ts>`; a live sync runs both, at the
+ * local clock. [chain] is the x5u body's DER, leaf first ([dev.revokt.engine.parse.X5uPem]); [pinned] holds SPKI
+ * SHA-256s. The chain follows mozilla::pkix (Firefox `cac25a6`):
  *
- * - **The terminal** is the first certificate after the leaf whose SPKI SHA-256 is in [pinned]; nothing after it is
- *   parsed. Only its SPKI is read: never its validity, CA bits, key usage or subject (mozilla::pkix's trust-anchor
- *   semantics). A certificate before it that does not parse is [X5uChainFailure.PARSE].
- * - **Every link below the terminal:** no extension OID twice (maintainer decision on #164: the JDK rejects even two
- *   identical copies); the signed TBS algorithm and the link's own key in the floor ([X5uFloor]); its signature
- *   `VERIFIED` under the next certificate's SPKI through [verifier], with the signed TBS algorithm.
- * - **Every non-leaf link below the terminal:** basicConstraints `cA = TRUE`; a `pathLenConstraint` at least the number
- *   of non-leaf links under it (mozilla::pkix's and webpki's count, self-issued links included); its subject equal to
- *   its child's issuer, raw or under `canonicalSubject`; `keyCertSign` when keyUsage is present.
- * - **The leaf:** extKeyUsage present with codeSigning; subjectAltName exactly one `GeneralName`, a dNSName equal to
- *   [X5U_LEAF_NAME] (the issue's narrow reading of "exactly").
+ * - **The terminal** is the first certificate after the leaf whose SPKI SHA-256 is in [pinned], found over the
+ *   certificates as [CertificateParser] reads them leniently; nothing after it is parsed, and it is read for its SPKI
+ *   alone. A certificate before it that does not parse is [X5uChainFailure.PARSE].
+ * - **Every link below the terminal:** DER as mozilla::pkix reads it ([notDer], [DerTimes]); a non-empty issuer; the
+ *   outer algorithm equal to the signed one; no extension OID twice; no critical extension mozilla::pkix does not
+ *   understand, and no understood one empty; the algorithm floor and `CheckSubjectPublicKeyInfo` ([X5uFloor]); its
+ *   signature `VERIFIED` under the next certificate's SPKI through [verifier], with the signed TBS algorithm.
+ * - **The leaf:** not a CA; a well-formed basicConstraints and keyUsage if present; extKeyUsage with codeSigning and
+ *   without OCSPSigning; exactly one SAN, the dNSName [X5U_LEAF_NAME]; an embedded SCT list, if any, one OCTET STRING.
+ * - **Every non-leaf link below the terminal:** basicConstraints `cA = TRUE` within its `pathLenConstraint` (at most
+ *   127); its subject equal to its child's issuer, raw or under `canonicalSubject`; `keyCertSign` when keyUsage is
+ *   present; codeSigning when extKeyUsage is present; its TLS feature, if any, carried by its child; its
+ *   nameConstraints satisfied by the leaf's dNSName ([DnsSubtrees]).
  *
- * The extension readers are the strict ones ([ExtensionValues]); one that fails is [X5uChainFailure.EXTENSION]. Checks
- * run cheapest first, the signatures last, so the failure reported is the first in [X5uChainFailure] order of the first
- * pass that fails. Nothing here throws but a fatal error (spec §5.5, [verifyClassified]).
+ * The extension readers are the strict ones ([ExtensionValues]); anything malformed in a value they read is
+ * [X5uChainFailure.EXTENSION]. The signatures are verified last. Nothing here throws but a fatal error (spec §5.5,
+ * [verifyClassified]).
  */
 internal fun validateX5uChain(
     chain: List<ByteArray>,
@@ -290,6 +293,12 @@ private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
         return failed(X5uChainFailure.EKU, 0, "no codeSigning in extKeyUsage")
     }
     if (eku.contains(OCSP_SIGNING)) return failed(X5uChainFailure.EKU, 0, "OCSPSigning in extKeyUsage")
+    if (!sctListIsOctetString(
+            c,
+        )
+    ) {
+        return failed(X5uChainFailure.EXTENSION, 0, "an embedded SCT list not one OCTET STRING")
+    }
     val san = ExtensionValues.subjectAltName(c).valueOr(0, "subjectAltName") { return it }
     val names = san?.names.orEmpty()
     val only = names.singleOrNull()
@@ -298,6 +307,26 @@ private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
     }
     return null
 }
+
+/**
+ * mozilla::pkix's `ExtractSignedCertificateTimestampListFromExtension` on the leaf (`pkixbuild.cpp`): an embedded SCT
+ * list extension's `extnValue` is exactly one OCTET STRING, under a minimal header, with nothing after it. Its content
+ * is not read. True when the leaf has none.
+ */
+private fun sctListIsOctetString(c: ParsedCertificate): Boolean {
+    val e = c.tbs.extensions.firstOrNull { Oid.matches(c.tbsBytes, it.oid, Oid.SCT_LIST_CONTENT) } ?: return true
+    return try {
+        val ctx = ParseContext()
+        val r = DerReader(c.tbsBytes, e.value.start, e.value.end, ctx)
+        r.read(OCTET_STRING, HeaderSite.EXTENSION_VALUE)
+        r.requireEnd("SignedCertificateTimestampList")
+        ctx.nonMinimal.isEmpty()
+    } catch (_: DerException) {
+        false
+    }
+}
+
+private const val OCTET_STRING = 0x04
 
 /** The rules of the non-leaf link [i]: a CA within its path length, named as its child's issuer, signing certificates. */
 private fun issuer(
@@ -408,19 +437,53 @@ private const val MAX_VERSION = 3
  * (`OptionalVersion`: the parser reads `[3]` whatever the version says, as Firefox does), and every critical flag `00`
  * or `FF` (`Boolean`; an explicit FALSE is accepted, as there). The times are [DerTimes]'.
  */
-private fun notDer(c: ParsedCertificate): String? {
-    val version = c.tbs.version
+private fun notDer(c: ParsedCertificate): String? = envelopeNotDer(c) ?: tbsNotDer(c)
+
+/**
+ * The envelope's part of [notDer]: minimal definite headers, a definite TBS and outer `signatureAlgorithm` (the parser
+ * accepts both indefinite, as the JDK does; mozilla::pkix does not), no unused bits in `signatureValue`.
+ */
+private fun envelopeNotDer(c: ParsedCertificate): String? {
     val signatureValue = c.envelope.signatureValue
     return when {
         c.nonMinimalHeaders.isNotEmpty() -> "a non-minimal length at ${c.nonMinimalHeaders[0].site}"
         c.envelope.tbsIndefinite -> "an indefinite-length TBS"
+        c.der[c.envelope.signatureAlgorithm.start + 1].toInt() and 0xff == INDEFINITE -> "an indefinite signatureAlgorithm"
+        signatureValue.length == 0 || c.der[signatureValue.start].toInt() != 0 -> "signatureValue has unused bits"
+        else -> null
+    }
+}
+
+/**
+ * The TBS's part of [notDer]: a minimal serial, nothing the parse skipped, unique ids only in their primitive forms
+ * (mozilla::pkix's `SkipOptionalImplicitPrimitiveTag`; the parser also reads `a1` and `a2`), the version, and the
+ * critical flags.
+ */
+private fun tbsNotDer(c: ParsedCertificate): String? {
+    val version = c.tbs.version
+    return when {
         !Keyability.minimalInteger(c.tbsBytes, c.tbs.serial) -> "serialNumber is not a minimal INTEGER"
         c.ignoredElements.isNotEmpty() -> "skipped bytes at ${c.ignoredElements[0].site}"
-        signatureValue.length == 0 || c.der[signatureValue.start].toInt() != 0 -> "signatureValue has unused bits"
+        constructedUniqueId(c) -> "a constructed unique id"
         version != null && (version.length != 1 || c.tbsBytes[version.start] !in 0..MAX_VERSION) -> "version"
         c.tbs.extensions.any { !criticalIsDer(c.tbsBytes, it) } -> "a critical flag other than 00 or FF"
         else -> null
     }
+}
+
+private const val INDEFINITE = 0x80
+private const val CONSTRUCTED_ISSUER_UID = 0xa1
+private const val CONSTRUCTED_SUBJECT_UID = 0xa2
+
+/** Whether a unique id after [c]'s SPKI is in its constructed form; the parser already read these elements. */
+private fun constructedUniqueId(c: ParsedCertificate): Boolean {
+    val r = DerReader(c.tbsBytes, c.tbs.spki.end, c.tbs.tlv.end, ParseContext())
+    while (r.hasMore()) {
+        val tag = r.peekTag()
+        if (tag == CONSTRUCTED_ISSUER_UID || tag == CONSTRUCTED_SUBJECT_UID) return true
+        r.readAny(HeaderSite.TBS_STOP)
+    }
+    return false
 }
 
 /** Whether [e]'s critical BOOLEAN, if written, is `00` or `FF`; the parser already read [e], so nothing here throws. */
@@ -479,7 +542,9 @@ private object Understood {
         for (e in c.tbs.extensions) {
             fun isOid(oid: ByteArray) = Oid.matches(c.tbsBytes, e.oid, oid)
             val accepted = ACCEPTED.any(::isOid)
-            if (accepted && e.value.length == 0) return "an empty ${e.oidDotted}"
+            // A critical Netscape certificate type is understood too, so it may not be empty either.
+            val netscape = e.critical && isOid(NETSCAPE_CERT_TYPE)
+            if ((accepted || netscape) && e.value.length == 0) return "an empty ${e.oidDotted}"
             val alsoUnderstood = isOid(OCSP_NOCHECK) || (isOid(NETSCAPE_CERT_TYPE) && backsNetscape(c))
             if (!e.critical || accepted || alsoUnderstood) continue
             return "an unknown critical ${e.oidDotted}"

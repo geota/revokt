@@ -335,6 +335,10 @@ internal class X5uChainTest : X5uChainFixture() {
             // zeros; an exponent zero, negative or not minimal; bytes after RSAPublicKey.
             TestDer.seq(algId(RSA_KEY), TestDer.tlv(0x03, TestDer.bytes(0x00), rsaPublicKey(2048))),
             TestDer.seq(
+                algId(RSA_KEY, TestDer.bytes(0x05, 0x01, 0x00)),
+                TestDer.tlv(0x03, TestDer.bytes(0x00), rsaPublicKey(2048)),
+            ),
+            TestDer.seq(
                 algId(RSA_KEY, TestDer.oid(EC_KEY)),
                 TestDer.tlv(0x03, TestDer.bytes(0x00), rsaPublicKey(2048)),
             ),

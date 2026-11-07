@@ -291,7 +291,17 @@ internal class X5uChainRulesTest : X5uChainFixture() {
             chain(intermediate = intermediate(caExtensions() + nameConstraints(constraints(null, listOf(email))))),
         )
         // An underscore is a valid name-constraint DNS ID character (IsValidDNSID).
-        val underscore = constraints(null, listOf(dnsTree("_acme.other.example"), dnsTree("a.co-op")))
+        val underscore =
+            constraints(
+                null,
+                listOf(
+                    dnsTree("_acme.other.example"),
+                    dnsTree("a.co-op"),
+                    // Accept boundaries: a 63-octet label, and a 253-octet name.
+                    dnsTree("a".repeat(63) + ".example"),
+                    dnsTree(List(3) { "b".repeat(63) }.joinToString(".") + "." + "c".repeat(61)),
+                ),
+            )
         assertLoads(chain(intermediate = intermediate(caExtensions() + nameConstraints(underscore))))
         assertFails(
             NAME_CONSTRAINTS,
@@ -377,22 +387,18 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         assertFails(EKU, 1, chain(intermediate = intermediate(listOf(bc(ca = true), eku("2.5.29.37.0")))))
         // Serials: negative and zero load; a non-minimal INTEGER is not DER.
         for (serial in listOf(TestDer.bytes(0x80), TestDer.bytes(0x00), TestDer.bytes(0xff, 0x7f))) {
-            assertLoads(chain(leaf = leafParts(serial = serial).der))
+            assertLoads(chain(leaf = parts(tweaks = Tweaks(serial = serial)).der))
         }
         for (serial in listOf(TestDer.bytes(0x00, 0x01), TestDer.bytes(0xff, 0x80))) {
-            assertFails(PARSE, 0, chain(leaf = leafParts(serial = serial).der))
+            assertFails(PARSE, 0, chain(leaf = parts(tweaks = Tweaks(serial = serial)).der))
         }
-        // An empty Extensions SEQUENCE is read (mozilla::pkix allows it); the leaf then has no EKU.
-        assertFails(
-            EKU,
-            0,
-            chain(
-                leaf =
-                    leafParts(extensions = emptyList(), wrapper = {
-                        TestDer.tlv(0xa3, TestDer.seq())
-                    }).der,
-            ),
-        )
+        // An empty Extensions SEQUENCE is read (mozilla::pkix allows it): the leaf then has no EKU, the intermediate no
+        // basicConstraints, so neither fails as PARSE; a pinned intermediate with one loads, its bytes never read.
+        val emptyExtensions = Tweaks(wrapper = { TestDer.tlv(0xa3, TestDer.seq()) })
+        assertFails(EKU, 0, placed(At.LEAF, parts(At.LEAF, emptyList(), emptyExtensions).der))
+        val emptyIntermediate = parts(At.INTERMEDIATE, emptyList(), emptyExtensions).der
+        assertFails(NOT_CA, 1, placed(At.INTERMEDIATE, emptyIntermediate))
+        assertLoads(listOf(leaf(), emptyIntermediate), pins = setOf(hash(intermediateKey)), links = 1)
     }
 
     @Test
@@ -404,42 +410,84 @@ internal class X5uChainRulesTest : X5uChainFixture() {
     }
 
     @Test
-    fun `a link that is not DER as mozilla pkix reads it is FAILED`() {
-        val nonMinimalValue =
-            TestDer.seq(TestDer.oid(OTHER_OID), TestDer.tlvWithLength(0x04, TestDer.bytes(0x81, 0x02), NULL))
-        val trailingInExtension = TestDer.seq(TestDer.oid(OTHER_OID), TestDer.tlv(0x04, NULL), NULL)
-        for (der in listOf(
-            leafParts(extensions = LEAF_EXTENSIONS + listOf(nonMinimalValue)).der,
-            leafParts(extensions = LEAF_EXTENSIONS + listOf(trailingInExtension)).der,
-            leafParts(wrapper = { TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray()), NULL) }).der,
-            leafParts(wrapper = { NULL + TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray())) }).der,
-            leafParts(tbsTrailing = NULL).der,
-            leafParts(signatureValue = { TestDer.tlv(0x03, TestDer.bytes(0x01), it) }).der,
-            leafParts(signatureValue = { TestDer.tlv(0x03) }).der,
-            leafParts(version = version(TestDer.bytes(4))).der,
-            leafParts(version = version(TestDer.bytes(0xff))).der,
-            leafParts(version = version(TestDer.bytes(0x00, 0x02))).der,
-            leafParts(extensions = LEAF_EXTENSIONS + TestDer.extension(OTHER_OID, NULL).let(::criticalOne)).der,
-            indefinite(leafParts()),
-            longCertificateHeader(leafParts()),
+    fun `the leaf's embedded SCT list is one OCTET STRING, and a critical Netscape type is never empty`() {
+        fun sct(value: ByteArray) = TestDer.extension(SCT_LIST, value)
+        assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + sct(TestDer.tlv(0x04, TestDer.bytes(0x00, 0x00))))))
+        assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + sct(TestDer.tlv(0x04)))))
+        for (value in listOf(
+            TestDer.tlv(0x04, TestDer.bytes(0x00, 0x00)) + NULL,
+            TestDer.seq(TestDer.tlv(0x04)),
+            TestDer.tlvWithLength(0x04, TestDer.bytes(0x81, 0x02), TestDer.bytes(0x00, 0x00)),
+            TestDer.tlv(0x04, TestDer.bytes(0x00, 0x00)).copyOf(3),
         )) {
-            assertFails(PARSE, 0, chain(leaf = der))
+            assertFails(EXTENSION, 0, chain(leaf = leaf(LEAF_EXTENSIONS + sct(value))))
         }
-        // What mozilla::pkix accepts: v1 (absent, or explicit as bug 1031093 allows), v2 and v4 read like v3, and an
-        // explicit critical FALSE.
-        val accepted =
-            listOf(ByteArray(0), version(TestDer.bytes(0)), version(TestDer.bytes(1)), version(TestDer.bytes(3)))
-        for (v in accepted) {
-            assertLoads(chain(leaf = leafParts(version = v).der))
-        }
-        assertLoads(
-            chain(leaf = leafParts(extensions = LEAF_EXTENSIONS + TestDer.extension(OTHER_OID, NULL, false)).der),
-        )
+        // Only the leaf's is read, as in pkixbuild.cpp.
+        assertLoads(chain(intermediate = intermediate(caExtensions() + sct(TestDer.seq()))))
+        val emptyNetscape = TestDer.extension(NETSCAPE_CERT_TYPE, ByteArray(0), critical = true)
+        assertFails(EXTENSION, 0, chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = false) + emptyNetscape)))
+        assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + TestDer.extension(NETSCAPE_CERT_TYPE, ByteArray(0)))))
     }
 
     @Test
-    fun `validity times must be in DER form`() {
+    fun `a link that is not DER as mozilla pkix reads it is FAILED, on the leaf and the intermediate`() {
+        val nonMinimalValue =
+            TestDer.seq(TestDer.oid(OTHER_OID), TestDer.tlvWithLength(0x04, TestDer.bytes(0x81, 0x02), NULL))
+        val trailingInExtension = TestDer.seq(TestDer.oid(OTHER_OID), TestDer.tlv(0x04, NULL), NULL)
+        val criticalOne = TestDer.extension(OTHER_OID, NULL).let(::criticalOne)
+        for (at in At.entries) {
+            val base = extensionsAt(at)
+            for (der in listOf(
+                parts(at, base + nonMinimalValue).der,
+                parts(at, base + trailingInExtension).der,
+                parts(at, tweaks = Tweaks(wrapper = { TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray()), NULL) })).der,
+                parts(at, tweaks = Tweaks(wrapper = { NULL + TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray())) })).der,
+                parts(at, tweaks = Tweaks(tbsTrailing = NULL)).der,
+                parts(at, tweaks = Tweaks(signatureValue = { TestDer.tlv(0x03, TestDer.bytes(0x01), it) })).der,
+                parts(at, tweaks = Tweaks(signatureValue = { TestDer.tlv(0x03) })).der,
+                parts(at, tweaks = Tweaks(version = version(TestDer.bytes(4)))).der,
+                parts(at, tweaks = Tweaks(version = version(TestDer.bytes(0xff)))).der,
+                parts(at, tweaks = Tweaks(version = version(TestDer.bytes(0x00, 0x02)))).der,
+                // Constructed unique ids: mozilla::pkix skips only the primitive [1] and [2].
+                parts(at, tweaks = Tweaks(uniqueIds = TestDer.tlv(0xa1, TestDer.tlv(0x03, TestDer.bytes(0x00))))).der,
+                parts(at, tweaks = Tweaks(uniqueIds = TestDer.tlv(0xa2, TestDer.tlv(0x03, TestDer.bytes(0x00))))).der,
+                parts(at, base + criticalOne).der,
+                indefinite(parts(at)),
+                indefiniteAlgorithm(parts(at)),
+                longCertificateHeader(parts(at)),
+            )) {
+                assertFails(PARSE, at.index, placed(at, der))
+            }
+            // What mozilla::pkix accepts: v1 (absent, or explicit as bug 1031093 allows), v2 and v4 read like v3,
+            // primitive unique ids, and an explicit critical FALSE.
+            val versions =
+                listOf(ByteArray(0), version(TestDer.bytes(0)), version(TestDer.bytes(1)), version(TestDer.bytes(3)))
+            for (v in versions) {
+                assertLoads(placed(at, parts(at, tweaks = Tweaks(version = v)).der))
+            }
+            val primitiveIds =
+                TestDer.tlv(0x81, TestDer.bytes(0x00, 0x01)) + TestDer.tlv(0x82, TestDer.bytes(0x00, 0x02))
+            assertLoads(placed(at, parts(at, tweaks = Tweaks(uniqueIds = primitiveIds)).der))
+            assertLoads(placed(at, parts(at, base + TestDer.extension(OTHER_OID, NULL, false)).der))
+        }
+    }
+
+    @Test
+    fun `validity times must be in DER form, on the leaf and the intermediate`() {
         val good = TestDer.tlv(0x18, TestDer.ascii("20500101000000Z"))
+
+        /** The default chain with [validity] on the certificate [at]. */
+        fun windowAt(
+            at: At,
+            validity: ByteArray,
+        ): List<ByteArray> =
+            if (at ==
+                At.LEAF
+            ) {
+                chain(leaf = leaf(validity = validity))
+            } else {
+                chain(intermediate = intermediate(validity = validity))
+            }
         for (text in listOf(
             "2610221345Z",
             "261022134530",
@@ -447,7 +495,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
             "691231235959Z",
             "500101000000Z",
         )) {
-            assertFails(PARSE, 0, chain(leaf = leaf(validity = TestDer.seq(utc(text), good))))
+            for (at in At.entries) assertFails(PARSE, at.index, windowAt(at, TestDer.seq(utc(text), good)))
         }
         for (text in listOf(
             "20261022134530.5Z",
@@ -469,8 +517,10 @@ internal class X5uChainRulesTest : X5uChainFixture() {
             "2025010100000/Z",
             "20250101000000z",
         )) {
-            assertFails(PARSE, 0, chain(leaf = leaf(validity = TestDer.seq(generalized(text), good))))
-            assertFails(PARSE, 0, chain(leaf = leaf(validity = TestDer.seq(utc("700101000000Z"), generalized(text)))))
+            for (at in At.entries) {
+                assertFails(PARSE, at.index, windowAt(at, TestDer.seq(generalized(text), good)))
+                assertFails(PARSE, at.index, windowAt(at, TestDer.seq(utc("700101000000Z"), generalized(text))))
+            }
         }
         // The decoded millisecond, against java.time, at the edges of the ranges.
         for ((time, instant) in listOf(
@@ -490,7 +540,9 @@ internal class X5uChainRulesTest : X5uChainFixture() {
 
     @Test
     fun `an empty issuer name is FAILED`() {
-        assertFails(NAME, 0, chain(leaf = leafParts(issuer = TestDer.seq()).der))
+        for (at in At.entries) {
+            assertFails(NAME, at.index, placed(at, parts(at, tweaks = Tweaks(issuer = TestDer.seq())).der))
+        }
     }
 
     @Test

@@ -179,33 +179,65 @@ internal open class X5uChainFixture {
 
     protected fun live(path: X5uPath): X5uValidity = checkValidity(path, NOW)
 
-    /** A leaf signed by the intermediate with the given encoding parts, for the DER rules. */
-    protected fun leafParts(
-        version: ByteArray = version(TestDer.bytes(2)),
-        serial: ByteArray = TestDer.bytes(0x00, 0x8f, 0x12, 0x34),
-        extensions: List<ByteArray> = LEAF_EXTENSIONS,
-        wrapper: (List<ByteArray>) -> ByteArray = { TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray())) },
-        tbsTrailing: ByteArray = ByteArray(0),
-        signatureValue: (ByteArray) -> ByteArray = { TestDer.tlv(0x03, TestDer.bytes(0x00), it) },
-        issuer: ByteArray = INTERMEDIATE,
+    /** Where [parts] puts a certificate: the leaf (x5u index 0) or the intermediate (index 1). */
+    enum class At(
+        val index: Int,
+    ) {
+        LEAF(0),
+        INTERMEDIATE(1),
+    }
+
+    /** The encoding parts [parts] varies, each defaulting to the well-formed one. */
+    class Tweaks(
+        val version: ByteArray = version(TestDer.bytes(2)),
+        val serial: ByteArray = TestDer.bytes(0x00, 0x8f, 0x12, 0x34),
+        val uniqueIds: ByteArray = ByteArray(0),
+        val wrapper: (List<ByteArray>) -> ByteArray = { TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray())) },
+        val tbsTrailing: ByteArray = ByteArray(0),
+        val signatureValue: (ByteArray) -> ByteArray = { TestDer.tlv(0x03, TestDer.bytes(0x00), it) },
+        val issuer: ByteArray? = null,
+    )
+
+    /** The default extensions of the certificate [at]. */
+    protected fun extensionsAt(at: At): List<ByteArray> = if (at == At.LEAF) LEAF_EXTENSIONS else caExtensions()
+
+    /**
+     * The certificate [at], really signed by its issuer (the intermediate for the leaf, the root for the intermediate),
+     * with [extensions] (the position's defaults when null) and [tweaks], for the DER rules.
+     */
+    protected fun parts(
+        at: At = At.LEAF,
+        extensions: List<ByteArray>? = null,
+        tweaks: Tweaks = Tweaks(),
     ): TestCert {
+        val leaf = at == At.LEAF
+        val alg = if (leaf) EC_SHA384 else RSA_SHA384
+
         fun cert(signature: ByteArray) =
             TestCert(
-                version = version,
-                serial = TestDer.tlv(0x02, serial),
-                tbsSignature = EC_SHA384.id,
-                issuer = issuer,
+                version = tweaks.version,
+                serial = TestDer.tlv(0x02, tweaks.serial),
+                tbsSignature = alg.id,
+                issuer = tweaks.issuer ?: if (leaf) INTERMEDIATE else ROOT,
                 validity = WIDE,
-                subject = LEAF,
-                spki = leafKey.public.encoded,
-                extensions = extensions,
-                extensionsWrapper = wrapper,
-                tbsTrailing = tbsTrailing,
-                outerAlgorithm = EC_SHA384.id,
-                signature = signatureValue(signature),
+                subject = if (leaf) LEAF else INTERMEDIATE,
+                spki = (if (leaf) leafKey else intermediateKey).public.encoded,
+                uniqueIds = tweaks.uniqueIds,
+                extensions = extensions ?: extensionsAt(at),
+                extensionsWrapper = tweaks.wrapper,
+                tbsTrailing = tweaks.tbsTrailing,
+                outerAlgorithm = alg.id,
+                signature = tweaks.signatureValue(signature),
             )
-        return cert(JcaFixtures.sign(EC_SHA384.jca, intermediateKey.private, cert(ByteArray(0)).tbs))
+        val signer = (if (leaf) intermediateKey else rootKey).private
+        return cert(JcaFixtures.sign(alg.jca, signer, cert(ByteArray(0)).tbs))
     }
+
+    /** The default chain with [der] at [at]. */
+    protected fun placed(
+        at: At,
+        der: ByteArray,
+    ): List<ByteArray> = if (at == At.LEAF) chain(leaf = der) else chain(intermediate = der)
 
     // Helpers
 
@@ -346,6 +378,13 @@ internal open class X5uChainFixture {
             val header = if (tbs[1].toInt() and 0x80 == 0) 2 else 2 + (tbs[1].toInt() and 0x7f)
             val body = TestDer.bytes(0x30, 0x80) + tbs.copyOfRange(header, tbs.size) + TestDer.bytes(0x00, 0x00)
             return TestDer.seq(body, cert.outerAlgorithm, cert.signature)
+        }
+
+        /** [cert] with its outer `signatureAlgorithm` re-written under an indefinite length. */
+        fun indefiniteAlgorithm(cert: TestCert): ByteArray {
+            val alg = cert.outerAlgorithm
+            val body = TestDer.bytes(0x30, 0x80) + alg.copyOfRange(2, alg.size) + TestDer.bytes(0x00, 0x00)
+            return TestDer.seq(cert.tbs, body, cert.signature)
         }
 
         /** [cert] under a `Certificate` header whose length takes one octet more than it needs. */

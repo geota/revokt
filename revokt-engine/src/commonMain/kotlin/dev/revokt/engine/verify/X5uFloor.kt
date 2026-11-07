@@ -9,7 +9,6 @@ import dev.revokt.engine.parse.HeaderSite
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.ParseContext
-import dev.revokt.engine.parse.PrimeCurve
 import dev.revokt.engine.parse.Span
 import dev.revokt.engine.parse.VerifierInput
 import okio.ByteString.Companion.decodeHex
@@ -48,6 +47,17 @@ internal object X5uFloor {
     private val RSA_ENCRYPTION =
         byteArrayOf(0x2a, 0x86.toByte(), 0x48, 0x86.toByte(), 0xf7.toByte(), 0x0d, 0x01, 0x01, 0x01)
     private val EC_PUBLIC_KEY = byteArrayOf(0x2a, 0x86.toByte(), 0x48, 0xce.toByte(), 0x3d, 0x02, 0x01)
+
+    /** `05 00`: the only NULL the parameters of `rsaEncryption` may be (`ExpectTagAndEmptyValue`). */
+    private val NULL_TLV = byteArrayOf(NULL.toByte(), 0x00)
+
+    /** The namedCurve OID content and field length in bytes of P-256, P-384 and P-521 (`CheckSubjectPublicKeyInfo`). */
+    private val CURVES =
+        listOf(
+            byteArrayOf(0x2a, 0x86.toByte(), 0x48, 0xce.toByte(), 0x3d, 0x03, 0x01, 0x07) to 32,
+            byteArrayOf(0x2b, 0x81.toByte(), 0x04, 0x00, 0x22) to 48,
+            byteArrayOf(0x2b, 0x81.toByte(), 0x04, 0x00, 0x23) to 66,
+        )
 
     /** sha256/384/512WithRSAEncryption and ecdsa-with-SHA256/384/512 (RFC 4055 §5, RFC 5758 §3.2). */
     private val SIGNATURES = (11..13).map { "$PKCS1.$it" }.toSet() + (2..4).map { "1.2.840.10045.4.3.$it" }
@@ -94,7 +104,7 @@ internal object X5uFloor {
                 bits.length >= 2 && spki[bits.start].toInt() == 0 && parameters != null &&
                     when {
                         Oid.matches(spki, oid, RSA_ENCRYPTION) -> {
-                            parameters.tag == NULL && rsa(spki, key, ctx)
+                            parameters.tlv.bytes(spki).contentEquals(NULL_TLV) && rsa(spki, key, ctx)
                         }
 
                         Oid.matches(spki, oid, EC_PUBLIC_KEY) -> {
@@ -148,7 +158,7 @@ internal object X5uFloor {
         curveOid: Span,
         key: Span,
     ): Boolean {
-        val curve = PrimeCurve.ALL.firstOrNull { Oid.matches(b, curveOid, it.oid) } ?: return false
-        return key.length == 1 + 2 * curve.byteLength && b[key.start].toInt() == UNCOMPRESSED
+        val fieldBytes = CURVES.firstOrNull { Oid.matches(b, curveOid, it.first) }?.second ?: return false
+        return key.length == 1 + 2 * fieldBytes && b[key.start].toInt() == UNCOMPRESSED
     }
 }
