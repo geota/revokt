@@ -15,6 +15,7 @@ import dev.revokt.engine.parse.Extension
 import dev.revokt.engine.parse.ExtensionRead
 import dev.revokt.engine.parse.ExtensionValues
 import dev.revokt.engine.parse.HeaderSite
+import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.ParseContext
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.Span
@@ -37,7 +38,10 @@ internal enum class X5uChainFailure {
     /** No certificate after the leaf has a pinned SPKI. */
     NOT_PINNED,
 
-    /** An extension OID occurs more than once, or an extension the chain reads is malformed. */
+    /**
+     * An extension OID occurs more than once, an extension the chain reads is malformed, a critical extension is not
+     * one mozilla::pkix understands (or is one it enforces and revokt does not), or one it understands is empty.
+     */
     EXTENSION,
 
     /** A link's signed TBS algorithm or its own key is below the algorithm floor, or its outer algorithm differs. */
@@ -45,6 +49,9 @@ internal enum class X5uChainFailure {
 
     /** A non-leaf link has no basicConstraints, or `cA` is not TRUE. */
     NOT_CA,
+
+    /** The leaf's basicConstraints has `cA = TRUE` (mozilla::pkix's `CA_CERT_USED_AS_END_ENTITY`). */
+    CA_LEAF,
 
     /** A non-leaf link's `pathLenConstraint` is below the number of non-leaf links under it. */
     PATH_LEN,
@@ -55,7 +62,7 @@ internal enum class X5uChainFailure {
     /** A link's issuer name is empty, or a non-leaf link's subject is not its child's issuer, raw or canonical. */
     NAME,
 
-    /** The leaf has no extKeyUsage, no codeSigning purpose in it, or also OCSPSigning. */
+    /** The leaf has no extKeyUsage, no codeSigning in it, or also OCSPSigning; or a CA's extKeyUsage lacks codeSigning. */
     EKU,
 
     /** The leaf's subjectAltName is absent or is not exactly one dNSName equal to [X5U_LEAF_NAME]. */
@@ -246,6 +253,7 @@ private fun link(
     }
     val duplicates = c.duplicateExtensionOids()
     if (duplicates.isNotEmpty()) return failed(X5uChainFailure.EXTENSION, i, "duplicate extensions $duplicates")
+    Understood.rejected(c)?.let { return failed(X5uChainFailure.EXTENSION, i, it) }
     if (!X5uFloor.signature(c.tbs.signature.bytes(c.tbsBytes))) {
         return failed(X5uChainFailure.ALGORITHM, i, "signature algorithm below the floor")
     }
@@ -253,11 +261,20 @@ private fun link(
     return null
 }
 
-/** The leaf rules: codeSigning in extKeyUsage, and exactly one SAN, the dNSName [X5U_LEAF_NAME]. */
+/**
+ * The leaf rules: not a CA, a readable keyUsage if present, codeSigning in extKeyUsage without OCSPSigning, and exactly
+ * one SAN, the dNSName [X5U_LEAF_NAME]. The not-a-CA, keyUsage and OCSPSigning rules are mozilla::pkix's
+ * (`CheckBasicConstraints`, `CheckKeyUsage`, `CheckExtendedKeyUsage` for an end entity; maintainer decision
+ * 2026-11-06, pending in the next spec revision).
+ */
 private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
+    val bc = ExtensionValues.basicConstraints(c).valueOr(0, "basicConstraints") { return it }
+    if (bc?.ca == true) return failed(X5uChainFailure.CA_LEAF, 0, "the leaf has cA TRUE")
+    ExtensionValues.keyUsage(c).valueOr(0, "keyUsage") { return it }
     val eku = ExtensionValues.extendedKeyUsage(c).valueOr(0, "extKeyUsage") { return it }
-    if (eku?.contains(CODE_SIGNING) != true) return failed(X5uChainFailure.EKU, 0, "no codeSigning in extKeyUsage")
-    // mozilla::pkix's CheckExtendedKeyUsage: an end entity that may also sign OCSP responses makes no sense.
+    if (eku == null || !eku.contains(CODE_SIGNING)) {
+        return failed(X5uChainFailure.EKU, 0, "no codeSigning in extKeyUsage")
+    }
     if (eku.contains(OCSP_SIGNING)) return failed(X5uChainFailure.EKU, 0, "OCSPSigning in extKeyUsage")
     val san = ExtensionValues.subjectAltName(c).valueOr(0, "subjectAltName") { return it }
     val names = san?.names.orEmpty()
@@ -287,6 +304,10 @@ private fun issuer(
     }
     val ku = ExtensionValues.keyUsage(c).valueOr(i, "keyUsage") { return it }
     if (ku?.keyCertSign == false) return failed(X5uChainFailure.KEY_USAGE, i, "keyUsage without keyCertSign")
+    // mozilla::pkix and webpki check the required EKU on every certificate that has one (maintainer decision
+    // 2026-11-06, pending in the next spec revision); the terminal is never read.
+    val eku = ExtensionValues.extendedKeyUsage(c).valueOr(i, "extKeyUsage") { return it }
+    if (eku?.contains(CODE_SIGNING) == false) return failed(X5uChainFailure.EKU, i, "extKeyUsage without codeSigning")
     return null
 }
 
@@ -342,6 +363,69 @@ private fun criticalIsDer(
     fields.read(OBJECT_IDENTIFIER, HeaderSite.EXTENSION_OID)
     val flag = fields.readOptional(BOOLEAN, HeaderSite.EXTENSION_CRITICAL) ?: return true
     return ExtensionValues.boolean(b, flag.content)
+}
+
+/**
+ * The extensions mozilla::pkix's `BackCert::RememberExtension` understands (at `cac25a6`), so that a critical copy of any
+ * other is `ERROR_UNKNOWN_CRITICAL_EXTENSION` (maintainer decision 2026-11-06, pending in the next spec revision).
+ * OIDs are compared as encoded, as `MatchRest` does, so a non-minimal arc is an unknown extension.
+ *
+ * - Understood and checked here, or ignored by Firefox for an any-policy content signature (so a critical copy is
+ *   accepted): keyUsage, subjectAltName, basicConstraints, extKeyUsage, certificatePolicies (`CheckCertificatePolicies`
+ *   returns at once for anyPolicy), policyConstraints, inhibitAnyPolicy, authorityInfoAccess, the embedded SCT list,
+ *   qcStatements, and a critical `id-pkix-ocsp-nocheck`.
+ * - Netscape certificate type, when critical, only with basicConstraints and extKeyUsage present, as `BackCert::Init`.
+ * - Understood and *enforced* by Firefox but not here: nameConstraints and the TLS feature (`CheckNameConstraints`,
+ *   `CheckTLSFeatures`). A critical copy is rejected rather than ignored; a non-critical one is ignored.
+ * - An understood extension with an empty value is rejected (`ERROR_EXTENSION_VALUE_INVALID`), but `ocsp-nocheck`.
+ */
+private object Understood {
+    private val ACCEPTED =
+        listOf(
+            byteArrayOf(0x55, 0x1d, 0x0f), // keyUsage
+            byteArrayOf(0x55, 0x1d, 0x11), // subjectAltName
+            byteArrayOf(0x55, 0x1d, 0x13), // basicConstraints
+            byteArrayOf(0x55, 0x1d, 0x20), // certificatePolicies
+            byteArrayOf(0x55, 0x1d, 0x24), // policyConstraints
+            byteArrayOf(0x55, 0x1d, 0x25), // extKeyUsage
+            byteArrayOf(0x55, 0x1d, 0x36), // inhibitAnyPolicy
+            pkix(0x01, 0x01), // authorityInfoAccess
+            pkix(0x01, 0x03), // qcStatements
+            byteArrayOf(0x2b, 0x06, 0x01, 0x04, 0x01, 0xd6.toByte(), 0x79, 0x02, 0x04, 0x02), // embedded SCT list
+        )
+
+    /** Understood, and enforced by Firefox only: a critical copy cannot be honoured here. */
+    private val ENFORCED = listOf(byteArrayOf(0x55, 0x1d, 0x1e), pkix(0x01, 0x18)) // nameConstraints, TLS feature
+
+    private val OCSP_NOCHECK = pkix(0x30, 0x01, 0x05)
+    private val NETSCAPE_CERT_TYPE =
+        byteArrayOf(0x60, 0x86.toByte(), 0x48, 0x01, 0x86.toByte(), 0xf8.toByte(), 0x42, 0x01, 0x01)
+
+    /** `id-pkix` (1.3.6.1.5.5.7) followed by [arcs], as OID content. */
+    private fun pkix(vararg arcs: Int): ByteArray =
+        byteArrayOf(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07) + arcs.map { it.toByte() }
+
+    /** Why one of [c]'s extensions fails mozilla::pkix's reading, or null. */
+    fun rejected(c: ParsedCertificate): String? {
+        for (e in c.tbs.extensions) {
+            fun isOid(oid: ByteArray) = Oid.matches(c.tbsBytes, e.oid, oid)
+            val accepted = ACCEPTED.any(::isOid)
+            val enforced = ENFORCED.any(::isOid)
+            if ((accepted || enforced) && e.value.length == 0) return "an empty ${e.oidDotted}"
+            if (!e.critical || accepted || isOid(OCSP_NOCHECK) ||
+                (isOid(NETSCAPE_CERT_TYPE) && backsNetscape(c))
+            ) {
+                continue
+            }
+            return "${if (enforced) "an unenforced" else "an unknown"} critical ${e.oidDotted}"
+        }
+        return null
+    }
+
+    /** `BackCert::Init`: a critical Netscape certificate type stands only beside basicConstraints and extKeyUsage. */
+    private fun backsNetscape(c: ParsedCertificate): Boolean =
+        c.extensions(ExtensionValues.BASIC_CONSTRAINTS).isNotEmpty() &&
+            c.extensions(ExtensionValues.EXT_KEY_USAGE).isNotEmpty()
 }
 
 private const val SEQUENCE = 0x30
