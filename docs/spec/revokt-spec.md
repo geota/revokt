@@ -1,10 +1,36 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 54** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-07
+Status: **draft spec / project proposal, revision 55** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-07
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 55 (x5u failure reasons, the leaf's SCT list, the ECDSA scope, 2026-11-07)
+- **Clarified** (§7.1, from the #170 and #174 reviews): which failure reason a malformed encoding gets.
+  - `PARSE` covers the certificate's outer structure: the TBS and the outer `signatureAlgorithm`, an indefinite length
+    included; the serial's minimal encoding; the primitive unique IDs; the `critical` BOOLEAN.
+  - Each extension value revokt reads (basicConstraints, keyUsage, extKeyUsage, subjectAltName, nameConstraints,
+    the leaf's SCT list) is parsed first, and anything malformed is `EXTENSION`: bytes after the value, a BOOLEAN such
+    as `cA` of `01`, a non-minimal length, an empty keyUsage (`03 00`, `03 01 00`), an empty extKeyUsage (`30 00`) or
+    a non-OID element in it, an unknown GeneralName tag. Only a well-formed value reaches the `SAN`, `EKU` and
+    `KEY_USAGE` checks. The TLS feature is compared byte for byte and never parsed. Before, the "DER" bullet said
+    `PARSE` for these, which contradicted the "Extensions" bullet.
+- **Added** (§7.1, matching Firefox): when the leaf carries the embedded SCT list, its `extnValue` is exactly one
+  OCTET STRING with nothing after it, else `EXTENSION` (`pkixbuild.cpp` lines 218 to 229 at
+  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`). The list's content is not read.
+- **Fixtures** (§9 (d)):
+  - the extension-internal rows now expect `EXTENSION`;
+  - new rows: the empty keyUsage and extKeyUsage forms, a non-OID extKeyUsage element and a SAN with an unknown
+    GeneralName tag → `EXTENSION`; a serial with a redundant leading `00` or `FF`, or an empty serial (`02 00`), →
+    `PARSE`, beside "a zero or negative serial loads"; a constructed unique ID → `PARSE`; `rsaEncryption` NULL
+    parameters with content → `ALGORITHM`; an empty critical Netscape certificate type → `EXTENSION`, and an empty
+    non-critical one → loads; the SCT list cases.
+- **Scoped** (§3, the #160 comment): the ECDSA range check covers standalone ECDSA. A composite ML-DSA + ECDSA
+  signature verifies as one provider operation, so its ECDSA component is the owning provider's responsibility;
+  both owning providers (BC's `ECDSASigner`, BoringSSL under Conscrypt) range-check it.
+- **Gated** (§9 verifier row): the brainpool cases under BC wait on #175, the BC dependency decision, instead of
+  being [0.2, #172]. The NIST-curve cases stay [0.2, #172].
 
 ### Changes in revision 54 (the x5u chain follows mozilla::pkix, and the ECDSA range check, 2026-11-07)
 - **Added** (§7.1, the maintainer's decision on #126): the x5u chain follows mozilla::pkix at Firefox
@@ -1636,7 +1662,7 @@ curve the provider does not support is `UNSUPPORTED`, never `INVALID`. Then, aft
 decoded the key and before `Signature` is called, the verifier decodes the signature's `ECDSA-Sig-Value` and answers
 `INVALID` unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1.
 - **n** is the order of the decoded key's own curve, `ECPublicKey.params.order`, so every curve the provider supports
-  is covered: P-256, P-384 and P-521, and the brainpool curves under BC. A key whose order cannot be read is
+  is covered: P-256, P-384 and P-521, and the brainpool curves under BC (whether revokt's tests take BC is #175). A key whose order cannot be read is
   `INVALID`.
 - **The `ECDSA-Sig-Value` profile:** a SEQUENCE of exactly two INTEGERs, with minimal definite lengths, each INTEGER
   in minimal two's complement and positive, and no bytes after the SEQUENCE. Anything else is `INVALID`. This can be
@@ -1646,8 +1672,10 @@ decoded the key and before `Signature` is called, the verifier decodes the signa
   17.0.2 and in 18 GA (CVE-2022-21449), which within revokt's JVM 17+ target is 17.0.0 to 17.0.2 and 18 GA.
 - **High s** (s > n/2) stays accepted: the #163 review found Mozilla's `ct-logs` collection signature with s > n/2,
   and SEC 1 and NSS accept it.
-- **Scope:** every ECDSA signature that reaches the verifier: a TLS chain's links, the x5u chain's links (§7.1) and
-  the content signature after its raw-to-DER conversion.
+- **Scope:** every standalone ECDSA signature that reaches the verifier: a TLS chain's links, the x5u chain's links
+  (§7.1) and the content signature after its raw-to-DER conversion. A composite ML-DSA + ECDSA signature verifies as
+  one provider operation, so its ECDSA component is the owning provider's responsibility (revision 55, the #160
+  comment); both owning providers range-check it (BC's `ECDSASigner`, and BoringSSL under Conscrypt; Appendix A).
 
 **From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
 signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
@@ -3039,7 +3067,7 @@ base URL pinned in `MozillaRemoteSettings`, never taken from the server root res
 HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; `_expected` is validated as an integer before it enters a query string), `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal (revision 54: Firefox's `AppTrustDomain` set): a signature is RSA PKCS#1 v1.5 or ECDSA with SHA-256, SHA-384 or SHA-512 (an ECDSA AlgorithmIdentifier with NULL or absent parameters, as mozilla::pkix reads it), or `id-RSASSA-PSS` whose parameters are byte for byte one of mozilla::pkix's three encodings (SHA-256, SHA-384 or SHA-512 with NULL hash parameters, MGF1 with the same hash, a salt length equal to the hash length, `trailerField` omitted for its default 1); a link's key is `rsaEncryption` of at least 2048 bits or `id-ecPublicKey` on P-256, P-384 or P-521, so an `id-RSASSA-PSS` key fails; anything else `FAILED` (`ALGORITHM`; the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply). This floor is the x5u chain's own: §3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged; validity at verification time for the leaf
 and every non-terminal link; for every non-leaf link below the terminal: basicConstraints `cA = TRUE`,
 `pathLenConstraint` honoured, subject name equal to the child's issuer (raw or canonical), keyUsage
-`keyCertSign` when present;
+`keyCertSign` when present (`KEY_USAGE`);
 links verified with the signed TBS algorithm; root SPKI hash in the pinned set (today one entry, the SPKI SHA-256 of
 `CN=root-ca-production-amo`, `3317FA45154AC7DA55694D3782316056471FC147C04AED3E03FFE99565B1E2E7`, which
 `MozillaRemoteSettings.DEFAULT` pins; certificate SHA-256 `C8A80E9A…A106DB`; both verified in Appendix A, revision 49;
@@ -3053,16 +3081,24 @@ key is attacker-choosable, so a check on it stops nothing, while root expiry wou
 seed. **Order:** the pin lookup runs first, over each certificate after the leaf as read leniently (§9.2's parser);
 the strict profile below then applies only to the links below the terminal, and the terminal is read for its SPKI
 alone. Leaf EKU
-codeSigning and never `id-kp-OCSPSigning` (`EKU`); leaf SAN exactly `onecrl.content-signature.mozilla.org`. Any non-terminal certificate
+codeSigning and never `id-kp-OCSPSigning` (`EKU`); leaf SAN exactly `onecrl.content-signature.mozilla.org` (`SAN`). Any non-terminal certificate
 on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stage `X5U`).
 
 **The chain follows mozilla::pkix** (revision 54, the maintainer's decision on #126: mozilla::pkix at Firefox
 `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki 0.103.15 consulted and its divergences listed in Appendix A). Every failure is
 `SyncOutcome.FAILED`, and the parenthesis names the chain's failure reason. For every link below the terminal:
-- **DER as mozilla::pkix reads it** (`PARSE`): minimal tag and length headers; no indefinite length, the TBS
-  included; no element the certificate grammar does not place (a TLV after the SPKI other than the optional unique IDs
-  and `[3]`, a second SEQUENCE inside `[3]`, bytes after an extension's `extnValue`), and each extension value revokt
-  reads is parsed to its end; a BOOLEAN is `00` or `FF`; zero unused bits in the signature BIT STRING. Times are read
+- **DER as mozilla::pkix reads it** (`PARSE` for the certificate's outer structure, `EXTENSION` inside an
+  extension value; revision 55): in the outer structure, minimal tag and length headers; no indefinite length, the
+  TBS and the outer `signatureAlgorithm` included; no element the certificate grammar does not place (a TLV after the
+  SPKI other than the optional unique IDs, which are primitive, and `[3]`, a second SEQUENCE inside `[3]`, bytes after
+  an extension's `extnValue`); a minimally encoded serial; the `critical` BOOLEAN `00` or `FF`; zero unused bits in
+  the signature BIT STRING. Each extension value revokt reads (basicConstraints, keyUsage, extKeyUsage, subjectAltName,
+  nameConstraints, the leaf's embedded SCT list) is parsed first and to its end, and anything malformed is
+  `EXTENSION`: bytes after the value, a BOOLEAN other than `00` or `FF`, a non-minimal length, an empty keyUsage BIT
+  STRING (`03 00`) or one with no named-bit byte (`03 01 00`), an empty extKeyUsage SEQUENCE (`30 00`) or a non-OID
+  element in it, an unknown GeneralName tag. Only a well-formed value reaches the `SAN`, `EKU` and `KEY_USAGE` checks,
+  so a SAN with an unknown GeneralName tag is `EXTENSION`, not `SAN`. An empty `extnValue` is the understood-empty rule
+  below. The TLS feature is compared byte for byte and never parsed. Times are read
   as mozilla::pkix reads them: `UTCTime` as `YYMMDDHHMMSSZ` and `GeneralizedTime` as `YYYYMMDDHHMMSSZ`, either type
   for any year (Mozilla's `Content Signing Intermediate` uses GeneralizedTime `20150317000000Z`), a year of 1970 or
   later, and notBefore ≤ notAfter. **What mozilla::pkix accepts and revokt accepts too, although DER or RFC 5280
@@ -3080,7 +3116,10 @@ on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stag
 - **Extensions** (`EXTENSION`): an OID that occurs twice fails, whatever it is (RFC 5280's MUST NOT; stricter than
   mozilla::pkix, which rejects only a repeated extension it understands, Appendix A); an understood extension with
   an empty value fails, except `id-pkix-ocsp-nocheck`; a malformed basicConstraints or keyUsage on the leaf fails as
-  on every link; a `pathLenConstraint` above 127 fails, as mozilla::pkix's integer reader does.
+  on every link; a `pathLenConstraint` above 127 fails, as mozilla::pkix's integer reader does. **The leaf's
+  embedded SCT list** (revision 55, as Firefox): when the leaf carries the extension, its `extnValue` is exactly one
+  OCTET STRING with nothing after it (`pkixbuild.cpp` lines 218 to 229 at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`,
+  `ExtractSignedCertificateTimestampListFromExtension`); anything else fails. The list's content is not read.
 - **Critical extensions** (`EXTENSION`): a critical extension outside mozilla::pkix's understood set
   (`BackCert::RememberExtension`: keyUsage, subjectAltName, basicConstraints, nameConstraints, certificatePolicies,
   policyConstraints, extKeyUsage, inhibitAnyPolicy, authorityInfoAccess, the TLS feature extension, the embedded SCT
@@ -3290,22 +3329,30 @@ tests; **live checks** are informational.
   leaf at live fetch → `CLOCK_SKEW`, expired leaf in seed → loads; a pinned SPKI as a non-terminal
   link → loads with the path truncated there; the pinned terminal expired, or wrapped in a
   self-signed certificate with another subject → loads; (revision 54, each in the leaf and in the intermediate where both apply) a
-  non-minimal length, a TLV after the SPKI, a second SEQUENCE inside `[3]`, bytes after an `extnValue`, trailing bytes
-  inside an extension value revokt reads, an indefinite-length TBS, a `UTCTime` without seconds, a time with a
-  fraction or an offset, a year before 1970, notBefore after notAfter, a BOOLEAN of `01` and a signature BIT STRING
-  with unused bits → `FAILED` (`PARSE`); a GeneralizedTime before 2050 (Mozilla's intermediate's
-  `20150317000000Z`), an explicitly encoded v1 version, an explicit FALSE `critical` or `cA`, an empty Extensions
-  SEQUENCE, a zero or negative serial and a keyUsage with a non-minimal named-bit encoding → loads; a version INTEGER
+  non-minimal length in the outer structure, a TLV after the SPKI, a second SEQUENCE inside `[3]`, bytes after an
+  `extnValue`, an indefinite-length TBS or outer `signatureAlgorithm`, a constructed unique ID, a `UTCTime` without
+  seconds, a time with a fraction or an offset, a year before 1970, notBefore after notAfter, a `critical` BOOLEAN of
+  `01` and a signature BIT STRING with unused bits → `FAILED` (`PARSE`); (revision 55) trailing bytes inside an
+  extension value revokt reads, a BOOLEAN `cA` of `01`, a non-minimal length inside basicConstraints, keyUsage,
+  extKeyUsage, subjectAltName or nameConstraints, an empty keyUsage BIT STRING (`03 00`) or one with no named-bit byte (`03 01 00`), an empty extKeyUsage
+  SEQUENCE (`30 00`), an extKeyUsage with a non-OID element, and a SAN with an unknown GeneralName tag → `EXTENSION`
+  (the SAN case not `SAN`); a GeneralizedTime before 2050
+  (Mozilla's intermediate's `20150317000000Z`), an explicitly encoded v1 version, an explicit FALSE `critical` or `cA`,
+  an empty Extensions SEQUENCE, a zero or negative serial and a keyUsage with a non-minimal named-bit encoding →
+  loads; a serial with a redundant leading `00` or `FF`, or an empty serial (`02 00`), → `PARSE`; a version INTEGER
   of 4 → `PARSE`, a version of 3, which is v4 → loads, and an implicit v1 with `[3]` → loads; an issuer with no RDN → `NAME`;
   an outer `signatureAlgorithm` that differs from the TBS one → `ALGORITHM`, and one that differs only by a NULL
   against an absent parameter → loads; an EC key with explicit curve parameters, a compressed point or a point one
-  byte short, an `rsaEncryption` key with absent parameters, a modulus with a redundant leading `00`, and an SPKI BIT
+  byte short, an `rsaEncryption` key with absent parameters or with NULL parameters that
+  have content, a modulus with a redundant leading `00`, and an SPKI BIT
   STRING with unused bits → `ALGORITHM`; an ECDSA signature AlgorithmIdentifier with NULL parameters → loads; an
   extension OID twice, critical or not and understood or not → `EXTENSION`; an empty subjectAltName value →
   `EXTENSION`, and an empty critical `id-pkix-ocsp-nocheck` → loads; a `pathLenConstraint` of 128 → `EXTENSION`; an
   unknown critical extension → `EXTENSION`, and the same extension not critical → loads; a critical
-  certificatePolicies → loads; a critical Netscape certificate type with basicConstraints and extKeyUsage → loads, and
-  without extKeyUsage → `EXTENSION`; an intermediate with the TLS feature extension over a leaf without it, or with
+  certificatePolicies → loads; a critical Netscape certificate type with basicConstraints and extKeyUsage → loads,
+  without extKeyUsage → `EXTENSION`, and with an empty value → `EXTENSION`, while an empty non-critical Netscape certificate type → loads; (revision 55) a leaf whose embedded SCT
+  list `extnValue` is an OCTET STRING followed by a byte, or is not an OCTET STRING → `EXTENSION`, and a well-formed
+  one → loads; an intermediate with the TLS feature extension over a leaf without it, or with
   another value → `EXTENSION`, and the same value on both → loads; a terminal with the TLS feature over an
   intermediate without it → loads; a leaf with `cA = TRUE` → `LEAF_CA`; a
   malformed leaf basicConstraints or keyUsage → `EXTENSION`; a leaf extKeyUsage of codeSigning and
@@ -3387,8 +3434,8 @@ tests; **live checks** are informational.
   parameters included; a SHA-256 message hash with MGF1 over SHA-1, which the JDK verifies; a mask generation
   function other than `id-mgf1`; each `UNSUPPORTED` instead under a provider without `id-RSASSA-PSS`); raw-to-DER
   edge cases; an off-curve point
-  on a supported OID → `INVALID`; [0.2, #172] ECDSA range (revision 54), on P-256, P-384 and P-521, and on
-  brainpoolP256r1 and brainpoolP384r1 under BC: r or s of 0, of n and of n + 1 → `INVALID` before `Signature` is
+  on a supported OID → `INVALID`; [0.2, #172] ECDSA range (revision 54), on P-256, P-384 and P-521, and, gated on #175
+  (the BC dependency decision; revision 55), on brainpoolP256r1 and brainpoolP384r1 under BC: r or s of 0, of n and of n + 1 → `INVALID` before `Signature` is
   called; an ECDSA signature on a curve the probe marks unsupported → `UNSUPPORTED`, whatever its r and s; r = s = 0, the CVE-2022-21449 form, → `INVALID` against a stub provider that answers `VERIFIED` to every
   signature, so the row tests revokt's check and not the JDK's; an `ECDSA-Sig-Value` with trailing bytes, a negative
   INTEGER, a redundant leading `00`, a non-minimal length or a missing s → `INVALID`; a key whose curve order cannot be
@@ -4659,6 +4706,12 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     redundant leading `00` did not (0 of 20). revokt's profile rejects both, so it is stricter than SunEC there.
   - **High s:** the #163 review found Mozilla's `ct-logs` collection signature with s > n/2; SEC 1 and NSS accept a
     high s, so revokt does too.
+  - **Composite owners range-check their ECDSA component** (revision 55, §3), read at each project's main branch on
+    2026-11-07, not at the versions revokt tests:
+    - BC: bc-java `core/src/main/java/org/bouncycastle/crypto/signers/ECDSASigner.java` `verifySignature` returns
+      false unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1 ("r in the range [1,n-1]");
+    - BoringSSL: `crypto/fipsmodule/ecdsa/ecdsa.cc.inc` lines 74 to 81 reject a zero r or s (`ec_scalar_is_zero`),
+      and `crypto/fipsmodule/ec/scalar.cc.inc` `ec_scalar_from_bytes` (lines 73 to 85) rejects a value ≥ n.
 - **Revision 54, the x5u chain follows mozilla::pkix at Firefox `cac25a6fa321b0051932359b84c4e2fe3caabdc5`**
   (tag `FIREFOX_BETA_161_BASE`, 2026-11-05), with rustls-webpki 0.103.15 consulted, read 2026-11-07 (Firefox through
   the GitHub contents API; webpki from the local cargo registry):
@@ -4690,6 +4743,10 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     `pkixnames.cpp` matches a dNSName subtree on label boundaries, ignoring case, with `""` matching every name; it
     rejects an empty NameConstraints, an encoded `minimum` or `maximum` and an invalid base, and applies a permitted
     subtree only to names of its own type.
+  - **Revision 55:** at the same commit, `pkixbuild.cpp` lines 218 to 229 extract an end entity's embedded SCT list
+    with `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` (lines 312 to 322:
+    `ExpectTagAndGetValueAtEnd(extnValue, OCTET_STRING, …)`), and a failure fails every path through the
+    certificate, as revision 46 recorded at `86136a5`.
   - **webpki's divergences**, consulted and not followed: its understood critical set is only id-ce 15, 17, 19, 30, 31
     and 37 (keyUsage, subjectAltName, basicConstraints, nameConstraints, cRLDistributionPoints, extKeyUsage;
     `cert.rs` lines 302 to 317); it rejects any certificate with unique IDs (`cert.rs` line 98); it does not require
