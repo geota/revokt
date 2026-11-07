@@ -112,10 +112,6 @@ internal class X5uPath private constructor(
                 windows +=
                     DerTimes.window(c.tbsBytes, c.tbs.validity) ?: return failed(X5uChainFailure.PARSE, i, "times")
             }
-            // CheckTLSFeatures runs for every potential issuer, the trust anchor included (revision 54, pending).
-            if (!tlsFeatures(certs[terminal], certs[terminal - 1])) {
-                return failed(X5uChainFailure.EXTENSION, terminal, "the child lacks the terminal's TLS feature")
-            }
             signatures(certs, verifier)?.let { return it }
             return X5uChainResult.Valid(X5uPath(certs.subList(0, terminal).toList(), windows))
         }

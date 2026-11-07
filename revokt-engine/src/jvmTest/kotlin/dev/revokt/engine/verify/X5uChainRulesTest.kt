@@ -225,16 +225,9 @@ internal class X5uChainRulesTest : X5uChainFixture() {
                     intermediate(caExtensions() + statusRequest),
             ),
         )
-        // Only an issuer's feature binds, the terminal's included (CheckTLSFeatures runs for the trust anchor too).
+        // Only a CA below the terminal binds: the leaf's alone, and the terminal's, are not read (revision 54).
         assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + statusRequest)))
-        assertFails(EXTENSION, 2, chain(root = root(extensions = caExtensions() + statusRequest)))
-        assertLoads(
-            chain(
-                leaf = leaf(LEAF_EXTENSIONS + statusRequest),
-                intermediate = intermediate(caExtensions() + statusRequest),
-                root = root(extensions = caExtensions() + statusRequest),
-            ),
-        )
+        assertLoads(chain(root = root(extensions = caExtensions() + statusRequest)))
     }
 
     @Test
