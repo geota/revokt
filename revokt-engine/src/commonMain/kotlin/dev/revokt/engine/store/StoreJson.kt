@@ -51,6 +51,9 @@ internal class StoreFields(
             else -> wrong(key)
         }
 
+    /** The object [key] holds, or null when it is absent or anything but an object. */
+    fun objectOrNull(key: String): StoreFields? = (obj[key] as? JsonObject)?.let(::StoreFields)
+
     fun optArray(key: String): JsonArray? =
         when (val v = obj[key]) {
             null, JsonNull -> null

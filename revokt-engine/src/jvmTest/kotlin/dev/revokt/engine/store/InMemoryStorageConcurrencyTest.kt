@@ -11,10 +11,15 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** `RevoktStorage.inMemory()` is thread-safe: concurrent readers see each write whole, never a mix (spec §3, #109). */
+/**
+ * `RevoktStorage.inMemory()` is thread-safe (spec §3, #109). What this catches is the map itself: without the lock,
+ * `names()` iterating while writers add keys throws `ConcurrentModificationException` (every run of five, measured), and
+ * concurrent puts can lose keys. A read cannot tear, since each write swaps in a whole private copy; the check that
+ * every read is uniform stays as a guard on that.
+ */
 class InMemoryStorageConcurrencyTest {
     @Test
-    fun `concurrent readers see each write whole while writers replace and add keys`() {
+    fun `concurrent names, reads and writes neither throw nor lose a key`() {
         val store = RevoktStorage.inMemory()
         val size = 64 * 1024
         store.write("shared", ByteArray(size))

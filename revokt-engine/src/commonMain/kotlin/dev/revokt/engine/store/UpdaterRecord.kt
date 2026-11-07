@@ -64,7 +64,12 @@ internal object UpdaterJson {
                 StoreFields.objectOf(record.sources.map { (id, s) -> id to source(clamped(s, nowMillis)) }),
         )
 
-    /** The record in [bytes] with every backoff clamped against [nowMillis], or null when it is malformed. */
+    /**
+     * The record in [bytes] with every backoff clamped against [nowMillis], or null when the file or a dataset-level
+     * member is malformed. The dataset-level members are read independently of the per-source map: a source entry that
+     * does not decode is dropped alone, and a `sources` that is absent or not an object reads as no sources, so a bad
+     * entry never costs the rollback watermark (§10).
+     */
     fun read(
         bytes: ByteArray,
         nowMillis: Long,
@@ -75,11 +80,28 @@ internal object UpdaterJson {
                 seedInstalledAtMillis = f.optLong("seedInstalledAtMillis"),
                 datasetLastAttemptAtMillis = f.optLong("datasetLastAttemptAtMillis"),
                 sources =
-                    (f.optObject("sources") ?: f.missing("sources")).members.associate { (id, value) ->
-                        id to clamped(source(value as? JsonObject ?: f.wrong(id)), nowMillis)
-                    },
+                    f
+                        .objectOrNull("sources")
+                        ?.members
+                        .orEmpty()
+                        .mapNotNull { (id, value) ->
+                            sourceOrNull(value)?.let { id to clamped(it, nowMillis) }
+                        }.toMap(),
             )
         }
+
+    /** The source entry [value], or null when it does not decode. */
+    private fun sourceOrNull(value: JsonValue): SourceRecord? =
+        try {
+            (value as? JsonObject)?.let(::source)
+        } catch (ignored: MalformedStoreFileException) {
+            null
+        } catch (ignored: IllegalArgumentException) {
+            null
+        }
+
+    /** The last `now` at which `now + MAX_BACKOFF` does not overflow. */
+    private val LAST_UNSATURATED: Long = Long.MAX_VALUE - RevoktLimits.MAX_BACKOFF
 
     /** [s] with its backoff at most [nowMillis] + `MAX_BACKOFF`, saturating rather than overflowing. */
     private fun clamped(
@@ -87,14 +109,7 @@ internal object UpdaterJson {
         nowMillis: Long,
     ): SourceRecord {
         val backoff = s.backoffUntilMillis ?: return s
-        val cap =
-            if (nowMillis >
-                Long.MAX_VALUE - RevoktLimits.MAX_BACKOFF
-            ) {
-                Long.MAX_VALUE
-            } else {
-                nowMillis + RevoktLimits.MAX_BACKOFF
-            }
+        val cap = if (nowMillis > LAST_UNSATURATED) Long.MAX_VALUE else nowMillis + RevoktLimits.MAX_BACKOFF
         return if (backoff <= cap) s else s.copy(backoffUntilMillis = cap)
     }
 
@@ -127,7 +142,8 @@ internal object UpdaterJson {
     private fun source(obj: JsonObject): SourceRecord {
         val f = StoreFields(obj)
         val failures = f.optLong("consecutiveFailures") ?: 0
-        if (failures !in 0..Int.MAX_VALUE) f.wrong("consecutiveFailures")
+        // In Int range here; a negative count is SourceRecord's own check.
+        if (failures !in Int.MIN_VALUE..Int.MAX_VALUE) f.wrong("consecutiveFailures")
         return SourceRecord(
             lastVerifiedLastModified = f.optLong("lastVerifiedLastModified"),
             lastVerifiedAtMillis = f.optLong("lastVerifiedAtMillis"),

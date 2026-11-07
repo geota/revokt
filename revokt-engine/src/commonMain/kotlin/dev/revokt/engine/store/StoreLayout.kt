@@ -19,6 +19,22 @@ internal class StoredGeneration(
     val files: GenerationFiles,
 )
 
+/**
+ * A store file read three ways, so a caller can count a corrupt file as a store failure (spec §6.5, `storeFailures`)
+ * rather than take it for an empty store.
+ */
+internal sealed interface StoreRead<out T> {
+    /** No file has the key. */
+    data object Absent : StoreRead<Nothing>
+
+    /** The file is there but does not decode, or does not belong where it is. */
+    data object Malformed : StoreRead<Nothing>
+
+    data class Found<out T>(
+        val value: T,
+    ) : StoreRead<T>
+}
+
 /** What [StoreLayout.blob] found under a blob key. */
 internal enum class BlobState { ABSENT, MATCH, MISMATCH }
 
@@ -101,6 +117,9 @@ internal class StoreLayout(
         ) { "meta.json is for ${meta.dataset}/${meta.channel}" }
         require((records != null) == (meta.trustClass == TrustClass.SIGNED)) { "records.json iff SIGNED" }
         val named = GenerationFiles.filenamesIn(index)
+        require(
+            named.none { it == INDEX || it == META || it == RECORDS },
+        ) { "$INDEX names a file the directory reserves" }
         require(deltas.keys.none { it in meta.blobs }) { "a file is both a blob and a delta" }
         require(named == meta.blobs.keys + deltas.keys) { "$INDEX names $named, not the generation's files" }
         val keys = storage.names()
@@ -115,13 +134,16 @@ internal class StoreLayout(
     }
 
     /**
-     * The complete generation's `meta.json` in [directory], or null when it has none, it is malformed, it is another
-     * dataset's or channel's ("a `channel` mismatch is no generation"), or it belongs in another directory.
+     * The `meta.json` in [directory]: [StoreRead.Malformed] when it does not decode, is another dataset's or channel's
+     * ("a `channel` mismatch is no generation"), or belongs in another directory.
      */
-    fun meta(directory: String): GenerationMeta? {
-        val meta = storage.read(fileKey(directory, META))?.let(MetaJson::read) ?: return null
-        return meta.takeIf { it.dataset == dataset && it.channel == channel && it.directory == directory }
-    }
+    fun readMeta(directory: String): StoreRead<GenerationMeta> =
+        read(fileKey(directory, META)) { bytes ->
+            MetaJson.read(bytes)?.takeIf { it.dataset == dataset && it.channel == channel && it.directory == directory }
+        }
+
+    /** The complete generation's `meta.json` in [directory], or null when [readMeta] finds none that is valid here. */
+    fun meta(directory: String): GenerationMeta? = (readMeta(directory) as? StoreRead.Found)?.value
 
     /**
      * The generation in [directory] as a C2SP image under its names, every blob re-hashed against its key, or null
@@ -165,14 +187,18 @@ internal class StoreLayout(
     /** The `records.json` of the `SIGNED` generation in [directory], or null. */
     fun records(directory: String): ByteArray? = storage.read(fileKey(directory, RECORDS))
 
-    /** Deletes every key in [directory]; its blobs stay (content-addressed). */
+    /**
+     * Deletes every key in [directory], `meta.json` first (the reverse of the write order), so an interrupted delete
+     * never leaves a directory that reads as complete with files missing. Its blobs stay (content-addressed).
+     */
     fun deleteGeneration(directory: String) {
+        storage.delete(fileKey(directory, META))
         val prefix = fileKey(directory, "")
         for (key in storage.names()) if (key.startsWith(prefix)) storage.delete(key)
     }
 
-    /** The pointer, or null when there is none or it is malformed. */
-    fun pointer(): Pointer? = storage.read(currentKey)?.let(PointerJson::read)
+    /** The `current` pointer. */
+    fun pointer(): StoreRead<Pointer> = read(currentKey, PointerJson::read)
 
     /**
      * Flips the pointer to [pointer]. Both directories must hold complete generations of this dataset and channel, and
@@ -189,8 +215,8 @@ internal class StoreLayout(
         storage.write(currentKey, PointerJson.write(pointer))
     }
 
-    /** The updater record with its backoffs clamped against [nowMillis], or null when there is none or it is malformed. */
-    fun updater(nowMillis: Long): UpdaterRecord? = storage.read(updaterKey)?.let { UpdaterJson.read(it, nowMillis) }
+    /** The updater record, its backoffs clamped against [nowMillis] (see [UpdaterJson.read] for a bad source entry). */
+    fun updater(nowMillis: Long): StoreRead<UpdaterRecord> = read(updaterKey) { UpdaterJson.read(it, nowMillis) }
 
     fun writeUpdater(
         record: UpdaterRecord,
@@ -202,28 +228,65 @@ internal class StoreLayout(
     /**
      * Keeps exactly the directories the pointer names and the blobs their `meta.json` reference: deletes every other
      * directory under this dataset and channel, complete or not, and every other blob. Files directly under the prefix
-     * (`current`, `updater.json`) stay. Returns the number of keys deleted.
+     * (`current`, `updater.json`) stay. With no pointer nothing is kept. When it cannot tell what is referenced, it
+     * keeps more: a malformed `current` deletes nothing, and a pointed directory whose `meta.json` is present but
+     * malformed keeps every blob. Returns the number of keys deleted.
+     *
+     * Runs on the loader thread only, never between [putBlob] or [writeGeneration] and [point]: a blob or directory of
+     * an install not yet pointed to is unreferenced, so prune would delete it.
      */
     fun prune(): Int {
-        val pointer = pointer()
+        val pointer =
+            when (val read = pointer()) {
+                StoreRead.Absent -> null
+                StoreRead.Malformed -> return 0
+                is StoreRead.Found -> read.value
+            }
         val kept = listOfNotNull(pointer?.live, pointer?.previous).toSet()
-        val blobs = kept.flatMap { meta(it)?.blobs?.values.orEmpty() }.mapTo(HashSet()) { "$BLOBS_DIR/${it.hex()}" }
+        val metas = kept.map(::readMeta)
+        val blobs =
+            if (StoreRead.Malformed in metas) {
+                null
+            } else {
+                metas
+                    .flatMap {
+                        (it as? StoreRead.Found)
+                            ?.value
+                            ?.blobs
+                            ?.values
+                            .orEmpty()
+                    }.mapTo(
+                        HashSet(),
+                    ) { "$BLOBS_DIR/${it.hex()}" }
+            }
         val doomed = storage.names().filter { key -> isPruned(key, kept, blobs) }
         doomed.forEach(storage::delete)
         return doomed.size
     }
 
-    /** Whether prune deletes [key]: a key in a directory under [root] other than [kept], or a blob not in [blobs]. */
+    /**
+     * Whether prune deletes [key]: a key in a directory under [root] other than [kept], or a blob not in [blobs] (null
+     * keeps every blob).
+     */
     private fun isPruned(
         key: String,
         kept: Set<String>,
-        blobs: Set<String>,
+        blobs: Set<String>?,
     ): Boolean {
         val rest = key.removePrefix("$root/")
         val slash = rest.indexOf('/')
         if (rest == key || slash < 0) return false
         val top = rest.substring(0, slash)
-        return if (top == BLOBS_DIR) rest !in blobs else top !in kept
+        return if (top == BLOBS_DIR) blobs != null && rest !in blobs else top !in kept
+    }
+
+    /** [key]'s file through [decode], whose null means malformed. */
+    private fun <T> read(
+        key: String,
+        decode: (ByteArray) -> T?,
+    ): StoreRead<T> {
+        val bytes = storage.read(key) ?: return StoreRead.Absent
+        return decode(bytes)?.let { StoreRead.Found(it) } ?: StoreRead.Malformed
     }
 
     companion object {

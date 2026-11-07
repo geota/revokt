@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
@@ -22,9 +23,9 @@ class StoreLayoutTest {
     private val fullBytes = byteArrayOf(3, 0, 1, 2, 3)
     private val deltaBytes = byteArrayOf(3, 0, 9)
 
-    /** A 33-character full filter and a 64-character delta, as their attachments name them. */
-    private val fullAttachment = "compat-2026-11-06-delta-01234.bin"
-    private val deltaAttachment = "compat-2026-11-06-full-filter-with-a-very-long-name-012345678.ff"
+    /** A 64-character full filter and a 33-character delta, as their attachments name them. */
+    private val fullAttachment = "compat-2026-11-06-full-filter-with-a-very-long-name-012345678.ff"
+    private val deltaAttachment = "compat-2026-11-06-delta-01234.bin"
     private val fullName = GenerationNames.derive(fullAttachment)
     private val deltaName = GenerationNames.derive(deltaAttachment)
 
@@ -105,8 +106,8 @@ class StoreLayoutTest {
     @Test
     fun `33- and 64-character names are the derived names in index bin, the directory, meta json and the files`() {
         val directory = install()
-        assertEquals("compat-2026-11--31041d40a1b14a73", fullName)
-        assertEquals("compat-2026-11--decf10cbc971a35f", deltaName)
+        assertEquals("compat-2026-11--decf10cbc971a35f", fullName)
+        assertEquals("compat-2026-11--31041d40a1b14a73", deltaName)
         val stored = assertNotNull(layout.readGeneration(directory))
         assertEquals(setOf("index.bin", fullName, deltaName), stored.files.names)
         assertEquals(setOf(fullName), stored.meta.blobs.keys)
@@ -236,6 +237,20 @@ class StoreLayoutTest {
     }
 
     @Test
+    fun `writeGeneration refuses a file named index bin, meta json or records json`() {
+        val sha = StoreFixtures.sha256(fullBytes)
+        layout.putBlob(fullBytes)
+        val meta = StoreFixtures.meta(blobs = mapOf(fullName to sha))
+        for (reserved in listOf("index.bin", "meta.json", "records.json")) {
+            val index = StoreFixtures.index(fullName, reserved)
+            assertFailsWith<IllegalArgumentException>(reserved) {
+                layout.writeGeneration(meta, index, mapOf(reserved to deltaBytes), byteArrayOf())
+            }
+        }
+        assertEquals(listOf(layout.blobKey(sha)), storage.writes)
+    }
+
+    @Test
     fun `an existing matching blob is reused, not rewritten`() {
         assertEquals(BlobState.ABSENT, layout.blob(StoreFixtures.sha256(fullBytes)))
         assertEquals(BlobWrite.WRITTEN, layout.putBlob(fullBytes))
@@ -259,16 +274,18 @@ class StoreLayoutTest {
     }
 
     @Test
-    fun `the pointer round-trips through current`() {
-        assertNull(layout.pointer())
+    fun `the pointer round-trips through current, and an absent pointer is not a malformed one`() {
+        assertEquals(StoreRead.Absent, layout.pointer())
         val older = install(generationId = "g0", sourceTimestampMillis = 1)
         val newer = install(generationId = "g1", sourceTimestampMillis = 2, full = byteArrayOf(3, 0, 5))
         layout.point(Pointer(newer, older))
-        assertEquals(Pointer(newer, older), layout.pointer())
+        assertEquals(StoreRead.Found(Pointer(newer, older)), layout.pointer())
         layout.point(Pointer(newer, null))
-        assertEquals(Pointer(newer, null), layout.pointer())
-        storage.write("crlite/compat/current", "{\"live\":\"../x\"}".encodeToByteArray())
-        assertNull(layout.pointer())
+        assertEquals(StoreRead.Found(Pointer(newer, null)), layout.pointer())
+        for (bad in listOf("{\"live\":\"../x\"}", "", "[]", "{")) {
+            storage.write("crlite/compat/current", bad.encodeToByteArray())
+            assertEquals(StoreRead.Malformed, layout.pointer(), bad)
+        }
     }
 
     @Test
@@ -288,9 +305,9 @@ class StoreLayoutTest {
     }
 
     @Test
-    fun `updater json round-trips through the store, clamped`() {
+    fun `updater json round-trips through the store, clamped, and an absent file is not a malformed one`() {
         val now = 1_762_430_400_000L
-        assertNull(layout.updater(now))
+        assertEquals(StoreRead.Absent, layout.updater(now))
         val record =
             UpdaterRecord(
                 watermarkMillis = 5,
@@ -299,11 +316,13 @@ class StoreLayoutTest {
             )
         layout.writeUpdater(record, now)
         assertEquals("crlite/compat/updater.json", storage.writes.last())
-        val read = assertNotNull(layout.updater(now))
+        val read = assertIs<StoreRead.Found<UpdaterRecord>>(layout.updater(now)).value
         assertEquals(5, read.watermarkMillis)
         assertEquals(now + dev.revokt.RevoktLimits.MAX_BACKOFF, read.sources.getValue("rs").backoffUntilMillis)
-        storage.write("crlite/compat/updater.json", "[]".encodeToByteArray())
-        assertNull(layout.updater(now))
+        for (bad in listOf("[]", "", "{\"watermarkMillis\":\"5\"}")) {
+            storage.write("crlite/compat/updater.json", bad.encodeToByteArray())
+            assertEquals(StoreRead.Malformed, layout.updater(now), bad)
+        }
     }
 
     @Test
@@ -349,6 +368,95 @@ class StoreLayoutTest {
         storage.write("crlite/compat/updater.json", byteArrayOf())
         layout.prune()
         assertEquals(setOf("crlite/compat/updater.json"), storage.names())
+    }
+
+    @Test
+    fun `prune with a malformed pointer deletes nothing`() {
+        val directory = install()
+        install(generationId = "unpointed", full = byteArrayOf(3, 0, 7))
+        storage.write("crlite/compat/stray/file", byteArrayOf(1))
+        layout.point(Pointer(directory, null))
+        for (bad in listOf("{\"live\":\"../x\"}", "", "{")) {
+            storage.write("crlite/compat/current", bad.encodeToByteArray())
+            val before = storage.names()
+            assertEquals(0, layout.prune(), bad)
+            assertEquals(before, storage.names(), bad)
+        }
+    }
+
+    @Test
+    fun `prune keeps every blob and the directory when a pointed meta json is present but malformed`() {
+        val live = install(TrustClass.SIGNED, "l", 2, byteArrayOf(3, 0, 2))
+        val previous = install(TrustClass.SIGNED, "p", 1, byteArrayOf(3, 0, 1))
+        val old = install(TrustClass.SIGNED, "o", 0, byteArrayOf(3, 0, 3))
+        layout.point(Pointer(live, previous))
+        val metaKey = "crlite/compat/$previous/meta.json"
+        val good = assertNotNull(storage.read(metaKey))
+        val otherDirectory = MetaJson.write(StoreFixtures.meta(generationId = "elsewhere", sourceTimestampMillis = 1))
+        for (bad in listOf(
+            "{".encodeToByteArray(),
+            good.decodeToString().replace("\"metaVersion\":1", "\"metaVersion\":2").encodeToByteArray(),
+            good.decodeToString().replace("\"channel\":\"COMPAT\"", "\"channel\":\"DEFAULT\"").encodeToByteArray(),
+            otherDirectory,
+        )) {
+            storage.write(metaKey, bad)
+            val blobs = storage.names().filter { it.startsWith("crlite/compat/blobs/") }.toSet()
+            val previousKeys = storage.names().filter { it.startsWith("crlite/compat/$previous/") }.toSet()
+            layout.prune()
+            val after = storage.names()
+            assertEquals(blobs, after.filter { it.startsWith("crlite/compat/blobs/") }.toSet(), bad.decodeToString())
+            assertEquals(previousKeys, after.filter { it.startsWith("crlite/compat/$previous/") }.toSet())
+            assertNotNull(layout.readGeneration(live))
+            assertNull(layout.readGeneration(old))
+        }
+        storage.write(metaKey, good)
+        layout.prune()
+        assertEquals(BlobState.ABSENT, layout.blob(StoreFixtures.sha256(byteArrayOf(3, 0, 3))))
+        assertNotNull(layout.readGeneration(previous))
+    }
+
+    @Test
+    fun `prune keeps a pointed directory with no meta json, but references no blob for it`() {
+        val live = install(TrustClass.SIGNED, "l", 2, byteArrayOf(3, 0, 2))
+        val previous = install(TrustClass.SIGNED, "p", 1, byteArrayOf(3, 0, 1))
+        layout.point(Pointer(live, previous))
+        storage.delete("crlite/compat/$previous/meta.json")
+        layout.prune()
+        assertEquals(BlobState.ABSENT, layout.blob(StoreFixtures.sha256(byteArrayOf(3, 0, 1))))
+        assertNotNull(storage.read("crlite/compat/$previous/index.bin"))
+        assertNotNull(layout.readGeneration(live))
+    }
+
+    @Test
+    fun `deleteGeneration deletes meta json first, so an interrupted delete leaves no complete directory`() {
+        val directory = install()
+        // A store that lists meta.json last, the worst order for a delete that follows names(), and fails the second
+        // delete, as a process death would interrupt it.
+        val inner = StoreFixtures.Recording(storage)
+        var deletes = 0
+        val failing =
+            object : RevoktStorage by inner {
+                override fun names(): Set<String> =
+                    inner.names().sortedBy { it.endsWith("/meta.json") }.toCollection(LinkedHashSet())
+
+                override fun delete(name: String) {
+                    check(++deletes < 2) { "interrupted" }
+                    inner.delete(name)
+                }
+            }
+        assertFailsWith<IllegalStateException> {
+            StoreLayout(
+                failing,
+                Dataset.CRLITE,
+                "COMPAT",
+            ).deleteGeneration(directory)
+        }
+        assertEquals(listOf("crlite/compat/$directory/meta.json"), inner.deletes)
+        assertNull(layout.meta(directory))
+        assertNull(layout.readGeneration(directory))
+        storage.deletes.clear()
+        layout.deleteGeneration(directory)
+        assertEquals(emptyList(), storage.names().filter { it.contains(directory) })
     }
 
     @Test

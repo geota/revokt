@@ -10,12 +10,13 @@ import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** `meta.json`, `current` and `updater.json` (spec §6.5, #109). */
 class StoreJsonTest {
-    private val full = "compat-2026-11-06-delta-01234.bin"
+    private val full = "compat-2026-11-06-full-filter-with-a-very-long-name-012345678.ff"
     private val blobs = mapOf(GenerationNames.derive(full) to StoreFixtures.sha256(byteArrayOf(1)))
 
     private fun text(bytes: ByteArray): String = bytes.decodeToString()
@@ -37,7 +38,7 @@ class StoreJsonTest {
         val bytes = MetaJson.write(meta)
         assertEquals(meta, MetaJson.read(bytes))
         assertEquals(
-            """{"blobs":{"compat-2026-11--31041d40a1b14a73":"blobs/${blobs.values.single().hex()}"},""" +
+            """{"blobs":{"compat-2026-11--decf10cbc971a35f":"blobs/${blobs.values.single().hex()}"},""" +
                 """"changesetTimestampMillis":1762430400001,"channel":"COMPAT",""" +
                 """"collection":"security-state/cert-revocations","dataset":"CRLITE","format":"V3",""" +
                 """"freshness":"RECORD_LAST_MODIFIED","generationId":"g1","metaVersion":1,""" +
@@ -50,7 +51,7 @@ class StoreJsonTest {
     @Test
     fun `meta json carries the derived name, never the attachment filename`() {
         val bytes = text(MetaJson.write(StoreFixtures.meta(blobs = blobs)))
-        assertTrue("compat-2026-11--31041d40a1b14a73" in bytes)
+        assertTrue("compat-2026-11--decf10cbc971a35f" in bytes)
         assertTrue(full !in bytes)
     }
 
@@ -104,11 +105,13 @@ class StoreJsonTest {
             "\"blobs/$sha\"" to "\"$sha\"",
             "\"blobs/$sha\"" to "\"blobs/../$sha\"",
             "\"blobs/$sha\"" to "7",
-            "\"compat-2026-11--31041d40a1b14a73\"" to "\"$full\"",
-            "\"compat-2026-11--31041d40a1b14a73\"" to "\"../x\"",
+            "\"compat-2026-11--decf10cbc971a35f\"" to "\"$full\"",
+            "\"compat-2026-11--decf10cbc971a35f\"" to "\"../x\"",
             "\"blobs\":{" to "\"blobs\":[],\"x\":{",
             "\"signerLeafSha256\":\"${"07".repeat(32)}\"" to "\"signerLeafSha256\":\"${"07".repeat(31)}\"",
             "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"${"09".repeat(95)}0\"",
+            "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"${"09".repeat(95)}\"",
+            "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"${"09".repeat(97)}\"",
             "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"${"0A".repeat(96)}\"",
             "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"\"",
             "\"changesetTimestampMillis\":1762430400001," to "",
@@ -143,6 +146,11 @@ class StoreJsonTest {
             StoreFixtures.meta(TrustClass.MIRROR).copy(signed = StoreFixtures.meta().signed)
         }
         assertFailsWith<IllegalArgumentException> { StoreFixtures.meta().copy(signed = null) }
+        for (size in listOf(0, 1, 95, 97)) {
+            assertFailsWith<IllegalArgumentException>("$size") {
+                SignedMeta(1, ByteArray(32).toByteString(), ByteArray(size).toByteString())
+            }
+        }
         assertFailsWith<IllegalArgumentException> {
             SignedMeta(
                 1,
@@ -233,29 +241,55 @@ class StoreJsonTest {
     }
 
     @Test
-    fun `a malformed updater json reads as nothing`() {
+    fun `a malformed file or dataset-level member makes updater json malformed`() {
         val bytes = UpdaterJson.write(record, now)
-        val hash = "01".repeat(32)
         for ((from, to) in listOf(
-            "\"consecutiveFailures\":3" to "\"consecutiveFailures\":-1",
-            "\"consecutiveFailures\":3" to "\"consecutiveFailures\":2147483648",
             "\"watermarkMillis\":1762000000000" to "\"watermarkMillis\":\"1762000000000\"",
-            "\"$hash\"" to "\"${hash.dropLast(1)}A\"",
-            "\"$hash\"" to "\"${hash.drop(2)}\"",
-            "\"$hash\"" to "1",
-            "\"chainSha256s\":[" to "\"chainSha256s\":{\"x\":[",
-            ",\"sinceMillis\":${now - 100}" to "",
-            "\"mirror\":{\"consecutiveFailures\":0}" to "\"mirror\":[]",
+            "\"watermarkMillis\":1762000000000" to "\"watermarkMillis\":1.5",
+            "\"seedInstalledAtMillis\":1761000000000" to "\"seedInstalledAtMillis\":[]",
+            "\"datasetLastAttemptAtMillis\":${now - 5}" to "\"datasetLastAttemptAtMillis\":18446744073709551615",
         )) {
             assertNull(UpdaterJson.read(edited(bytes, from, to), now), "$from -> $to")
         }
         for (bad in listOf(
-            "{}",
             "[]",
-            "{\"sources\":[]}",
             "x",
+            "",
+            "null",
+            "{\"sources\":{}",
         )) {
             assertNull(UpdaterJson.read(bad.encodeToByteArray(), now), bad)
+        }
+    }
+
+    @Test
+    fun `a bad source entry is dropped alone and the watermark survives`() {
+        val bytes = UpdaterJson.write(record, now)
+        val hash = "01".repeat(32)
+        val withoutRemoteSettings = record.copy(sources = record.sources - "remote-settings")
+        for ((from, to) in listOf(
+            "\"consecutiveFailures\":3" to "\"consecutiveFailures\":-1",
+            "\"consecutiveFailures\":3" to "\"consecutiveFailures\":2147483648",
+            "\"lastVerifiedLastModified\":1762000000123" to "\"lastVerifiedLastModified\":\"x\"",
+            "\"$hash\"" to "\"${hash.dropLast(1)}A\"",
+            "\"$hash\"" to "\"${hash.drop(2)}\"",
+            "\"$hash\"" to "1",
+            "\"chainSha256s\":[" to "\"chainSha256s\":7,\"was\":[",
+            ",\"sinceMillis\":${now - 100}" to "",
+        )) {
+            val read = assertNotNull(UpdaterJson.read(edited(bytes, from, to), now), "$from -> $to")
+            assertEquals(withoutRemoteSettings, read, "$from -> $to")
+            assertEquals(1_762_000_000_000, read.watermarkMillis)
+        }
+        val mirrorBad = UpdaterJson.read(edited(bytes, "\"mirror\":{\"consecutiveFailures\":0}", "\"mirror\":[]"), now)
+        assertEquals(record.copy(sources = record.sources - "mirror"), mirrorBad)
+        assertEquals(UpdaterRecord(), UpdaterJson.read("{}".encodeToByteArray(), now))
+        for (sources in listOf("[]", "7", "null", "\"x\"")) {
+            assertEquals(
+                UpdaterRecord(watermarkMillis = 5),
+                UpdaterJson.read("{\"watermarkMillis\":5,\"sources\":$sources}".encodeToByteArray(), now),
+                sources,
+            )
         }
     }
 

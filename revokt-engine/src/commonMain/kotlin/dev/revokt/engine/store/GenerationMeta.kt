@@ -20,7 +20,7 @@ internal data class SignedMeta(
 ) {
     init {
         require(signerLeafSha256.size == SHA256_BYTES) { "the signer leaf SHA-256 is ${signerLeafSha256.size} bytes" }
-        require(signature.size > 0) { "the signature is empty" }
+        require(signature.size == P384_SIGNATURE_BYTES) { "the signature is ${signature.size} bytes, not raw r || s" }
     }
 }
 
@@ -56,6 +56,9 @@ internal data class GenerationMeta(
 }
 
 internal const val SHA256_BYTES: Int = 32
+
+/** A `p384ecdsa` content signature as stored: the raw `r || s`, 48 bytes each (spec §6.5 seed archive, §7.1). */
+internal const val P384_SIGNATURE_BYTES: Int = 96
 
 /** `meta.json`'s encoding: canonical JSON over the engine's JSON tree, enums by name, bytes as lowercase hex. */
 internal object MetaJson {
