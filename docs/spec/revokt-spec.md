@@ -12,12 +12,16 @@ Status: **draft spec / project proposal, revision 54** · Target: JVM 17+ and An
   and §7.1 names the chain's failure reason for each:
   - **Strict DER** (`PARSE`): non-minimal headers, elements the grammar does not place (a TLV after the SPKI, a
     second SEQUENCE inside `[3]`, bytes after an `extnValue`), an indefinite-length TBS, non-DER times and unused bits
-    in the signature BIT STRING all fail. This profile is the chain's only: §9.2's TLS parser is unchanged.
+    in the signature BIT STRING all fail. The one exception is an explicitly encoded v1 version, which mozilla::pkix
+    accepts (bug 1031093). This profile is the chain's only: §9.2's TLS parser is unchanged.
   - **Leaf basicConstraints:** `cA = TRUE` fails (`LEAF_CA`, a new reason). A malformed leaf basicConstraints or
     keyUsage is `EXTENSION`.
   - **Critical extensions** (`EXTENSION`): a critical extension outside Firefox's `BackCert::RememberExtension` set
-    fails. A critical nameConstraints is enforced or rejected, never ignored. A critical Netscape certificate type is
-    accepted only when Firefox would permit the purpose.
+    fails. A critical Netscape certificate type is accepted only when basicConstraints and extKeyUsage are both
+    present, Firefox's actual rule (it does not read the type bits).
+  - **nameConstraints** (`NAME`), critical or not, as Firefox: each non-leaf link's dNSName subtrees are checked
+    against the leaf's dNSName, matched as mozilla::pkix matches them. A nameConstraints with any other name form
+    fails closed (`EXTENSION`), which is stricter than Firefox (Appendix A).
   - **EKU** (`EKU`): every non-leaf link below the terminal with an extKeyUsage includes codeSigning, and the
     terminal is never checked. The leaf also rejects `id-kp-OCSPSigning`.
   - **Version and issuer:** the version is 0 to 3 (`PARSE`), and `[3]` is read whatever the version. An issuer
@@ -27,6 +31,8 @@ Status: **draft spec / project proposal, revision 54** · Target: JVM 17+ and An
     SHA-512, MGF1 with the same hash, salt equal to the hash length, trailer 1), and only `rsaEncryption` and
     `id-ecPublicKey` keys, so an `id-RSASSA-PSS` key fails. **§3's `id-RSASSA-PSS` rule for the TLS verifier
     (revision 51) is unchanged.**
+- **Proposals for review:** the failure reasons for the new rules and strict DER below the terminal only (Appendix
+  A).
 - **Confirmed** (§7.1): the terminal is the first certificate *after the leaf* whose SPKI is pinned. A pinned leaf
   SPKI pins nothing (`NOT_PINNED`).
 - **Fixtures** (§9 (d)): one row per rule, each in the leaf and the intermediate where both apply, with the
@@ -3012,8 +3018,9 @@ and the parenthesis names the chain's failure reason):
 - **Strict DER** (`PARSE`): minimal tag and length headers; no element the certificate grammar does not place (a TLV
   after the SPKI other than the optional unique IDs and `[3]`, a second SEQUENCE inside `[3]`, bytes after an
   extension's `extnValue`); no indefinite length, the TBS included; `UTCTime` and `GeneralizedTime` in their DER forms;
-  zero unused bits in the signature BIT STRING. This is the x5u chain's profile only: §9.2's TLS parser stays as
-  lenient as the platforms.
+  zero unused bits in the signature BIT STRING. The one exception is an explicitly encoded v1 version (`[0]` holding
+  0), which DER forbids for a DEFAULT but mozilla::pkix accepts (bug 1031093), and so does revokt. This is the x5u
+  chain's profile only: §9.2's TLS parser stays as lenient as the platforms.
 - **Version and names:** the version is 0 to 3 (`PARSE` otherwise), and `[3]` is read whatever the version, as
   mozilla::pkix does; an issuer name with no RDN fails (`NAME`).
 - **Outer algorithm** (`ALGORITHM`): the outer `signatureAlgorithm` equals the TBS `signature` as parsed algorithms,
@@ -3024,11 +3031,16 @@ and the parenthesis names the chain's failure reason):
   (`BackCert::RememberExtension`: keyUsage, subjectAltName, basicConstraints, nameConstraints, certificatePolicies,
   policyConstraints, extKeyUsage, inhibitAnyPolicy, authorityInfoAccess, the TLS feature extension, the embedded SCT
   list and qcStatements, and, when critical, `id-pkix-ocsp-nocheck` and the Netscape certificate type) fails on any
-  link. A critical nameConstraints is enforced or rejected, never ignored. A critical Netscape certificate type is
+  link. A critical Netscape certificate type is
   accepted only when the purpose is permitted, as Firefox decides it: basicConstraints and extKeyUsage are both
   present, and their own checks then apply.
 - **EKU below the leaf** (`EKU`): every non-leaf link below the terminal that has an extKeyUsage includes codeSigning.
   The terminal's is never read.
+- **nameConstraints** (`NAME`), critical or not, as Firefox enforces them (`pkixbuild.cpp`): on every non-leaf link
+  below the terminal, its dNSName subtrees are checked against the leaf's one dNSName, which must lie in a permitted
+  subtree when any is listed and in no excluded one. A subtree matches as in mozilla::pkix: without a leading dot it
+  covers the name and its subdomains, with one only the subdomains, compared ignoring ASCII case. A nameConstraints
+  that lists any other name form, which revokt does not evaluate, fails closed (`EXTENSION`).
 
 Any non-terminal certificate
 on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stage `X5U`). **Rollback guard**: high-water mark on
@@ -3219,7 +3231,11 @@ tests; **live checks** are informational.
   intermediate extKeyUsage without codeSigning → `EKU`, an intermediate with no extKeyUsage → loads, and a terminal
   extKeyUsage without codeSigning → loads; a PSS link whose salt is not the hash length, whose MGF1 hash differs from
   the message hash, or whose hash is SHA-224 → `ALGORITHM`; an `id-RSASSA-PSS` key on a link → `ALGORITHM`; a chain
-  whose only pinned SPKI is the leaf's → `NOT_PINNED`; Mozilla's committed chain → loads; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
+  whose only pinned SPKI is the leaf's → `NOT_PINNED`; Mozilla's committed chain → loads, its intermediate's
+  non-critical nameConstraints (`content-signature.mozilla.org` and `.content-signature.mozilla.org`) passing for
+  the leaf; the same intermediate over a leaf whose dNSName lies outside the permitted subtree → `NAME`, its
+  nameConstraints marked critical or not; a nameConstraints with a directoryName subtree → `EXTENSION`; an explicitly
+  encoded v1 version on a leaf → loads; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
   falls to `previous`, `storeFailures = 1`; a crash before `meta.json` leaves an incomplete directory
   that prune deletes; a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → migrates within one `READONLY_POLL_INTERVAL`, `storageFallback = false`, the in-memory generation on disk; an empty
   directory → `storeFailures = 0`; a `MIRROR` `meta.json` reloads as `MIRROR`; a `meta.json` with the
@@ -4564,9 +4580,14 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     root's DER and checks it); the path is the x5u order with no depth cap (both references build by name, at most
     six sub-CAs); name chaining also accepts the canonical form; the leaf SAN is exactly one dNSName and its EKU must
     be present; RSA size counts significant bits (Firefox rounds to bytes); a seed's chain validity is checked at
-    its signed time; links are not checked against OneCRL; a non-critical nameConstraints is not read (Mozilla's
-    `Content Signing Intermediate` carries one, permitting `content-signature.mozilla.org` and its subdomains, which
-    the leaf satisfies).
+    its signed time; links are not checked against OneCRL; the terminal's nameConstraints are never read.
+  - **Stricter than Firefox:** a nameConstraints with a name form other than dNSName fails closed, where
+    mozilla::pkix evaluates it (directoryName against the subject, and the other forms). Mozilla's
+    `Content Signing Intermediate` carries a non-critical nameConstraints with two dNSName subtrees only
+    (`content-signature.mozilla.org` and `.content-signature.mozilla.org`), which the leaf satisfies.
+  - **Proposals for review:** the failure reasons for the new rules (`PARSE` for the version, `NAME` for an empty
+    issuer and for nameConstraints, `ALGORITHM` for the outer algorithm, the new `LEAF_CA`) and strict DER below the
+    terminal only (the terminal is read for its SPKI alone) are the spec's proposals; #170's review checks them.
 - Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
   2026-10-30: `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` reads the SCT extension's
   `extnValue` with `der::ExpectTagAndGetValueAtEnd(extnValue, der::OCTET_STRING, …)`, which requires the tag `0x04`
