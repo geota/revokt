@@ -26,8 +26,9 @@ Status: **draft spec / project proposal, revision 54** · Target: JVM 17+ and An
   - **Extensions** (`EXTENSION`): any repeated OID (stricter than mozilla::pkix, Appendix A); an empty value for an
     understood extension, `id-pkix-ocsp-nocheck` excepted; a `pathLenConstraint` above 127; a critical extension
     outside `BackCert::RememberExtension`'s set; a critical Netscape certificate type without basicConstraints and
-    extKeyUsage (Firefox's actual rule; it does not read the type bits); an issuer's TLS feature, the terminal's
-    included, that its child does not carry with the same value.
+    extKeyUsage (Firefox's actual rule; it does not read the type bits); and, enforced between the links below the
+    terminal, a link's TLS feature that its child does not carry with the same value (the terminal's is not read,
+    a remaining difference).
   - **Leaf basicConstraints:** `cA = TRUE` fails (`LEAF_CA`, a new reason).
   - **EKU** (`EKU`): every non-leaf link below the terminal with an extKeyUsage includes codeSigning
     (anyExtendedKeyUsage alone does not), and the terminal is never checked. The leaf also rejects
@@ -42,7 +43,7 @@ Status: **draft spec / project proposal, revision 54** · Target: JVM 17+ and An
     **§3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged.**
 - **Confirmed** (§7.1): the terminal is the first certificate *after the leaf* whose SPKI is pinned, so a pinned leaf
   SPKI pins nothing (`NOT_PINNED`). The pin lookup runs before the strict parse, and the terminal is read for its SPKI
-  and its TLS feature only. §7.1's rationale now says that this is revokt's rule: Firefox matches the anchor by its
+  alone. §7.1's rationale now says that this is revokt's rule: Firefox matches the anchor by its
   whole DER.
 - **Added** (§3, the maintainer's decision; #172): the ECDSA range check.
   - Before the provider is called, every ECDSA signature's `ECDSA-Sig-Value` is decoded, and the signature is
@@ -3046,7 +3047,7 @@ mozilla::pkix still checks it. Pinning the key alone keeps a re-issued root work
 key is attacker-choosable, so a check on it stops nothing, while root expiry would freeze every deployed client and
 seed. **Order:** the pin lookup runs first, over each certificate after the leaf as read leniently (§9.2's parser);
 the strict profile below then applies only to the links below the terminal, and the terminal is read for its SPKI
-and, for the TLS-feature rule below, its TLS feature extension, nothing else. Leaf EKU
+alone. Leaf EKU
 codeSigning and never `id-kp-OCSPSigning` (`EKU`); leaf SAN exactly `onecrl.content-signature.mozilla.org`. Any non-terminal certificate
 on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stage `X5U`).
 
@@ -3081,8 +3082,10 @@ on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stag
   list and qcStatements, and, when critical, `id-pkix-ocsp-nocheck` and the Netscape certificate type) fails on any
   link. A critical Netscape certificate type is accepted only when basicConstraints and extKeyUsage are both present,
   whose own checks then decide (mozilla::pkix does not read the type bits).
-- **TLS feature** (`EXTENSION`): when an issuer, the terminal included, carries the TLS feature extension, its child
-  carries one with the same value, as mozilla::pkix's `CheckTLSFeatures`.
+- **TLS feature** (`EXTENSION`), enforced between the links below the terminal, as mozilla::pkix's
+  `CheckTLSFeatures`: when a non-leaf link below the terminal carries the TLS feature extension, its child carries one
+  with the same value. The terminal's TLS feature is never read: the root is pinned, and a TLS feature there could only
+  add a constraint.
 - **Leaf basicConstraints:** `cA = TRUE` on the leaf fails (`LEAF_CA`; Firefox `ERROR_CA_CERT_USED_AS_END_ENTITY`,
   webpki `CaUsedAsEndEntity`).
 - **EKU below the leaf** (`EKU`): every non-leaf link below the terminal that has an extKeyUsage includes codeSigning
@@ -3294,7 +3297,8 @@ tests; **live checks** are informational.
   unknown critical extension → `EXTENSION`, and the same extension not critical → loads; a critical
   certificatePolicies → loads; a critical Netscape certificate type with basicConstraints and extKeyUsage → loads, and
   without extKeyUsage → `EXTENSION`; an intermediate with the TLS feature extension over a leaf without it, or with
-  another value → `EXTENSION`, and the same with the feature on the terminal; a leaf with `cA = TRUE` → `LEAF_CA`; a
+  another value → `EXTENSION`, and the same value on both → loads; a terminal with the TLS feature over an
+  intermediate without it → loads; a leaf with `cA = TRUE` → `LEAF_CA`; a
   malformed leaf basicConstraints or keyUsage → `EXTENSION`; a leaf extKeyUsage of codeSigning and
   `id-kp-OCSPSigning` → `EKU`; an intermediate extKeyUsage without codeSigning, or of anyExtendedKeyUsage alone →
   `EKU`, an intermediate with no extKeyUsage → loads, and a terminal extKeyUsage without codeSigning → loads; a PSS
@@ -4682,7 +4686,8 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     the outer and TBS algorithms by bytes (`SignatureAlgorithmMismatch`); and it checks every descendant's names
     against nameConstraints.
   - **Differences from mozilla::pkix that remain, each by §7.1's own text:** the terminal is its pinned SPKI only
-    (Firefox matches the root's DER and checks it), so the terminal's nameConstraints are never read; the path is the
+    (Firefox matches the root's DER and checks it), so the terminal's nameConstraints are never read, and neither is its
+    TLS feature, which Firefox also checks against the anchor's child; the path is the
     x5u order with no depth cap (both references build by name, at most six sub-CAs); name chaining also accepts the
     canonical form; the leaf SAN is exactly one dNSName and its EKU must be present; RSA size counts significant bits
     (Firefox rounds to bytes); a seed's chain validity is checked at its signed time; links are not checked against
