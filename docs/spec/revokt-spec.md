@@ -46,7 +46,7 @@ Status: **draft spec / project proposal, revision 54** · Target: JVM 17+ and An
   curve order n (SEC 1 §4.1.4 step 1, which ring's verifier also performs; JDK 17.0.0 to 17.0.2 skipped it,
   CVE-2022-21449). A malformed `ECDSA-Sig-Value` is `INVALID` too, and a high s stays accepted. It covers every
   ECDSA signature that reaches the verifier, the x5u links and the content signature included. §9's verifier tests
-  and Appendix A follow.
+  and Appendix A follow; Appendix A quotes NVD's affected versions for the CVE.
 
 ### Changes in revision 53 (a mirror's `index.bin` is built locally, 2026-11-06)
 - **Decided** (§7.3, §3.2; the maintainer's decision on #160): revokt never fetches an `index.bin` from a mirror.
@@ -4553,8 +4553,10 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
   on 2026-06-21, and its `ca.last_not_after` showed no update after 2026-10-24 (both seen on 2026-10-29), so CAs were
   selected by key, not by recorded activity.
 - **Revision 54, the ECDSA range check** (§3, #172): SEC 1 v2 §4.1.4 ("Verifying Operation") step 1 rejects a
-  signature unless r and s are integers in [1, n − 1]. The JDK's ECDSA from 15 until the April 2022 updates (17.0.3 and
-  18.0.1) skipped the check, so r = s = 0 verified under any key (CVE-2022-21449). Every JDK revokt tests on (17.0.21,
+  signature unless r and s are integers in [1, n − 1]. CVE-2022-21449 is the JDK skipping it, so that r = s = 0 verified
+  under any key. NVD's description, fetched from the NVD API on 2026-11-07: "Supported versions that are affected are
+  Oracle Java SE: 17.0.2 and 18; Oracle GraalVM Enterprise Edition: 21.3.1 and 22.0.0.2", fixed in Oracle's April
+  2022 Critical Patch Update (17.0.3 and 18.0.1); §3's "17.0.0 to 17.0.2" counts the two 17 updates that predate it. Every JDK revokt tests on (17.0.21,
   21, 25 and 27) has the fix; revokt checks the range itself, so neither an older JDK nor an injected provider can
   bring the gap back.
 - **Revision 54, the x5u chain against mozilla::pkix at Firefox `cac25a6` and rustls-webpki 0.103.15**, read
