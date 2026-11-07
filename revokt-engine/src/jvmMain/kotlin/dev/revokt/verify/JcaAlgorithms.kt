@@ -131,8 +131,8 @@ internal object JcaAlgorithms {
     /**
      * The `(r, s)` of the DER `Ecdsa-Sig-Value` (RFC 3279 §2.2.3) [der], or null for anything else: a SEQUENCE of
      * exactly two INTEGERs and nothing after it, every length minimal and definite, every INTEGER minimal two's
-     * complement and positive (a redundant leading `00` is not minimal). Stricter than SunEC, which verifies a negative
-     * INTEGER read as unsigned (spec Appendix A, revision 54).
+     * complement (a redundant leading `00` is not) and non-negative; zero is left to the range check. Stricter than
+     * SunEC, which verifies a negative INTEGER read as unsigned (spec Appendix A, revision 54).
      */
     fun ecdsaSignature(der: ByteArray): Pair<BigInteger, BigInteger>? =
         try {
@@ -150,11 +150,11 @@ internal object JcaAlgorithms {
 
     private fun integer(
         der: ByteArray,
-        r: DerReader,
+        reader: DerReader,
     ): BigInteger? {
-        val content = r.read(INTEGER, HeaderSite.SIGNATURE_VALUE).content
-        val positive = Keyability.minimalInteger(der, content) && der[content.start] >= 0
-        return if (positive) BigInteger(content.bytes(der)) else null
+        val content = reader.read(INTEGER, HeaderSite.SIGNATURE_VALUE).content
+        val nonNegative = Keyability.minimalInteger(der, content) && der[content.start] >= 0
+        return if (nonNegative) BigInteger(content.bytes(der)) else null
     }
 
     private const val SEQUENCE = 0x30

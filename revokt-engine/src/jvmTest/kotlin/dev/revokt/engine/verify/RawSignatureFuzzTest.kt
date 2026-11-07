@@ -53,6 +53,9 @@ class RawSignatureFuzzTest {
             check(read == null || encode(read.first, read.second).contentEquals(data)) {
                 "the strict decoder took a non-DER Ecdsa-Sig-Value"
             }
+            check(read == null || (read.first.signum() >= 0 && read.second.signum() >= 0)) {
+                "the strict decoder took a negative INTEGER"
+            }
             check(verifier.verify(ECDSA_WITH_SHA384, leaf, data, der) != dev.revokt.VerifyResult.VERIFIED) {
                 "a fuzzed signature verified"
             }

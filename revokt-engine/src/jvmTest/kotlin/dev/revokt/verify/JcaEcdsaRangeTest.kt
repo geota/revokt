@@ -182,6 +182,17 @@ class JcaEcdsaRangeTest {
     }
 
     @Test
+    fun `verifier a cached key still gets the range check`() {
+        val pair = JcaFixtures.ec("secp256r1")
+        val n = order(pair)
+        assertEquals(VERIFIED to true, verify(pair, sign("SHA256withECDSA", pair.private), accepting = false))
+        assertEquals(1, verifier.cachedKeyCount, "the key is cached")
+        for ((what, sig) in listOf("r = s = 0" to signature(ZERO, ZERO), "s = n" to signature(ONE, n))) {
+            assertEquals(INVALID to false, verify(pair, sig), "cached key, $what")
+        }
+    }
+
+    @Test
     fun `verifier a key without a curve order is INVALID before the Signature`() {
         val pair = JcaFixtures.ec("secp256r1")
         opaqueKey = true
@@ -195,10 +206,10 @@ class JcaEcdsaRangeTest {
             val n = order(pair)
             val genuine = sign("SHA256withECDSA", pair.private)
             assertEquals(VERIFIED to true, verify(pair, genuine, accepting = false), curve)
-            // §9's row: the same signature rewritten to (r, n − s), as valid under SEC 1; one of s and n − s is high.
+            // §9's row: the same signature rewritten to (r, n − s), as valid under SEC 1. n is odd, so exactly one of
+            // s and n − s is above n / 2: one of the two signatures verified here is a high-s one.
             val (r, s) = checkNotNull(JcaAlgorithms.ecdsaSignature(genuine)) { "the JDK's signature decodes" }
             val rewritten = signature(r, n - s)
-            assertTrue(maxOf(s, n - s) > n.shiftRight(1))
             assertEquals(VERIFIED to true, verify(pair, rewritten, accepting = false), "$curve (r, n - s)")
         }
     }
