@@ -426,6 +426,8 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, unknownTagSan))))
         assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, nonOidEku, san(dns(X5U_LEAF_NAME))))))
         assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, nonOidEku))))
+        assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, nonOidEku, san(dns(X5U_LEAF_NAME)), bc(ca = true)))))
+        assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, eku(CODE_SIGNING), unknownTagSan, bc(ca = true)))))
         assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(ku, eku(CODE_SIGNING), trailingSan))))
         assertFails(EXTENSION, 0, chain(leaf = leaf(LEAF_EXTENSIONS + trailingBc)))
         // On a CA: malformed values come before NOT_CA, KEY_USAGE and EKU.
