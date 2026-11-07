@@ -346,6 +346,9 @@ internal class X5uChainTest : X5uChainFixture() {
             // id-ecPublicKey: a compressed point, a point one octet short or long, a parameter after the curve.
             ecSpki(P256, TestDer.bytes(0x02, *IntArray(32) { 1 })),
             ecSpki(P256, TestDer.bytes(0x02, *IntArray(64) { 1 })),
+            // An RSA key under id-RSASSA-PSS or an unknown OID, with NULL parameters.
+            TestDer.seq(algId(PSS, NULL), TestDer.tlv(0x03, TestDer.bytes(0x00), rsaPublicKey(2048))),
+            TestDer.seq(algId("1.3.6.1.4.1.99999.3", NULL), TestDer.tlv(0x03, TestDer.bytes(0x00), rsaPublicKey(2048))),
             JcaFixtures.spki(
                 TestDer.seq(TestDer.oid(EC_KEY), TestDer.tlv(0x04, TestDer.oidContent(P256))),
                 TestDer.bytes(0x04, *IntArray(64) { 1 }),

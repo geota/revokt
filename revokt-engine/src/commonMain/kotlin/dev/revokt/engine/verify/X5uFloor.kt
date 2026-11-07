@@ -134,15 +134,13 @@ internal object X5uFloor {
         Keyability.minimalInteger(b, content) && b[content.start] >= 0 &&
             !(content.length == 1 && b[content.start].toInt() == 0)
 
-    /** The significant bits of the minimal positive INTEGER at [content]. */
+    /** The significant bits of the minimal positive INTEGER at [content]; a `00` prefix adds none. */
     private fun bits(
         b: ByteArray,
         content: Span,
-    ): Int {
-        val first = if (b[content.start].toInt() == 0) content.start + 1 else content.start
-        return (content.end - first - 1) * Byte.SIZE_BITS +
-            (Int.SIZE_BITS - (b[first].toInt() and 0xff).countLeadingZeroBits())
-    }
+    ): Int =
+        (content.length - 1) * Byte.SIZE_BITS +
+            (Int.SIZE_BITS - (b[content.start].toInt() and 0xff).countLeadingZeroBits())
 
     /** An uncompressed point of exactly [curveOid]'s length, on P-256, P-384 or P-521. */
     private fun ec(
