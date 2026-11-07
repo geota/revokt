@@ -3,36 +3,27 @@
 
 package dev.revokt.engine.walker
 
-import dev.revokt.ChainSource
 import dev.revokt.FallbackReason
 import dev.revokt.Finding
 import dev.revokt.KeyabilityClause
-import dev.revokt.Layer
 import dev.revokt.NoIssuerReason
 import dev.revokt.ParseReason
-import dev.revokt.PathBuilderFallback
 import dev.revokt.PathStatus
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktTestingApi
 import dev.revokt.SignatureVerifier
-import dev.revokt.TerminalKind
 import dev.revokt.VerifyResult
 import dev.revokt.WalkEnd
 import dev.revokt.WalkStats
 import dev.revokt.engine.parse.TestDer
-import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
-import dev.revokt.engine.walker.FixtureWorld.Companion.TELETEX_STRING
 import dev.revokt.testing.SymOids
-import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /**
  * Decision steps 1 to 3 and the parse findings (spec §5.1 decision list, revision 50's step 6; §4's `Finding.Path` fields; §5.5; §9.2 D8),

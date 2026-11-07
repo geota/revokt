@@ -3,11 +3,8 @@
 
 package dev.revokt.engine.walker
 
-import dev.revokt.ChainSource
 import dev.revokt.FallbackReason
 import dev.revokt.Finding
-import dev.revokt.KeyabilityClause
-import dev.revokt.Layer
 import dev.revokt.NoIssuerReason
 import dev.revokt.ParseReason
 import dev.revokt.PathBuilderFallback
@@ -15,12 +12,8 @@ import dev.revokt.PathStatus
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktTestingApi
-import dev.revokt.SignatureVerifier
 import dev.revokt.TerminalKind
-import dev.revokt.VerifyResult
 import dev.revokt.WalkEnd
-import dev.revokt.WalkStats
-import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
 import dev.revokt.engine.walker.FixtureWorld.Companion.TELETEX_STRING
@@ -31,7 +24,6 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -131,12 +123,13 @@ class DecideFallbackTest {
 
     @Test
     fun `walk NotFound and a fallback path is Found with usedFallback and the fallback key`() {
-        with(Honest()) {
+        with(Honest(leafExtensions = listOf(sctExtension()))) {
             val fake = w.cert("F", intermediate.subject, w.name("Attacker"))
             w.verifies(leaf, fake.key)
             val f = fixture("fb", presented = listOf(leaf, fake), walk = notFound(NoIssuerReason.UNANCHORED))
             val fallback = FakeFallback.finds(leaf, intermediate, root)
             val d = WalkerHarness.decide(f, fallback, platformOnly = true)
+            assertLeafQuery(d, leaf, "fallback found")
             assertPath(d, "fallback found") {
                 status(PathStatus.FOUND)
                     .walkerReason(NoIssuerReason.UNANCHORED)
@@ -167,12 +160,50 @@ class DecideFallbackTest {
                 val d2 = WalkerHarness.decide(f, FakeFallback { answer })
                 assertEquals(PathStatus.NO_ISSUER, d2.path.status, case)
                 assertEquals(listOf(notUsed(FallbackReason.FAILED)), d2.findings, case)
+                assertFalse(d2.buildThrew, case)
             }
 
             // The builder gets copies: changing them leaves the caller's chain as it was.
             val before = f.presented.map { it.copyOf() }
             WalkerHarness.decide(f, FakeFallback { chain2 -> chain2.forEach { it.fill(0) }.let { null } })
             assertEquals(before.map { it.toByteString() }, f.presented.map { it.toByteString() })
+        }
+    }
+
+    @Test
+    fun `a fallback path that does not start with the presented leaf, or holds a null, is a failed fallback`() {
+        with(Honest()) {
+            val fake = w.cert("F", intermediate.subject, w.name("Attacker"))
+            w.verifies(leaf, fake.key)
+            val f = fixture("fb", presented = listOf(leaf, fake), walk = notFound(NoIssuerReason.UNANCHORED))
+            // A consumer builder's path for another leaf under the honest issuer must not key this leaf.
+            val other =
+                w.cert(
+                    "L2",
+                    w.name("other.example"),
+                    intermediate.subject,
+                    signer = intermediate.key,
+                    key = w.leafKey(),
+                )
+            val cases =
+                listOf(
+                    "another leaf first" to FakeFallback.finds(other, intermediate, root),
+                    "the issuer first" to FakeFallback.finds(intermediate, root),
+                    "a null element" to FakeFallback { java.util.Arrays.asList(leaf.der, null, root.der) },
+                    "a null leaf" to FakeFallback { java.util.Arrays.asList(null, intermediate.der, root.der) },
+                )
+            for ((case, fallback) in cases) {
+                val d = WalkerHarness.decide(f, fallback)
+                assertPath(d, case) {
+                    status(PathStatus.NO_ISSUER)
+                        .noIssuerReason(NoIssuerReason.UNANCHORED)
+                        .walkerReason(NoIssuerReason.UNANCHORED)
+                        .endReason(WalkEnd.COMPLETE)
+                }
+                assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings, case)
+                assertFalse(d.buildThrew, case)
+                assertEquals(1, fallback.calls, case)
+            }
         }
     }
 
@@ -391,7 +422,15 @@ class DecideFallbackTest {
         val name = w.name("Intermediate")
         val sub = w.cert("S", name, root.subject, signer = root.key)
         val honest = w.cert("H", name, root.subject, signer = root.key)
-        val leaf = w.cert("L", w.name("leaf.example"), name, signer = sub.key, key = w.leafKey())
+        val leaf =
+            w.cert(
+                "L",
+                w.name("leaf.example"),
+                name,
+                signer = sub.key,
+                extensions = listOf(sctExtension()),
+                key = w.leafKey(),
+            )
         w.verifies(leaf, honest.key)
         // 64 store anchors named like the leaf's issuer: with S they are 65 related candidates at the leaf.
         val junk = List(RevoktLimits.MAX_RELATED_PER_LEVEL) { w.cert("A$it", name, w.name("Junk issuer $it")) }
@@ -417,6 +456,7 @@ class DecideFallbackTest {
             }
             val reason = if (fallback == null) FallbackReason.DISABLED else FallbackReason.FAILED
             assertEquals(if (used) emptyList() else listOf(notUsed(reason)), d.findings, case)
+            assertLeafQuery(d, leaf, case)
         }
     }
 

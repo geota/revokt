@@ -87,7 +87,7 @@ internal data class ExpectedWalk(
 }
 
 /** The walker-only harness (spec §9): [reconstruct] over one fixture row, with the cross-call memo cleared. */
-@OptIn(RevoktInternalApi::class)
+@OptIn(RevoktInternalApi::class, RevoktTestingApi::class)
 internal object WalkerHarness {
     fun walk(
         f: WalkerFixture,

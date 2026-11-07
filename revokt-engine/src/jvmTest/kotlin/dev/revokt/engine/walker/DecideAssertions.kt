@@ -8,29 +8,18 @@ import dev.revokt.FallbackReason
 import dev.revokt.Finding
 import dev.revokt.KeyabilityClause
 import dev.revokt.Layer
-import dev.revokt.NoIssuerReason
-import dev.revokt.ParseReason
 import dev.revokt.PathBuilderFallback
-import dev.revokt.PathStatus
 import dev.revokt.RevoktInternalApi
-import dev.revokt.RevoktLimits
 import dev.revokt.RevoktTestingApi
 import dev.revokt.SignatureVerifier
 import dev.revokt.TerminalKind
 import dev.revokt.VerifyResult
-import dev.revokt.WalkEnd
-import dev.revokt.WalkStats
+import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.TestDer
-import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
-import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
-import dev.revokt.engine.walker.FixtureWorld.Companion.TELETEX_STRING
 import dev.revokt.testing.SymOids
 import okio.ByteString.Companion.toByteString
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /*
@@ -128,3 +117,28 @@ internal val K6_VALIDITY: ByteArray =
         TestDer.tlv(0x17, TestDer.ascii("5001010000Z")),
         TestDer.tlv(0x18, TestDer.ascii("20500101000000Z")),
     )
+
+/**
+ * An SCT-list extension with one item (spec §6.1, §9.2): version 0, log id `0x11`×32, [timestamp], no extensions, an
+ * empty signature. Outside K8's list, so a leaf carrying it stays keyable.
+ */
+internal fun sctExtension(timestamp: Long = 1_780_000_000_000): ByteArray {
+    val item =
+        TestDer.bytes(0) + ByteArray(32) { 0x11 } + ByteArray(8) { (timestamp ushr (56 - 8 * it)).toByte() } +
+            TestDer.bytes(0, 0, 4, 3, 0, 0)
+    val items = TestDer.bytes(item.size shr 8, item.size and 0xff) + item
+    val list = TestDer.bytes(items.size shr 8, items.size and 0xff) + items
+    return TestDer.extension(Oid.SCT_LIST, TestDer.tlv(0x04, list))
+}
+
+/** [d] carries [leaf]'s `serial` and its non-empty `scts`, what step 7 queries with. */
+internal fun assertLeafQuery(
+    d: PathDecision,
+    leaf: FixtureCert,
+    at: String,
+) {
+    val parsed = WalkerCerts.cert(leaf.der)
+    assertTrue(parsed.scts.isNotEmpty(), "$at: the leaf carries an SCT")
+    assertContentEquals(parsed.serial, d.serial, "$at: serial")
+    assertEquals(parsed.scts, d.scts, "$at: scts")
+}

@@ -97,8 +97,9 @@ internal fun decide(
  * [decide] for the walker-only harness (spec §9): step 3's leaf checks without its `MAX_PRESENTED` and
  * `MAX_PRESENTED_BYTES` cut, so fixtures (i), (s2), (t) and (y), which present more than `MAX_PRESENTED`
  * certificates, reach the walk. Test-visible only: no trust-manager path and no `Evaluator.evaluate` calls it, since on
- * every one of them those rows are cut at step 3.
+ * every one of them those rows are cut at step 3. `@RevoktTestingApi`, so skipping the cut is an explicit opt-in.
  */
+@RevoktTestingApi
 internal fun decideWalkerHarness(
     chain: List<ByteArray>,
     index: CandidateIndex,
@@ -306,23 +307,33 @@ private class Decider(
 
     /**
      * Step 6's PKIX fallback: `DISABLED` with none configured, `SKIPPED` over `FALLBACK_MAX_PRESENTED`, else one
-     * `build` over the raw presented chain (copies, so the builder cannot change the caller's arrays); null, a throw
-     * or a path whose leaf-issuer key cannot be read is `FAILED`.
+     * `build` over the raw presented chain (copies, so the builder cannot change the caller's arrays). `FAILED` is a
+     * null, a throw, or a path decide cannot use: empty, holding a null element (a Java builder), not starting with the
+     * presented leaf's bytes (a consumer builder's path could otherwise be keyed by an unrelated issuer), or with a
+     * leaf-issuer key that cannot be read. Reading the result runs inside the catch, so nothing it does escapes as an
+     * engine error.
      */
     @Suppress("TooGenericExceptionCaught") // §5.5's rule: every throwable but a fatal error is caught
     private fun fallback(leaf: Cert): Fallback {
         val builder = context.fallback ?: return Fallback.NotUsed(FallbackReason.DISABLED)
         if (chain.size > RevoktLimits.FALLBACK_MAX_PRESENTED) return Fallback.NotUsed(FallbackReason.SKIPPED)
-        val ders =
-            try {
-                builder.build(chain.map { it.copyOf() }, snapshot, context.nowMillis)
-            } catch (t: Throwable) {
-                if (isFatal(t)) throw t
-                buildThrew = true
-                null
-            }
-        if (ders.isNullOrEmpty()) return Fallback.NotUsed(FallbackReason.FAILED)
-        val key = issuerKey(ders, leaf) ?: return Fallback.NotUsed(FallbackReason.FAILED)
+        return try {
+            builder.build(chain.map { it.copyOf() }, snapshot, context.nowMillis)?.let { path(it, leaf) }
+        } catch (t: Throwable) {
+            if (isFatal(t)) throw t
+            buildThrew = true
+            null
+        } ?: Fallback.NotUsed(FallbackReason.FAILED)
+    }
+
+    /** A usable fallback [result], or null; [result] is typed as a Java builder may fill it. */
+    private fun path(
+        result: List<ByteArray?>,
+        leaf: Cert,
+    ): Fallback.Path? {
+        val ders = result.map { it ?: return null }
+        if (ders.isEmpty() || !ders[0].contentEquals(chain[0])) return null
+        val key = issuerKey(ders, leaf) ?: return null
         return Fallback.Path(ders.map { it.toByteString().sha256() }, key)
     }
 
