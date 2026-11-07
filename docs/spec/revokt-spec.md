@@ -1,10 +1,41 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 53** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-06
+Status: **draft spec / project proposal, revision 54** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-06
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 54 (the x5u chain matches Firefox, 2026-11-06)
+- **Added** (§7.1, the maintainer's decision on #126): every link below the terminal now passes the checks of
+  mozilla::pkix at Firefox `cac25a6` and rustls-webpki 0.103.15 (Appendix A). Each failure is `SyncOutcome.FAILED`,
+  and §7.1 names the chain's failure reason for each:
+  - **Strict DER** (`PARSE`): non-minimal headers, elements the grammar does not place (a TLV after the SPKI, a
+    second SEQUENCE inside `[3]`, bytes after an `extnValue`), an indefinite-length TBS, non-DER times and unused bits
+    in the signature BIT STRING all fail. This profile is the chain's only: §9.2's TLS parser is unchanged.
+  - **Leaf basicConstraints:** `cA = TRUE` fails (`LEAF_CA`, a new reason). A malformed leaf basicConstraints or
+    keyUsage is `EXTENSION`.
+  - **Critical extensions** (`EXTENSION`): a critical extension outside Firefox's `BackCert::RememberExtension` set
+    fails. A critical nameConstraints is enforced or rejected, never ignored. A critical Netscape certificate type is
+    accepted only when Firefox would permit the purpose.
+  - **EKU** (`EKU`): every non-leaf link below the terminal with an extKeyUsage includes codeSigning, and the
+    terminal is never checked. The leaf also rejects `id-kp-OCSPSigning`.
+  - **Version and issuer:** the version is 0 to 3 (`PARSE`), and `[3]` is read whatever the version. An issuer
+    with no RDN fails (`NAME`). The outer `signatureAlgorithm` equals the TBS one as parsed, with NULL and absent
+    parameters equal (`ALGORITHM`).
+  - **Algorithm floor** (`ALGORITHM`): `id-RSASSA-PSS` only in its three exact encodings (SHA-256, SHA-384 or
+    SHA-512, MGF1 with the same hash, salt equal to the hash length, trailer 1), and only `rsaEncryption` and
+    `id-ecPublicKey` keys, so an `id-RSASSA-PSS` key fails. **§3's `id-RSASSA-PSS` rule for the TLS verifier
+    (revision 51) is unchanged.**
+- **Confirmed** (§7.1): the terminal is the first certificate *after the leaf* whose SPKI is pinned. A pinned leaf
+  SPKI pins nothing (`NOT_PINNED`).
+- **Fixtures** (§9 (d)): one row per rule, each in the leaf and the intermediate where both apply, with the
+  accepting counterparts (a non-critical unknown extension, a critical certificatePolicies, an intermediate without
+  extKeyUsage, a terminal without codeSigning, NULL against absent parameters, a version value of 3), a leaf-only pin,
+  and Mozilla's committed chain.
+- **§10 and Appendix A:** §10's feed-path item names the strict chain checks. Appendix A records the Firefox and
+  webpki sources read, and the differences that remain by §7.1's own text.
+- **Not included:** the ECDSA r and s range check, which is still undecided.
 
 ### Changes in revision 53 (a mirror's `index.bin` is built locally, 2026-11-06)
 - **Decided** (§7.3, §3.2; the maintainer's decision on #160): revokt never fetches an `index.bin` from a mirror.
@@ -2948,18 +2979,45 @@ schemas likewise); a verified changeset whose records fail validation is `SyncOu
 engine's own tree and tokenizer; duplicate keys and unpaired surrogates rejected; keys sorted by code
 point. **Content signature**: `mode` is read and must equal `p384ecdsa` (else `FAILED`, stage `SIGNATURE`); the algorithm is never derived from it; the attachment
 base URL pinned in `MozillaRemoteSettings`, never taken from the server root response. **x5u chain**:
-HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; `_expected` is validated as an integer before it enters a query string), `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal: SHA-256 or stronger, RSA ≥ 2048, P-256 or stronger, anything else `FAILED` (the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply); validity at verification time for the leaf
+HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; `_expected` is validated as an integer before it enters a query string), `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal (revision 54: Firefox's `AppTrustDomain` set): a signature is RSA PKCS#1 v1.5 or ECDSA with SHA-256, SHA-384 or SHA-512, or `id-RSASSA-PSS` whose parameters are byte for byte one of mozilla::pkix's three encodings (SHA-256, SHA-384 or SHA-512, MGF1 with the same hash, a salt length equal to the hash length, `trailerField` 1); a link's key is `rsaEncryption` of at least 2048 bits or `id-ecPublicKey` on P-256, P-384 or P-521, so an `id-RSASSA-PSS` key fails; anything else `FAILED` (`ALGORITHM`; the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply). This floor is the x5u chain's own: §3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged; validity at verification time for the leaf
 and every non-terminal link; for every non-leaf link below the terminal: basicConstraints `cA = TRUE`,
 `pathLenConstraint` honoured, subject name equal to the child's issuer (raw or canonical), keyUsage
 `keyCertSign` when present;
 links verified with the signed TBS algorithm; root SPKI hash in the pinned set (today one entry, the SPKI SHA-256 of
 `CN=root-ca-production-amo`, `3317FA45154AC7DA55694D3782316056471FC147C04AED3E03FFE99565B1E2E7`, which
 `MozillaRemoteSettings.DEFAULT` pins; certificate SHA-256 `C8A80E9A…A106DB`; both verified in Appendix A, revision 49;
-the set is additive while any seed references a root); **the terminal is a trust anchor**: the first certificate on the path whose SPKI is
-pinned, anything after it ignored; only its SPKI is checked, never its validity, CA bits, key usage
+the set is additive while any seed references a root); **the terminal is a trust anchor**: the first certificate after the leaf whose SPKI is
+pinned, anything after it ignored (a pinned SPKI on the leaf pins nothing, so a chain pinned only there is `FAILED`,
+`NOT_PINNED`; confirmed in revision 54: mozilla::pkix fails a pinned root used as the end entity with
+`ERROR_CA_CERT_USED_AS_END_ENTITY`, and rustls-webpki never takes the end entity as an anchor); only its SPKI is checked, never its validity, CA bits, key usage
 or subject (mozilla::pkix semantics; the wrapper around a pinned key is attacker-choosable, so a
 check on it stops nothing, while root expiry would freeze every deployed client and seed); leaf EKU
-codeSigning; leaf SAN exactly `onecrl.content-signature.mozilla.org`. Any non-terminal certificate
+codeSigning and never `id-kp-OCSPSigning` (`EKU`); leaf SAN exactly `onecrl.content-signature.mozilla.org`.
+**Firefox parity for every link below the terminal** (revision 54, the maintainer's decision on #126: the chain
+matches mozilla::pkix at Firefox `cac25a6` and rustls-webpki 0.103.15, Appendix A; every failure is `SyncOutcome.FAILED`,
+and the parenthesis names the chain's failure reason):
+- **Strict DER** (`PARSE`): minimal tag and length headers; no element the certificate grammar does not place (a TLV
+  after the SPKI other than the optional unique IDs and `[3]`, a second SEQUENCE inside `[3]`, bytes after an
+  extension's `extnValue`); no indefinite length, the TBS included; `UTCTime` and `GeneralizedTime` in their DER forms;
+  zero unused bits in the signature BIT STRING. This is the x5u chain's profile only: §9.2's TLS parser stays as
+  lenient as the platforms.
+- **Version and names:** the version is 0 to 3 (`PARSE` otherwise), and `[3]` is read whatever the version, as
+  mozilla::pkix does; an issuer name with no RDN fails (`NAME`).
+- **Outer algorithm** (`ALGORITHM`): the outer `signatureAlgorithm` equals the TBS `signature` as parsed algorithms,
+  with a NULL and an absent parameter comparing equal. The link is still verified with the signed TBS algorithm.
+- **Leaf basicConstraints:** `cA = TRUE` on the leaf fails (`LEAF_CA`; Firefox `ERROR_CA_CERT_USED_AS_END_ENTITY`,
+  webpki `CaUsedAsEndEntity`). A malformed basicConstraints or keyUsage on the leaf is `EXTENSION`, as on every link.
+- **Critical extensions** (`EXTENSION`): a critical extension outside Firefox's understood set
+  (`BackCert::RememberExtension`: keyUsage, subjectAltName, basicConstraints, nameConstraints, certificatePolicies,
+  policyConstraints, extKeyUsage, inhibitAnyPolicy, authorityInfoAccess, the TLS feature extension, the embedded SCT
+  list and qcStatements, and, when critical, `id-pkix-ocsp-nocheck` and the Netscape certificate type) fails on any
+  link. A critical nameConstraints is enforced or rejected, never ignored. A critical Netscape certificate type is
+  accepted only when the purpose is permitted, as Firefox decides it: basicConstraints and extKeyUsage are both
+  present, and their own checks then apply.
+- **EKU below the leaf** (`EKU`): every non-leaf link below the terminal that has an extKeyUsage includes codeSigning.
+  The terminal's is never read.
+
+Any non-terminal certificate
 on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stage `X5U`). **Rollback guard**: high-water mark on
 the signed `last_modified` (`<ts>` of the verified payload, never the unsigned envelope `timestamp`), persisted in `updater.json`; older by less than `rollbackWindow`
 (default = `clockSkew`, 24 h; collection timestamps are server-assigned and monotone) may still
@@ -3136,7 +3194,19 @@ tests; **live checks** are informational.
   `keyCertSign`, an x5u URL on a non-allowlisted host, an x5u over 64 KiB, expired intermediate or
   leaf at live fetch → `CLOCK_SKEW`, expired leaf in seed → loads; a pinned SPKI as a non-terminal
   link → loads with the path truncated there; the pinned terminal expired, or wrapped in a
-  self-signed certificate with another subject → loads; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
+  self-signed certificate with another subject → loads; (revision 54, each in the leaf and in the intermediate) a
+  non-minimal length, a TLV after the SPKI, a second SEQUENCE inside `[3]`, bytes after an `extnValue`, an
+  indefinite-length TBS, a `UTCTime` without seconds and a signature BIT STRING with unused bits → `FAILED`
+  (`PARSE`); a version of 4 → `PARSE`, and a version value of 3 → loads; an issuer with no RDN → `NAME`; an outer
+  `signatureAlgorithm` that differs from the TBS one → `ALGORITHM`, and one that differs only by a NULL against an
+  absent parameter → loads; an unknown critical extension → `EXTENSION`, and the same extension not critical → loads;
+  a critical certificatePolicies → loads; a critical Netscape certificate type with basicConstraints and
+  extKeyUsage → loads, and without extKeyUsage → `EXTENSION`; a leaf with `cA = TRUE` → `LEAF_CA`; a malformed leaf
+  basicConstraints or keyUsage → `EXTENSION`; a leaf extKeyUsage of codeSigning and `id-kp-OCSPSigning` → `EKU`; an
+  intermediate extKeyUsage without codeSigning → `EKU`, an intermediate with no extKeyUsage → loads, and a terminal
+  extKeyUsage without codeSigning → loads; a PSS link whose salt is not the hash length, whose MGF1 hash differs from
+  the message hash, or whose hash is SHA-224 → `ALGORITHM`; an `id-RSASSA-PSS` key on a link → `ALGORITHM`; a chain
+  whose only pinned SPKI is the leaf's → `NOT_PINNED`; Mozilla's committed chain → loads; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
   falls to `previous`, `storeFailures = 1`; a crash before `meta.json` leaves an incomplete directory
   that prune deletes; a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → migrates within one `READONLY_POLL_INTERVAL`, `storageFallback = false`, the in-memory generation on disk; an empty
   directory → `storeFailures = 0`; a `MIRROR` `meta.json` reloads as `MIRROR`; a `meta.json` with the
@@ -4026,7 +4096,8 @@ justified in writing.
   so an unsigned manifest bounds neither heap nor disk nor metered bandwidth; its names are checked and a body is
   fetched only from the configured mirror URL followed by a checked name (§7.3), so an unsigned name never names a
   path outside its generation directory or another URL;
-  x5u allowlisted, capped and path-validated; the parser is at least as lenient as the platforms,
+  x5u allowlisted, capped and path-validated, with Firefox's chain checks under strict DER (§7.1, revision 54); the
+  TLS parser is at least as lenient as the platforms,
   verified differentially (§9.2), and `PARSE_FAILED` applies to the leaf only.
 - Crypto never implemented in Kotlin except the raw-to-DER ECDSA conversion and the §9.2 profile's EC on-curve check (public field arithmetic over P-256, P-384 and P-521, no secret data); `UNSUPPORTED` is decided
   by a startup probe, never by a server-chosen exception; provider exceptions never escape the
@@ -4449,6 +4520,32 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
   outside the count (their issuer is not an index issuer). crt.sh's server certificate (CN=crt.sh, Sectigo) had expired
   on 2026-06-21, and its `ca.last_not_after` showed no update after 2026-10-24 (both seen on 2026-10-29), so CAs were
   selected by key, not by recorded activity.
+- **Revision 54, the x5u chain against mozilla::pkix at Firefox `cac25a6` and rustls-webpki 0.103.15**, read
+  2026-11-06 (Firefox through the GitHub contents API; webpki from the local cargo registry):
+  - `pkixcert.cpp` `BackCert::RememberExtension` understands keyUsage, subjectAltName, basicConstraints,
+    nameConstraints, certificatePolicies, policyConstraints, extKeyUsage, inhibitAnyPolicy, authorityInfoAccess, the
+    TLS feature extension, the embedded SCT list and qcStatements, plus `id-pkix-ocsp-nocheck` and the Netscape
+    certificate type only when critical. Any other critical extension is `ERROR_UNKNOWN_CRITICAL_EXTENSION` (line
+    161). A critical Netscape certificate type is understood only when basicConstraints and extKeyUsage are both
+    present.
+  - `pkixder.cpp` `OptionalVersion` accepts the values 0 to 3, and an explicitly encoded v1; `pkixcert.cpp` parses
+    the extensions of v1 and v2 certificates as of v3. webpki requires v3 (`UnsupportedCertVersion`); revokt follows
+    Firefox.
+  - `pkixcheck.cpp`: `ERROR_SIGNATURE_ALGORITHM_MISMATCH` compares the parsed outer and TBS algorithms, so a NULL and
+    an absent parameter are equal (line 82; webpki compares bytes, `SignatureAlgorithmMismatch`);
+    `ERROR_EMPTY_ISSUER_NAME` for an issuer with no RDN (line 143); `ERROR_CA_CERT_USED_AS_END_ENTITY` (line 705;
+    webpki `CaUsedAsEndEntity`); `CheckExtendedKeyUsage` requires the purpose in every present extKeyUsage and
+    rejects `id-kp-OCSPSigning` in an end entity (line 864).
+  - `pkixder.cpp` accepts `id-RSASSA-PSS` only with one of three parameter encodings, matched byte for byte (lines
+    186 to 250).
+  - `pkixbuild.cpp` checks an issuer's nameConstraints whenever it is present, critical or not (line 173).
+  - **Differences that remain, each by §7.1's own text:** the terminal is its pinned SPKI only (Firefox matches the
+    root's DER and checks it); the path is the x5u order with no depth cap (both references build by name, at most
+    six sub-CAs); name chaining also accepts the canonical form; the leaf SAN is exactly one dNSName and its EKU must
+    be present; RSA size counts significant bits (Firefox rounds to bytes); a seed's chain validity is checked at
+    its signed time; links are not checked against OneCRL; a non-critical nameConstraints is not read (Mozilla's
+    `Content Signing Intermediate` carries one, permitting `content-signature.mozilla.org` and its subdomains, which
+    the leaf satisfies).
 - Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
   2026-10-30: `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` reads the SCT extension's
   `extnValue` with `der::ExpectTagAndGetValueAtEnd(extnValue, der::OCTET_STRING, …)`, which requires the tag `0x04`
