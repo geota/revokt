@@ -61,10 +61,9 @@ class RevoktLoggersTest {
 
     @Test
     fun `safeLog swallows a StackOverflowError and rethrows a fatal error`() {
-        RevoktLogger { _, _, _ -> throw StackOverflowError() }.safeLog(LogLevel.INFO, "swallowed")
-        RevoktLogger { _, _, _ -> throw LinkageError() }.safeLog(LogLevel.INFO, "swallowed")
-        assertFailsWith<OutOfMemoryError> {
-            RevoktLogger { _, _, _ -> throw OutOfMemoryError() }.safeLog(LogLevel.INFO, "rethrown")
-        }
+        fun throwing(t: Throwable) = RevoktLogger { _, _, _ -> throw t }
+        throwing(StackOverflowError()).safeLog(LogLevel.INFO, "swallowed")
+        throwing(LinkageError()).safeLog(LogLevel.INFO, "swallowed")
+        assertFailsWith<OutOfMemoryError> { throwing(OutOfMemoryError()).safeLog(LogLevel.INFO, "rethrown") }
     }
 }
