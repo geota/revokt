@@ -293,12 +293,7 @@ private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
         return failed(X5uChainFailure.EKU, 0, "no codeSigning in extKeyUsage")
     }
     if (eku.contains(OCSP_SIGNING)) return failed(X5uChainFailure.EKU, 0, "OCSPSigning in extKeyUsage")
-    if (!sctListIsOctetString(
-            c,
-        )
-    ) {
-        return failed(X5uChainFailure.EXTENSION, 0, "an embedded SCT list not one OCTET STRING")
-    }
+    if (!sctListIsOctetString(c)) return failed(X5uChainFailure.EXTENSION, 0, "SCT list not one OCTET STRING")
     val san = ExtensionValues.subjectAltName(c).valueOr(0, "subjectAltName") { return it }
     val names = san?.names.orEmpty()
     val only = names.singleOrNull()
