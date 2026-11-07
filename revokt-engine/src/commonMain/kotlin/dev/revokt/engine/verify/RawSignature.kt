@@ -7,8 +7,9 @@ package dev.revokt.engine.verify
  * The content signature's `signature` field (spec §7.1, §6.5 "Seed archive"): unpadded base64url of the raw ECDSA pair
  * `r ‖ s`, two halves of equal length, big-endian. The rules follow Firefox's `ContentSignatureVerifier` (maintainer
  * decision on #163, Firefox parity): any non-empty even length is a pair, so a P-256, P-384 or P-521 leaf's signature
- * decodes (P-384's is 96 bytes, 128 characters), and the leaf's key decides whether it verifies. [toDer] is the one
- * crypto routine written in Kotlin (spec §10): the raw pair as the DER `ECDSA-Sig-Value` that `SHA384withECDSA` takes.
+ * decodes (P-384's is 96 bytes, 128 characters), and the leaf's key decides whether it verifies. [toDer] is one of the
+ * crypto routines written in Kotlin that spec §10 lists, beside the verifier's `ECDSA-Sig-Value` decode and its r and
+ * s range comparison (revision 54): the raw pair as the DER `ECDSA-Sig-Value` that `SHA384withECDSA` takes.
  */
 internal object RawSignature {
     /** P-521's `r ‖ s`, the largest pair any supported curve signs (2 × 66 bytes); Firefox sets no cap. */

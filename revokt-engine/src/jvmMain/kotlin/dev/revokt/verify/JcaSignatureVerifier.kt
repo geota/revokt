@@ -15,6 +15,7 @@ import dev.revokt.verify.JcaAlgorithms.EC_PUBLIC_KEY
 import dev.revokt.verify.JcaAlgorithms.KEYS
 import dev.revokt.verify.JcaAlgorithms.KEY_CACHE_ENTRIES
 import dev.revokt.verify.JcaAlgorithms.SIGNATURES
+import dev.revokt.verify.JcaAlgorithms.ecdsaInRange
 import dev.revokt.verify.JcaAlgorithms.pssSpec
 import okio.ByteString.Companion.toByteString
 import java.security.AlgorithmParameters
@@ -24,6 +25,7 @@ import java.security.Provider
 import java.security.ProviderException
 import java.security.PublicKey
 import java.security.Signature
+import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.ECParameterSpec
 import java.security.spec.ECPublicKeySpec
@@ -49,7 +51,10 @@ import java.util.Collections
  *   included), an OID outside the tables, a key that cannot have made the
  *   signature (an `id-RSASSA-PSS` key signs PSS only, RFC 4055 §1.2), parameters other than absent or NULL outside
  *   PSS, PSS parameters other than SHA-2 message and MGF1 hashes, trailer field 1 and a salt length some key has room
- *   for (spec revision 51, pending), and any `GeneralSecurityException`. A `RuntimeException` from the provider
+ *   for (spec revision 51, pending), an ECDSA signature that is not a DER `Ecdsa-Sig-Value` with `r` and `s` in
+ *   `[1, n − 1]`, `n` the order of the decoded key's curve (`ECPublicKey.params.order`; a key without one is
+ *   `INVALID`), checked before the provider's `Signature` is created (spec §3 "ECDSA range check", revision 54;
+ *   [JcaAlgorithms.ecdsaInRange]), and any `GeneralSecurityException`. A `RuntimeException` from the provider
  *   propagates, wrapped in a [ProviderException], so the caller records it as `INVALID` plus `Finding.VerifierError`
  *   (spec §5.1 decision list; [verifyClassified]).
  * - `KeyFactory` is selected by the SPKI key OID; `Signature` and `KeyFactory` are created per call. Parsed keys are
@@ -106,6 +111,7 @@ public class JcaSignatureVerifier
             try {
                 val hash = spki.toByteString().sha256()
                 val publicKey = keys[hash] ?: keyFactory(keyFactory).generatePublic(X509EncodedKeySpec(spki))
+                if (scheme.ecdsa && !inRange(signature, publicKey)) return VerifyResult.INVALID
                 val verifier = signature(scheme.jcaName)
                 verifier.initVerify(publicKey)
                 pss?.let { verifier.setParameter(it) }
@@ -121,6 +127,15 @@ public class JcaSignatureVerifier
             } catch (e: RuntimeException) {
                 throw ProviderException("${scheme.jcaName} on $oid threw ${e::class.java.name}", e)
             }
+
+        /** Whether [publicKey] has a curve order `n` and [signature]'s `r` and `s` are in `[1, n − 1]` for it. */
+        private fun inRange(
+            signature: ByteArray,
+            publicKey: PublicKey,
+        ): Boolean {
+            val order = (publicKey as? ECPublicKey)?.params?.order ?: return false
+            return ecdsaInRange(signature, order)
+        }
 
         private fun signature(name: String): Signature =
             if (provider == null) Signature.getInstance(name) else Signature.getInstance(name, provider)
