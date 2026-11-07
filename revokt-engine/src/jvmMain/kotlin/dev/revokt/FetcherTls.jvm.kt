@@ -10,6 +10,7 @@ import javax.net.ssl.X509TrustManager
  * The JVM's [FetcherTls] (spec §3): every handshake of the source's fetcher goes through [sslSocketFactory], whose trust
  * decisions are [trustManager]'s. revokt builds one per fetching source; the constructor is revokt's own.
  */
+@Suppress("PublicConstructorOnFinalClass") // the constructor is @RevoktInternalApi: revokt builds each (spec §3)
 public actual class FetcherTls
     @RevoktInternalApi
     constructor(
