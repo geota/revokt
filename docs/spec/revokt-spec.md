@@ -10,20 +10,25 @@ Status: **draft spec / project proposal, revision 55** · Target: JVM 17+ and An
 - **Clarified** (§7.1, from the #170 and #174 reviews): which failure reason a malformed encoding gets.
   - `PARSE` covers the certificate's outer structure: the TBS and the outer `signatureAlgorithm`, an indefinite length
     included; the serial's minimal encoding; the primitive unique IDs; the `critical` BOOLEAN.
-  - Anything malformed inside an extension value revokt reads is `EXTENSION`: bytes after the value, a BOOLEAN such
-    as `cA` of `01`, a non-minimal length inside basicConstraints, keyUsage, extKeyUsage, subjectAltName or
-    nameConstraints, an empty keyUsage. Before, the "DER" bullet said `PARSE` for these, which contradicted the
-    "Extensions" bullet.
+  - Each extension value revokt reads (basicConstraints, keyUsage, extKeyUsage, subjectAltName, nameConstraints,
+    the leaf's SCT list) is parsed first, and anything malformed is `EXTENSION`: bytes after the value, a BOOLEAN such
+    as `cA` of `01`, a non-minimal length, an empty keyUsage (`03 00`, `03 01 00`), an empty extKeyUsage (`30 00`) or
+    a non-OID element in it, an unknown GeneralName tag. Only a well-formed value reaches the `SAN`, `EKU` and
+    `KEY_USAGE` checks. The TLS feature is compared byte for byte and never parsed. Before, the "DER" bullet said
+    `PARSE` for these, which contradicted the "Extensions" bullet.
 - **Added** (§7.1, matching Firefox): when the leaf carries the embedded SCT list, its `extnValue` is exactly one
   OCTET STRING with nothing after it, else `EXTENSION` (`pkixbuild.cpp` lines 218 to 229 at
   `cac25a6fa321b0051932359b84c4e2fe3caabdc5`). The list's content is not read.
 - **Fixtures** (§9 (d)):
   - the extension-internal rows now expect `EXTENSION`;
-  - new rows: an empty keyUsage → `EXTENSION`; a serial with a redundant leading `00` or `FF` → `PARSE`, beside "a
-    zero or negative serial loads"; a constructed unique ID → `PARSE`; `rsaEncryption` NULL parameters with content →
-    `ALGORITHM`; an empty critical Netscape certificate type → `EXTENSION`; the SCT list cases.
+  - new rows: the empty keyUsage and extKeyUsage forms, a non-OID extKeyUsage element and a SAN with an unknown
+    GeneralName tag → `EXTENSION`; a serial with a redundant leading `00` or `FF`, or an empty serial (`02 00`), →
+    `PARSE`, beside "a zero or negative serial loads"; a constructed unique ID → `PARSE`; `rsaEncryption` NULL
+    parameters with content → `ALGORITHM`; an empty critical Netscape certificate type → `EXTENSION`, and an empty
+    non-critical one → loads; the SCT list cases.
 - **Scoped** (§3, the #160 comment): the ECDSA range check covers standalone ECDSA. A composite ML-DSA + ECDSA
-  signature verifies as one provider operation, so its ECDSA component is the owning provider's responsibility.
+  signature verifies as one provider operation, so its ECDSA component is the owning provider's responsibility;
+  both owning providers (BC's `ECDSASigner`, BoringSSL under Conscrypt) range-check it.
 - **Gated** (§9 verifier row): the brainpool cases under BC wait on #175, the BC dependency decision, instead of
   being [0.2, #172]. The NIST-curve cases stay [0.2, #172].
 
@@ -1670,7 +1675,7 @@ decoded the key and before `Signature` is called, the verifier decodes the signa
 - **Scope:** every standalone ECDSA signature that reaches the verifier: a TLS chain's links, the x5u chain's links
   (§7.1) and the content signature after its raw-to-DER conversion. A composite ML-DSA + ECDSA signature verifies as
   one provider operation, so its ECDSA component is the owning provider's responsibility (revision 55, the #160
-  comment).
+  comment); both owning providers range-check it (BC's `ECDSASigner`, and BoringSSL under Conscrypt).
 
 **From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
 signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
@@ -3087,10 +3092,13 @@ on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stag
   TBS and the outer `signatureAlgorithm` included; no element the certificate grammar does not place (a TLV after the
   SPKI other than the optional unique IDs, which are primitive, and `[3]`, a second SEQUENCE inside `[3]`, bytes after
   an extension's `extnValue`); a minimally encoded serial; the `critical` BOOLEAN `00` or `FF`; zero unused bits in
-  the signature BIT STRING. Inside each extension value revokt reads (basicConstraints, keyUsage, extKeyUsage,
-  subjectAltName, nameConstraints, the TLS feature, the leaf's embedded SCT list), anything malformed is `EXTENSION`:
-  bytes after the value, a BOOLEAN other than `00` or `FF`, a non-minimal length, an empty BIT STRING; the value is
-  parsed to its end. Times are read
+  the signature BIT STRING. Each extension value revokt reads (basicConstraints, keyUsage, extKeyUsage, subjectAltName,
+  nameConstraints, the leaf's embedded SCT list) is parsed first and to its end, and anything malformed is
+  `EXTENSION`: bytes after the value, a BOOLEAN other than `00` or `FF`, a non-minimal length, an empty keyUsage BIT
+  STRING (`03 00`) or one with no named-bit byte (`03 01 00`), an empty extKeyUsage SEQUENCE (`30 00`) or a non-OID
+  element in it, an unknown GeneralName tag. Only a well-formed value reaches the `SAN`, `EKU` and `KEY_USAGE` checks,
+  so a SAN with an unknown GeneralName tag is `EXTENSION`, not `SAN`. An empty `extnValue` is the understood-empty rule
+  below. The TLS feature is compared byte for byte and never parsed. Times are read
   as mozilla::pkix reads them: `UTCTime` as `YYMMDDHHMMSSZ` and `GeneralizedTime` as `YYYYMMDDHHMMSSZ`, either type
   for any year (Mozilla's `Content Signing Intermediate` uses GeneralizedTime `20150317000000Z`), a year of 1970 or
   later, and notBefore ≤ notAfter. **What mozilla::pkix accepts and revokt accepts too, although DER or RFC 5280
@@ -3326,10 +3334,12 @@ tests; **live checks** are informational.
   seconds, a time with a fraction or an offset, a year before 1970, notBefore after notAfter, a `critical` BOOLEAN of
   `01` and a signature BIT STRING with unused bits → `FAILED` (`PARSE`); (revision 55) trailing bytes inside an
   extension value revokt reads, a BOOLEAN `cA` of `01`, a non-minimal length inside basicConstraints, keyUsage,
-  extKeyUsage, subjectAltName or nameConstraints, and an empty keyUsage → `EXTENSION`; a GeneralizedTime before 2050
+  extKeyUsage, subjectAltName or nameConstraints, an empty keyUsage BIT STRING (`03 00`) or one with no named-bit byte (`03 01 00`), an empty extKeyUsage
+  SEQUENCE (`30 00`), an extKeyUsage with a non-OID element, and a SAN with an unknown GeneralName tag → `EXTENSION`
+  (the SAN case not `SAN`); a GeneralizedTime before 2050
   (Mozilla's intermediate's `20150317000000Z`), an explicitly encoded v1 version, an explicit FALSE `critical` or `cA`,
   an empty Extensions SEQUENCE, a zero or negative serial and a keyUsage with a non-minimal named-bit encoding →
-  loads; a serial with a redundant leading `00` or `FF` → `PARSE`; a version INTEGER
+  loads; a serial with a redundant leading `00` or `FF`, or an empty serial (`02 00`), → `PARSE`; a version INTEGER
   of 4 → `PARSE`, a version of 3, which is v4 → loads, and an implicit v1 with `[3]` → loads; an issuer with no RDN → `NAME`;
   an outer `signatureAlgorithm` that differs from the TBS one → `ALGORITHM`, and one that differs only by a NULL
   against an absent parameter → loads; an EC key with explicit curve parameters, a compressed point or a point one
@@ -3340,7 +3350,7 @@ tests; **live checks** are informational.
   `EXTENSION`, and an empty critical `id-pkix-ocsp-nocheck` → loads; a `pathLenConstraint` of 128 → `EXTENSION`; an
   unknown critical extension → `EXTENSION`, and the same extension not critical → loads; a critical
   certificatePolicies → loads; a critical Netscape certificate type with basicConstraints and extKeyUsage → loads,
-  without extKeyUsage → `EXTENSION`, and with an empty value → `EXTENSION`; (revision 55) a leaf whose embedded SCT
+  without extKeyUsage → `EXTENSION`, and with an empty value → `EXTENSION`, while an empty non-critical Netscape certificate type → loads; (revision 55) a leaf whose embedded SCT
   list `extnValue` is an OCTET STRING followed by a byte, or is not an OCTET STRING → `EXTENSION`, and a well-formed
   one → loads; an intermediate with the TLS feature extension over a leaf without it, or with
   another value → `EXTENSION`, and the same value on both → loads; a terminal with the TLS feature over an
