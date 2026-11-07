@@ -328,6 +328,27 @@ class DiagnosticsTest {
     }
 
     @Test
+    fun `installed and warnings are read-only`() {
+        // toMap() and toList() copy two or more entries into a mutable collection. Dataset has one value in M1, so
+        // installed cannot hold two entries yet; warnings holds two.
+        val r =
+            SyncResult
+                .Builder()
+                .outcome(SyncOutcome.INSTALLED)
+                .atMillis(5)
+                .installed(mapOf(Dataset.CRLITE to "g1"))
+                .warnings(listOf(diagnostic(), diagnostic().newBuilder().code(DiagnosticCode.CAP_NEAR_LIMIT).build()))
+                .build()
+
+        @Suppress("UNCHECKED_CAST")
+        val installed = r.installed as MutableMap<Dataset, String>
+        assertFailsWith<UnsupportedOperationException> { installed.clear() }
+        @Suppress("UNCHECKED_CAST")
+        val warnings = r.warnings as MutableList<PolicyDiagnostic>
+        assertFailsWith<UnsupportedOperationException> { warnings.clear() }
+    }
+
+    @Test
     fun `safeLog passes the call through and swallows a throwing logger`() {
         val seen = mutableListOf<Triple<LogLevel, String, Throwable?>>()
         val cause = IllegalStateException("cause")

@@ -45,6 +45,8 @@ class RevoktLoggersTest {
             )
             assertEquals(LogLevel.entries.map { "at $it" }, handler.records.map { it.message })
             assertEquals(List(4) { "dev.revokt" }, handler.records.map { it.loggerName })
+            assertEquals(List(4) { "dev.revokt" }, handler.records.map { it.sourceClassName })
+            assertEquals(List(4) { null }, handler.records.map { it.sourceMethodName })
             assertSame(cause, handler.records.last().thrown)
             assertNull(handler.records.first().thrown)
         } finally {

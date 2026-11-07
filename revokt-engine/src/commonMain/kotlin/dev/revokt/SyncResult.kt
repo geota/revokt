@@ -29,7 +29,10 @@ public class SyncResult private constructor(
     /** The source the outcome is about; null when no one source is (a `FETCHER_TRUST` failure, for example). */
     public val sourceId: String? = builder.sourceId
 
-    /** Where a `FAILED`, `STORE_FAILED` or `CLOCK_SKEW` sync stopped. */
+    /**
+     * Where a `FAILED`, `STORE_FAILED` or `CLOCK_SKEW` sync stopped. A fetcher-policy reject and a 401 or 407 carry the
+     * stage of the fetch they interrupted: `CHANGESET`, `X5U` or `ATTACHMENT` (§3).
+     */
     public val stage: SyncStage? = builder.stage
 
     /** The last response status, when a fetch was involved. */
@@ -139,8 +142,12 @@ public class SyncResult private constructor(
 
         public fun atMillis(atMillis: Long): Builder = apply { this.atMillis = atMillis }
 
-        /** Replaces the installed generations with a copy of [installed]. */
-        public fun installed(installed: Map<Dataset, String>): Builder = apply { this.installed = installed.toMap() }
+        /** Replaces the installed generations with a read-only copy of [installed]. */
+        public fun installed(installed: Map<Dataset, String>): Builder =
+            apply {
+                this.installed =
+                    buildMap { putAll(installed) }
+            }
 
         public fun sourceId(sourceId: String?): Builder = apply { this.sourceId = sourceId }
 
@@ -157,8 +164,12 @@ public class SyncResult private constructor(
 
         public fun blockedLeafSerial(serial: ByteArray?): Builder = apply { blockedLeafSerial = serial?.toByteString() }
 
-        /** Replaces the warnings with a copy of [warnings]. */
-        public fun warnings(warnings: List<PolicyDiagnostic>): Builder = apply { this.warnings = warnings.toList() }
+        /** Replaces the warnings with a read-only copy of [warnings]. */
+        public fun warnings(warnings: List<PolicyDiagnostic>): Builder =
+            apply {
+                this.warnings =
+                    buildList { addAll(warnings) }
+            }
 
         public fun build(): SyncResult = SyncResult(this)
     }

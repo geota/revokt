@@ -8,11 +8,21 @@ import java.util.logging.Logger
 
 /** The JVM's [RevoktLogger]s (spec §3). */
 public object RevoktLoggers {
+    private const val NAME = "dev.revokt"
+
     // A strong reference: java.util.logging holds its named loggers weakly, so a level set on "dev.revokt" through
     // this logger would otherwise be lost when it is collected.
-    private val julLogger: Logger = Logger.getLogger("dev.revokt")
+    private val julLogger: Logger = Logger.getLogger(NAME)
 
-    private val jul = RevoktLogger { level, message, cause -> julLogger.log(level.julLevel(), message, cause) }
+    // logp with the logger name as the source class, so JUL does not infer this lambda as the caller.
+    private val jul =
+        RevoktLogger {
+            level,
+            message,
+            cause,
+            ->
+            julLogger.logp(level.julLevel(), NAME, null, message, cause)
+        }
 
     /**
      * A logger over the `java.util.logging` logger `"dev.revokt"`: [LogLevel.DEBUG] logs at `FINE`, [LogLevel.INFO] at
