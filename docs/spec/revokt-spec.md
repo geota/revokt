@@ -4554,7 +4554,7 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
   selected by key, not by recorded activity.
 - **Revision 54, the ECDSA range check** (§3, #172): SEC 1 v2 §4.1.4 ("Verifying Operation") step 1 rejects a
   signature unless r and s are integers in [1, n − 1]. CVE-2022-21449 is the JDK skipping it, so that r = s = 0 verified
-  under any key. NVD's description, fetched from the NVD API on 2026-11-07: "Supported versions that are affected are
+  under any key. NVD CVE-2022-21449, read 2026-11-07: "Supported versions that are affected are
   Oracle Java SE: 17.0.2 and 18; Oracle GraalVM Enterprise Edition: 21.3.1 and 22.0.0.2", fixed in Oracle's April
   2022 Critical Patch Update (17.0.3 and 18.0.1); §3's "17.0.0 to 17.0.2" counts the two 17 updates that predate it. Every JDK revokt tests on (17.0.21,
   21, 25 and 27) has the fix; revokt checks the range itself, so neither an older JDK nor an injected provider can
