@@ -26,6 +26,14 @@ public final class dev/revokt/CredentialType : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/CredentialType;
 }
 
+public final class dev/revokt/CrliteChannel : java/lang/Enum {
+	public static final field COMPAT Ldev/revokt/CrliteChannel;
+	public static final field DEFAULT Ldev/revokt/CrliteChannel;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/CrliteChannel;
+	public static fun values ()[Ldev/revokt/CrliteChannel;
+}
+
 public final class dev/revokt/CrliteQuery {
 	public synthetic fun <init> (Ldev/revokt/CrliteQuery$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
@@ -81,6 +89,48 @@ public final class dev/revokt/FallbackReason : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/FallbackReason;
 	public static fun values ()[Ldev/revokt/FallbackReason;
+}
+
+public final class dev/revokt/FetchRequest {
+	public synthetic fun <init> (Ldev/revokt/FetchRequest$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHeaders ()Ljava/util/Map;
+	public final fun getMaxBodyBytes ()J
+	public final fun getTimeoutMillis ()J
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/FetchResponse {
+	public static final field Companion Ldev/revokt/FetchResponse$Companion;
+	public synthetic fun <init> (Ldev/revokt/FetchResponse$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBody ()[B
+	public final fun getHeaders ()Ljava/util/Map;
+	public final fun getStatus ()I
+	public fun hashCode ()I
+	public final fun newBuilder ()Ldev/revokt/FetchResponse$Builder;
+	public static final fun of (ILjava/util/Map;[B)Ldev/revokt/FetchResponse;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/FetchResponse$Builder {
+	public fun <init> ()V
+	public final fun body ([B)Ldev/revokt/FetchResponse$Builder;
+	public final fun build ()Ldev/revokt/FetchResponse;
+	public final fun header (Ljava/lang/String;Ljava/lang/String;)Ldev/revokt/FetchResponse$Builder;
+	public final fun headers (Ljava/util/Map;)Ldev/revokt/FetchResponse$Builder;
+	public final fun status (I)Ldev/revokt/FetchResponse$Builder;
+}
+
+public final class dev/revokt/FetchResponse$Companion {
+	public final fun of (ILjava/util/Map;[B)Ldev/revokt/FetchResponse;
+}
+
+public final class dev/revokt/FetcherTls {
+	public final fun getSslSocketFactory ()Ljavax/net/ssl/SSLSocketFactory;
+	public final fun getTrustManager ()Ljavax/net/ssl/X509TrustManager;
 }
 
 public final class dev/revokt/FilterFormat : java/lang/Enum {
@@ -181,8 +231,21 @@ public final class dev/revokt/GenerationFiles {
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface class dev/revokt/HttpFetcher {
+	public abstract fun fetch (Ldev/revokt/FetchRequest;)Ldev/revokt/FetchResponse;
+}
+
+public abstract interface class dev/revokt/HttpFetcher$Factory {
+	public abstract fun create (Ldev/revokt/FetcherTls;)Ldev/revokt/HttpFetcher;
+}
+
 public final class dev/revokt/JvmGenerationFiles {
 	public static final field INSTANCE Ldev/revokt/JvmGenerationFiles;
+}
+
+public final class dev/revokt/JvmSeedSource {
+	public static final field INSTANCE Ldev/revokt/JvmSeedSource;
+	public static final fun fromPath (Ljava/nio/file/Path;)Ldev/revokt/SeedSource;
 }
 
 public final class dev/revokt/KeyabilityClause : java/lang/Enum {
@@ -218,6 +281,42 @@ public final class dev/revokt/Layer : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Layer;
 	public static fun values ()[Ldev/revokt/Layer;
+}
+
+public final class dev/revokt/MozillaRemoteSettings {
+	public static final field Companion Ldev/revokt/MozillaRemoteSettings$Companion;
+	public static final field DEFAULT Ldev/revokt/MozillaRemoteSettings;
+	public synthetic fun <init> (Ldev/revokt/MozillaRemoteSettings$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun collection (Ldev/revokt/Dataset;)Ljava/lang/String;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttachmentBaseUrl ()Ljava/lang/String;
+	public final fun getBaseUrl ()Ljava/lang/String;
+	public final fun getBucket ()Ljava/lang/String;
+	public final fun getPinnedRootSpkiSha256s ()Ljava/util/List;
+	public final fun getSourceId ()Ljava/lang/String;
+	public final fun getUserAgent ()Ljava/lang/String;
+	public final fun getX5uHostRewrites ()Ljava/util/Map;
+	public final fun getX5uHosts ()Ljava/util/Set;
+	public fun hashCode ()I
+	public final fun newBuilder ()Ldev/revokt/MozillaRemoteSettings$Builder;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/MozillaRemoteSettings$Builder {
+	public fun <init> ()V
+	public final fun attachmentBaseUrl (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun baseUrl (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun bucket (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun build ()Ldev/revokt/MozillaRemoteSettings;
+	public final fun collection (Ldev/revokt/Dataset;Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun pinnedRootSpkiSha256s (Ljava/util/Collection;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun sourceId (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun userAgent (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun x5uHostRewrite (Ljava/lang/String;Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
+	public final fun x5uHosts (Ljava/util/Set;)Ldev/revokt/MozillaRemoteSettings$Builder;
+}
+
+public final class dev/revokt/MozillaRemoteSettings$Companion {
 }
 
 public final class dev/revokt/NoIssuerReason : java/lang/Enum {
@@ -386,6 +485,25 @@ public final class dev/revokt/RuleClass : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/RuleClass;
 	public static fun values ()[Ldev/revokt/RuleClass;
+}
+
+public abstract interface class dev/revokt/SeedOpener {
+	public abstract fun open ()Ljava/io/InputStream;
+}
+
+public final class dev/revokt/SeedSource {
+	public static final field Companion Ldev/revokt/SeedSource$Companion;
+	public static final fun bundled ()Ldev/revokt/SeedSource;
+	public static final fun fromResource (Ljava/lang/String;)Ldev/revokt/SeedSource;
+	public static final fun none ()Ldev/revokt/SeedSource;
+	public static final fun of (Ldev/revokt/SeedOpener;)Ldev/revokt/SeedSource;
+}
+
+public final class dev/revokt/SeedSource$Companion {
+	public final fun bundled ()Ldev/revokt/SeedSource;
+	public final fun fromResource (Ljava/lang/String;)Ldev/revokt/SeedSource;
+	public final fun none ()Ldev/revokt/SeedSource;
+	public final fun of (Ldev/revokt/SeedOpener;)Ldev/revokt/SeedSource;
 }
 
 public abstract interface class dev/revokt/SignatureVerifier {
