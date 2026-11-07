@@ -63,8 +63,7 @@ import kotlin.test.assertTrue
 
 /**
  * The x5u chain's encoding and extension rules beyond fixture (d): mozilla::pkix's DER and time rules, validity
- * windows, duplicate, malformed and critical extensions, a CA leaf and a CA's extKeyUsage (review round 1 of #170 and
- * the maintainer decision of 2026-11-06, pending in the next spec revision).
+ * windows, duplicate, malformed and critical extensions, a CA leaf and a CA's extKeyUsage (spec revision 54).
  */
 internal class X5uChainRulesTest : X5uChainFixture() {
     @Test

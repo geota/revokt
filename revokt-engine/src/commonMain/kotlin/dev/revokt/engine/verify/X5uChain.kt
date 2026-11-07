@@ -68,7 +68,7 @@ internal enum class X5uChainFailure {
 
     /**
      * The leaf's dNSName lies outside a CA's nameConstraints: not in its permitted dNSName subtrees, or in an excluded
-     * one (mozilla::pkix's `ERROR_CERT_NOT_IN_NAME_SPACE`; revision 54, pending).
+     * one (mozilla::pkix's `ERROR_CERT_NOT_IN_NAME_SPACE`; spec revision 54).
      */
     NAME_CONSTRAINTS,
 
@@ -279,8 +279,7 @@ private fun link(
 /**
  * The leaf rules: not a CA, a readable keyUsage if present, codeSigning in extKeyUsage without OCSPSigning, and exactly
  * one SAN, the dNSName [X5U_LEAF_NAME]. The not-a-CA, keyUsage and OCSPSigning rules are mozilla::pkix's
- * (`CheckBasicConstraints`, `CheckKeyUsage`, `CheckExtendedKeyUsage` for an end entity; maintainer decision
- * 2026-11-06, pending in the next spec revision).
+ * (`CheckBasicConstraints`, `CheckKeyUsage`, `CheckExtendedKeyUsage` for an end entity; spec revision 54).
  */
 private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
     val bc = basicConstraints(c, 0) { return it }
@@ -319,8 +318,8 @@ private fun issuer(
     }
     val ku = keyUsage(c, i) { return it }
     if (ku?.keyCertSign == false) return failed(X5uChainFailure.KEY_USAGE, i, "keyUsage without keyCertSign")
-    // mozilla::pkix and webpki check the required EKU on every certificate that has one (maintainer decision
-    // 2026-11-06, pending in the next spec revision); the terminal is never read.
+    // mozilla::pkix and webpki check the required EKU on every certificate that has one (spec revision 54); the
+    // terminal is never read.
     val eku = ExtensionValues.extendedKeyUsage(c).valueOr(i, "extKeyUsage") { return it }
     if (eku?.contains(CODE_SIGNING) == false) return failed(X5uChainFailure.EKU, i, "extKeyUsage without codeSigning")
     val child = certs[i - 1]
@@ -438,7 +437,7 @@ private fun criticalIsDer(
 
 /**
  * The extensions mozilla::pkix's `BackCert::RememberExtension` understands (at `cac25a6`), so that a critical copy of any
- * other is `ERROR_UNKNOWN_CRITICAL_EXTENSION` (maintainer decision 2026-11-06, pending in the next spec revision).
+ * other is `ERROR_UNKNOWN_CRITICAL_EXTENSION` (spec revision 54).
  * OIDs are compared as encoded, as `MatchRest` does, so a non-minimal arc is an unknown extension.
  *
  * - Understood and checked here, or ignored by Firefox for an any-policy content signature (so a critical copy is

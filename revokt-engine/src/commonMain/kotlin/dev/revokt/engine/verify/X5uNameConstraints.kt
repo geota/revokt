@@ -12,7 +12,7 @@ import dev.revokt.engine.parse.Span
 
 /**
  * A CA's nameConstraints as mozilla::pkix's `CheckNameConstraints` applies them to the leaf's dNSName (`pkixnames.cpp`
- * at `cac25a6`; revision 54, pending), critical or not. Only the dNSName subtrees bind:
+ * at `cac25a6`; spec revision 54), critical or not. Only the dNSName subtrees bind:
  *
  * - The name must match a [permitted] dNSName subtree when any is listed (the check is per name type, so a permitted
  *   list without a dNSName constrains nothing) and no [excluded] one.
