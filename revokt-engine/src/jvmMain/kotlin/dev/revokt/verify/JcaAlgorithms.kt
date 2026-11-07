@@ -117,8 +117,8 @@ internal object JcaAlgorithms {
 
     /**
      * Whether [signature] is a DER `Ecdsa-Sig-Value` with `1 ≤ r ≤ n − 1` and `1 ≤ s ≤ n − 1` for the curve order [n]:
-     * step 1 of ECDSA verification (SEC 1 §4.1.4), which JDK 17.0.0 to 17.0.2 skipped (CVE-2022-21449: `r = s = 0`
-     * verified for any message and key). Spec revision 54, pending. A high `s` is in range.
+     * step 1 of ECDSA verification (SEC 1 §4.1.4), which JDK 17.0.0 to 17.0.2 and 18 GA skipped (CVE-2022-21449:
+     * `r = s = 0` verified for any message and key). Spec §3 "ECDSA range check" (revision 54). A high `s` is in range.
      */
     fun ecdsaInRange(
         signature: ByteArray,
@@ -131,8 +131,8 @@ internal object JcaAlgorithms {
     /**
      * The `(r, s)` of the DER `Ecdsa-Sig-Value` (RFC 3279 §2.2.3) [der], or null for anything else: a SEQUENCE of
      * exactly two INTEGERs and nothing after it, every length minimal and definite, every INTEGER minimal two's
-     * complement and not negative (a redundant leading `00` is not minimal), so no provider's reading of a negative
-     * INTEGER matters.
+     * complement and positive (a redundant leading `00` is not minimal). Stricter than SunEC, which verifies a negative
+     * INTEGER read as unsigned (spec Appendix A, revision 54).
      */
     fun ecdsaSignature(der: ByteArray): Pair<BigInteger, BigInteger>? =
         try {

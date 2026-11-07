@@ -53,7 +53,7 @@ import java.util.Collections
  *   PSS, PSS parameters other than SHA-2 message and MGF1 hashes, trailer field 1 and a salt length some key has room
  *   for (spec revision 51, pending), an ECDSA signature that is not a DER `Ecdsa-Sig-Value` with `r` and `s` in
  *   `[1, n − 1]`, `n` the order of the decoded key's curve (`ECPublicKey.params.order`; a key without one is
- *   `INVALID`), checked before the provider's `Signature` is created (spec revision 54, pending;
+ *   `INVALID`), checked before the provider's `Signature` is created (spec §3 "ECDSA range check", revision 54;
  *   [JcaAlgorithms.ecdsaInRange]), and any `GeneralSecurityException`. A `RuntimeException` from the provider
  *   propagates, wrapped in a [ProviderException], so the caller records it as `INVALID` plus `Finding.VerifierError`
  *   (spec §5.1 decision list; [verifyClassified]).
