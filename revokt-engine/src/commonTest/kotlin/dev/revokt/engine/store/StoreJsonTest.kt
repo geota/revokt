@@ -227,8 +227,8 @@ class StoreJsonTest {
 
     @Test
     fun `updater json round-trips`() {
-        assertEquals(record, UpdaterJson.read(UpdaterJson.write(record, now), now))
-        assertEquals(UpdaterRecord(), UpdaterJson.read(UpdaterJson.write(UpdaterRecord(), now), now))
+        assertEquals(UpdaterRead(record), UpdaterJson.read(UpdaterJson.write(record, now), now))
+        assertEquals(UpdaterRead(UpdaterRecord()), UpdaterJson.read(UpdaterJson.write(UpdaterRecord(), now), now))
         assertEquals("""{"sources":{}}""", text(UpdaterJson.write(UpdaterRecord(), now)))
     }
 
@@ -237,7 +237,7 @@ class StoreJsonTest {
         val bytes =
             edited(UpdaterJson.write(record, now), "\"consecutiveFailures\":3", "\"consecutiveFailures\":3,\"zNew\":{}")
         val wider = edited(bytes, "{\"datasetLastAttemptAtMillis\"", "{\"aNew\":true,\"datasetLastAttemptAtMillis\"")
-        assertEquals(record, UpdaterJson.read(wider, now))
+        assertEquals(UpdaterRead(record), UpdaterJson.read(wider, now))
     }
 
     @Test
@@ -278,15 +278,26 @@ class StoreJsonTest {
             ",\"sinceMillis\":${now - 100}" to "",
         )) {
             val read = assertNotNull(UpdaterJson.read(edited(bytes, from, to), now), "$from -> $to")
-            assertEquals(withoutRemoteSettings, read, "$from -> $to")
-            assertEquals(1_762_000_000_000, read.watermarkMillis)
+            assertEquals(withoutRemoteSettings, read.record, "$from -> $to")
+            assertEquals(setOf("remote-settings"), read.droppedSources, "$from -> $to")
+            assertEquals(1_762_000_000_000, read.record.watermarkMillis)
         }
         val mirrorBad = UpdaterJson.read(edited(bytes, "\"mirror\":{\"consecutiveFailures\":0}", "\"mirror\":[]"), now)
-        assertEquals(record.copy(sources = record.sources - "mirror"), mirrorBad)
-        assertEquals(UpdaterRecord(), UpdaterJson.read("{}".encodeToByteArray(), now))
+        assertEquals(UpdaterRead(record.copy(sources = record.sources - "mirror"), setOf("mirror")), mirrorBad)
+        val bothBad =
+            edited(
+                edited(bytes, "\"mirror\":{\"consecutiveFailures\":0}", "\"mirror\":7"),
+                "\"consecutiveFailures\":3",
+                "\"consecutiveFailures\":-1",
+            )
+        assertEquals(
+            UpdaterRead(record.copy(sources = emptyMap()), setOf("mirror", "remote-settings")),
+            UpdaterJson.read(bothBad, now),
+        )
+        assertEquals(UpdaterRead(UpdaterRecord()), UpdaterJson.read("{}".encodeToByteArray(), now))
         for (sources in listOf("[]", "7", "null", "\"x\"")) {
             assertEquals(
-                UpdaterRecord(watermarkMillis = 5),
+                UpdaterRead(UpdaterRecord(watermarkMillis = 5)),
                 UpdaterJson.read("{\"watermarkMillis\":5,\"sources\":$sources}".encodeToByteArray(), now),
                 sources,
             )
@@ -301,6 +312,7 @@ class StoreJsonTest {
             now + RevoktLimits.MAX_BACKOFF,
             UpdaterJson
                 .read(written, now)
+                ?.record
                 ?.sources
                 ?.get("rs")
                 ?.backoffUntilMillis,
@@ -311,6 +323,7 @@ class StoreJsonTest {
             now + RevoktLimits.MAX_BACKOFF,
             UpdaterJson
                 .read(ahead, now)
+                ?.record
                 ?.sources
                 ?.get("rs")
                 ?.backoffUntilMillis,
@@ -323,7 +336,8 @@ class StoreJsonTest {
                 .read(
                     UpdaterJson.write(UpdaterRecord(sources = mapOf("rs" to near)), now),
                     now,
-                )?.sources
+                )?.record
+                ?.sources
                 ?.get("rs"),
         )
         val max = SourceRecord(backoffUntilMillis = Long.MAX_VALUE)
@@ -336,7 +350,8 @@ class StoreJsonTest {
                         Long.MAX_VALUE - 1,
                     ),
                     Long.MAX_VALUE - 1,
-                )?.sources
+                )?.record
+                ?.sources
                 ?.get("rs"),
         )
     }

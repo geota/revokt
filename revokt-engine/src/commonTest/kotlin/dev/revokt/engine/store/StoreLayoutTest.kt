@@ -316,7 +316,7 @@ class StoreLayoutTest {
             )
         layout.writeUpdater(record, now)
         assertEquals("crlite/compat/updater.json", storage.writes.last())
-        val read = assertIs<StoreRead.Found<UpdaterRecord>>(layout.updater(now)).value
+        val read = assertIs<StoreRead.Found<UpdaterRead>>(layout.updater(now)).value.record
         assertEquals(5, read.watermarkMillis)
         assertEquals(now + dev.revokt.RevoktLimits.MAX_BACKOFF, read.sources.getValue("rs").backoffUntilMillis)
         for (bad in listOf("[]", "", "{\"watermarkMillis\":\"5\"}")) {

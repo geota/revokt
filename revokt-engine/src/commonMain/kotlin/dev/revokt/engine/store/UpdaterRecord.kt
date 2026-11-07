@@ -23,6 +23,15 @@ internal data class UpdaterRecord(
     val sources: Map<String, SourceRecord> = emptyMap(),
 )
 
+/**
+ * A decoded `updater.json`: its [record], and the ids of the source entries that did not decode and were dropped, each
+ * a store failure for the caller to count (spec §6.5, `storeFailures`).
+ */
+internal data class UpdaterRead(
+    val record: UpdaterRecord,
+    val droppedSources: Set<String> = emptySet(),
+)
+
 /** One source's entry in [UpdaterRecord.sources] (spec §6.5). */
 internal data class SourceRecord(
     val lastVerifiedLastModified: Long? = null,
@@ -67,27 +76,28 @@ internal object UpdaterJson {
     /**
      * The record in [bytes] with every backoff clamped against [nowMillis], or null when the file or a dataset-level
      * member is malformed. The dataset-level members are read independently of the per-source map: a source entry that
-     * does not decode is dropped alone, and a `sources` that is absent or not an object reads as no sources, so a bad
-     * entry never costs the rollback watermark (§10).
+     * does not decode is dropped alone and its id reported in [UpdaterRead.droppedSources], and a `sources` that is
+     * absent or not an object reads as no sources, so a bad entry never costs the rollback watermark (§10).
      */
     fun read(
         bytes: ByteArray,
         nowMillis: Long,
-    ): UpdaterRecord? =
+    ): UpdaterRead? =
         StoreFields.decodeOrNull(bytes) { f ->
-            UpdaterRecord(
-                watermarkMillis = f.optLong("watermarkMillis"),
-                seedInstalledAtMillis = f.optLong("seedInstalledAtMillis"),
-                datasetLastAttemptAtMillis = f.optLong("datasetLastAttemptAtMillis"),
-                sources =
-                    f
-                        .objectOrNull("sources")
-                        ?.members
-                        .orEmpty()
-                        .mapNotNull { (id, value) ->
-                            sourceOrNull(value)?.let { id to clamped(it, nowMillis) }
-                        }.toMap(),
-            )
+            val sources = LinkedHashMap<String, SourceRecord>()
+            val dropped = LinkedHashSet<String>()
+            for ((id, value) in f.objectOrNull("sources")?.members.orEmpty()) {
+                val source = sourceOrNull(value)
+                if (source == null) dropped += id else sources[id] = clamped(source, nowMillis)
+            }
+            val record =
+                UpdaterRecord(
+                    watermarkMillis = f.optLong("watermarkMillis"),
+                    seedInstalledAtMillis = f.optLong("seedInstalledAtMillis"),
+                    datasetLastAttemptAtMillis = f.optLong("datasetLastAttemptAtMillis"),
+                    sources = sources,
+                )
+            UpdaterRead(record, dropped)
         }
 
     /** The source entry [value], or null when it does not decode. */

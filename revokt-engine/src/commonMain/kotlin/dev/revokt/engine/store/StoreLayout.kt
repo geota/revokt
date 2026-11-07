@@ -215,8 +215,8 @@ internal class StoreLayout(
         storage.write(currentKey, PointerJson.write(pointer))
     }
 
-    /** The updater record, its backoffs clamped against [nowMillis] (see [UpdaterJson.read] for a bad source entry). */
-    fun updater(nowMillis: Long): StoreRead<UpdaterRecord> = read(updaterKey) { UpdaterJson.read(it, nowMillis) }
+    /** The updater record, its backoffs clamped against [nowMillis], with the ids of any dropped source entries. */
+    fun updater(nowMillis: Long): StoreRead<UpdaterRead> = read(updaterKey) { UpdaterJson.read(it, nowMillis) }
 
     fun writeUpdater(
         record: UpdaterRecord,
