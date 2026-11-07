@@ -36,6 +36,8 @@ import dev.revokt.verify.JcaFixtures.SHA1
 import dev.revokt.verify.JcaFixtures.SHA1_RSA
 import dev.revokt.verify.JcaFixtures.SHA256
 import dev.revokt.verify.JcaFixtures.SHA256_RSA
+import dev.revokt.verify.JcaFixtures.SHA384
+import dev.revokt.verify.JcaFixtures.SHA512
 import dev.revokt.verify.JcaFixtures.algId
 import dev.revokt.verify.JcaFixtures.generate
 import dev.revokt.verify.JcaFixtures.pssParams
@@ -55,6 +57,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
@@ -371,6 +374,31 @@ internal open class X5uChainFixture {
             TestDer.seq(
                 if (oid == RSA_KEY) algId(oid, NULL) else algId(oid),
                 TestDer.tlv(0x03, TestDer.bytes(0x00), rsaPublicKey(bits, leadingZeros)),
+            )
+
+        /** rustls-pki-types 1.15.1 `data/alg-rsa-pss-sha256.der` under its SEQUENCE header. */
+        const val RSA_PSS_SHA256_HEX =
+            "304106092a864886f70d01010a3034a00f300d06096086480165030402010500a11c" +
+                "301a06092a864886f70d010108300d06096086480165030402010500a203020120"
+
+        /**
+         * `id-RSASSA-PSS` with [hash] (NULL parameters), MGF1 on [mgfHash], salt [salt], and an explicit trailer 1 when
+         * [trailer]: the exact encodings when [mgfHash] is [hash], [salt] its length and [trailer] false.
+         */
+        fun exactPss(
+            hash: String,
+            salt: Int,
+            mgfHash: String = hash,
+            trailer: Boolean = false,
+        ): ByteArray =
+            algId(
+                PSS,
+                TestDer.seq(
+                    TestDer.tlv(0xa0, algId(hash, NULL)),
+                    TestDer.tlv(0xa1, algId(JcaFixtures.MGF1, algId(mgfHash, NULL))),
+                    TestDer.tlv(0xa2, JcaFixtures.integer(salt)),
+                    if (trailer) TestDer.tlv(0xa3, JcaFixtures.integer(1)) else ByteArray(0),
+                ),
             )
 
         /** An `rsaEncryption` SPKI whose BIT STRING content is [content]. */

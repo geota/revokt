@@ -23,6 +23,7 @@ import dev.revokt.engine.parse.Validity
 import dev.revokt.engine.parse.VerifierInput
 import dev.revokt.verify.verifyClassified
 import okio.ByteString
+import okio.ByteString.Companion.decodeHex
 import okio.ByteString.Companion.toByteString
 
 /** Why an x5u chain was rejected; every one is `SyncOutcome.FAILED` (spec §7.1 "x5u chain"). */
@@ -518,24 +519,42 @@ private object DerTimes {
  * anything else `FAILED`". Read as Firefox's `AppTrustDomain` reads it (`CheckSignatureDigestAlgorithm`,
  * `CheckRSAPublicKeyModulusSizeInBits`, `CheckECDSACurveIsAcceptable` at `cac25a6`):
  *
- * - **Signatures:** RSA PKCS#1 v1.5 and ECDSA with SHA-256, SHA-384 or SHA-512; `id-RSASSA-PSS` whose hash and MGF1
- *   hash are each one of those three. SHA-1, SHA-224, SHA-512/t, SHA-3 and every other scheme are below the floor.
- * - **Keys:** `rsaEncryption` or `id-RSASSA-PSS` with a modulus of at least 2048 significant bits; `id-ecPublicKey` on
- *   P-256, P-384 or P-521. Brainpool, P-224, EdDSA, ML-DSA and every other key are below it.
+ * - **Signatures:** RSA PKCS#1 v1.5 and ECDSA with SHA-256, SHA-384 or SHA-512, and `id-RSASSA-PSS` in exactly one
+ *   of its three encodings ([PSS]): SHA-256, SHA-384 or SHA-512, MGF1 with the same hash, a salt of the hash length,
+ *   the default trailer. These are the bytes of mozilla::pkix's `der::SignatureAlgorithmIdentifierValue` and
+ *   rustls-pki-types' `alg_id::RSA_PSS_SHA256/384/512` (`data/alg-rsa-pss-sha*.der`). SHA-1, SHA-224, SHA-512/t,
+ *   SHA-3, any other PSS encoding and every other scheme are below the floor.
+ * - **Keys:** `rsaEncryption` with a modulus of at least 2048 significant bits, or `id-ecPublicKey` on P-256, P-384 or
+ *   P-521 (`CheckSubjectPublicKeyInfoContents`). `id-RSASSA-PSS` keys (Firefox's `ERROR_UNSUPPORTED_KEYALG`),
+ *   brainpool, P-224, EdDSA, ML-DSA and every other key are below it.
  *
- * Parameters beyond these are the verifier's to reject; the floor only bounds what can reach it.
+ * Maintainer decision 2026-11-06, pending in the next spec revision: only this floor narrows; the walker's verifier
+ * keeps its wider PSS rule (spec §3). Parameters beyond these are the verifier's to reject.
  */
 internal object X5uFloor {
     private const val PKCS1 = "1.2.840.113549.1.1"
     private const val RSA_ENCRYPTION = "$PKCS1.1"
-    private const val RSASSA_PSS = "$PKCS1.10"
     private const val EC_PUBLIC_KEY = "1.2.840.10045.2.1"
     private const val MIN_RSA_BITS = 2048
     private const val INTEGER = 0x02
     private const val BIT_STRING = 0x03
 
-    /** SHA-256, SHA-384, SHA-512 (NIST hash arcs 1 to 3). */
-    private val HASHES = (1..3).map { "2.16.840.1.101.3.4.2.$it" }.toSet()
+    /**
+     * The three `id-RSASSA-PSS` `AlgorithmIdentifier` TLVs: SHA-256, SHA-384, SHA-512, each hash with NULL parameters,
+     * MGF1 on the same hash, salt 32, 48 or 64, trailer absent.
+     */
+    private val PSS =
+        listOf(
+            // SHA-256
+            "304106092a864886f70d01010a3034a00f300d06096086480165030402010500a11c" +
+                "301a06092a864886f70d010108300d06096086480165030402010500a203020120",
+            // SHA-384
+            "304106092a864886f70d01010a3034a00f300d06096086480165030402020500a11c" +
+                "301a06092a864886f70d010108300d06096086480165030402020500a203020130",
+            // SHA-512
+            "304106092a864886f70d01010a3034a00f300d06096086480165030402030500a11c" +
+                "301a06092a864886f70d010108300d06096086480165030402030500a203020140",
+        ).map { it.decodeHex() }.toSet()
 
     /** sha256/384/512WithRSAEncryption and ecdsa-with-SHA256/384/512 (RFC 4055 §5, RFC 5758 §3.2). */
     private val SIGNATURES = (11..13).map { "$PKCS1.$it" }.toSet() + (2..4).map { "1.2.840.10045.4.3.$it" }
@@ -546,17 +565,14 @@ internal object X5uFloor {
     /** Whether the signed TBS `AlgorithmIdentifier` TLV [sigAlg] is in the floor. */
     fun signature(sigAlg: ByteArray): Boolean {
         val algorithm = VerifierInput.algorithm(sigAlg) ?: return false
-        if (algorithm.oid in SIGNATURES) return true
-        if (algorithm.oid != RSASSA_PSS) return false
-        val pss = VerifierInput.pss(algorithm.parameters) ?: return false
-        return pss.hashOid in HASHES && pss.mgfHashOid in HASHES
+        return algorithm.oid in SIGNATURES || sigAlg.toByteString() in PSS
     }
 
     /** Whether the `SubjectPublicKeyInfo` TLV [spki] is in the floor. */
     fun key(spki: ByteArray): Boolean {
         val key = VerifierInput.spkiAlgorithm(spki) ?: return false
         return when (key.oid) {
-            RSA_ENCRYPTION, RSASSA_PSS -> (modulusBits(spki) ?: 0) >= MIN_RSA_BITS
+            RSA_ENCRYPTION -> (modulusBits(spki) ?: 0) >= MIN_RSA_BITS
             EC_PUBLIC_KEY -> key.parametersOid in CURVES
             else -> false
         }

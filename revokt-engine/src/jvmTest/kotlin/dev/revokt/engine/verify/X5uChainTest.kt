@@ -36,6 +36,8 @@ import dev.revokt.verify.JcaFixtures.SHA1
 import dev.revokt.verify.JcaFixtures.SHA1_RSA
 import dev.revokt.verify.JcaFixtures.SHA256
 import dev.revokt.verify.JcaFixtures.SHA256_RSA
+import dev.revokt.verify.JcaFixtures.SHA384
+import dev.revokt.verify.JcaFixtures.SHA512
 import dev.revokt.verify.JcaFixtures.algId
 import dev.revokt.verify.JcaFixtures.generate
 import dev.revokt.verify.JcaFixtures.pssParams
@@ -55,6 +57,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
@@ -246,10 +249,23 @@ internal class X5uChainTest : X5uChainFixture() {
         assertLoads(chain(leaf = leaf(alg = Alg(algId(ECDSA_SHA512), "SHA512withECDSA"))))
         assertLoads(chain(intermediate = intermediate(alg = Alg(algId(SHA256_RSA, NULL), "SHA256withRSA"))))
         assertLoads(chain(intermediate = intermediate(alg = Alg(algId(SHA512_RSA, NULL), "SHA512withRSA"))))
-        val pss = pssParams(hash = SHA256, mgfHash = SHA256, salt = 32)
-        val pssAlg = Alg(algId(PSS, pss), "RSASSA-PSS", pssSpec("SHA-256", "SHA-256", 32))
-        assertLoads(chain(intermediate = intermediate(alg = pssAlg)))
+        // id-RSASSA-PSS in exactly its three encodings (rustls-pki-types' alg_id::RSA_PSS_SHA256/384/512, maintainer
+        // decision 2026-11-06), each really signed under the RSA root.
+        assertEquals(RSA_PSS_SHA256_HEX, exactPss(SHA256, 32).toByteString().hex())
+        for ((hash, jca, salt) in listOf(
+            Triple(SHA256, "SHA-256", 32),
+            Triple(SHA384, "SHA-384", 48),
+            Triple(SHA512, "SHA-512", 64),
+        )) {
+            val pssAlg = Alg(exactPss(hash, salt), "RSASSA-PSS", pssSpec(jca, jca, salt))
+            assertLoads(chain(intermediate = intermediate(alg = pssAlg)))
+        }
         for (id in listOf(
+            exactPss(SHA256, 32, mgfHash = SHA384),
+            exactPss(SHA384, 32),
+            exactPss(SHA256, 20),
+            exactPss(SHA256, 32, trailer = true),
+            algId(PSS, pssParams(hash = SHA256, mgfHash = SHA256, salt = 32)),
             algId(ECDSA_SHA224),
             algId(SHA224_RSA, NULL),
             algId(SHA3_256_ECDSA),
@@ -288,6 +304,7 @@ internal class X5uChainTest : X5uChainFixture() {
             rsaSpki(2047),
             rsaSpki(1024),
             rsaSpki(2047, PSS),
+            rsaSpki(2048, PSS),
             ecSpki(P224),
             ecSpki(BRAINPOOL_P256),
             ecSpki(null),
@@ -308,7 +325,7 @@ internal class X5uChainTest : X5uChainFixture() {
             assertFails(ALGORITHM, 1, chain(intermediate = intermediate(spki = spki)), with = never)
         }
         assertTrue(X5uFloor.key(rsaSpki(2048)))
-        assertTrue(X5uFloor.key(rsaSpki(2048, PSS)))
+        assertFalse(X5uFloor.key(rsaSpki(2048, PSS)))
         assertTrue(X5uFloor.key(rsaSpki(4096, leadingZeros = 3)))
     }
 
