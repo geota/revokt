@@ -252,7 +252,12 @@ internal class X5uChainRulesTest : X5uChainFixture() {
             )
         }
         // Outside: another name, a leading-dot subtree of the name itself, a suffix that is not a label boundary.
-        for (permitted in listOf("other.example", ".onecrl.content-signature.mozilla.org", "signature.mozilla.org")) {
+        for (permitted in listOf(
+            "other.example",
+            ".other.example",
+            ".onecrl.content-signature.mozilla.org",
+            "signature.mozilla.org",
+        )) {
             assertFails(
                 NAME,
                 1,

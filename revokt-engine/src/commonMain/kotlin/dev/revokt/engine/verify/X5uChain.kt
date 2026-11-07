@@ -405,7 +405,7 @@ private class DnsSubtrees(
             val n = name.lowercase()
             return when {
                 c.isEmpty() -> true
-                c.startsWith('.') -> n.length > c.length && n.endsWith(c)
+                c.startsWith('.') -> n.endsWith(c)
                 else -> n == c || n.endsWith(".$c")
             }
         }
