@@ -18,7 +18,6 @@ import dev.revokt.verify.JcaAlgorithms.SIGNATURES
 import dev.revokt.verify.JcaAlgorithms.ecdsaInRange
 import dev.revokt.verify.JcaAlgorithms.pssSpec
 import okio.ByteString.Companion.toByteString
-import java.math.BigInteger
 import java.security.AlgorithmParameters
 import java.security.GeneralSecurityException
 import java.security.KeyFactory
@@ -26,6 +25,7 @@ import java.security.Provider
 import java.security.ProviderException
 import java.security.PublicKey
 import java.security.Signature
+import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.ECParameterSpec
 import java.security.spec.ECPublicKeySpec
@@ -52,8 +52,9 @@ import java.util.Collections
  *   signature (an `id-RSASSA-PSS` key signs PSS only, RFC 4055 §1.2), parameters other than absent or NULL outside
  *   PSS, PSS parameters other than SHA-2 message and MGF1 hashes, trailer field 1 and a salt length some key has room
  *   for (spec revision 51, pending), an ECDSA signature that is not a DER `Ecdsa-Sig-Value` with `r` and `s` in
- *   `[1, n − 1]` for the order `n` of the key's curve, checked before the provider is called (spec revision 54,
- *   pending; [JcaAlgorithms.ecdsaInRange]), and any `GeneralSecurityException`. A `RuntimeException` from the provider
+ *   `[1, n − 1]`, `n` the order of the decoded key's curve (`ECPublicKey.params.order`; a key without one is
+ *   `INVALID`), checked before the provider's `Signature` is created (spec revision 54, pending;
+ *   [JcaAlgorithms.ecdsaInRange]), and any `GeneralSecurityException`. A `RuntimeException` from the provider
  *   propagates, wrapped in a [ProviderException], so the caller records it as `INVALID` plus `Finding.VerifierError`
  *   (spec §5.1 decision list; [verifyClassified]).
  * - `KeyFactory` is selected by the SPKI key OID; `Signature` and `KeyFactory` are created per call. Parsed keys are
@@ -66,9 +67,6 @@ public class JcaSignatureVerifier
         private val provider: Provider? = null,
     ) : SignatureVerifier {
         private val keys = LruMap<okio.ByteString, PublicKey>(KEY_CACHE_ENTRIES)
-
-        /** Each probed-supported curve's order `n`, from its `ECParameterSpec`; written only by the probe. */
-        private val orders = HashMap<String, BigInteger>()
         private val unsupported: Set<String> = probe()
 
         /** The number of parsed keys in the cache: at most 1,024, each one that produced `VERIFIED`. */
@@ -96,10 +94,6 @@ public class JcaSignatureVerifier
                     null
                 }
             if (!scheme.pss && !algorithm.noParameters) return VerifyResult.INVALID
-            // The key's curve passed the probe (else UNSUPPORTED above), so the probe recorded its order.
-            if (scheme.ecdsa && orders[key.parametersOid]?.let { ecdsaInRange(signature, it) } != true) {
-                return VerifyResult.INVALID
-            }
             return run(scheme, algorithm.oid, keyFactory, spki, message, signature, pss)
         }
 
@@ -117,6 +111,7 @@ public class JcaSignatureVerifier
             try {
                 val hash = spki.toByteString().sha256()
                 val publicKey = keys[hash] ?: keyFactory(keyFactory).generatePublic(X509EncodedKeySpec(spki))
+                if (scheme.ecdsa && !inRange(signature, publicKey)) return VerifyResult.INVALID
                 val verifier = signature(scheme.jcaName)
                 verifier.initVerify(publicKey)
                 pss?.let { verifier.setParameter(it) }
@@ -132,6 +127,15 @@ public class JcaSignatureVerifier
             } catch (e: RuntimeException) {
                 throw ProviderException("${scheme.jcaName} on $oid threw ${e::class.java.name}", e)
             }
+
+        /** Whether [publicKey] has a curve order `n` and [signature]'s `r` and `s` are in `[1, n − 1]` for it. */
+        private fun inRange(
+            signature: ByteArray,
+            publicKey: PublicKey,
+        ): Boolean {
+            val order = (publicKey as? ECPublicKey)?.params?.order ?: return false
+            return ecdsaInRange(signature, order)
+        }
 
         private fun signature(name: String): Signature =
             if (provider == null) Signature.getInstance(name) else Signature.getInstance(name, provider)
@@ -165,8 +169,7 @@ public class JcaSignatureVerifier
          * Whether ECDSA over [curveOid] runs: the curve's base point as an SPKI (private key 1; the domain parameters and
          * the encoding are public data, from the installed providers) decodes through the provider's `KeyFactory` as
          * [verify] decodes a key, and checks the signature `(r, s) = (1, 1)` to `false`. A provider without the curve
-         * throws; one that answers `true` is broken and gets no curve either. A supported curve's order goes into
-         * [orders], for [verify]'s range check.
+         * throws; one that answers `true` is broken and gets no curve either.
          */
         private fun curve(curveOid: String): Boolean {
             val parameters = AlgorithmParameters.getInstance("EC")
@@ -177,9 +180,7 @@ public class JcaSignatureVerifier
             val verifier = signature("SHA256withECDSA")
             verifier.initVerify(key)
             verifier.update(ByteArray(1))
-            if (verifier.verify(ECDSA_ONE_ONE)) return false
-            orders[curveOid] = spec.order
-            return true
+            return !verifier.verify(ECDSA_ONE_ONE)
         }
 
         @Suppress("TooGenericExceptionCaught") // §5.5's rule: a provider's LinkageError is "unsupported", not a crash

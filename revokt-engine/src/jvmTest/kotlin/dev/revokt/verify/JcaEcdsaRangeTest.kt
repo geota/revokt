@@ -16,30 +16,37 @@ import java.math.BigInteger.ONE
 import java.math.BigInteger.ZERO
 import java.security.KeyFactory
 import java.security.KeyPair
+import java.security.PublicKey
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Issue #172 (spec §3, revision 54, pending): an ECDSA signature is `INVALID` before the provider is called unless it
- * is a DER `ECDSA-Sig-Value` with `1 ≤ r ≤ n − 1` and `1 ≤ s ≤ n − 1`, `n` the order of the key's curve (SEC 1 §4.1.4
- * step 1). JDK 17.0.0 to 17.0.2 skipped that step and accepted `r = s = 0` (CVE-2022-21449). A recording provider over
- * SunEC shows which signatures reach it; every out-of-range signature here is one a correct verifier rejects.
+ * Issue #172 (spec §3, revision 54, pending): an ECDSA signature is `INVALID` before the provider's `Signature` is
+ * created unless it is a DER `ECDSA-Sig-Value` with `1 ≤ r ≤ n − 1` and `1 ≤ s ≤ n − 1`, `n` the order of the decoded
+ * key's curve (SEC 1 §4.1.4 step 1). JDK 17.0.0 to 17.0.2 skipped that step and accepted `r = s = 0` (CVE-2022-21449).
+ *
+ * The provider is a stub over SunEC that counts its `Signature` instances. After the startup probe it answers `true`
+ * to every signature when [accept] is set, so an `INVALID` there is revokt's own check, not the JDK's. Every
+ * out-of-range signature here is one a correct verifier rejects.
  */
 class JcaEcdsaRangeTest {
-    private var calls = 0
-    private val recording =
-        TestProvider("ecdsa-recording")
+    private var signatures = 0
+    private var accept = false
+    private var opaqueKey = false
+    private val stub =
+        TestProvider("ecdsa-stub")
             .signature("SHA256withECDSA") {
-                calls++
-                DelegatingSignature(Signature.getInstance("SHA256withECDSA", "SunEC"))
+                signatures++
+                DelegatingSignature(Signature.getInstance("SHA256withECDSA", "SunEC")) { it || accept }
             }.keyFactory("EC") {
-                calls++
-                DelegatingKeyFactory(KeyFactory.getInstance("EC", "SunEC"))
+                val inner = KeyFactory.getInstance("EC", "SunEC")
+                DelegatingKeyFactory(inner) { if (opaqueKey) OPAQUE else inner.generatePublic(it) }
             }
-    private val verifier = JcaSignatureVerifier(recording).also { calls = 0 }
+    private val verifier = JcaSignatureVerifier(stub)
     private val curves = listOf("secp256r1", "secp384r1", "secp521r1")
 
     private fun order(pair: KeyPair): BigInteger = (pair.public as ECPublicKey).params.order
@@ -51,14 +58,16 @@ class JcaEcdsaRangeTest {
         s: BigInteger,
     ): ByteArray = TestDer.seq(integer(r), integer(s))
 
-    /** Verifies [signature] under [pair]'s key and returns the result with whether the provider was called. */
+    /** The result for [signature] under [pair]'s key, the stub accepting all if [accepting]; and if a Signature ran. */
     private fun verify(
         pair: KeyPair,
         signature: ByteArray,
+        accepting: Boolean = true,
     ): Pair<VerifyResult, Boolean> {
-        calls = 0
+        accept = accepting
+        signatures = 0
         val result = verifier.verify(algId(ECDSA_SHA256), pair.public.encoded, MESSAGE, signature)
-        return result to (calls > 0)
+        return result to (signatures > 0)
     }
 
     @Test
@@ -68,7 +77,7 @@ class JcaEcdsaRangeTest {
     }
 
     @Test
-    fun `verifier an ECDSA r or s outside 1 to n-1 is INVALID without a provider call`() {
+    fun `verifier an ECDSA r or s outside 1 to n-1 is INVALID under a provider that accepts everything`() {
         for (curve in curves) {
             val pair = JcaFixtures.ec(curve)
             val n = order(pair)
@@ -91,7 +100,7 @@ class JcaEcdsaRangeTest {
     }
 
     @Test
-    fun `verifier a malformed ECDSA-Sig-Value is INVALID without a provider call`() {
+    fun `verifier a malformed ECDSA-Sig-Value is INVALID under a provider that accepts everything`() {
         val pair = JcaFixtures.ec("secp256r1")
         val one = integer(ONE)
         val genuine = sign("SHA256withECDSA", pair.private)
@@ -108,8 +117,10 @@ class JcaEcdsaRangeTest {
                 "r as an OCTET STRING" to TestDer.seq(TestDer.tlv(0x04, TestDer.bytes(1)), one),
                 "s as an ENUMERATED" to TestDer.seq(one, TestDer.tlv(0x0a, TestDer.bytes(1))),
                 "an empty INTEGER" to TestDer.seq(TestDer.tlv(0x02), one),
-                "r with a redundant 0x00" to TestDer.seq(TestDer.tlv(0x02, TestDer.bytes(0x00, 0x01)), one),
-                "s with a redundant 0xff" to TestDer.seq(one, TestDer.tlv(0x02, TestDer.bytes(0xff, 0xff))),
+                "r with a redundant leading 00" to TestDer.seq(TestDer.tlv(0x02, TestDer.bytes(0x00, 0x01)), one),
+                "s with a redundant leading 00" to TestDer.seq(one, TestDer.tlv(0x02, TestDer.bytes(0x00, 0x7f))),
+                "s with a redundant leading ff" to TestDer.seq(one, TestDer.tlv(0x02, TestDer.bytes(0xff, 0xff))),
+                "r = 0x80 without its 00 (negative)" to TestDer.seq(TestDer.tlv(0x02, TestDer.bytes(0x80)), one),
                 "a non-minimal SEQUENCE length" to
                     TestDer.tlvWithLength(0x30, TestDer.bytes(0x81, 0x06), TestDer.concat(one, one)),
                 "a non-minimal INTEGER length" to
@@ -118,6 +129,10 @@ class JcaEcdsaRangeTest {
                 "a truncated SEQUENCE" to TestDer.seq(one, one).copyOf(7),
             )
         for ((what, sig) in cases) assertEquals(INVALID to false, verify(pair, sig), what)
+        // The decoder itself refuses a negative INTEGER, before the range check would.
+        assertNull(JcaAlgorithms.ecdsaSignature(signature(ONE.negate(), ONE)))
+        assertNull(JcaAlgorithms.ecdsaSignature(signature(ONE, ONE.negate())))
+        assertEquals(ONE to ONE, JcaAlgorithms.ecdsaSignature(signature(ONE, ONE)))
         // A non-minimal header on a genuine signature (which is short enough for the short form): not DER, so INVALID.
         val content = genuine.copyOfRange(2, genuine.size)
         assertEquals(genuine[1].toInt(), content.size)
@@ -130,11 +145,19 @@ class JcaEcdsaRangeTest {
         for (curve in curves) {
             val pair = JcaFixtures.ec(curve)
             val n = order(pair)
-            // Each bound: in range, so the provider decides, and these are no signature of MESSAGE.
+            // Each bound: in range, so the stub decides; no signature of MESSAGE, so SunEC alone says INVALID.
             for ((r, s) in listOf(ONE to n - ONE, n - ONE to ONE, ONE to ONE, n - ONE to n - ONE)) {
-                assertEquals(INVALID to true, verify(pair, signature(r, s)), "$curve r = $r, s = $s")
+                assertEquals(VERIFIED to true, verify(pair, signature(r, s)), "$curve r = $r, s = $s under the stub")
+                assertEquals(INVALID to true, verify(pair, signature(r, s), accepting = false), "$curve r = $r, s = $s")
             }
         }
+    }
+
+    @Test
+    fun `verifier a key without a curve order is INVALID before the Signature`() {
+        val pair = JcaFixtures.ec("secp256r1")
+        opaqueKey = true
+        assertEquals(INVALID to false, verify(pair, sign("SHA256withECDSA", pair.private)))
     }
 
     @Test
@@ -143,14 +166,14 @@ class JcaEcdsaRangeTest {
             val pair = JcaFixtures.ec(curve)
             val half = order(pair).shiftRight(1)
             val genuine = sign("SHA256withECDSA", pair.private)
-            assertEquals(VERIFIED to true, verify(pair, genuine), curve)
+            assertEquals(VERIFIED to true, verify(pair, genuine, accepting = false), curve)
             // The JDK's own signatures, made until one has s > n / 2 (each one has, with probability 1/2).
             val high =
                 generateSequence { sign("SHA256withECDSA", pair.private) }
                     .take(HIGH_S_TRIES)
                     .first { s(it) > half }
             assertTrue(s(high) > half)
-            assertEquals(VERIFIED to true, verify(pair, high), "$curve high s")
+            assertEquals(VERIFIED to true, verify(pair, high, accepting = false), "$curve high s")
         }
     }
 
@@ -162,5 +185,15 @@ class JcaEcdsaRangeTest {
 
     private companion object {
         const val HIGH_S_TRIES = 128
+
+        /** A key that is no `ECPublicKey`, so it has no curve order. */
+        val OPAQUE =
+            object : PublicKey {
+                override fun getAlgorithm() = "EC"
+
+                override fun getFormat() = "X.509"
+
+                override fun getEncoded() = ByteArray(0)
+            }
     }
 }
