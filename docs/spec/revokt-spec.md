@@ -36,8 +36,8 @@ Status: **draft spec / project proposal, revision 54** · Target: JVM 17+ and An
   - **nameConstraints**, critical or not, as `pkixnames.cpp`: dNSName subtrees against the leaf's dNSName on label
     boundaries ignoring case, permitted applying per name type, `""` matching every name. A name outside fails
     (`NAME_CONSTRAINTS`, a new reason). A malformed or unsupported constraint fails (`EXTENSION`): an invalid base, an
-    encoded `minimum` or `maximum`, an empty NameConstraints or GeneralSubtrees, and a directoryName subtree (fail
-    closed, stricter than mozilla::pkix). Only the leaf's name is checked, a remaining difference.
+    encoded `minimum` or `maximum`, an empty NameConstraints or GeneralSubtrees, a directoryName subtree, and an
+    rfc822Name subtree over a leaf whose subject carries an emailAddress (fail closed, stricter than mozilla::pkix). Only the leaf's name is checked, a remaining difference.
   - **Algorithm floor** (`ALGORITHM`): `id-RSASSA-PSS` only in mozilla::pkix's three byte-exact encodings, only
     `rsaEncryption` and `id-ecPublicKey` keys, and ECDSA AlgorithmIdentifiers with NULL or absent parameters.
     **§3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged.**
@@ -3101,7 +3101,9 @@ on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stag
   - a malformed or unsupported constraint fails (`EXTENSION`): an invalid dNSName base (an absolute `x.`, `.`, a
     wildcard), an encoded `minimum` or `maximum`, an empty NameConstraints, an empty GeneralSubtrees, and any
     directoryName subtree, which mozilla::pkix checks against the subject and revokt does not evaluate (fail closed).
-    Subtrees of the other name forms cannot affect a leaf whose only name is a dNSName and are not read.
+    An rfc822Name subtree also fails closed (`EXTENSION`) when the leaf's subject carries an emailAddress attribute,
+    which mozilla::pkix checks against rfc822Name constraints; otherwise rfc822Name subtrees have no effect. Subtrees
+    of the remaining name forms cannot affect a leaf whose only name is a dNSName and are not read.
   - Only the leaf's name is checked; mozilla::pkix and webpki check every descendant (Appendix A).
 
 **Rollback guard**: high-water mark on
@@ -3311,7 +3313,7 @@ tests; **live checks** are informational.
   `.onecrl.content-signature.mozilla.org` → `NAME_CONSTRAINTS` (a leading dot covers subdomains only), a permitted
   `ignature.mozilla.org` (a suffix off a label boundary) → `NAME_CONSTRAINTS`, a permitted
   `CONTENT-SIGNATURE.MOZILLA.ORG` → loads, an excluded `mozilla.org` → `NAME_CONSTRAINTS`, a permitted rfc822Name
-  subtree alone → loads, a leaf outside the permitted subtree → `NAME_CONSTRAINTS`, an encoded `minimum` →
+  subtree alone → loads, the same over a leaf whose subject carries an emailAddress attribute → `EXTENSION`, a leaf outside the permitted subtree → `NAME_CONSTRAINTS`, an encoded `minimum` →
   `EXTENSION`, a wildcard or absolute base → `EXTENSION`, an empty NameConstraints → `EXTENSION`, and a directoryName
   subtree → `EXTENSION`; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
   falls to `previous`, `storeFailures = 1`; a crash before `meta.json` leaves an incomplete directory
@@ -4695,7 +4697,8 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     descendant.
   - **Stricter than mozilla::pkix:** any repeated extension OID fails (RFC 5280's MUST NOT), where mozilla::pkix
     rejects only a repeated extension it understands; a nameConstraints with a directoryName subtree fails closed,
-    where mozilla::pkix checks it against the subject. Mozilla's `Content Signing Intermediate` carries a
+    where mozilla::pkix checks it against the subject, and so does an rfc822Name subtree when the leaf's subject
+    carries an emailAddress attribute, which mozilla::pkix checks against it. Mozilla's `Content Signing Intermediate` carries a
     non-critical nameConstraints with two dNSName subtrees only (`content-signature.mozilla.org` and
     `.content-signature.mozilla.org`), which the leaf satisfies.
 - Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
