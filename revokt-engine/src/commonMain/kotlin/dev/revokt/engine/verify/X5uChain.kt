@@ -6,6 +6,7 @@ package dev.revokt.engine.verify
 import dev.revokt.SignatureVerifier
 import dev.revokt.VerifyResult
 import dev.revokt.canonicalSubject
+import dev.revokt.engine.parse.BasicConstraints
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.DerException
@@ -15,6 +16,8 @@ import dev.revokt.engine.parse.Extension
 import dev.revokt.engine.parse.ExtensionRead
 import dev.revokt.engine.parse.ExtensionValues
 import dev.revokt.engine.parse.HeaderSite
+import dev.revokt.engine.parse.KeyUsage
+import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.ParseContext
 import dev.revokt.engine.parse.ParsedCertificate
@@ -63,6 +66,12 @@ internal enum class X5uChainFailure {
     /** A link's issuer name is empty, or a non-leaf link's subject is not its child's issuer, raw or canonical. */
     NAME,
 
+    /**
+     * The leaf's dNSName lies outside a CA's nameConstraints: not in its permitted dNSName subtrees, or in an excluded
+     * one (mozilla::pkix's `ERROR_CERT_NOT_IN_NAME_SPACE`; revision 54, pending).
+     */
+    NAME_CONSTRAINTS,
+
     /** The leaf has no extKeyUsage, no codeSigning in it, or also OCSPSigning; or a CA's extKeyUsage lacks codeSigning. */
     EKU,
 
@@ -102,6 +111,10 @@ internal class X5uPath private constructor(
                 (link(c, i) ?: if (i == 0) leaf(c) else issuer(certs, i))?.let { return it }
                 windows +=
                     DerTimes.window(c.tbsBytes, c.tbs.validity) ?: return failed(X5uChainFailure.PARSE, i, "times")
+            }
+            // CheckTLSFeatures runs for every potential issuer, the trust anchor included (revision 54, pending).
+            if (!tlsFeatures(certs[terminal], certs[terminal - 1])) {
+                return failed(X5uChainFailure.EXTENSION, terminal, "the child lacks the terminal's TLS feature")
             }
             signatures(certs, verifier)?.let { return it }
             return X5uChainResult.Valid(X5uPath(certs.subList(0, terminal).toList(), windows))
@@ -274,9 +287,9 @@ private fun link(
  * 2026-11-06, pending in the next spec revision).
  */
 private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
-    val bc = ExtensionValues.basicConstraints(c).valueOr(0, "basicConstraints") { return it }
+    val bc = basicConstraints(c, 0) { return it }
     if (bc?.ca == true) return failed(X5uChainFailure.LEAF_CA, 0, "the leaf has cA TRUE")
-    ExtensionValues.keyUsage(c).valueOr(0, "keyUsage") { return it }
+    keyUsage(c, 0) { return it }
     val eku = ExtensionValues.extendedKeyUsage(c).valueOr(0, "extKeyUsage") { return it }
     if (eku == null || !eku.contains(CODE_SIGNING)) {
         return failed(X5uChainFailure.EKU, 0, "no codeSigning in extKeyUsage")
@@ -297,7 +310,7 @@ private fun issuer(
     i: Int,
 ): X5uChainResult.Failed? {
     val c = certs[i]
-    val bc = ExtensionValues.basicConstraints(c).valueOr(i, "basicConstraints") { return it }
+    val bc = basicConstraints(c, i) { return it }
     if (bc == null) return failed(X5uChainFailure.NOT_CA, i, "no basicConstraints")
     if (!bc.ca) return failed(X5uChainFailure.NOT_CA, i, "cA is not TRUE")
     // The non-leaf links under link i are links 1 to i − 1.
@@ -308,7 +321,7 @@ private fun issuer(
     if (!chains(certs[i - 1].rawIssuer(), c.rawSubject())) {
         return failed(X5uChainFailure.NAME, i, "subject is not the issuer of certificate ${i - 1}")
     }
-    val ku = ExtensionValues.keyUsage(c).valueOr(i, "keyUsage") { return it }
+    val ku = keyUsage(c, i) { return it }
     if (ku?.keyCertSign == false) return failed(X5uChainFailure.KEY_USAGE, i, "keyUsage without keyCertSign")
     // mozilla::pkix and webpki check the required EKU on every certificate that has one (maintainer decision
     // 2026-11-06, pending in the next spec revision); the terminal is never read.
@@ -321,95 +334,38 @@ private fun issuer(
     val subtrees =
         DnsSubtrees.read(c.tbsBytes, constraints.value)
             ?: return failed(X5uChainFailure.EXTENSION, i, "nameConstraints that revokt does not evaluate")
-    if (!subtrees.permits(X5U_LEAF_NAME)) return failed(X5uChainFailure.NAME, i, "the leaf is outside nameConstraints")
+    if (!subtrees.permits(X5U_LEAF_NAME)) {
+        return failed(X5uChainFailure.NAME_CONSTRAINTS, i, "the leaf is outside nameConstraints")
+    }
     return null
 }
 
 /** `id-ce-nameConstraints` (2.5.29.30), as OID content. */
 private val NAME_CONSTRAINTS = byteArrayOf(0x55, 0x1d, 0x1e)
 
-/**
- * A nameConstraints of dNSName subtrees only, as mozilla::pkix's `CheckNameConstraints` checks it against the leaf's
- * dNSName (`pkixnames.cpp`, at `cac25a6`; revision 54, pending): critical or not, the name must lie in a [permitted]
- * subtree when any is listed and in no [excluded] one. A subtree without a leading dot covers the name and its
- * subdomains, one with a leading dot only the subdomains, and an empty one everything, compared ignoring ASCII case
- * (`MatchPresentedDNSIDWithReferenceDNSID` in the name-constraint role).
- */
-private class DnsSubtrees(
-    val permitted: List<String>?,
-    val excluded: List<String>,
-) {
-    fun permits(name: String): Boolean =
-        (permitted == null || permitted.any { covers(it, name) }) && excluded.none { covers(it, name) }
+/** mozilla::pkix reads `pathLenConstraint` as `Integer` into a byte: 0 to 127 (`IntegralValueRestriction`). */
+private const val MAX_PATH_LEN = 127
 
-    companion object {
-        private const val PERMITTED = 0xa0
-        private const val EXCLUDED = 0xa1
-        private val SITE = HeaderSite.EXTENSION_VALUE
-        private val DNS_CHARACTERS = (('a'..'z') + ('A'..'Z') + ('0'..'9') + "-_.".toList()).toSet()
+/** [c]'s basicConstraints, null when absent; a malformed one, or a pathLen above 127, is passed to [reject]. */
+private inline fun basicConstraints(
+    c: ParsedCertificate,
+    i: Int,
+    reject: (X5uChainResult.Failed) -> Nothing,
+): BasicConstraints? {
+    val bc = ExtensionValues.basicConstraints(c).valueOr(i, "basicConstraints", reject)
+    if ((bc?.pathLen ?: 0) > MAX_PATH_LEN) reject(failed(X5uChainFailure.EXTENSION, i, "pathLenConstraint above 127"))
+    return bc
+}
 
-        /**
-         * The subtrees in the `extnValue` content [value], or null when revokt cannot evaluate them, so that the chain
-         * fails closed: not DER, neither field present, an empty `GeneralSubtrees`, a base other than a dNSName, a
-         * `minimum` or `maximum` written (RFC 5280 §4.2.1.10: zero and absent), or a dNSName with an octet outside
-         * letters, digits, `-`, `_` and `.` (mozilla::pkix rejects an invalid DNS ID as `ERROR_BAD_DER`).
-         */
-        fun read(
-            b: ByteArray,
-            value: Span,
-        ): DnsSubtrees? =
-            try {
-                val ctx = ParseContext()
-                val r = DerReader(b, value.start, value.end, ctx)
-                val fields = r.child(r.read(SEQUENCE, SITE))
-                r.requireEnd("nameConstraints")
-                val permitted =
-                    fields
-                        .readOptional(
-                            PERMITTED,
-                            SITE,
-                        )?.let { subtrees(b, fields.child(it)) ?: return null }
-                val excluded = fields.readOptional(EXCLUDED, SITE)?.let { subtrees(b, fields.child(it)) ?: return null }
-                fields.requireEnd("nameConstraints")
-                if (ctx.nonMinimal.isNotEmpty() || (permitted == null && excluded == null)) {
-                    null
-                } else {
-                    DnsSubtrees(permitted, excluded.orEmpty())
-                }
-            } catch (_: DerException) {
-                null
-            }
-
-        private fun subtrees(
-            b: ByteArray,
-            r: DerReader,
-        ): List<String>? {
-            val out = ArrayList<String>()
-            if (!r.hasMore()) return null
-            while (r.hasMore()) {
-                val subtree = r.child(r.read(SEQUENCE, SITE))
-                val base = subtree.readAny(SITE)
-                if (base.tag != ExtensionValues.DNS_NAME || subtree.hasMore()) return null
-                val text = base.content.bytes(b).decodeToString()
-                if (!text.all { it in DNS_CHARACTERS }) return null
-                out += text
-            }
-            return out
-        }
-
-        private fun covers(
-            constraint: String,
-            name: String,
-        ): Boolean {
-            val c = constraint.lowercase()
-            val n = name.lowercase()
-            return when {
-                c.isEmpty() -> true
-                c.startsWith('.') -> n.endsWith(c)
-                else -> n == c || n.endsWith(".$c")
-            }
-        }
-    }
+/** [c]'s keyUsage, null when absent; a malformed one, or one with no bits (`CheckKeyUsage`), is passed to [reject]. */
+private inline fun keyUsage(
+    c: ParsedCertificate,
+    i: Int,
+    reject: (X5uChainResult.Failed) -> Nothing,
+): KeyUsage? {
+    val ku = ExtensionValues.keyUsage(c).valueOr(i, "keyUsage", reject)
+    if (ku?.bits?.isEmpty() == true) reject(failed(X5uChainFailure.EXTENSION, i, "keyUsage with no bits"))
+    return ku
 }
 
 /**
@@ -463,6 +419,7 @@ private fun notDer(c: ParsedCertificate): String? {
     return when {
         c.nonMinimalHeaders.isNotEmpty() -> "a non-minimal length at ${c.nonMinimalHeaders[0].site}"
         c.envelope.tbsIndefinite -> "an indefinite-length TBS"
+        !Keyability.minimalInteger(c.tbsBytes, c.tbs.serial) -> "serialNumber is not a minimal INTEGER"
         c.ignoredElements.isNotEmpty() -> "skipped bytes at ${c.ignoredElements[0].site}"
         signatureValue.length == 0 || c.der[signatureValue.start].toInt() != 0 -> "signatureValue has unused bits"
         version != null && (version.length != 1 || c.tbsBytes[version.start] !in 0..MAX_VERSION) -> "version"
@@ -634,92 +591,4 @@ private object DerTimes {
         val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
         return era * 146_097L + doe - 719_468
     }
-}
-
-/**
- * Spec §7.1's algorithm floor for every link below the terminal: "SHA-256 or stronger, RSA ≥ 2048, P-256 or stronger,
- * anything else `FAILED`". Read as Firefox's `AppTrustDomain` reads it (`CheckSignatureDigestAlgorithm`,
- * `CheckRSAPublicKeyModulusSizeInBits`, `CheckECDSACurveIsAcceptable` at `cac25a6`):
- *
- * - **Signatures:** RSA PKCS#1 v1.5 and ECDSA with SHA-256, SHA-384 or SHA-512, and `id-RSASSA-PSS` in exactly one
- *   of its three encodings ([PSS]): SHA-256, SHA-384 or SHA-512, MGF1 with the same hash, a salt of the hash length,
- *   the default trailer. These are the bytes of mozilla::pkix's `der::SignatureAlgorithmIdentifierValue` and
- *   rustls-pki-types' `alg_id::RSA_PSS_SHA256/384/512` (`data/alg-rsa-pss-sha*.der`). SHA-1, SHA-224, SHA-512/t,
- *   SHA-3, any other PSS encoding and every other scheme are below the floor.
- * - **Keys:** `rsaEncryption` with a modulus of at least 2048 significant bits, or `id-ecPublicKey` on P-256, P-384 or
- *   P-521 (`CheckSubjectPublicKeyInfoContents`). `id-RSASSA-PSS` keys (Firefox's `ERROR_UNSUPPORTED_KEYALG`),
- *   brainpool, P-224, EdDSA, ML-DSA and every other key are below it.
- *
- * Maintainer decision 2026-11-06, pending in the next spec revision: only this floor narrows; the walker's verifier
- * keeps its wider PSS rule (spec §3). Parameters beyond these are the verifier's to reject.
- */
-internal object X5uFloor {
-    private const val PKCS1 = "1.2.840.113549.1.1"
-    private const val RSA_ENCRYPTION = "$PKCS1.1"
-    private const val EC_PUBLIC_KEY = "1.2.840.10045.2.1"
-    private const val MIN_RSA_BITS = 2048
-    private const val INTEGER = 0x02
-    private const val BIT_STRING = 0x03
-
-    /**
-     * The three `id-RSASSA-PSS` `AlgorithmIdentifier` TLVs: SHA-256, SHA-384, SHA-512, each hash with NULL parameters,
-     * MGF1 on the same hash, salt 32, 48 or 64, trailer absent.
-     */
-    private val PSS =
-        listOf(
-            // SHA-256
-            "304106092a864886f70d01010a3034a00f300d06096086480165030402010500a11c" +
-                "301a06092a864886f70d010108300d06096086480165030402010500a203020120",
-            // SHA-384
-            "304106092a864886f70d01010a3034a00f300d06096086480165030402020500a11c" +
-                "301a06092a864886f70d010108300d06096086480165030402020500a203020130",
-            // SHA-512
-            "304106092a864886f70d01010a3034a00f300d06096086480165030402030500a11c" +
-                "301a06092a864886f70d010108300d06096086480165030402030500a203020140",
-        ).map { it.decodeHex() }.toSet()
-
-    /** sha256/384/512WithRSAEncryption and ecdsa-with-SHA256/384/512 (RFC 4055 §5, RFC 5758 §3.2). */
-    private val SIGNATURES = (11..13).map { "$PKCS1.$it" }.toSet() + (2..4).map { "1.2.840.10045.4.3.$it" }
-
-    /** P-256, P-384, P-521. */
-    private val CURVES = setOf("1.2.840.10045.3.1.7", "1.3.132.0.34", "1.3.132.0.35")
-
-    /** Whether the signed TBS `AlgorithmIdentifier` TLV [sigAlg] is in the floor. */
-    fun signature(sigAlg: ByteArray): Boolean {
-        val algorithm = VerifierInput.algorithm(sigAlg) ?: return false
-        return algorithm.oid in SIGNATURES || sigAlg.toByteString() in PSS
-    }
-
-    /** Whether the `SubjectPublicKeyInfo` TLV [spki] is in the floor. */
-    fun key(spki: ByteArray): Boolean {
-        val key = VerifierInput.spkiAlgorithm(spki) ?: return false
-        return when (key.oid) {
-            RSA_ENCRYPTION -> (modulusBits(spki) ?: 0) >= MIN_RSA_BITS
-            EC_PUBLIC_KEY -> key.parametersOid in CURVES
-            else -> false
-        }
-    }
-
-    /**
-     * The significant bits of `n` in the `RSAPublicKey` [spki]'s BIT STRING holds, or null when that is not a SEQUENCE
-     * starting with a non-negative INTEGER behind a zero unused-bits octet; the verifier reads the rest.
-     */
-    private fun modulusBits(spki: ByteArray): Int? =
-        try {
-            val ctx = ParseContext()
-            val top = DerReader(spki, 0, spki.size, ctx)
-            val fields = top.child(top.read(SEQUENCE, HeaderSite.SPKI))
-            fields.read(SEQUENCE, HeaderSite.SPKI)
-            val bits = fields.read(BIT_STRING, HeaderSite.SPKI).content
-            if (bits.length < 2 || spki[bits.start].toInt() != 0) return null
-            val key = DerReader(spki, bits.start + 1, bits.end, ctx)
-            val n = key.child(key.read(SEQUENCE, HeaderSite.SPKI)).read(INTEGER, HeaderSite.SPKI).content
-            if (n.length == 0 || spki[n.start] < 0) return null
-            var first = n.start
-            while (first < n.end - 1 && spki[first].toInt() == 0) first++
-            (n.end - first - 1) * Byte.SIZE_BITS +
-                (Int.SIZE_BITS - (spki[first].toInt() and 0xff).countLeadingZeroBits())
-        } catch (_: DerException) {
-            null
-        }
 }

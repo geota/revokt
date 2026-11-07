@@ -30,6 +30,9 @@ import dev.revokt.verify.JcaFixtures.EC_KEY
 import dev.revokt.verify.JcaFixtures.ED25519
 import dev.revokt.verify.JcaFixtures.NULL
 import dev.revokt.verify.JcaFixtures.P224
+import dev.revokt.verify.JcaFixtures.P256
+import dev.revokt.verify.JcaFixtures.P384
+import dev.revokt.verify.JcaFixtures.P521
 import dev.revokt.verify.JcaFixtures.PSS
 import dev.revokt.verify.JcaFixtures.RSA_KEY
 import dev.revokt.verify.JcaFixtures.SHA1
@@ -245,6 +248,14 @@ internal class X5uChainTest : X5uChainFixture() {
 
     @Test
     fun `the floor bounds every link's signature algorithm`() {
+        // ECDSA and PKCS#1 v1.5 parameters may be NULL or absent; anything else is not the algorithm.
+        assertLoads(chain(leaf = leaf(alg = Alg(algId(ECDSA_SHA384, NULL), "SHA384withECDSA"))))
+        assertLoads(chain(intermediate = intermediate(alg = Alg(algId("1.2.840.113549.1.1.12"), "SHA384withRSA"))))
+        assertFails(
+            ALGORITHM,
+            0,
+            chain(leaf = leaf(alg = Alg(algId(ECDSA_SHA384, TestDer.oid(P384)), "SHA384withECDSA"))),
+        )
         assertLoads(chain(leaf = leaf(alg = Alg(algId(ECDSA_SHA256), "SHA256withECDSA"))))
         assertLoads(chain(leaf = leaf(alg = Alg(algId(ECDSA_SHA512), "SHA512withECDSA"))))
         assertLoads(chain(intermediate = intermediate(alg = Alg(algId(SHA256_RSA, NULL), "SHA256withRSA"))))
@@ -320,13 +331,48 @@ internal class X5uChainTest : X5uChainFixture() {
             rsaBits(TestDer.bytes(0x00, 0x05, 0x00)),
             // Not an SPKI the verifier reads: an element after the BIT STRING.
             TestDer.seq(algId(RSA_KEY, NULL), TestDer.tlv(0x03, TestDer.bytes(0x00), rsaPublicKey(2048)), NULL),
+            // CheckSubjectPublicKeyInfo: rsaEncryption without NULL, or with other parameters; a modulus with leading
+            // zeros; an exponent zero, negative or not minimal; bytes after RSAPublicKey.
+            TestDer.seq(algId(RSA_KEY), TestDer.tlv(0x03, TestDer.bytes(0x00), rsaPublicKey(2048))),
+            TestDer.seq(
+                algId(RSA_KEY, TestDer.oid(EC_KEY)),
+                TestDer.tlv(0x03, TestDer.bytes(0x00), rsaPublicKey(2048)),
+            ),
+            rsaSpki(4096, leadingZeros = 1),
+            rsaBits(TestDer.bytes(0x00) + rsaPublicKey(2048, exponent = TestDer.bytes(0x00))),
+            rsaBits(TestDer.bytes(0x00) + rsaPublicKey(2048, exponent = TestDer.bytes(0x80, 0x01))),
+            rsaBits(TestDer.bytes(0x00) + rsaPublicKey(2048, exponent = TestDer.bytes(0x00, 0x03))),
+            rsaBits(TestDer.bytes(0x00) + rsaPublicKey(2048) + NULL),
+            // id-ecPublicKey: a compressed point, a point one octet short or long, a parameter after the curve.
+            ecSpki(P256, TestDer.bytes(0x02, *IntArray(32) { 1 })),
+            ecSpki(P256, TestDer.bytes(0x04, *IntArray(63) { 1 })),
+            ecSpki(P256, TestDer.bytes(0x04, *IntArray(65) { 1 })),
+            JcaFixtures.spki(
+                TestDer.seq(TestDer.oid(EC_KEY), TestDer.oid(P256), NULL),
+                TestDer.bytes(0x04, *IntArray(64) { 1 }),
+            ),
         )) {
             assertFails(ALGORITHM, 0, chain(leaf = leaf(spki = spki)), with = never)
             assertFails(ALGORITHM, 1, chain(intermediate = intermediate(spki = spki)), with = never)
         }
+        // A non-minimal SPKI header is not DER, which the parse checks first.
+        val longHeader =
+            TestDer.tlvWithLength(
+                0x30,
+                TestDer.bytes(0x83, 0x00, 0x01, 0x22),
+                rsaSpki(2048).copyOfRange(
+                    4,
+                    4 + 0x122,
+                ),
+            )
+        assertFails(PARSE, 0, chain(leaf = leaf(spki = longHeader)), with = never)
+        assertFalse(X5uFloor.key(longHeader))
         assertTrue(X5uFloor.key(rsaSpki(2048)))
         assertFalse(X5uFloor.key(rsaSpki(2048, PSS)))
-        assertTrue(X5uFloor.key(rsaSpki(4096, leadingZeros = 3)))
+        assertTrue(X5uFloor.key(rsaSpki(4096)))
+        assertTrue(X5uFloor.key(ecSpki(P256)))
+        assertTrue(X5uFloor.key(ecSpki(P384, TestDer.bytes(0x04, *IntArray(96) { 1 }))))
+        assertTrue(X5uFloor.key(ecSpki(P521, TestDer.bytes(0x04, *IntArray(132) { 1 }))))
     }
 
     @Test

@@ -16,6 +16,7 @@ import dev.revokt.engine.verify.X5uChainFailure.EXTENSION
 import dev.revokt.engine.verify.X5uChainFailure.KEY_USAGE
 import dev.revokt.engine.verify.X5uChainFailure.LEAF_CA
 import dev.revokt.engine.verify.X5uChainFailure.NAME
+import dev.revokt.engine.verify.X5uChainFailure.NAME_CONSTRAINTS
 import dev.revokt.engine.verify.X5uChainFailure.NOT_CA
 import dev.revokt.engine.verify.X5uChainFailure.NOT_PINNED
 import dev.revokt.engine.verify.X5uChainFailure.PARSE
@@ -189,7 +190,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         assertFails(
             EXTENSION,
             0,
-            chain(leaf = leaf(LEAF_EXTENSIONS + TestDer.extension(NAME_CONSTRAINTS, ByteArray(0)))),
+            chain(leaf = leaf(LEAF_EXTENSIONS + TestDer.extension(NAME_CONSTRAINTS_OID, ByteArray(0)))),
         )
         // A critical Netscape certificate type only beside basicConstraints and extKeyUsage (BackCert::Init).
         val netscape =
@@ -224,9 +225,16 @@ internal class X5uChainRulesTest : X5uChainFixture() {
                     intermediate(caExtensions() + statusRequest),
             ),
         )
-        // Only a CA's feature binds; the leaf's alone, and the terminal's, are not checked.
+        // Only an issuer's feature binds, the terminal's included (CheckTLSFeatures runs for the trust anchor too).
         assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + statusRequest)))
-        assertLoads(chain(root = root(extensions = caExtensions() + statusRequest)))
+        assertFails(EXTENSION, 2, chain(root = root(extensions = caExtensions() + statusRequest)))
+        assertLoads(
+            chain(
+                leaf = leaf(LEAF_EXTENSIONS + statusRequest),
+                intermediate = intermediate(caExtensions() + statusRequest),
+                root = root(extensions = caExtensions() + statusRequest),
+            ),
+        )
     }
 
     @Test
@@ -259,7 +267,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
             "signature.mozilla.org",
         )) {
             assertFails(
-                NAME,
+                NAME_CONSTRAINTS,
                 1,
                 chain(
                     intermediate =
@@ -269,7 +277,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         }
         for (excluded in listOf("content-signature.mozilla.org", ".mozilla.org", "")) {
             val tree = constraints(permitted = null, excluded = listOf(dnsTree(excluded)))
-            assertFails(NAME, 1, chain(intermediate = intermediate(caExtensions() + nameConstraints(tree))))
+            assertFails(NAME_CONSTRAINTS, 1, chain(intermediate = intermediate(caExtensions() + nameConstraints(tree))))
         }
         assertLoads(
             chain(
@@ -277,15 +285,53 @@ internal class X5uChainRulesTest : X5uChainFixture() {
                     intermediate(caExtensions() + nameConstraints(constraints(null, listOf(dnsTree("other.example"))))),
             ),
         )
-        // Any form revokt does not evaluate fails closed.
+        // Permitted is per name type: only other forms listed constrain no dNSName, and are ignored.
         val email = TestDer.seq(TestDer.tlv(0x81, TestDer.ascii("a@content-signature.mozilla.org")))
+        val ip = TestDer.seq(TestDer.tlv(0x87, TestDer.bytes(10, 0, 0, 0, 255, 0, 0, 0)))
+        val uri = TestDer.seq(TestDer.tlv(0x86, TestDer.ascii(".mozilla.org")))
+        assertLoads(
+            chain(
+                intermediate =
+                    intermediate(caExtensions() + nameConstraints(constraints(listOf(email, ip, uri)))),
+            ),
+        )
+        assertLoads(
+            chain(intermediate = intermediate(caExtensions() + nameConstraints(constraints(null, listOf(email))))),
+        )
+        assertFails(
+            NAME_CONSTRAINTS,
+            1,
+            chain(
+                intermediate =
+                    intermediate(
+                        caExtensions() + nameConstraints(constraints(listOf(email, dnsTree("other.example")))),
+                    ),
+            ),
+        )
+    }
+
+    @Test
+    fun `nameConstraints revokt cannot evaluate fail closed, and only CAs below the terminal are read`() {
+        // Malformed or unsupported constraints fail closed: a directoryName, a minimum or maximum, an invalid DNS ID
+        // (a wildcard, a trailing dot, a lone dot, an empty label, a leading hyphen, an all-numeric last label), an
+        // unknown GeneralName tag, empty subtrees, neither field, trailing bytes, a non-minimal length.
         val directory = TestDer.seq(TestDer.tlv(0xa4, TestCert.name("x")))
         val withMinimum = TestDer.seq(dns("content-signature.mozilla.org"), TestDer.tlv(0x80, TestDer.bytes(0)))
+        val withMaximum = TestDer.seq(dns("content-signature.mozilla.org"), TestDer.tlv(0x81, TestDer.bytes(3)))
         for (value in listOf(
-            constraints(listOf(email)),
             constraints(listOf(dnsTree("content-signature.mozilla.org")), listOf(directory)),
+            constraints(listOf(directory)),
             constraints(listOf(withMinimum)),
+            constraints(listOf(withMaximum)),
             constraints(listOf(dnsTree("*.mozilla.org"))),
+            constraints(listOf(dnsTree("mozilla.org."))),
+            constraints(listOf(dnsTree("."))),
+            constraints(listOf(dnsTree("mozilla..org"))),
+            constraints(listOf(dnsTree("-mozilla.org"))),
+            constraints(listOf(dnsTree("mozilla-.org"))),
+            constraints(listOf(dnsTree("mozilla.123"))),
+            constraints(listOf(dnsTree("a".repeat(64) + ".org"))),
+            constraints(listOf(TestDer.seq(TestDer.tlv(0x89, TestDer.bytes(1))))),
             constraints(listOf()),
             TestDer.seq(),
             TestDer.seq(TestDer.tlv(0xa0, TestDer.seq(dns("content-signature.mozilla.org"))), NULL),
@@ -300,7 +346,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         val sub = TestCert.name("Sub Intermediate")
         val outside = nameConstraints(constraints(listOf(dnsTree("other.example"))))
         assertFails(
-            NAME,
+            NAME_CONSTRAINTS,
             2,
             listOf(
                 issue(LEAF, leafKey.public.encoded, sub, subKey.private, LEAF_EXTENSIONS),
@@ -311,6 +357,54 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         )
         assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + outside)))
         assertLoads(chain(root = root(extensions = caExtensions() + outside)))
+    }
+
+    @Test
+    fun `basicConstraints, keyUsage and serials are read as mozilla pkix reads them`() {
+        // pathLenConstraint is a byte from 0 to 127.
+        assertLoads(chain(intermediate = intermediate(caExtensions(pathLen = 127))))
+        assertFails(EXTENSION, 1, chain(intermediate = intermediate(caExtensions(pathLen = 128))))
+        assertFails(EXTENSION, 0, chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = false, pathLen = 128))))
+        // A keyUsage with no bits fails; trailing zero bits that are not trimmed are read.
+        val noBits = TestDer.extension("2.5.29.15", TestDer.tlv(0x03, TestDer.bytes(0x00)), critical = true)
+        val untrimmed =
+            TestDer.extension(
+                "2.5.29.15",
+                TestDer.tlv(0x03, TestDer.bytes(0x00, 0x06, 0x00)),
+                critical = true,
+            )
+        assertFails(EXTENSION, 0, chain(leaf = leaf(LEAF_EXTENSIONS.drop(1) + noBits)))
+        assertFails(EXTENSION, 1, chain(intermediate = intermediate(listOf(bc(ca = true), noBits))))
+        assertLoads(chain(intermediate = intermediate(listOf(bc(ca = true), untrimmed))))
+        // An explicit cA FALSE is read as FALSE; an intermediate whose only EKU is anyExtendedKeyUsage fails.
+        assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = false))))
+        assertFails(EKU, 1, chain(intermediate = intermediate(listOf(bc(ca = true), eku("2.5.29.37.0")))))
+        // Serials: negative and zero load; a non-minimal INTEGER is not DER.
+        for (serial in listOf(TestDer.bytes(0x80), TestDer.bytes(0x00), TestDer.bytes(0xff, 0x7f))) {
+            assertLoads(chain(leaf = leafParts(serial = serial).der))
+        }
+        for (serial in listOf(TestDer.bytes(0x00, 0x01), TestDer.bytes(0xff, 0x80))) {
+            assertFails(PARSE, 0, chain(leaf = leafParts(serial = serial).der))
+        }
+        // An empty Extensions SEQUENCE is read (mozilla::pkix allows it); the leaf then has no EKU.
+        assertFails(
+            EKU,
+            0,
+            chain(
+                leaf =
+                    leafParts(extensions = emptyList(), wrapper = {
+                        TestDer.tlv(0xa3, TestDer.seq())
+                    }).der,
+            ),
+        )
+    }
+
+    @Test
+    fun `the pinned terminal is found before the strict rules, and is not held to them`() {
+        val nonMinimal =
+            TestDer.seq(TestDer.oid(OTHER_OID), TestDer.tlvWithLength(0x04, TestDer.bytes(0x81, 0x02), NULL))
+        assertLoads(chain(root = root(extensions = caExtensions() + nonMinimal)))
+        assertFails(PARSE, 1, chain(intermediate = intermediate(caExtensions() + nonMinimal)))
     }
 
     @Test

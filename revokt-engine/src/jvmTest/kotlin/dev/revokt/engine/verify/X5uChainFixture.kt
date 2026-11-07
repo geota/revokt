@@ -30,6 +30,9 @@ import dev.revokt.verify.JcaFixtures.EC_KEY
 import dev.revokt.verify.JcaFixtures.ED25519
 import dev.revokt.verify.JcaFixtures.NULL
 import dev.revokt.verify.JcaFixtures.P224
+import dev.revokt.verify.JcaFixtures.P256
+import dev.revokt.verify.JcaFixtures.P384
+import dev.revokt.verify.JcaFixtures.P521
 import dev.revokt.verify.JcaFixtures.PSS
 import dev.revokt.verify.JcaFixtures.RSA_KEY
 import dev.revokt.verify.JcaFixtures.SHA1
@@ -179,6 +182,7 @@ internal open class X5uChainFixture {
     /** A leaf signed by the intermediate with the given encoding parts, for the DER rules. */
     protected fun leafParts(
         version: ByteArray = version(TestDer.bytes(2)),
+        serial: ByteArray = TestDer.bytes(0x00, 0x8f, 0x12, 0x34),
         extensions: List<ByteArray> = LEAF_EXTENSIONS,
         wrapper: (List<ByteArray>) -> ByteArray = { TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray())) },
         tbsTrailing: ByteArray = ByteArray(0),
@@ -188,6 +192,7 @@ internal open class X5uChainFixture {
         fun cert(signature: ByteArray) =
             TestCert(
                 version = version,
+                serial = TestDer.tlv(0x02, serial),
                 tbsSignature = EC_SHA384.id,
                 issuer = issuer,
                 validity = WIDE,
@@ -230,7 +235,7 @@ internal open class X5uChainFixture {
         const val SERVER_AUTH = "1.3.6.1.5.5.7.3.1"
         const val OCSP_SIGNING = "1.3.6.1.5.5.7.3.9"
         const val OTHER_OID = "1.3.6.1.4.1.99999.2"
-        const val NAME_CONSTRAINTS = "2.5.29.30"
+        const val NAME_CONSTRAINTS_OID = "2.5.29.30"
         const val TLS_FEATURE = "1.3.6.1.5.5.7.1.24"
         const val SCT_LIST = "1.3.6.1.4.1.11129.2.4.2"
         const val OCSP_NOCHECK = "1.3.6.1.5.5.7.48.1.5"
@@ -357,13 +362,14 @@ internal open class X5uChainFixture {
         fun rsaPublicKey(
             bits: Int,
             leadingZeros: Int = 0,
+            exponent: ByteArray = TestDer.bytes(0x01, 0x00, 0x01),
         ): ByteArray {
             val n =
                 BigInteger.ONE
                     .shiftLeft(bits - 1)
                     .or(BigInteger.ONE)
                     .toByteArray()
-            return TestDer.seq(TestDer.tlv(0x02, ByteArray(leadingZeros), n), JcaFixtures.integer(65537))
+            return TestDer.seq(TestDer.tlv(0x02, ByteArray(leadingZeros), n), TestDer.tlv(0x02, exponent))
         }
 
         fun rsaSpki(
@@ -417,7 +423,7 @@ internal open class X5uChainFixture {
         fun nameConstraints(
             value: ByteArray,
             critical: Boolean = false,
-        ): ByteArray = TestDer.extension(NAME_CONSTRAINTS, value, critical.takeIf { it })
+        ): ByteArray = TestDer.extension(NAME_CONSTRAINTS_OID, value, critical.takeIf { it })
 
         /** An `rsaEncryption` SPKI whose BIT STRING content is [content]. */
         fun rsaBits(content: ByteArray): ByteArray = TestDer.seq(algId(RSA_KEY, NULL), TestDer.tlv(0x03, content))
@@ -426,10 +432,13 @@ internal open class X5uChainFixture {
         fun modulus(n: ByteArray): ByteArray = TestDer.seq(TestDer.tlv(0x02, n), JcaFixtures.integer(3))
 
         /** An `id-ecPublicKey` SPKI on [curve] (no parameters when null) with a placeholder point. */
-        fun ecSpki(curve: String?): ByteArray =
+        fun ecSpki(
+            curve: String?,
+            point: ByteArray = TestDer.bytes(0x04, *IntArray(64) { 1 }),
+        ): ByteArray =
             JcaFixtures.spki(
                 TestDer.seq(TestDer.oid(EC_KEY), curve?.let { TestDer.oid(it) } ?: ByteArray(0)),
-                TestDer.bytes(0x04, *IntArray(64) { 1 }),
+                point,
             )
     }
 }
