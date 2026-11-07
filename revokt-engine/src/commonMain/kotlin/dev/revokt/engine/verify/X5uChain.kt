@@ -314,13 +314,8 @@ private fun issuer(
     // 2026-11-06, pending in the next spec revision); the terminal is never read.
     val eku = ExtensionValues.extendedKeyUsage(c).valueOr(i, "extKeyUsage") { return it }
     if (eku?.contains(CODE_SIGNING) == false) return failed(X5uChainFailure.EKU, i, "extKeyUsage without codeSigning")
-    if (!tlsFeatures(
-            c,
-            certs[i - 1],
-        )
-    ) {
-        return failed(X5uChainFailure.EXTENSION, i, "TLS feature not carried by the child")
-    }
+    val child = certs[i - 1]
+    if (!tlsFeatures(c, child)) return failed(X5uChainFailure.EXTENSION, i, "the child lacks the TLS feature")
     return null
 }
 
