@@ -260,6 +260,215 @@ public sealed class Finding {
     }
 
     /**
+     * What decision step 7 found for one leaf-issuer key (spec §4, §5.1): the engine's answer, the key it was asked
+     * about and the coverage end of the generation that answered.
+     */
+    @OptIn(RevoktTestingApi::class)
+    public class Crlite private constructor(
+        builder: Builder,
+    ) : Finding() {
+        public val result: CrliteQueryResult = requireNotNull(builder.result) { "result is not set" }
+
+        private val issuerSpki: ByteString? = builder.issuerSpkiSha256
+
+        /** The end of the answering generation's coverage; null when the engine cannot tell (§3.2). */
+        public val coverageEndMillis: Long? = builder.coverageEndMillis
+
+        /** The SHA-256 of the issuer SPKI the query was for, one of `Finding.Path.issuerSpkiSha256s`. A fresh copy. */
+        public val issuerSpkiSha256: ByteArray? get() = issuerSpki?.toByteArray()
+
+        /** A builder holding this finding's values. */
+        @RevoktTestingApi
+        public fun newBuilder(): Builder =
+            Builder().result(result).issuerSpkiSha256(issuerSpkiSha256).coverageEndMillis(coverageEndMillis)
+
+        override fun equals(other: Any?): Boolean =
+            other is Crlite &&
+                result == other.result &&
+                issuerSpki == other.issuerSpki &&
+                coverageEndMillis == other.coverageEndMillis
+
+        override fun hashCode(): Int = listOf(result, issuerSpki, coverageEndMillis).hashCode()
+
+        override fun toString(): String =
+            "Crlite(result=$result, issuerSpkiSha256=${issuerSpki?.hex()}, coverageEndMillis=$coverageEndMillis)"
+
+        /** Builds a [Finding.Crlite] for tests and fakes. */
+        @RevoktTestingApi
+        public class Builder {
+            internal var result: CrliteQueryResult? = null
+                private set
+            internal var issuerSpkiSha256: ByteString? = null
+                private set
+            internal var coverageEndMillis: Long? = null
+                private set
+
+            public fun result(result: CrliteQueryResult): Builder = apply { this.result = result }
+
+            public fun issuerSpkiSha256(sha256: ByteArray?): Builder =
+                apply { issuerSpkiSha256 = sha256?.toByteString() }
+
+            public fun coverageEndMillis(millis: Long?): Builder = apply { coverageEndMillis = millis }
+
+            public fun build(): Crlite = Crlite(this)
+        }
+    }
+
+    /**
+     * One dataset's data as a verdict saw it (spec §4, §8 data rules): the generation it read, where that came from and
+     * how old it was, and the data rules that fired for it. The builder checks the invariant that needs no other
+     * finding: [trustClass] is null exactly when [generationId] is, that is when the dataset has no generation.
+     */
+    @OptIn(RevoktTestingApi::class)
+    public class DataState private constructor(
+        builder: Builder,
+    ) : Finding() {
+        // The constructor takes its Builder, so the accessor Kotlin emits for the nested Builder keeps one signature as
+        // fields are added (the class is growable).
+        public val dataset: Dataset = requireNotNull(builder.dataset) { "dataset is not set" }
+
+        /** How the generation was obtained; null exactly when [generationId] is. `UNSIGNED_DATA` never fires on null. */
+        public val trustClass: TrustClass? = builder.trustClass
+
+        /**
+         * The generation read: `SIGNED` `"<changeset timestamp>/<last applied record id>"`, `MIRROR`/`SYSTEM` the
+         * manifest hash, a seed its seed id; null when the dataset has no generation.
+         */
+        public val generationId: String? = builder.generationId
+
+        /** What [sourceTimestampMillis] means for this dataset and source. */
+        public val freshness: Freshness? = builder.freshness
+
+        public val fromSeed: Boolean = builder.fromSeed
+
+        public val sourceTimestampMillis: Long? = builder.sourceTimestampMillis
+
+        /** The generation's age when the verdict was computed; clamped at 0 when [clockBehind]. */
+        public val ageMillis: Long? = builder.ageMillis
+
+        /** True while the loader's start task has not passed the seed and system-cache steps; `NO_DATA` never fires. */
+        public val pending: Boolean = builder.pending
+
+        /** `sourceTimestampMillis > now + clockSkew` at the last publish; never persisted. */
+        public val clockBehind: Boolean = builder.clockBehind
+
+        /** The seed's format, when [fromSeed]. */
+        public val seedFormat: Int? = builder.seedFormat
+
+        /** The loud flag: `ageMillis > staleAfter`. Fires no rule. */
+        public val stale: Boolean = builder.stale
+
+        /** The data rules that fired for this dataset (`NO_DATA`, `STALE`, `UNSIGNED_DATA`), in `Rule.PRECEDENCE` order. */
+        public val rules: Set<Rule> = builder.rules
+
+        init {
+            require((trustClass == null) == (generationId == null)) {
+                "trustClass is null exactly when generationId is (spec §4): got trustClass=$trustClass, " +
+                    "generationId=$generationId"
+            }
+        }
+
+        /** A builder holding this finding's values. */
+        @RevoktTestingApi
+        public fun newBuilder(): Builder =
+            Builder()
+                .dataset(dataset)
+                .trustClass(trustClass)
+                .generationId(generationId)
+                .freshness(freshness)
+                .fromSeed(fromSeed)
+                .sourceTimestampMillis(sourceTimestampMillis)
+                .ageMillis(ageMillis)
+                .pending(pending)
+                .clockBehind(clockBehind)
+                .seedFormat(seedFormat)
+                .stale(stale)
+                .rules(rules)
+
+        /** Every field, named, in declaration order: equality, hashing and [toString] all read this one list. */
+        private fun fields(): List<Pair<String, Any?>> =
+            listOf(
+                "dataset" to dataset,
+                "trustClass" to trustClass,
+                "generationId" to generationId,
+                "freshness" to freshness,
+                "fromSeed" to fromSeed,
+                "sourceTimestampMillis" to sourceTimestampMillis,
+                "ageMillis" to ageMillis,
+                "pending" to pending,
+                "clockBehind" to clockBehind,
+                "seedFormat" to seedFormat,
+                "stale" to stale,
+                "rules" to rules,
+            )
+
+        override fun equals(other: Any?): Boolean = other is DataState && fields() == other.fields()
+
+        override fun hashCode(): Int = fields().hashCode()
+
+        override fun toString(): String =
+            fields().joinToString(prefix = "DataState(", postfix = ")") { (name, value) -> "$name=$value" }
+
+        /** Builds a [Finding.DataState] for tests and fakes; [build] checks the invariant the constructor does. */
+        @RevoktTestingApi
+        @Suppress("TooManyFunctions") // One setter per spec §4 field, plus build().
+        public class Builder {
+            internal var dataset: Dataset? = null
+                private set
+            internal var trustClass: TrustClass? = null
+                private set
+            internal var generationId: String? = null
+                private set
+            internal var freshness: Freshness? = null
+                private set
+            internal var fromSeed: Boolean = false
+                private set
+            internal var sourceTimestampMillis: Long? = null
+                private set
+            internal var ageMillis: Long? = null
+                private set
+            internal var pending: Boolean = false
+                private set
+            internal var clockBehind: Boolean = false
+                private set
+            internal var seedFormat: Int? = null
+                private set
+            internal var stale: Boolean = false
+                private set
+            internal var rules: Set<Rule> = emptySet()
+                private set
+
+            public fun dataset(dataset: Dataset): Builder = apply { this.dataset = dataset }
+
+            public fun trustClass(trustClass: TrustClass?): Builder = apply { this.trustClass = trustClass }
+
+            public fun generationId(id: String?): Builder = apply { generationId = id }
+
+            public fun freshness(freshness: Freshness?): Builder = apply { this.freshness = freshness }
+
+            public fun fromSeed(fromSeed: Boolean): Builder = apply { this.fromSeed = fromSeed }
+
+            public fun sourceTimestampMillis(millis: Long?): Builder = apply { sourceTimestampMillis = millis }
+
+            public fun ageMillis(millis: Long?): Builder = apply { ageMillis = millis }
+
+            public fun pending(pending: Boolean): Builder = apply { this.pending = pending }
+
+            public fun clockBehind(behind: Boolean): Builder = apply { clockBehind = behind }
+
+            public fun seedFormat(format: Int?): Builder = apply { seedFormat = format }
+
+            public fun stale(stale: Boolean): Builder = apply { this.stale = stale }
+
+            /** Replaces the fired rules with a read-only copy of [rules], in `Rule.PRECEDENCE` order. */
+            public fun rules(rules: Set<Rule>): Builder =
+                apply { this.rules = buildSet { Rule.PRECEDENCE.filterTo(this) { it in rules } } }
+
+            public fun build(): DataState = DataState(this)
+        }
+    }
+
+    /**
      * An algorithm OID a layer could not verify (spec §4, §5.1): the walk emits one per OID it met, on every outcome,
      * with [outcomeDepended] true exactly when the status is `ISSUER_UNVERIFIED`.
      */
@@ -428,6 +637,91 @@ public sealed class Finding {
             public fun certIndex(index: Int): Builder = apply { certIndex = index }
 
             public fun build(): AlgorithmIdMismatch = AlgorithmIdMismatch(this)
+        }
+    }
+
+    /**
+     * Why `ENGINE_ERROR` fired (spec §4, §5.5): one per producer occurrence. The builder checks that an
+     * [EngineErrorProducer.ENGINE] error names its engine: [engineName] is the engine's `RevocationEngine.name` (§3.2),
+     * so never null there.
+     */
+    @OptIn(RevoktTestingApi::class)
+    public class EngineError private constructor(
+        builder: Builder,
+    ) : Finding() {
+        public val message: String = requireNotNull(builder.message) { "message is not set" }
+
+        public val producer: EngineErrorProducer = requireNotNull(builder.producer) { "producer is not set" }
+
+        /** The engine's `RevocationEngine.name` when [producer] is `ENGINE`: `"kotlin"` and `"upki"` for the shipped two. */
+        public val engineName: String? = builder.engineName
+
+        init {
+            require(producer != EngineErrorProducer.ENGINE || engineName != null) {
+                "engineName is set whenever producer is ENGINE (spec §4)"
+            }
+        }
+
+        /** A builder holding this finding's values. */
+        @RevoktTestingApi
+        public fun newBuilder(): Builder = Builder().message(message).producer(producer).engineName(engineName)
+
+        override fun equals(other: Any?): Boolean =
+            other is EngineError &&
+                message == other.message &&
+                producer == other.producer &&
+                engineName == other.engineName
+
+        override fun hashCode(): Int = listOf(message, producer, engineName).hashCode()
+
+        override fun toString(): String = "EngineError(message=$message, producer=$producer, engineName=$engineName)"
+
+        /** Builds a [Finding.EngineError] for tests and fakes; [build] checks the invariant the constructor does. */
+        @RevoktTestingApi
+        public class Builder {
+            internal var message: String? = null
+                private set
+            internal var producer: EngineErrorProducer? = null
+                private set
+            internal var engineName: String? = null
+                private set
+
+            public fun message(message: String): Builder = apply { this.message = message }
+
+            public fun producer(producer: EngineErrorProducer): Builder = apply { this.producer = producer }
+
+            public fun engineName(name: String?): Builder = apply { engineName = name }
+
+            public fun build(): EngineError = EngineError(this)
+        }
+    }
+
+    /** A fired `REJECT` rule an exemption lifted (spec §4, §8 exemptions): one per exempted rule. */
+    @OptIn(RevoktTestingApi::class)
+    public class Exempted private constructor(
+        builder: Builder,
+    ) : Finding() {
+        public val rule: Rule = requireNotNull(builder.rule) { "rule is not set" }
+
+        /** A builder holding this finding's values. */
+        @RevoktTestingApi
+        public fun newBuilder(): Builder = Builder().rule(rule)
+
+        override fun equals(other: Any?): Boolean = other is Exempted && rule == other.rule
+
+        override fun hashCode(): Int = rule.hashCode()
+
+        override fun toString(): String = "Exempted(rule=$rule)"
+
+        /** Builds a [Finding.Exempted] for tests and fakes. */
+        @RevoktTestingApi
+        public class Builder {
+            internal var rule: Rule? = null
+                private set
+
+            public fun rule(rule: Rule): Builder = apply { this.rule = rule }
+
+            public fun build(): Exempted = Exempted(this)
         }
     }
 }

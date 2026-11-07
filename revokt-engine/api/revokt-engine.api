@@ -133,6 +133,30 @@ public final class dev/revokt/EngineErrorProducer : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/EngineErrorProducer;
 }
 
+public abstract interface class dev/revokt/Exemption {
+	public static final field Companion Ldev/revokt/Exemption$Companion;
+	public static fun anchorIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public abstract fun isExempt (Ldev/revokt/ExemptionContext;)Z
+}
+
+public final class dev/revokt/Exemption$Companion {
+	public final fun anchorIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+}
+
+public final class dev/revokt/ExemptionContext {
+	public synthetic fun <init> (Ldev/revokt/ExemptionContext$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChain ()Ldev/revokt/PresentedChain;
+	public final fun getCredentialType ()Ldev/revokt/CredentialType;
+	public final fun getDataStates ()Ljava/util/Map;
+	public final fun getHost ()Ljava/lang/String;
+	public final fun getNowMillis ()J
+	public final fun getPath ()Ldev/revokt/Finding$Path;
+	public final fun getRule ()Ldev/revokt/Rule;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/revokt/FallbackReason : java/lang/Enum {
 	public static final field DISABLED Ldev/revokt/FallbackReason;
 	public static final field FAILED Ldev/revokt/FallbackReason;
@@ -199,6 +223,53 @@ public final class dev/revokt/Finding$AlgorithmIdMismatch : dev/revokt/Finding {
 	public synthetic fun <init> (Ldev/revokt/Finding$AlgorithmIdMismatch$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCertIndex ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Finding$Crlite : dev/revokt/Finding {
+	public synthetic fun <init> (Ldev/revokt/Finding$Crlite$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCoverageEndMillis ()Ljava/lang/Long;
+	public final fun getIssuerSpkiSha256 ()[B
+	public final fun getResult ()Ldev/revokt/CrliteQueryResult;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Finding$DataState : dev/revokt/Finding {
+	public synthetic fun <init> (Ldev/revokt/Finding$DataState$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAgeMillis ()Ljava/lang/Long;
+	public final fun getClockBehind ()Z
+	public final fun getDataset ()Ldev/revokt/Dataset;
+	public final fun getFreshness ()Ldev/revokt/Freshness;
+	public final fun getFromSeed ()Z
+	public final fun getGenerationId ()Ljava/lang/String;
+	public final fun getPending ()Z
+	public final fun getRules ()Ljava/util/Set;
+	public final fun getSeedFormat ()Ljava/lang/Integer;
+	public final fun getSourceTimestampMillis ()Ljava/lang/Long;
+	public final fun getStale ()Z
+	public final fun getTrustClass ()Ldev/revokt/TrustClass;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Finding$EngineError : dev/revokt/Finding {
+	public synthetic fun <init> (Ldev/revokt/Finding$EngineError$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEngineName ()Ljava/lang/String;
+	public final fun getMessage ()Ljava/lang/String;
+	public final fun getProducer ()Ldev/revokt/EngineErrorProducer;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Finding$Exempted : dev/revokt/Finding {
+	public synthetic fun <init> (Ldev/revokt/Finding$Exempted$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRule ()Ldev/revokt/Rule;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -438,6 +509,20 @@ public final class dev/revokt/PolicyDiagnostic {
 public abstract interface class dev/revokt/PreparedGeneration : java/lang/AutoCloseable {
 	public abstract fun getGenerationId ()Ljava/lang/String;
 	public abstract fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
+}
+
+public final class dev/revokt/PresentedChain {
+	public synthetic fun <init> (Ljava/util/List;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun der (I)[B
+	public final fun dnsNames (I)Ljava/util/List;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSize ()I
+	public fun hashCode ()I
+	public final fun issuer (I)[B
+	public final fun serial (I)[B
+	public final fun spkiSha256 (I)[B
+	public final fun subject (I)[B
+	public fun toString ()Ljava/lang/String;
 }
 
 public abstract interface class dev/revokt/RevocationEngine : java/lang/AutoCloseable {
