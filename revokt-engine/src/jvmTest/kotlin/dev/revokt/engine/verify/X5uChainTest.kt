@@ -173,6 +173,32 @@ class X5uChainTest {
 
     private fun live(path: X5uPath): X5uValidity = checkValidity(path, NOW)
 
+    /** A leaf signed by the intermediate with the given encoding parts, for the DER rules. */
+    private fun leafParts(
+        version: ByteArray = version(TestDer.bytes(2)),
+        extensions: List<ByteArray> = LEAF_EXTENSIONS,
+        wrapper: (List<ByteArray>) -> ByteArray = { TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray())) },
+        tbsTrailing: ByteArray = ByteArray(0),
+        signatureValue: (ByteArray) -> ByteArray = { TestDer.tlv(0x03, TestDer.bytes(0x00), it) },
+        issuer: ByteArray = INTERMEDIATE,
+    ): TestCert {
+        fun cert(signature: ByteArray) =
+            TestCert(
+                version = version,
+                tbsSignature = EC_SHA384.id,
+                issuer = issuer,
+                validity = WIDE,
+                subject = LEAF,
+                spki = leafKey.public.encoded,
+                extensions = extensions,
+                extensionsWrapper = wrapper,
+                tbsTrailing = tbsTrailing,
+                outerAlgorithm = EC_SHA384.id,
+                signature = signatureValue(signature),
+            )
+        return cert(JcaFixtures.sign(EC_SHA384.jca, intermediateKey.private, cert(ByteArray(0)).tbs))
+    }
+
     // Fixture (d): the valid chain and every mutation
 
     @Test
@@ -429,23 +455,18 @@ class X5uChainTest {
     }
 
     @Test
-    fun `validateX5uChain never reads a validity field`() {
+    fun `validateX5uChain never checks a validity period`() {
         val past = window("19900101000000Z", "20000101000000Z")
         val path = assertLoads(chain(leaf(validity = past), intermediate(validity = past), root(validity = past)))
         assertEquals(0, assertIs<X5uValidity.ClockSkew>(live(path)).certIndex)
-        // Windows that do not decode, or end before they start, pass it too; checkValidity then fails closed.
-        val utcMonth13 = TestDer.tlv(0x17, TestDer.ascii("991399999999Z"))
-        for (window in listOf(
-            TestDer.seq(utcMonth13, TestDer.tlv(0x18, TestDer.ascii("20500101000000Z"))),
-            TestDer.seq(TestDer.tlv(0x18, TestDer.ascii("20200101000000Z")), utcMonth13),
-            window("20300101000000Z", "20200101000000Z"),
-        )) {
-            val odd = assertLoads(chain(leaf = leaf(validity = window)))
-            assertEquals(0, assertIs<X5uValidity.Failed>(live(odd)).certIndex)
-        }
-        val oddIntermediate =
-            assertLoads(chain(intermediate = intermediate(validity = window("20300101000000Z", "20200101000000Z"))))
-        assertEquals(1, assertIs<X5uValidity.Failed>(live(oddIntermediate)).certIndex)
+        // A window that is not two DER times in order is not DER (mozilla::pkix's ERROR_INVALID_DER_TIME): FAILED.
+        assertFails(PARSE, 0, chain(leaf = leaf(validity = window("20300101000000Z", "20200101000000Z"))))
+        assertFails(
+            PARSE,
+            1,
+            chain(intermediate = intermediate(validity = window("20300101000000Z", "20200101000000Z"))),
+        )
+        assertLoads(chain(leaf = leaf(validity = window("20300101000000Z", "20300101000000Z"))))
     }
 
     // Further rules
@@ -496,8 +517,21 @@ class X5uChainTest {
     }
 
     @Test
-    fun `links are verified with the signed TBS algorithm, never the unsigned outer one`() {
-        val mismatched = Alg(EC_SHA384.id, EC_SHA384.jca, outer = algId(ECDSA_SHA512))
+    fun `links are verified with the signed TBS algorithm, and the outer one must equal it`() {
+        assertFails(
+            ALGORITHM,
+            0,
+            chain(leaf = leaf(alg = Alg(EC_SHA384.id, EC_SHA384.jca, outer = algId(ECDSA_SHA512)))),
+        )
+        assertFails(
+            ALGORITHM,
+            1,
+            chain(
+                intermediate = intermediate(alg = Alg(RSA_SHA384.id, RSA_SHA384.jca, outer = algId(SHA256_RSA, NULL))),
+            ),
+        )
+        // NULL and absent parameters are the same algorithm (mozilla::pkix compares parsed values).
+        val mismatched = Alg(EC_SHA384.id, EC_SHA384.jca, outer = algId(ECDSA_SHA384, NULL))
         assertLoads(chain(leaf = leaf(alg = mismatched)))
         val calls = ArrayList<List<ByteArray>>()
         val recording =
@@ -535,6 +569,99 @@ class X5uChainTest {
         assertFails(PARSE, 2, chain(root = garbage))
         assertFails(PARSE, 1, chain(intermediate = ByteArray(0)))
         assertFailsWith<IllegalArgumentException> { validate(emptyList()) }
+    }
+
+    @Test
+    fun `a link that is not DER as mozilla pkix reads it is FAILED`() {
+        val nonMinimalValue =
+            TestDer.seq(TestDer.oid(OTHER_OID), TestDer.tlvWithLength(0x04, TestDer.bytes(0x81, 0x02), NULL))
+        val trailingInExtension = TestDer.seq(TestDer.oid(OTHER_OID), TestDer.tlv(0x04, NULL), NULL)
+        for (der in listOf(
+            leafParts(extensions = LEAF_EXTENSIONS + listOf(nonMinimalValue)).der,
+            leafParts(extensions = LEAF_EXTENSIONS + listOf(trailingInExtension)).der,
+            leafParts(wrapper = { TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray()), NULL) }).der,
+            leafParts(wrapper = { NULL + TestDer.tlv(0xa3, TestDer.seq(*it.toTypedArray())) }).der,
+            leafParts(tbsTrailing = NULL).der,
+            leafParts(signatureValue = { TestDer.tlv(0x03, TestDer.bytes(0x01), it) }).der,
+            leafParts(signatureValue = { TestDer.tlv(0x03) }).der,
+            leafParts(version = version(TestDer.bytes(4))).der,
+            leafParts(version = version(TestDer.bytes(0xff))).der,
+            leafParts(version = version(TestDer.bytes(0x00, 0x02))).der,
+            leafParts(extensions = LEAF_EXTENSIONS + TestDer.extension(OTHER_OID, NULL).let(::criticalOne)).der,
+            indefinite(leafParts()),
+            longCertificateHeader(leafParts()),
+        )) {
+            assertFails(PARSE, 0, chain(leaf = der))
+        }
+        // What mozilla::pkix accepts: v1, v2 and v4 read like v3, and an explicit critical FALSE.
+        for (v in listOf(ByteArray(0), version(TestDer.bytes(1)), version(TestDer.bytes(3)))) {
+            assertLoads(chain(leaf = leafParts(version = v).der))
+        }
+        assertLoads(
+            chain(leaf = leafParts(extensions = LEAF_EXTENSIONS + TestDer.extension(OTHER_OID, NULL, false)).der),
+        )
+    }
+
+    @Test
+    fun `validity times must be in DER form`() {
+        val good = TestDer.tlv(0x18, TestDer.ascii("20500101000000Z"))
+        for (text in listOf(
+            "2610221345Z",
+            "261022134530",
+            "261022134530+0000",
+            "691231235959Z",
+            "500101000000Z",
+        )) {
+            assertFails(PARSE, 0, chain(leaf = leaf(validity = TestDer.seq(utc(text), good))))
+        }
+        for (text in listOf(
+            "20261022134530.5Z",
+            "20261022134530+0100",
+            "19691231235959Z",
+            "20251301000000Z",
+            "20250001000000Z",
+            "20250100000000Z",
+            "20250132000000Z",
+            "20250229000000Z",
+            "21000229000000Z",
+            "20250431000000Z",
+            "20250101240000Z",
+            "20250101006000Z",
+            "20250101000060Z",
+            "2025010100000aZ",
+            "202501010000a0Z",
+            "202501010000/0Z",
+            "2025010100000/Z",
+            "20250101000000z",
+        )) {
+            assertFails(PARSE, 0, chain(leaf = leaf(validity = TestDer.seq(generalized(text), good))))
+            assertFails(PARSE, 0, chain(leaf = leaf(validity = TestDer.seq(utc("700101000000Z"), generalized(text)))))
+        }
+        // The decoded millisecond, against java.time, at the edges of the ranges.
+        for ((time, instant) in listOf(
+            utc("700101000000Z") to "1970-01-01T00:00:00Z",
+            utc("491231235959Z") to "2049-12-31T23:59:59Z",
+            utc("990228120000Z") to "1999-02-28T12:00:00Z",
+            generalized("20000229120000Z") to "2000-02-29T12:00:00Z",
+            generalized("20240229000000Z") to "2024-02-29T00:00:00Z",
+            generalized("20250430235959Z") to "2025-04-30T23:59:59Z",
+            generalized("20251231235959Z") to "2025-12-31T23:59:59Z",
+            generalized("99991231235959Z") to "9999-12-31T23:59:59Z",
+        )) {
+            val path = assertLoads(chain(leaf = leaf(validity = TestDer.seq(utc("700101000000Z"), time))))
+            assertEquals(0L..millis(instant), path.windows[0])
+        }
+    }
+
+    @Test
+    fun `an empty issuer name is FAILED`() {
+        assertFails(NAME, 0, chain(leaf = leafParts(issuer = TestDer.seq()).der))
+    }
+
+    @Test
+    fun `a leaf that may also sign OCSP responses is FAILED`() {
+        val extensions = listOf(ku(DIGITAL_SIGNATURE), eku(CODE_SIGNING, OCSP_SIGNING), san(dns(X5U_LEAF_NAME)))
+        assertFails(EKU, 0, chain(leaf = leaf(extensions)))
     }
 
     // Mozilla's chain
@@ -587,6 +714,8 @@ class X5uChainTest {
     private companion object {
         const val CODE_SIGNING = "1.3.6.1.5.5.7.3.3"
         const val SERVER_AUTH = "1.3.6.1.5.5.7.3.1"
+        const val OCSP_SIGNING = "1.3.6.1.5.5.7.3.9"
+        const val OTHER_OID = "1.3.6.1.4.1.99999.2"
         const val DIGITAL_SIGNATURE = 0
         const val KEY_CERT_SIGN = 5
         const val CRL_SIGN = 6
@@ -672,6 +801,35 @@ class X5uChainTest {
         fun san(vararg names: ByteArray): ByteArray = TestDer.extension("2.5.29.17", TestDer.seq(*names))
 
         fun dns(name: String): ByteArray = TestDer.tlv(0x82, TestDer.ascii(name))
+
+        fun utc(text: String): ByteArray = TestDer.tlv(0x17, TestDer.ascii(text))
+
+        fun generalized(text: String): ByteArray = TestDer.tlv(0x18, TestDer.ascii(text))
+
+        /** The `[0] EXPLICIT Version` with INTEGER content [content]. */
+        fun version(content: ByteArray): ByteArray = TestDer.tlv(0xa0, TestDer.tlv(0x02, content))
+
+        /** [extension] with a critical BOOLEAN of `01` inserted after its OID. */
+        fun criticalOne(extension: ByteArray): ByteArray {
+            val oid = TestDer.oid(OTHER_OID)
+            val rest = extension.copyOfRange(2 + oid.size, extension.size)
+            return TestDer.seq(oid, TestDer.tlv(0x01, TestDer.bytes(0x01)), rest)
+        }
+
+        /** [cert] with its TBS re-written under an indefinite length (`30 80 … 00 00`). */
+        fun indefinite(cert: TestCert): ByteArray {
+            val tbs = cert.tbs
+            val header = if (tbs[1].toInt() and 0x80 == 0) 2 else 2 + (tbs[1].toInt() and 0x7f)
+            val body = TestDer.bytes(0x30, 0x80) + tbs.copyOfRange(header, tbs.size) + TestDer.bytes(0x00, 0x00)
+            return TestDer.seq(body, cert.outerAlgorithm, cert.signature)
+        }
+
+        /** [cert] under a `Certificate` header whose length takes one octet more than it needs. */
+        fun longCertificateHeader(cert: TestCert): ByteArray {
+            val content = TestDer.concat(cert.tbs, cert.outerAlgorithm, cert.signature)
+            val n = content.size
+            return TestDer.tlvWithLength(0x30, TestDer.bytes(0x83, n shr 16, (n shr 8) and 0xff, n and 0xff), content)
+        }
 
         /** An extension of an unassigned OID, which a second copy makes a duplicate. */
         fun dup(): ByteArray = TestDer.extension("1.3.6.1.4.1.99999.1", TestDer.tlv(0x05, ByteArray(0)))
