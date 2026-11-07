@@ -52,7 +52,7 @@ internal enum class X5uChainFailure {
     NOT_CA,
 
     /** The leaf's basicConstraints has `cA = TRUE` (mozilla::pkix's `CA_CERT_USED_AS_END_ENTITY`). */
-    CA_LEAF,
+    LEAF_CA,
 
     /** A non-leaf link's `pathLenConstraint` is below the number of non-leaf links under it. */
     PATH_LEN,
@@ -275,7 +275,7 @@ private fun link(
  */
 private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
     val bc = ExtensionValues.basicConstraints(c).valueOr(0, "basicConstraints") { return it }
-    if (bc?.ca == true) return failed(X5uChainFailure.CA_LEAF, 0, "the leaf has cA TRUE")
+    if (bc?.ca == true) return failed(X5uChainFailure.LEAF_CA, 0, "the leaf has cA TRUE")
     ExtensionValues.keyUsage(c).valueOr(0, "keyUsage") { return it }
     val eku = ExtensionValues.extendedKeyUsage(c).valueOr(0, "extKeyUsage") { return it }
     if (eku == null || !eku.contains(CODE_SIGNING)) {
@@ -314,8 +314,32 @@ private fun issuer(
     // 2026-11-06, pending in the next spec revision); the terminal is never read.
     val eku = ExtensionValues.extendedKeyUsage(c).valueOr(i, "extKeyUsage") { return it }
     if (eku?.contains(CODE_SIGNING) == false) return failed(X5uChainFailure.EKU, i, "extKeyUsage without codeSigning")
+    if (!tlsFeatures(
+            c,
+            certs[i - 1],
+        )
+    ) {
+        return failed(X5uChainFailure.EXTENSION, i, "TLS feature not carried by the child")
+    }
     return null
 }
+
+/**
+ * mozilla::pkix's `CheckTLSFeatures`: when [issuer] has a TLS feature extension, [child] has one with the same value
+ * bytes. Duplicates were rejected before, so each has at most one.
+ */
+private fun tlsFeatures(
+    issuer: ParsedCertificate,
+    child: ParsedCertificate,
+): Boolean {
+    val required =
+        issuer.tbs.extensions.firstOrNull { Oid.matches(issuer.tbsBytes, it.oid, TLS_FEATURE) } ?: return true
+    val carried = child.tbs.extensions.firstOrNull { Oid.matches(child.tbsBytes, it.oid, TLS_FEATURE) } ?: return false
+    return required.value.bytes(issuer.tbsBytes).contentEquals(carried.value.bytes(child.tbsBytes))
+}
+
+/** `id-pe-tlsfeature` (1.3.6.1.5.5.7.1.24, RFC 7633), as OID content. */
+private val TLS_FEATURE = byteArrayOf(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x18)
 
 /** Spec §7.1 "subject name equal to the child's issuer (raw or canonical)": a null canonical form never matches. */
 private fun chains(
@@ -381,8 +405,9 @@ private fun criticalIsDer(
  *   returns at once for anyPolicy), policyConstraints, inhibitAnyPolicy, authorityInfoAccess, the embedded SCT list,
  *   qcStatements, and a critical `id-pkix-ocsp-nocheck`.
  * - Netscape certificate type, when critical, only with basicConstraints and extKeyUsage present, as `BackCert::Init`.
- * - Understood and *enforced* by Firefox but not here: nameConstraints and the TLS feature (`CheckNameConstraints`,
- *   `CheckTLSFeatures`). A critical copy is rejected rather than ignored; a non-critical one is ignored.
+ * - Understood and *enforced* by Firefox but not here: nameConstraints (`CheckNameConstraints`). A critical copy is
+ *   rejected rather than ignored; a non-critical one is ignored. The TLS feature, which Firefox also enforces, is
+ *   enforced here too ([tlsFeatures]), so it is understood.
  * - An understood extension with an empty value is rejected (`ERROR_EXTENSION_VALUE_INVALID`), but `ocsp-nocheck`.
  */
 private object Understood {
@@ -397,11 +422,12 @@ private object Understood {
             byteArrayOf(0x55, 0x1d, 0x36), // inhibitAnyPolicy
             pkix(0x01, 0x01), // authorityInfoAccess
             pkix(0x01, 0x03), // qcStatements
+            TLS_FEATURE, // enforced by [tlsFeatures]
             byteArrayOf(0x2b, 0x06, 0x01, 0x04, 0x01, 0xd6.toByte(), 0x79, 0x02, 0x04, 0x02), // embedded SCT list
         )
 
     /** Understood, and enforced by Firefox only: a critical copy cannot be honoured here. */
-    private val ENFORCED = listOf(byteArrayOf(0x55, 0x1d, 0x1e), pkix(0x01, 0x18)) // nameConstraints, TLS feature
+    private val ENFORCED = listOf(byteArrayOf(0x55, 0x1d, 0x1e)) // nameConstraints
 
     private val OCSP_NOCHECK = pkix(0x30, 0x01, 0x05)
     private val NETSCAPE_CERT_TYPE =

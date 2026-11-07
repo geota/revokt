@@ -11,10 +11,10 @@ import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.parse.X5uPem
 import dev.revokt.engine.parse.X5uPemRead
 import dev.revokt.engine.verify.X5uChainFailure.ALGORITHM
-import dev.revokt.engine.verify.X5uChainFailure.CA_LEAF
 import dev.revokt.engine.verify.X5uChainFailure.EKU
 import dev.revokt.engine.verify.X5uChainFailure.EXTENSION
 import dev.revokt.engine.verify.X5uChainFailure.KEY_USAGE
+import dev.revokt.engine.verify.X5uChainFailure.LEAF_CA
 import dev.revokt.engine.verify.X5uChainFailure.NAME
 import dev.revokt.engine.verify.X5uChainFailure.NOT_CA
 import dev.revokt.engine.verify.X5uChainFailure.NOT_PINNED
@@ -121,8 +121,8 @@ internal class X5uChainRulesTest : X5uChainFixture() {
 
     @Test
     fun `a leaf with cA TRUE is FAILED`() {
-        assertFails(CA_LEAF, 0, chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = true))))
-        assertFails(CA_LEAF, 0, chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = true, pathLen = 0))))
+        assertFails(LEAF_CA, 0, chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = true))))
+        assertFails(LEAF_CA, 0, chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = true, pathLen = 0))))
         assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = false))))
         assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = null, pathLen = 3))))
     }
@@ -141,7 +141,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
     @Test
     fun `a critical extension mozilla pkix does not understand, or enforces, is FAILED`() {
         val value = TestDer.seq()
-        for (oid in listOf(OTHER_OID, "2.5.29.14", "2.5.29.35", "2.5.29.31", NAME_CONSTRAINTS, TLS_FEATURE)) {
+        for (oid in listOf(OTHER_OID, "2.5.29.14", "2.5.29.35", "2.5.29.31", NAME_CONSTRAINTS)) {
             val critical = TestDer.extension(oid, value, critical = true)
             assertFails(EXTENSION, 0, chain(leaf = leaf(LEAF_EXTENSIONS + critical)))
             assertFails(EXTENSION, 1, chain(intermediate = intermediate(caExtensions() + critical)))
@@ -151,7 +151,15 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         }
         // Understood ones load critical: certificatePolicies, policyConstraints, inhibitAnyPolicy, AIA, qcStatements,
         // the SCT list, and ocsp-nocheck (also empty).
-        for (oid in listOf("2.5.29.32", "2.5.29.36", "2.5.29.54", "1.3.6.1.5.5.7.1.1", "1.3.6.1.5.5.7.1.3", SCT_LIST)) {
+        for (oid in listOf(
+            "2.5.29.32",
+            "2.5.29.36",
+            "2.5.29.54",
+            "1.3.6.1.5.5.7.1.1",
+            "1.3.6.1.5.5.7.1.3",
+            SCT_LIST,
+            TLS_FEATURE,
+        )) {
             val ext =
                 TestDer.extension(
                     oid,
@@ -193,6 +201,32 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + bc(ca = false) + netscape)))
         assertFails(EXTENSION, 0, chain(leaf = leaf(LEAF_EXTENSIONS + netscape)))
         assertFails(EXTENSION, 0, chain(leaf = leaf(listOf(bc(ca = false), san(dns(X5U_LEAF_NAME)), netscape))))
+    }
+
+    @Test
+    fun `a CA's TLS feature must be carried by its child, as CheckTLSFeatures requires`() {
+        val statusRequest = TestDer.extension(TLS_FEATURE, TestDer.seq(JcaFixtures.integer(5)))
+        val other = TestDer.extension(TLS_FEATURE, TestDer.seq(JcaFixtures.integer(17)))
+        assertFails(EXTENSION, 1, chain(intermediate = intermediate(caExtensions() + statusRequest)))
+        assertFails(
+            EXTENSION,
+            1,
+            chain(
+                leaf = leaf(LEAF_EXTENSIONS + other),
+                intermediate =
+                    intermediate(caExtensions() + statusRequest),
+            ),
+        )
+        assertLoads(
+            chain(
+                leaf = leaf(LEAF_EXTENSIONS + statusRequest),
+                intermediate =
+                    intermediate(caExtensions() + statusRequest),
+            ),
+        )
+        // Only a CA's feature binds; the leaf's alone, and the terminal's, are not checked.
+        assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + statusRequest)))
+        assertLoads(chain(root = root(extensions = caExtensions() + statusRequest)))
     }
 
     @Test

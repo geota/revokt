@@ -11,10 +11,10 @@ import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.parse.X5uPem
 import dev.revokt.engine.parse.X5uPemRead
 import dev.revokt.engine.verify.X5uChainFailure.ALGORITHM
-import dev.revokt.engine.verify.X5uChainFailure.CA_LEAF
 import dev.revokt.engine.verify.X5uChainFailure.EKU
 import dev.revokt.engine.verify.X5uChainFailure.EXTENSION
 import dev.revokt.engine.verify.X5uChainFailure.KEY_USAGE
+import dev.revokt.engine.verify.X5uChainFailure.LEAF_CA
 import dev.revokt.engine.verify.X5uChainFailure.NAME
 import dev.revokt.engine.verify.X5uChainFailure.NOT_CA
 import dev.revokt.engine.verify.X5uChainFailure.NOT_PINNED
