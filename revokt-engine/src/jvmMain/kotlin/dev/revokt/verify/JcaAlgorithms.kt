@@ -4,7 +4,13 @@
 package dev.revokt.verify
 
 import dev.revokt.engine.parse.AlgorithmId
+import dev.revokt.engine.parse.DerException
+import dev.revokt.engine.parse.DerReader
+import dev.revokt.engine.parse.HeaderSite
+import dev.revokt.engine.parse.Keyability
+import dev.revokt.engine.parse.ParseContext
 import dev.revokt.engine.parse.PssParameters
+import java.math.BigInteger
 import java.security.spec.MGF1ParameterSpec
 import java.security.spec.PSSParameterSpec
 
@@ -18,6 +24,9 @@ internal object JcaAlgorithms {
         /** Whether [key] can have made this signature: its OID is one of [keyOids], and an EC key names a curve. */
         fun accepts(key: AlgorithmId): Boolean =
             key.oid in keyOids && (key.oid != EC_PUBLIC_KEY || key.parametersOid in CURVES)
+
+        /** Whether this is ECDSA, whose `r` and `s` [ecdsaInRange] checks before the provider. */
+        val ecdsa: Boolean get() = EC_PUBLIC_KEY in keyOids
     }
 
     /** Spec §3: the key cache's bound. */
@@ -105,6 +114,49 @@ internal object JcaAlgorithms {
             "1.3.36.3.3.2.8.1.1.11",
             "1.3.36.3.3.2.8.1.1.13",
         )
+
+    /**
+     * Whether [signature] is a DER `Ecdsa-Sig-Value` with `1 ≤ r ≤ n − 1` and `1 ≤ s ≤ n − 1` for the curve order [n]:
+     * step 1 of ECDSA verification (SEC 1 §4.1.4), which JDK 17.0.0 to 17.0.2 skipped (CVE-2022-21449: `r = s = 0`
+     * verified for any message and key). Spec revision 54, pending. A high `s` is in range.
+     */
+    fun ecdsaInRange(
+        signature: ByteArray,
+        n: BigInteger,
+    ): Boolean {
+        val (r, s) = ecdsaSignature(signature) ?: return false
+        return BigInteger.ONE <= r && r < n && BigInteger.ONE <= s && s < n
+    }
+
+    /**
+     * The `(r, s)` of the DER `Ecdsa-Sig-Value` (RFC 3279 §2.2.3) [der], or null for anything else: a SEQUENCE of
+     * exactly two INTEGERs and nothing after it, every length minimal, every INTEGER minimal. The values keep their
+     * sign, so a negative one is out of [ecdsaInRange]'s range.
+     */
+    fun ecdsaSignature(der: ByteArray): Pair<BigInteger, BigInteger>? =
+        try {
+            val ctx = ParseContext()
+            val outer = DerReader(der, 0, der.size, ctx)
+            val fields = outer.child(outer.read(SEQUENCE, HeaderSite.SIGNATURE_VALUE))
+            outer.requireEnd("Ecdsa-Sig-Value")
+            val r = integer(der, fields)
+            val s = integer(der, fields)
+            fields.requireEnd("Ecdsa-Sig-Value")
+            if (ctx.nonMinimal.isEmpty() && r != null && s != null) r to s else null
+        } catch (_: DerException) {
+            null
+        }
+
+    private fun integer(
+        der: ByteArray,
+        r: DerReader,
+    ): BigInteger? {
+        val content = r.read(INTEGER, HeaderSite.SIGNATURE_VALUE).content
+        return if (Keyability.minimalInteger(der, content)) BigInteger(content.bytes(der)) else null
+    }
+
+    private const val SEQUENCE = 0x30
+    private const val INTEGER = 0x02
 
     /** The JCA form of [p], or null when it is absent, malformed or outside [JcaSignatureVerifier]'s PSS rules. */
     fun pssSpec(p: PssParameters?): PSSParameterSpec? {
