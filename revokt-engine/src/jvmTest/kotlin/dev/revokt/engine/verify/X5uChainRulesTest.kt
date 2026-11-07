@@ -63,7 +63,7 @@ import kotlin.test.assertTrue
 
 /**
  * The x5u chain's encoding and extension rules beyond fixture (d): mozilla::pkix's DER and time rules, validity
- * windows, duplicate, malformed and critical extensions, a CA leaf and a CA's extKeyUsage (spec revision 54).
+ * windows, duplicate, malformed and critical extensions, a CA leaf and a CA's extKeyUsage (spec revision 55).
  */
 internal class X5uChainRulesTest : X5uChainFixture() {
     @Test
@@ -224,7 +224,7 @@ internal class X5uChainRulesTest : X5uChainFixture() {
                     intermediate(caExtensions() + statusRequest),
             ),
         )
-        // Only a CA below the terminal binds: the leaf's alone, and the terminal's, are not read (revision 54).
+        // Only a CA below the terminal binds: the leaf's alone, and the terminal's, are not read (revision 55).
         assertLoads(chain(leaf = leaf(LEAF_EXTENSIONS + statusRequest)))
         assertLoads(chain(root = root(extensions = caExtensions() + statusRequest)))
     }

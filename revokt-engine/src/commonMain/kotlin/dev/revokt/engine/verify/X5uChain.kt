@@ -68,7 +68,7 @@ internal enum class X5uChainFailure {
 
     /**
      * The leaf's dNSName lies outside a CA's nameConstraints: not in its permitted dNSName subtrees, or in an excluded
-     * one (mozilla::pkix's `ERROR_CERT_NOT_IN_NAME_SPACE`; spec revision 54).
+     * one (mozilla::pkix's `ERROR_CERT_NOT_IN_NAME_SPACE`; spec revision 55).
      */
     NAME_CONSTRAINTS,
 
@@ -149,7 +149,7 @@ internal sealed class X5uValidity {
 internal const val X5U_LEAF_NAME: String = "onecrl.content-signature.mozilla.org"
 
 /**
- * Every check of the x5u chain but the validity periods (spec revision 54, §7.1 "x5u chain"; §6.5): a seed runs it
+ * Every check of the x5u chain but the validity periods (spec revision 55, §7.1 "x5u chain"; §6.5): a seed runs it
  * before its `records.json` is decoded and [checkValidity] after, at the decoded `<ts>`; a live sync runs both, at the
  * local clock. [chain] is the x5u body's DER, leaf first ([dev.revokt.engine.parse.X5uPem]); [pinned] holds SPKI
  * SHA-256s. The chain follows mozilla::pkix (Firefox `cac25a6`):
@@ -282,7 +282,7 @@ private fun link(
 /**
  * The leaf rules: not a CA, a readable keyUsage if present, codeSigning in extKeyUsage without OCSPSigning, and exactly
  * one SAN, the dNSName [X5U_LEAF_NAME]. The not-a-CA, keyUsage and OCSPSigning rules are mozilla::pkix's
- * (`CheckBasicConstraints`, `CheckKeyUsage`, `CheckExtendedKeyUsage` for an end entity; spec revision 54).
+ * (`CheckBasicConstraints`, `CheckKeyUsage`, `CheckExtendedKeyUsage` for an end entity; spec revision 55).
  */
 private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
     // Every value the leaf rules read is parsed first (revision 55): a malformed one is EXTENSION, never SAN or EKU.
@@ -347,7 +347,7 @@ private fun issuer(
         return failed(X5uChainFailure.NAME, i, "subject is not the issuer of certificate ${i - 1}")
     }
     if (ku?.keyCertSign == false) return failed(X5uChainFailure.KEY_USAGE, i, "keyUsage without keyCertSign")
-    // mozilla::pkix and webpki check the required EKU on every certificate that has one (spec revision 54); the
+    // mozilla::pkix and webpki check the required EKU on every certificate that has one (spec revision 55); the
     // terminal is never read.
     if (eku?.contains(CODE_SIGNING) == false) return failed(X5uChainFailure.EKU, i, "extKeyUsage without codeSigning")
     if (!tlsFeatures(c, child)) return failed(X5uChainFailure.EXTENSION, i, "the child lacks the TLS feature")
@@ -435,7 +435,7 @@ private const val EMPTY_NAME_TLV = 2
 
 /**
  * The extensions mozilla::pkix's `BackCert::RememberExtension` understands (at `cac25a6`), so that a critical copy of any
- * other is `ERROR_UNKNOWN_CRITICAL_EXTENSION` (spec revision 54).
+ * other is `ERROR_UNKNOWN_CRITICAL_EXTENSION` (spec revision 55).
  * OIDs are compared as encoded, as `MatchRest` does, so a non-minimal arc is an unknown extension.
  *
  * - Understood and checked here, or ignored by Firefox for an any-policy content signature (so a critical copy is

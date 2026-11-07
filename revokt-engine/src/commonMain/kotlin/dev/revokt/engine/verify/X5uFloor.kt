@@ -17,7 +17,7 @@ import okio.ByteString.Companion.toByteString
 /**
  * Spec §7.1's algorithm floor for every link below the terminal: "SHA-256 or stronger, RSA ≥ 2048, P-256 or stronger,
  * anything else `FAILED`". It is read as Firefox's `AppTrustDomain` and mozilla::pkix read it (`cac25a6`), and it is
- * spec revision 54's:
+ * spec revision 55's:
  *
  * - **Signatures** (`der::SignatureAlgorithmIdentifierValue`, `CheckSignatureDigestAlgorithm`): RSA PKCS#1 v1.5 and
  *   ECDSA with SHA-256, SHA-384 or SHA-512, their parameters NULL or absent; `id-RSASSA-PSS` in exactly one of its
