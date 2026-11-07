@@ -511,6 +511,25 @@ public final class dev/revokt/RevoktLoggers {
 	public static final fun jul ()Ldev/revokt/RevoktLogger;
 }
 
+public abstract interface class dev/revokt/RevoktStorage {
+	public static final field Companion Ldev/revokt/RevoktStorage$Companion;
+	public abstract fun delete (Ljava/lang/String;)V
+	public fun identity ()Ljava/lang/String;
+	public static fun inMemory ()Ldev/revokt/RevoktStorage;
+	public abstract fun lock ()Ljava/lang/AutoCloseable;
+	public abstract fun names ()Ljava/util/Set;
+	public abstract fun read (Ljava/lang/String;)[B
+	public abstract fun write (Ljava/lang/String;[B)V
+}
+
+public final class dev/revokt/RevoktStorage$Companion {
+	public final fun inMemory ()Ldev/revokt/RevoktStorage;
+}
+
+public final class dev/revokt/RevoktStorage$DefaultImpls {
+	public static fun identity (Ldev/revokt/RevoktStorage;)Ljava/lang/String;
+}
+
 public abstract interface annotation class dev/revokt/RevoktTestingApi : java/lang/annotation/Annotation {
 }
 
@@ -580,6 +599,12 @@ public final class dev/revokt/Severity : java/lang/Enum {
 public abstract interface class dev/revokt/SignatureVerifier {
 	public abstract fun unsupportedOids ()Ljava/util/Set;
 	public abstract fun verify ([B[B[B[B)Ldev/revokt/VerifyResult;
+}
+
+public final class dev/revokt/StoreLockedException : java/lang/RuntimeException {
+	public fun <init> (Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 }
 
 public final class dev/revokt/SyncOutcome : java/lang/Enum {
