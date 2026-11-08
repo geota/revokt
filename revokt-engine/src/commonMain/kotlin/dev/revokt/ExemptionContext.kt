@@ -7,6 +7,7 @@ package dev.revokt
  * What an [Exemption] is asked about (spec §4, §8 exemptions): one fired, exemptable `REJECT` rule and the facts of the
  * evaluation that fired it. An output type, growable: new evidence (M3 SCTs, M4 the distrust record) lands as new
  * nullable properties. A value with a private constructor and a `@RevoktTestingApi` builder; equality is by content.
+ * The builder checks that [chain] is null exactly when [credentialType] is not `X509`.
  */
 @OptIn(RevoktTestingApi::class)
 public class ExemptionContext private constructor(
@@ -31,6 +32,13 @@ public class ExemptionContext private constructor(
 
     /** The verdict's data states: an entry for every required and every consulted dataset. */
     public val dataStates: Map<Dataset, Finding.DataState> = builder.dataStates
+
+    init {
+        require((chain == null) == (credentialType != CredentialType.X509)) {
+            "chain is null exactly when credentialType is not X509 (spec §4): got credentialType=$credentialType, " +
+                "chain ${if (chain == null) "null" else "set"}"
+        }
+    }
 
     /** A builder holding this context's values. */
     @RevoktTestingApi
@@ -63,7 +71,7 @@ public class ExemptionContext private constructor(
     override fun toString(): String =
         fields().joinToString(prefix = "ExemptionContext(", postfix = ")") { (name, value) -> "$name=$value" }
 
-    /** Builds an [ExemptionContext] for tests and fakes. */
+    /** Builds an [ExemptionContext] for tests and fakes; [build] checks the invariant the constructor does. */
     @RevoktTestingApi
     public class Builder {
         internal var rule: Rule? = null

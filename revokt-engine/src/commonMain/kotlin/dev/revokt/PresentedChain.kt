@@ -75,9 +75,10 @@ public class PresentedChain private constructor(
 
     /**
      * Certificate [i]'s `subjectAltName` `dNSName` entries, in certificate order, as the IA5String text encoded (ASCII):
-     * raw, not checked as DNS syntax, and not normalised (case and any trailing dot kept). Empty when the certificate
-     * has no SAN, when its SAN does not read (malformed, or the extension twice) and when it is not [parsed]: an
-     * exemption only lifts a fired rule, so a name that cannot be read matches nothing.
+     * raw, not checked as DNS syntax (control characters included) and not normalised (case and any trailing dot kept),
+     * so match a name exactly, never by suffix on a raw name. Empty when the certificate has no SAN, when its SAN does
+     * not read (malformed, a non-ASCII `dNSName`, or the extension twice) and when it is not [parsed]: an exemption only
+     * lifts a fired rule, so a name that cannot be read matches nothing.
      */
     public fun dnsNames(i: Int): List<String> = entries[i].dnsNames
 

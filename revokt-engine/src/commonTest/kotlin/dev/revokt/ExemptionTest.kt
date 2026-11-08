@@ -71,7 +71,14 @@ class ExemptionTest {
         val changed =
             mapOf<String, ExemptionContext.Builder.() -> ExemptionContext.Builder>(
                 "rule" to { rule(Rule.STALE) },
-                "chain" to { chain(null) },
+                "chain" to {
+                    chain(
+                        PresentedChain
+                            .Builder()
+                            .certificates(listOf(TestCert(subject = TestCert.name("other.example")).der))
+                            .build(),
+                    )
+                },
                 "path" to { path(path(hash(4))) },
                 "host" to { host(null) },
                 "nowMillis" to { nowMillis(1) },
@@ -90,6 +97,7 @@ class ExemptionTest {
             ExemptionContext
                 .Builder()
                 .rule(Rule.NO_SCTS)
+                .chain(chain)
                 .path(path(null))
                 .nowMillis(0)
                 .dataStates(given)
@@ -100,13 +108,20 @@ class ExemptionTest {
         assertFailsWith<UnsupportedOperationException> {
             (c.dataStates as MutableMap<Dataset, Finding.DataState>).clear()
         }
-        assertNull(c.chain)
         assertNull(c.host)
         assertEquals(CredentialType.X509, c.credentialType)
-        val builder = { ExemptionContext.Builder() }
+        val builder = { ExemptionContext.Builder().chain(chain) }
         assertEquals("rule is not set", message { builder().path(path(null)).nowMillis(0).build() })
         assertEquals("path is not set", message { builder().rule(Rule.NO_SCTS).nowMillis(0).build() })
         assertEquals("nowMillis is not set", message { builder().rule(Rule.NO_SCTS).path(path(null)).build() })
+    }
+
+    @Test
+    fun `the chain is null exactly when the credential is not X509`() {
+        // M1 has only X509, so an X.509 context without a chain is the one way to break it (spec §4: null for M5's MTC).
+        val broken = message { context().newBuilder().chain(null).build() }
+        assertTrue("chain is null exactly when credentialType is not X509" in broken, broken)
+        assertEquals(chain, context().chain)
     }
 
     @Test

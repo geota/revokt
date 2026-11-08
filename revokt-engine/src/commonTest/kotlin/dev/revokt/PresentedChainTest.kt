@@ -81,6 +81,14 @@ class PresentedChainTest {
         // Not checked as DNS syntax: a space or an empty name is reported as encoded.
         val odd = TestCert(extensions = listOf(sanOf(tlv(0x82, ascii("a b")), tlv(0x82, ByteArray(0)))))
         assertEquals(listOf("a b", ""), chain(odd).dnsNames(0))
+        // A NUL is kept as encoded, so a suffix match on the raw name would be fooled; match exactly.
+        val nul = TestCert(extensions = listOf(sanOf(tlv(0x82, ascii("a\u0000b")))))
+        assertEquals(listOf("a\u0000b"), chain(nul).dnsNames(0))
+        // A non-ASCII octet (UTF-8 "é") makes the SAN unreadable, so no names, not a decoded or partial list.
+        val nonAscii =
+            TestCert(extensions = listOf(sanOf(tlv(0x82, ascii("a.example")), tlv(0x82, bytes(0xc3, 0xa9)))))
+        assertEquals(emptyList(), chain(nonAscii).dnsNames(0))
+        assertTrue(chain(nonAscii).parsed(0))
     }
 
     @Test
