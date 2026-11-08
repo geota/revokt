@@ -23,6 +23,7 @@ import java.util.concurrent.locks.LockSupport
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -138,6 +139,30 @@ class TimedFetchTest {
             stop.set(true)
             worker.join()
         }
+    }
+
+    @Test
+    fun `an inline dispatcher keeps an interrupt meant for the caller`() {
+        val fetcher =
+            HttpFetcher {
+                // The fetch runs on the caller's thread: this is the caller being interrupted, by close() say.
+                Thread.currentThread().interrupt()
+                ok(monitor)
+            }
+        try {
+            assertEquals(42, client(fetcher, io = Dispatchers.Unconfined).pollChanges().assertOk())
+            assertTrue(Thread.currentThread().isInterrupted, "the caller's interrupt was cleared")
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test
+    fun `an executor that throws on execute is FAILED with its throwable`() {
+        val refused = IllegalStateException("no threads")
+        val io = Executor { throw refused }.asCoroutineDispatcher()
+        val failed = client(HttpFetcher { ok(monitor) }, io = io).pollChanges()
+        assertSame(refused, failed.assertFailed(SyncStage.CHANGESET, ClientFailure.FETCHER_THREW).cause)
     }
 
     @Test

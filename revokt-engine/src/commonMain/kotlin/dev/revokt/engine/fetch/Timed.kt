@@ -26,7 +26,9 @@ internal sealed class Timed {
  * Runs [fetch] on [io] and waits at most [timeoutMillis] for it (spec §3 `FetchRequest.timeoutMillis`: "each fetch runs
  * under `Future.get(timeoutMillis)` on `ioDispatcher`; expiry is FAILED and the next sync proceeds"). Never throws:
  * every throwable of [fetch] is [Timed.Threw] (§3: "any `Throwable` = `SyncOutcome.FAILED`"). On a timeout the fetch is
- * not waited for, so a hung fetcher cannot block the next call.
+ * not waited for, so a hung fetcher cannot block the next call. An inline [io] (`Dispatchers.Unconfined`, or an
+ * `ioExecutor` that runs the task on the calling thread, such as `Runnable::run` or Guava's `directExecutor()`)
+ * defeats the timeout: the fetch blocks the caller before the wait starts. A refusal by the executor is [Timed.Threw].
  */
 internal expect fun fetchWithin(
     io: CoroutineDispatcher,
