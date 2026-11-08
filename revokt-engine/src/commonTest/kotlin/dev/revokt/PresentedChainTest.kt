@@ -3,6 +3,8 @@
 
 package dev.revokt
 
+import dev.revokt.engine.parse.CertificateParse
+import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.TestCert
 import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.parse.TestDer.ascii
@@ -17,7 +19,10 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
-/** `PresentedChain` as spec §4 declares it (#120): fields from revokt's own parse, value semantics and fresh copies. */
+/**
+ * `PresentedChain` as spec §4 declares it (#120): fields from revokt's own parse, every presented certificate at its
+ * presented index (the maintainer's reading A), value semantics and fresh copies.
+ */
 @OptIn(RevoktTestingApi::class)
 class PresentedChainTest {
     private val san = "2.5.29.17"
@@ -126,17 +131,69 @@ class PresentedChainTest {
     }
 
     @Test
-    fun `the builder rejects a certificate the parser rejects, and an index out of range throws`() {
-        val e =
-            assertFailsWith<IllegalArgumentException> {
-                PresentedChain
-                    .Builder()
-                    .certificates(listOf(leaf.der, bytes(0x30, 0x00)))
-                    .build()
-            }
-        assertTrue(e.message!!.startsWith("certificate 1 does not parse: "), e.message)
+    fun `an unparseable middle certificate keeps its index and its bytes, and nothing else`() {
+        val garbage = bytes(0x30, 0x03, 0x02, 0x01, 0x05)
+        val c =
+            PresentedChain
+                .Builder()
+                .certificates(listOf(leaf.der, garbage, ca.der))
+                .build()
+        assertEquals(3, c.size)
+        assertEquals(listOf(true, false, true), (0 until c.size).map(c::parsed))
+        assertContentEquals(garbage, c.der(1))
+        for (empty in listOf(c.subject(1), c.issuer(1), c.spkiSha256(1), c.serial(1))) assertEquals(0, empty.size)
+        assertEquals(emptyList(), c.dnsNames(1))
+        // The certificates either side read as they would alone, at their presented indices.
+        assertContentEquals(leaf.subject, c.subject(0))
+        assertEquals(listOf("a.example", "B.Example."), c.dnsNames(0))
+        assertContentEquals(ca.subject, c.subject(2))
+        assertContentEquals(bytes(0x01), c.serial(2))
+        assertTrue("(not parsed)" in c.toString(), c.toString())
+        assertEquals(c, c.newBuilder().build())
+        // An unparsed leaf too.
+        val noLeaf =
+            PresentedChain
+                .Builder()
+                .certificates(listOf(garbage, ca.der))
+                .build()
+        assertEquals(listOf(false, true), listOf(noLeaf.parsed(0), noLeaf.parsed(1)))
+    }
+
+    @Test
+    fun `the engine's chain takes the evaluation's parses, a certificate it did not read included`() {
+        val leafParse = (CertificateParser.parse(leaf.der) as CertificateParse.Parsed).certificate
+        // The CA's bytes would parse, but the evaluation stopped before reading them.
+        val c = PresentedChain.of(listOf(leaf.der, ca.der), listOf(leafParse, null))
+        assertEquals(listOf(true, false), listOf(c.parsed(0), c.parsed(1)))
+        assertContentEquals(leaf.subject, c.subject(0))
+        assertContentEquals(ca.der, c.der(1))
+        assertEquals(0, c.subject(1).size)
+        // The parsed flag is part of equality, and newBuilder keeps it.
+        assertNotEquals(chain(leaf, ca), c)
+        assertEquals(c, c.newBuilder().build())
+        assertEquals(chain(leaf, ca), c.newBuilder().certificates(listOf(leaf.der, ca.der)).build())
+        assertTrue(
+            "one parse result per certificate" in
+                assertFailsWith<IllegalArgumentException> {
+                    PresentedChain.of(
+                        listOf(leaf.der),
+                        emptyList(),
+                    )
+                }.message!!,
+        )
+        assertTrue(
+            "of other bytes" in
+                assertFailsWith<IllegalArgumentException> {
+                    PresentedChain.of(listOf(ca.der), listOf(leafParse))
+                }.message!!,
+        )
+    }
+
+    @Test
+    fun `an index out of range throws`() {
         val c = chain(leaf)
         assertFailsWith<IndexOutOfBoundsException> { c.der(1) }
+        assertFailsWith<IndexOutOfBoundsException> { c.parsed(1) }
         assertFailsWith<IndexOutOfBoundsException> { c.dnsNames(-1) }
     }
 }

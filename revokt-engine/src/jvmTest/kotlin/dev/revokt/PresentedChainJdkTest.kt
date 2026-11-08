@@ -52,6 +52,7 @@ class PresentedChainJdkTest {
             for ((i, der) in ders.withIndex()) {
                 val x = x509(der)
                 val at = "$name[$i]"
+                assertTrue(chain.parsed(i), at)
                 assertEquals(jdkDnsNames(x), chain.dnsNames(i), at)
                 assertContentEquals(der, chain.der(i), at)
                 assertContentEquals(x.subjectX500Principal.encoded, chain.subject(i), at)

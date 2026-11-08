@@ -512,13 +512,14 @@ public abstract interface class dev/revokt/PreparedGeneration : java/lang/AutoCl
 }
 
 public final class dev/revokt/PresentedChain {
-	public synthetic fun <init> (Ljava/util/List;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ldev/revokt/PresentedChain$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun der (I)[B
 	public final fun dnsNames (I)Ljava/util/List;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getSize ()I
 	public fun hashCode ()I
 	public final fun issuer (I)[B
+	public final fun parsed (I)Z
 	public final fun serial (I)[B
 	public final fun spkiSha256 (I)[B
 	public final fun subject (I)[B
