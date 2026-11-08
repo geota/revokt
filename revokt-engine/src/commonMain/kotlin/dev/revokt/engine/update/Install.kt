@@ -215,34 +215,30 @@ private class Install(
     }
 
     /**
-     * Writes the generation directory, `meta.json` last, or returns the failure. A directory that already holds this
-     * generation (the same `meta.json` and `index.bin`, left by an install that failed after writing it) is prepared as
-     * it stands; one whose `meta.json` is malformed or missing is replaced whole, unless the engine holds it live; one
-     * holding another generation stays and fails the install.
+     * Writes the generation directory, `meta.json` last, or returns the failure. A directory the engine holds live or
+     * the pointer names is never replaced: when it already holds this generation (the same `meta.json` and
+     * `index.bin`, left by an install that failed after the publish) it is prepared as it stands, so a retry can
+     * succeed, and a failure keeps it; when its `meta.json` is malformed (a newer binary's `metaVersion`, say, #178) or
+     * missing it stays and fails the install. Any other directory is replaced whole, since its delta files are not
+     * re-hashed, unless it holds another generation, which stays and fails the install.
      */
     private fun directory(directory: String): InstallResult? {
-        when (val existing = store.readMeta(directory)) {
-            is StoreRead.Found -> {
-                if (existing.value != meta || !store.index(directory).contentEquals(generation.index)) {
-                    val cause = IllegalStateException("$directory holds another generation")
-                    return fail(SyncOutcome.STORE_FAILED, null, cause)
-                }
-                // Already written, by an install that failed after it (a retry): prepare it as it stands. A failure
-                // deletes it only when nothing else holds it.
-                if (directory != liveDirectory() && directory !in pointed()) written = directory
-            }
-
-            StoreRead.Malformed, StoreRead.Absent -> {
-                if (directory == liveDirectory()) {
-                    val cause = IllegalStateException("$directory is the live generation's and its meta.json is not")
-                    return fail(SyncOutcome.STORE_FAILED, null, cause)
-                }
-                // A malformed or incomplete directory is replaced whole, so no file of an earlier attempt stays.
-                written = directory
-                store.deleteGeneration(directory)
-                store.writeGeneration(meta, generation.index, generation.deltas, generation.records)
-            }
+        val held = directory == liveDirectory() || directory in pointed()
+        val existing = store.readMeta(directory)
+        if (existing is StoreRead.Found &&
+            (existing.value != meta || !store.index(directory).contentEquals(generation.index))
+        ) {
+            return fail(SyncOutcome.STORE_FAILED, null, IllegalStateException("$directory holds another generation"))
         }
+        if (held) {
+            if (existing is StoreRead.Found) return null
+            val cause = IllegalStateException("$directory is live or pointed to, and its meta.json is not readable")
+            return fail(SyncOutcome.STORE_FAILED, null, cause)
+        }
+        // A malformed, incomplete or unreferenced directory is replaced whole, so no file of an earlier attempt stays.
+        written = directory
+        store.deleteGeneration(directory)
+        store.writeGeneration(meta, generation.index, generation.deltas, generation.records)
         return null
     }
 

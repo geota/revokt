@@ -367,8 +367,52 @@ class InstallTest {
             assertIs<InstallResult.Installed>(r, "meta=$meta")
             assertEquals(false, storage.names().contains("crlite/compat/$dir/stray"))
             assertEquals(p.meta, store.meta(dir))
+            storage.inner.delete("crlite/compat/current")
             store.deleteGeneration(dir)
         }
+    }
+
+    @Test
+    fun `a retry that fails before activate keeps the live directory the failed flip left unpointed`() {
+        val p = pending()
+        storage.fail = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        assertEquals(true, failed(install(p)).activated)
+        storage.fail = { null }
+        engine.onPrepare = { throw IllegalArgumentException("corrupt") }
+        val f = failed(install(pending()))
+        assertEquals(SyncStage.PREPARE, f.stage)
+        assertNotNull(store.readGeneration(p.meta.directory))
+        assertEquals("g1", engine.live)
+    }
+
+    @Test
+    fun `only a live or pointed directory is reused, and an orphan one is replaced whole`() {
+        val p = pending()
+        val dir = p.meta.directory
+        val delta = p.deltas.keys.single()
+        // An orphan holding this generation's meta json and index bin, with a delta that is not this generation's.
+        store.writeGeneration(p.meta, p.index, mapOf(delta to byteArrayOf(4, 0)), p.records)
+        storage.writes.clear()
+        assertIs<InstallResult.Installed>(install(pending()))
+        assertTrue("$dir/$delta" in storage.writes, "${storage.writes}")
+        assertTrue(p.deltas.getValue(delta).contentEquals(storage.inner.read("crlite/compat/$dir/$delta")))
+        // Pointed to (not live in a fresh snapshot): reused as it stands.
+        storage.writes.clear()
+        val r = install(pending(), engine, store, SnapshotRef(empty), publication, null, logger)
+        assertIs<InstallResult.Installed>(r)
+        assertEquals(listOf("current"), storage.writes)
+    }
+
+    @Test
+    fun `a pointed directory whose meta json is malformed is kept, as a newer binary's generation`() {
+        val p = pending()
+        assertIs<InstallResult.Installed>(install(p))
+        val key = "crlite/compat/${p.meta.directory}/meta.json"
+        storage.inner.write(key, "{\"metaVersion\":2}".encodeToByteArray())
+        val f = install(pending(), TestEngine(), store, SnapshotRef(empty), publication, null, logger)
+        assertEquals(SyncOutcome.STORE_FAILED, failed(f).outcome)
+        assertEquals("{\"metaVersion\":2}", storage.inner.read(key)?.decodeToString())
+        assertNotNull(storage.inner.read("crlite/compat/${p.meta.directory}/index.bin"))
     }
 
     @Test
