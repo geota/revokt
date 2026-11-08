@@ -133,7 +133,6 @@ class StoreJsonTest {
 
     @Test
     fun `a meta value that breaks the layout's rules is refused`() {
-        assertFailsWith<IllegalArgumentException> { StoreFixtures.meta(channel = "compat") }
         assertFailsWith<IllegalArgumentException> { StoreFixtures.meta(blobs = mapOf(full to blobs.values.single())) }
         assertFailsWith<IllegalArgumentException> {
             StoreFixtures.meta(

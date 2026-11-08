@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
@@ -35,7 +36,7 @@ internal object StoreFixtures {
         generationId: String = "g1",
         sourceTimestampMillis: Long = 1_762_430_400_000,
         blobs: Map<String, ByteString> = emptyMap(),
-        channel: String = "COMPAT",
+        channel: CrliteChannel = CrliteChannel.COMPAT,
     ): GenerationMeta =
         GenerationMeta(
             dataset = Dataset.CRLITE,
