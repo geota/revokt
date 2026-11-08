@@ -21,6 +21,7 @@ import dev.revokt.clubcard.port.CrliteClubcard
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.Window
 import dev.revokt.engine.store.GenerationMeta
+import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
@@ -87,10 +88,12 @@ internal sealed interface InstallResult {
     }
 
     /**
-     * [outcome] is `FAILED` or `STORE_FAILED`, at [stage], with [code] when the spec names one. [activated] is true
-     * only for a store failure after the publish (the pointer flip or `updater.json`): the engine and the snapshot hold
-     * the new generation, and its directory stays. Otherwise the engine, the snapshot and the pointer are untouched, and
-     * any directory this install wrote is deleted.
+     * [outcome] is `FAILED` or `STORE_FAILED`, at [stage], with [code] when the spec names one. [activated] is true when
+     * the failure came after `activate` returned: a store failure at the pointer flip or `updater.json` (`STORE_FAILED`
+     * at `STORE`, the snapshot published), or a fatal error such as an `OutOfMemoryError` while publishing (`FAILED` at
+     * `ACTIVATE`, the snapshot possibly not published). The engine then holds the new generation and its directory
+     * stays. Otherwise the engine, the snapshot and the pointer are untouched, and any directory this install wrote is
+     * deleted.
      */
     class Failed(
         val outcome: SyncOutcome,
@@ -171,11 +174,7 @@ private class Install(
         }
         stage = SyncStage.STORE
         val directory = meta.directory
-        if (store.readMeta(directory) != StoreRead.Absent) {
-            return fail(SyncOutcome.STORE_FAILED, null, IllegalStateException("$directory already holds a generation"))
-        }
-        written = directory
-        store.writeGeneration(meta, generation.index, generation.deltas, generation.records)
+        directory(directory)?.let { return it }
         val files =
             store.readGeneration(directory)?.files
                 ?: return fail(SyncOutcome.STORE_FAILED, null, IllegalStateException("$directory does not read back"))
@@ -187,6 +186,8 @@ private class Install(
                 return fail(SyncOutcome.FAILED, null, e)
             }
         val index = C2spIndex.read(files.bytes(StoreLayout.INDEX))
+        // 0.3 (§3.2, §11, the system cache): a SYSTEM index.bin that does not parse is STORE_UNREADABLE; today it fails
+        // writeGeneration above as STORE_FAILED, since no SYSTEM source exists in 0.2.
         if (!generation.indexBuilt) {
             stage = SyncStage.INDEX
             val mismatches = C2spIndex.inconsistencies(index, filters.mapValues { coverage(it.value) })
@@ -212,6 +213,49 @@ private class Install(
         updater?.let { store.writeUpdater(it, publication.nowMillis) }
         return InstallResult.Installed(directory, meta.generationId, epoch, storeFailures)
     }
+
+    /**
+     * Writes the generation directory, `meta.json` last, or returns the failure. A directory that already holds this
+     * generation (the same `meta.json` and `index.bin`, left by an install that failed after writing it) is prepared as
+     * it stands; one whose `meta.json` is malformed or missing is replaced whole, unless the engine holds it live; one
+     * holding another generation stays and fails the install.
+     */
+    private fun directory(directory: String): InstallResult? {
+        when (val existing = store.readMeta(directory)) {
+            is StoreRead.Found -> {
+                if (existing.value != meta || !store.index(directory).contentEquals(generation.index)) {
+                    val cause = IllegalStateException("$directory holds another generation")
+                    return fail(SyncOutcome.STORE_FAILED, null, cause)
+                }
+                // Already written, by an install that failed after it (a retry): prepare it as it stands. A failure
+                // deletes it only when nothing else holds it.
+                if (directory != liveDirectory() && directory !in pointed()) written = directory
+            }
+
+            StoreRead.Malformed, StoreRead.Absent -> {
+                if (directory == liveDirectory()) {
+                    val cause = IllegalStateException("$directory is the live generation's and its meta.json is not")
+                    return fail(SyncOutcome.STORE_FAILED, null, cause)
+                }
+                // A malformed or incomplete directory is replaced whole, so no file of an earlier attempt stays.
+                written = directory
+                store.deleteGeneration(directory)
+                store.writeGeneration(meta, generation.index, generation.deltas, generation.records)
+            }
+        }
+        return null
+    }
+
+    /** The directory of the generation the engine holds live for this dataset, as the snapshot published it. */
+    private fun liveDirectory(): String? {
+        val live = snapshot.snapshot.datasets[meta.dataset] ?: return null
+        val id = live.generationId ?: return null
+        return live.sourceTimestampMillis?.let { GenerationNames.directory(it, id) }
+    }
+
+    /** The directories the pointer names; none when it is absent or malformed (counted by [previous]). */
+    private fun pointed(): Set<String> =
+        (store.pointer() as? StoreRead.Found)?.value?.let { setOfNotNull(it.live, it.previous) }.orEmpty()
 
     /** The loader's own decode of every filter, for the self-check's reference evaluator and coverage. */
     private fun decode(files: GenerationFiles): Map<String, CrliteClubcard> =

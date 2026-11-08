@@ -137,7 +137,7 @@ class SelfCheckTest {
     }
 
     @Test
-    fun `the outside probe is low - 1 when high is the maximum, and an empty window is no inside SCT`() {
+    fun `the outside probe is low - 1 when high is the maximum, none for every timestamp, and empty is not inside`() {
         val max = -1L // u64::MAX
         val (inside, outside) = probes(UpdateFixtures.v4(listOf(log(1) to (10L to 5L), log(2) to (7L to max))))
         assertContentEquals(
@@ -158,12 +158,13 @@ class SelfCheckTest {
                 .single()
                 .timestampMillis,
         )
-        val wrapped = probes(UpdateFixtures.v4(listOf(log(1) to (0L to max))))[1]
+        // [0, MAX] leaves no timestamp outside: the outside probe is skipped and logged.
+        logger.messages.clear()
+        val full = probes(UpdateFixtures.v4(listOf(log(1) to (0L to max))))
+        assertEquals(listOf(ProbeKind.ABSENT_INSIDE), full.map { it.kind })
         assertEquals(
-            max,
-            wrapped.query.scts
-                .single()
-                .timestampMillis,
+            LogLevel.INFO to "engine self-check: f0 covers every timestamp, outside probe skipped",
+            logger.messages.first(),
         )
     }
 

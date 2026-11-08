@@ -76,10 +76,10 @@ internal sealed interface SelfCheckResult {
  *
  * Filters are iterated in `index.bin` filename order and each filter's index entries by ascending issuer hash. A
  * filter's inside SCT is (`logId`, `low`) of its first non-empty coverage entry in `index.bin` order (log directory
- * order, then entry order); its outside SCT is (`logId`, `high + 1`), or `low − 1` when `high` is the maximum. The
- * absent issuer is `SHA-256("revokt-self-check")`, its last byte incremented until no filter's index holds it; with
- * serial `0x01` and each filter's inside and outside SCT it must answer in the `{NOT_COVERED, NOT_ENROLLED, NO_SCTS}`
- * class (§3.2), so the upki engine passes.
+ * order, then entry order); its outside SCT is (`logId`, `high + 1`), or `low − 1` when `high` is the maximum, and
+ * none for a window of every timestamp. The absent issuer is `SHA-256("revokt-self-check")`, its last byte incremented
+ * until no filter's index holds it; with serial `0x01` and each filter's inside and outside SCT it must answer in the
+ * `{NOT_COVERED, NOT_ENROLLED, NO_SCTS}` class (§3.2), so the upki engine passes.
  *
  * The `REVOKED` probe takes the first branch that yields, each judged by the loader's own `revokt-clubcard` reference
  * evaluator against the block's filter under that filter's inside SCT: the first of the serials `0x01`..`0x1000`
@@ -143,7 +143,6 @@ internal object SelfCheck {
             )
         } else {
             for (t in tested) {
-                val outside = if (t.window.high == ULong.MAX_VALUE) t.window.low - 1u else t.window.high + 1u
                 out +=
                     Probe(
                         ProbeKind.ABSENT_INSIDE,
@@ -151,7 +150,21 @@ internal object SelfCheck {
                         query(absent, ONE, t.logId, t.window.low),
                         NOT_ENROLLED_CLASS,
                     )
-                out += Probe(ProbeKind.ABSENT_OUTSIDE, t.name, query(absent, ONE, t.logId, outside), NOT_ENROLLED_CLASS)
+                val outside = outside(t.window)
+                if (outside == null) {
+                    logger.safeLog(
+                        LogLevel.INFO,
+                        "engine self-check: ${t.name} covers every timestamp, outside probe skipped",
+                    )
+                } else {
+                    out +=
+                        Probe(
+                            ProbeKind.ABSENT_OUTSIDE,
+                            t.name,
+                            query(absent, ONE, t.logId, outside),
+                            NOT_ENROLLED_CLASS,
+                        )
+                }
             }
         }
         val revoked = revokedProbe(tested)
@@ -193,6 +206,14 @@ internal object SelfCheck {
             serial: ByteString,
         ): Probe = Probe(kind, name, query(issuer, serial, logId, window.low), setOf(CrliteQueryResult.REVOKED))
     }
+
+    /** `high + 1`, or `low − 1` when `high` is the maximum; null for `[0, MAX]`, which leaves no timestamp outside. */
+    private fun outside(window: Window): ULong? =
+        when {
+            window.high != ULong.MAX_VALUE -> window.high + 1u
+            window.low != 0uL -> window.low - 1u
+            else -> null
+        }
 
     /** The first non-empty entry for [name] in `index.bin` order: log directory order, then each section's order. */
     private fun inside(

@@ -181,6 +181,9 @@ internal class StoreLayout(
         return StoredGeneration(directory, meta, image)
     }
 
+    /** The `index.bin` in [directory], or null. */
+    fun index(directory: String): ByteArray? = storage.read(fileKey(directory, INDEX))
+
     /** The `records.json` of the `SIGNED` generation in [directory], or null. */
     fun records(directory: String): ByteArray? = storage.read(fileKey(directory, RECORDS))
 

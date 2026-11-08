@@ -17,8 +17,9 @@ import okio.ByteString
 
 /**
  * One Remote Settings CRLite record as [buildIndex] reads it (spec §6.5, §7.1): the schema-checked fields that place a
- * filter in a generation. [channel] is the record's wire name (`compat`, `default`); [filename] is its §6.3-checked
- * `attachment.filename`, which stays in the signed records only and maps to the file's name in the generation.
+ * filter in a generation. [channel] is the record's wire name ([CrliteChannel.wireName]); [filename] is its
+ * §6.3-checked `attachment.filename`, which stays in the signed records only and maps to the file's name in the
+ * generation.
  */
 internal class FilterRecord(
     val id: String,
@@ -114,7 +115,7 @@ internal fun buildIndex(
     channel: CrliteChannel,
     body: (FilterRecord) -> ByteArray,
 ): IndexBuild {
-    val wire = channel.name.lowercase()
+    val wire = channel.wireName
     val placed =
         records
             .filter { it.channel == wire }

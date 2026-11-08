@@ -306,16 +306,83 @@ class InstallTest {
     }
 
     @Test
-    fun `an install over a complete directory fails and leaves it in place`() {
+    fun `a retry over its own complete directory skips the write and installs`() {
+        val p = pending()
+        storage.fail = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        assertEquals(true, failed(install(p)).activated)
+        storage.fail = { null }
+        storage.writes.clear()
+        val r = assertIs<InstallResult.Installed>(install(pending()))
+        assertEquals(listOf("current", "updater.json"), storage.writes)
+        assertEquals(2, r.generationEpoch)
+        assertEquals(StoreRead.Found(Pointer(p.meta.directory, null)), store.pointer())
+        assertEquals("g1", engine.live)
+    }
+
+    @Test
+    fun `a failed retry deletes an orphan complete directory and keeps a pointed one`() {
+        val orphan = pending()
+        store.writeGeneration(orphan.meta, orphan.index, orphan.deltas, orphan.records)
+        engine.preparedAnswer = { CrliteQueryResult.NOT_REVOKED }
+        assertEquals(SyncStage.SELF_CHECK, failed(install(pending())).stage)
+        assertEquals(emptyList(), keysOf(orphan.meta.directory))
+        // Pointed to, but not live in this snapshot: a failure leaves it for recovery.
+        engine.preparedAnswer = null
+        val dir = assertIs<InstallResult.Installed>(install(pending())).directory
+        engine.preparedAnswer = { CrliteQueryResult.NOT_REVOKED }
+        val fresh = SnapshotRef(empty)
+        val f = install(pending(), engine, store, fresh, publication, null, logger)
+        assertEquals(SyncStage.SELF_CHECK, failed(f).stage)
+        assertNotNull(store.readGeneration(dir))
+        assertSame(empty, fresh.snapshot)
+    }
+
+    @Test
+    fun `a complete directory holding another meta json or index bin fails and stays`() {
+        val p = pending()
+        val other = p.meta.copy(collection = "security-state/other")
+        store.writeGeneration(other, p.index, p.deltas, p.records)
+        val f = failed(install(p))
+        assertEquals(SyncOutcome.STORE_FAILED, f.outcome)
+        assertEquals(SyncStage.STORE, f.stage)
+        assertEquals(other, store.meta(p.meta.directory))
+        store.deleteGeneration(p.meta.directory)
+        val padded = p.index + ByteArray(4)
+        store.writeGeneration(p.meta, padded, p.deltas, p.records)
+        assertEquals(SyncOutcome.STORE_FAILED, failed(install(p)).outcome)
+        assertTrue(padded.contentEquals(store.index(p.meta.directory)))
+        assertEquals(emptyList(), engine.prepared)
+    }
+
+    @Test
+    fun `a malformed or incomplete directory is replaced whole`() {
+        val p = pending()
+        val dir = p.meta.directory
+        for (meta in listOf("{".encodeToByteArray(), null)) {
+            storage.inner.write("crlite/compat/$dir/index.bin", byteArrayOf(1))
+            storage.inner.write("crlite/compat/$dir/stray", byteArrayOf(2))
+            if (meta != null) storage.inner.write("crlite/compat/$dir/meta.json", meta)
+            // A fresh snapshot each round, so the directory is not the live one.
+            val r = install(pending(), TestEngine(), store, SnapshotRef(empty), publication, null, logger)
+            assertIs<InstallResult.Installed>(r, "meta=$meta")
+            assertEquals(false, storage.names().contains("crlite/compat/$dir/stray"))
+            assertEquals(p.meta, store.meta(dir))
+            store.deleteGeneration(dir)
+        }
+    }
+
+    @Test
+    fun `the live generation's directory is never replaced, even with a malformed meta json`() {
         val p = pending()
         assertIs<InstallResult.Installed>(install(p))
         val published = snapshot.snapshot
+        val key = "crlite/compat/${p.meta.directory}/meta.json"
+        storage.inner.write(key, "{".encodeToByteArray())
         val f = failed(install(pending()))
         assertEquals(SyncOutcome.STORE_FAILED, f.outcome)
-        assertEquals(SyncStage.STORE, f.stage)
-        assertNotNull(store.readGeneration(p.meta.directory))
+        assertEquals("{", storage.inner.read(key)?.decodeToString())
         assertSame(published, snapshot.snapshot)
-        assertEquals(StoreRead.Found(Pointer(p.meta.directory, null)), store.pointer())
+        assertEquals("g1", engine.live)
     }
 
     @Test
