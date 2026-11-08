@@ -547,7 +547,8 @@ PGP fingerprint, a Gradle `trusted-key` snippet, `gh attestation verify`).
   next milestone opens: its `major.minor` is the current minor that `verifyRuleGrowability` holds new `Rule` rows and
   `ALLOW → REJECT` flips to (§4 growability, #73). The release workflow passes the tag's version instead. The contract
   starts afresh only in the PR whose base is on the previous major, so changes a new major makes to the fixture go in the
-  PR that bumps the major.
+  PR that bumps the major. The same PR sets `PolicyTable.CURRENT_MINOR` (revokt-engine) to the new `major.minor`: the
+  `flippedIn` grace rules read it, and `RevoktPolicyTest` fails while the two disagree.
 - **Release workflow** (never by hand): `workflow_dispatch` by a maintainer on `main` → build on the pinned
   toolchain → `apiCheck` and the golden-fixture diff rule (§4 growability) → reproducible-build check → SBOM →
   **`release` environment**, whose required reviewers are both maintainers with "Prevent self-review" on

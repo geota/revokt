@@ -597,6 +597,57 @@ public final class dev/revokt/RevoktLoggers {
 	public static final fun jul ()Ldev/revokt/RevoktLogger;
 }
 
+public final class dev/revokt/RevoktPolicy {
+	public static final field Companion Ldev/revokt/RevoktPolicy$Companion;
+	public static final field DEFAULT Ldev/revokt/RevoktPolicy;
+	public static final field STRICT Ldev/revokt/RevoktPolicy;
+	public synthetic fun <init> (Ldev/revokt/engine/policy/PolicyForm;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clockSkew ()Ljava/time/Duration;
+	public final fun exemption (Ldev/revokt/Rule;)Ldev/revokt/Exemption;
+	public final fun getClockSkewMillis ()J
+	public final fun getRequiredDatasets ()Ljava/util/Set;
+	public final fun getRollbackWindowMillis ()J
+	public final fun getSignedSourceFailingAfterMillis ()J
+	public final fun minTrustClass (Ldev/revokt/Dataset;)Ldev/revokt/TrustClass;
+	public final fun newBuilder ()Ldev/revokt/RevoktPolicy$Builder;
+	public final fun outcome (Ldev/revokt/Rule;)Ldev/revokt/Outcome;
+	public final fun rollbackWindow ()Ljava/time/Duration;
+	public final fun signedSourceFailingAfter ()Ljava/time/Duration;
+	public final fun staleness (Ldev/revokt/Dataset;)Ldev/revokt/Staleness;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/RevoktPolicy$Builder {
+	public synthetic fun <init> (Ldev/revokt/engine/policy/PolicyForm;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun build ()Ldev/revokt/RevoktPolicy;
+	public final fun clearExemption (Ldev/revokt/Rule;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun clearStaleness (Ldev/revokt/Dataset;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun clockSkew (Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun clockSkewMillis (J)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun exempt (Ldev/revokt/Rule;Ldev/revokt/Exemption;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun exemptAnchors (Ljava/util/Collection;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun minTrustClass (Ldev/revokt/Dataset;Ldev/revokt/TrustClass;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rejectStaleAfter (Ldev/revokt/Dataset;Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rejectStaleAfterMillis (Ldev/revokt/Dataset;Ljava/lang/Long;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun requiredDatasets (Ljava/util/Set;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rollbackWindow (Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rollbackWindowMillis (J)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rule (Ldev/revokt/Rule;Ldev/revokt/Outcome;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun signedSourceFailingAfter (Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun signedSourceFailingAfterMillis (J)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun staleness (Ldev/revokt/Dataset;Ldev/revokt/Staleness;)Ldev/revokt/RevoktPolicy$Builder;
+}
+
+public final class dev/revokt/RevoktPolicy$Companion {
+}
+
+public final class dev/revokt/RevoktPolicyKt {
+	public static final synthetic fun clockSkew-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
+	public static final synthetic fun rejectStaleAfter-moChb0s (Ldev/revokt/RevoktPolicy$Builder;Ldev/revokt/Dataset;Lkotlin/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public static final synthetic fun rollbackWindow-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
+	public static final synthetic fun signedSourceFailingAfter-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
+}
+
 public abstract interface class dev/revokt/RevoktStorage {
 	public static final field Companion Ldev/revokt/RevoktStorage$Companion;
 	public abstract fun delete (Ljava/lang/String;)V
@@ -685,6 +736,29 @@ public final class dev/revokt/Severity : java/lang/Enum {
 public abstract interface class dev/revokt/SignatureVerifier {
 	public abstract fun unsupportedOids ()Ljava/util/Set;
 	public abstract fun verify ([B[B[B[B)Ldev/revokt/VerifyResult;
+}
+
+public final class dev/revokt/Staleness {
+	public static final field Companion Ldev/revokt/Staleness$Companion;
+	public synthetic fun <init> (JLjava/lang/Long;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRejectStaleAfterMillis ()Ljava/lang/Long;
+	public final fun getStaleAfterMillis ()J
+	public fun hashCode ()I
+	public static final fun of (Ljava/time/Duration;Ljava/time/Duration;)Ldev/revokt/Staleness;
+	public static final fun ofMillis (JLjava/lang/Long;)Ldev/revokt/Staleness;
+	public final fun rejectStaleAfter ()Ljava/time/Duration;
+	public final fun staleAfter ()Ljava/time/Duration;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Staleness$Companion {
+	public final fun of (Ljava/time/Duration;Ljava/time/Duration;)Ldev/revokt/Staleness;
+	public final fun ofMillis (JLjava/lang/Long;)Ldev/revokt/Staleness;
+}
+
+public final class dev/revokt/StalenessKt {
+	public static final synthetic fun of-OxNrBVY (Ldev/revokt/Staleness$Companion;JLkotlin/time/Duration;)Ldev/revokt/Staleness;
 }
 
 public final class dev/revokt/StoreLockedException : java/lang/RuntimeException {
