@@ -17,8 +17,9 @@ public fun interface Exemption {
     public fun isExempt(context: ExemptionContext): Boolean
 
     /**
-     * The shipped helpers (§4), for the enterprise-CA case without a hand-written lambda. They live in this commonMain
-     * file because a companion cannot straddle source sets.
+     * The shipped helpers (§4), for the enterprise-CA and §5.2-gap cases without a hand-written lambda; combine them
+     * with `and` and `or` (Exemptions.kt). They live in this commonMain file because a companion cannot straddle
+     * source sets.
      */
     public companion object {
         /**
@@ -31,6 +32,57 @@ public fun interface Exemption {
         public fun anchorIn(sha256s: Collection<ByteArray>): Exemption {
             val anchors: Set<ByteString> = buildSet { sha256s.forEach { add(it.toByteString()) } }
             return Exemption { context -> context.path.anchorSha256?.toByteString() in anchors }
+        }
+
+        /**
+         * Exempt when the host is one of [hosts]. Both sides are compared as host' (§5.1 flow step 2): lowercased, one
+         * trailing dot stripped. [hosts] is copied when the exemption is made. A null `context.host` never matches. On
+         * an HTTP/2-coalesced connection the host is the one OkHttp handshook for (§5.1).
+         */
+        @JvmStatic
+        public fun hostIn(hosts: Collection<String>): Exemption {
+            val names: Set<String> = buildSet { hosts.forEach { add(hostPrime(it)) } }
+            return Exemption { context -> context.host?.let(::hostPrime) in names }
+        }
+
+        /**
+         * Exempt when host' equals one of [suffixes] or ends with `"." + suffix`, both sides compared as host', as for
+         * [hostIn]: a private CA serves many subdomains, so `"corp"` matches `"a.corp"` but not `"acorp"`. [suffixes]
+         * is copied when the exemption is made. A null `context.host` never matches.
+         */
+        @JvmStatic
+        public fun hostSuffixIn(suffixes: Collection<String>): Exemption {
+            val names: Set<String> = buildSet { suffixes.forEach { add(hostPrime(it)) } }
+            return Exemption { context -> context.host?.let { hasSuffixIn(hostPrime(it), names) } == true }
+        }
+
+        /**
+         * Exempt when the reported reason is `NoIssuerReason.PLATFORM_ONLY`: the platform accepted a chain revokt's
+         * walker could not anchor (§5.2). On its own it exempts every such chain for every host, so the enterprise
+         * recipe pairs it with [hostSuffixIn] (§8).
+         */
+        @JvmStatic
+        public fun platformOnly(): Exemption = PLATFORM_ONLY
+
+        private val PLATFORM_ONLY = Exemption { context -> context.path.noIssuerReason == NoIssuerReason.PLATFORM_ONLY }
+
+        /** host' (§5.1 flow step 2): lowercased, one trailing dot stripped. */
+        private fun hostPrime(host: String): String = host.lowercase().removeSuffix(".")
+
+        /**
+         * Whether [host] equals a suffix in [suffixes] or ends with `"." + suffix`. [host] itself, then what follows
+         * each of its dots, is looked up, so the cost is one lookup per label whatever the number of suffixes.
+         */
+        private fun hasSuffixIn(
+            host: String,
+            suffixes: Set<String>,
+        ): Boolean {
+            var dot = -1
+            do {
+                if (host.substring(dot + 1) in suffixes) return true
+                dot = host.indexOf('.', dot + 1)
+            } while (dot >= 0)
+            return false
         }
     }
 }

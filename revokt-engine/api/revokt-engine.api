@@ -133,14 +133,41 @@ public final class dev/revokt/EngineErrorProducer : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/EngineErrorProducer;
 }
 
+public final class dev/revokt/EvaluationRequest {
+	public synthetic fun <init> (Ldev/revokt/EvaluationRequest$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun newBuilder ()Ldev/revokt/EvaluationRequest$Builder;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/EvaluationRequest$Builder {
+	public fun <init> ()V
+	public final fun build ()Ldev/revokt/EvaluationRequest;
+	public final fun host (Ljava/lang/String;)Ldev/revokt/EvaluationRequest$Builder;
+	public final fun nowMillis (J)Ldev/revokt/EvaluationRequest$Builder;
+	public final fun presented (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
+	public final fun verifiedPaths (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
+}
+
+public abstract interface class dev/revokt/Evaluator {
+	public abstract fun evaluate (Ldev/revokt/EvaluationRequest;)Ldev/revokt/Verdict;
+}
+
 public abstract interface class dev/revokt/Exemption {
 	public static final field Companion Ldev/revokt/Exemption$Companion;
 	public static fun anchorIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public static fun hostIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public static fun hostSuffixIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
 	public abstract fun isExempt (Ldev/revokt/ExemptionContext;)Z
+	public static fun platformOnly ()Ldev/revokt/Exemption;
 }
 
 public final class dev/revokt/Exemption$Companion {
 	public final fun anchorIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public final fun hostIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public final fun hostSuffixIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public final fun platformOnly ()Ldev/revokt/Exemption;
 }
 
 public final class dev/revokt/ExemptionContext {
@@ -155,6 +182,11 @@ public final class dev/revokt/ExemptionContext {
 	public final fun getRule ()Ldev/revokt/Rule;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Exemptions {
+	public static final fun and (Ldev/revokt/Exemption;Ldev/revokt/Exemption;)Ldev/revokt/Exemption;
+	public static final fun or (Ldev/revokt/Exemption;Ldev/revokt/Exemption;)Ldev/revokt/Exemption;
 }
 
 public final class dev/revokt/FallbackReason : java/lang/Enum {
@@ -760,6 +792,44 @@ public final class dev/revokt/TrustClass : java/lang/Enum {
 	public final fun getRank ()I
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/TrustClass;
 	public static fun values ()[Ldev/revokt/TrustClass;
+}
+
+public abstract interface class dev/revokt/Verdict {
+	public abstract fun getCrlite ()Ldev/revokt/Finding$Crlite;
+	public abstract fun getDataStates ()Ljava/util/Map;
+	public abstract fun getElapsedNanos ()J
+	public abstract fun getFindings ()Ljava/util/List;
+	public abstract fun getPath ()Ldev/revokt/Finding$Path;
+	public abstract fun getRule ()Ldev/revokt/Rule;
+	public abstract fun getRules ()Ljava/util/Set;
+}
+
+public final class dev/revokt/Verdict$Accepted : dev/revokt/Verdict {
+	public synthetic fun <init> (Ldev/revokt/Verdict$Accepted$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCrlite ()Ldev/revokt/Finding$Crlite;
+	public fun getDataStates ()Ljava/util/Map;
+	public fun getElapsedNanos ()J
+	public fun getFindings ()Ljava/util/List;
+	public fun getPath ()Ldev/revokt/Finding$Path;
+	public fun getRule ()Ldev/revokt/Rule;
+	public fun getRules ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Verdict$Rejected : dev/revokt/Verdict {
+	public synthetic fun <init> (Ldev/revokt/Verdict$Rejected$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCrlite ()Ldev/revokt/Finding$Crlite;
+	public fun getDataStates ()Ljava/util/Map;
+	public fun getElapsedNanos ()J
+	public fun getFindings ()Ljava/util/List;
+	public fun getPath ()Ldev/revokt/Finding$Path;
+	public fun getRule ()Ldev/revokt/Rule;
+	public fun getRules ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class dev/revokt/VerifyResult : java/lang/Enum {
