@@ -50,18 +50,6 @@ internal class LiveGeneration(
 }
 
 /**
- * One filter of a candidate generation, for the §6.3 coverage tests: the latest coverage [high] of any log it covers,
- * unsigned as decoded, null when it covers none; and for a `SIGNED` generation the `last_modified` of the signed record
- * that carried it ([recordLastModifiedMillis], null for `MIRROR` and `SYSTEM`).
- */
-internal class FilterCoverage(
-    val high: ULong?,
-    val recordLastModifiedMillis: Long?,
-) {
-    override fun toString(): String = "FilterCoverage(high=$high, record=$recordLastModifiedMillis)"
-}
-
-/**
  * The clock and policy inputs of [SyncRules]: local [nowMillis] and the policy's `clockSkew` and `rollbackWindow`
  * (`RevoktPolicy`, §4), each a non-negative duration.
  */
@@ -87,7 +75,9 @@ internal class SyncClock(
  * channel. Every input is a value the caller passes: the changeset's signed `<ts>` ([signedTimestampMillis], the
  * verified envelope `timestamp` the client returns in `Changeset`, #181; never `pollChanges`' `last_modified`), the
  * dataset's watermark from `updater.json`, the [LiveGeneration] from the published snapshot (null when the dataset has
- * none: no stored generation, no seed) and the [SyncClock]. Nothing here reads the snapshot, the store or the engine.
+ * none: no stored generation, no seed) and the [SyncClock]. The candidate generation's coverage is `coverageHighs`:
+ * the latest coverage `high` of each filter, unsigned as decoded; a filter that covers no log contributes none. Nothing
+ * here reads the snapshot, the store or the engine.
  *
  * The coverage tests need the filter bodies, so the decision runs in two phases: [admit] before any body is fetched,
  * and [decide] once every filter's coverage is known, which repeats [admit] and adds the coverage tests. Their order:
@@ -135,69 +125,66 @@ internal object SyncRules {
     }
 
     /**
-     * The decision for a changeset whose candidate generation's filters are [filters]: [admit], then the `SIGNED`
+     * The decision for a changeset whose candidate generation's coverage is [coverageHighs]: [admit], then the `SIGNED`
      * coverage bound, then the coverage-monotonic rule inside the window.
      */
     fun decide(
         signedTimestampMillis: Long,
         watermarkMillis: Long?,
         live: LiveGeneration?,
-        filters: List<FilterCoverage>,
+        coverageHighs: List<ULong>,
         clock: SyncClock,
     ): SyncDecision {
         val admitted = admit(signedTimestampMillis, watermarkMillis, live, clock)
         if (admitted != SyncDecision.INSTALL && admitted != SyncDecision.INSTALL_CLOCK_BEHIND) return admitted
-        if (!coverageWithinBound(TrustClass.SIGNED, filters, clock)) return SyncDecision.FAILED
+        if (!coverageWithinBound(TrustClass.SIGNED, coverageHighs, signedTimestampMillis, clock)) {
+            return SyncDecision.FAILED
+        }
         val insideWindow = watermarkMillis != null && signedTimestampMillis <= watermarkMillis
         if (insideWindow && live != null && live.trustClass == TrustClass.SIGNED) {
             val liveMax = live.maxCoverageMillis
-            if (liveMax != null && !coverageAtLeast(filters, liveMax)) return SyncDecision.ROLLBACK_REFUSED
+            if (liveMax != null && !coverageAtLeast(coverageHighs, liveMax)) return SyncDecision.ROLLBACK_REFUSED
         }
         return admitted
     }
 
     /**
-     * Spec §6.3's coverage bound for a generation of [trustClass], one function for every class: `SIGNED`, no filter's
-     * coverage `high` is later than its own signed record's `last_modified` + `clockSkew` (each filter against the
-     * record that carried it, the reading closest to "the signed record's `last_modified`" when a changeset holds a
-     * full and its deltas); `MIRROR` and `SYSTEM`, none is later than local now + `clockSkew`. A `high` is compared
-     * unsigned, so one past [Long.MAX_VALUE] is beyond every bound. A `SIGNED` filter without its record's
-     * `last_modified` fails. `BUNDLED` has no source in this dataset and is refused.
+     * Spec §6.3's coverage bound for a generation of [trustClass], one function for every class: `SIGNED`, no coverage
+     * `high` is later than the changeset's signed `<ts>` ([signedTimestampMillis]) + `clockSkew` ("the timestamp compared
+     * everywhere here (…, coverage bound, `CLOCK_SKEW`) is the signed `<ts>`"); `MIRROR` and `SYSTEM`, none is later
+     * than local now + `clockSkew`, with no [signedTimestampMillis]. A `high` is compared unsigned, so one past
+     * [Long.MAX_VALUE] is beyond every bound. `BUNDLED` has no source in this dataset and is refused.
      *
      * The `MIRROR` and `SYSTEM` branch has no caller in 0.2 (no such source before 0.3, §11): it is kept, tested here,
      * and must survive the dead-code pass (#150).
      */
     fun coverageWithinBound(
         trustClass: TrustClass,
-        filters: List<FilterCoverage>,
+        coverageHighs: List<ULong>,
+        signedTimestampMillis: Long?,
         clock: SyncClock,
     ): Boolean {
         require(trustClass != TrustClass.BUNDLED) { "no BUNDLED source carries CRLite coverage" }
-        return filters.all { f ->
-            val high = f.high ?: return@all true
-            val bound =
-                if (trustClass == TrustClass.SIGNED) {
-                    val lastModified = f.recordLastModifiedMillis ?: return@all false
-                    saturatingAdd(lastModified, clock.clockSkewMillis)
-                } else {
-                    clock.futureBoundMillis
-                }
-            bound >= 0 && high <= bound.toULong()
+        require((trustClass == TrustClass.SIGNED) == (signedTimestampMillis != null)) {
+            "the signed <ts> is given exactly for SIGNED"
         }
+        val bound =
+            if (signedTimestampMillis != null) {
+                saturatingAdd(signedTimestampMillis, clock.clockSkewMillis)
+            } else {
+                clock.futureBoundMillis
+            }
+        return coverageHighs.all { bound >= 0 && it <= bound.toULong() }
     }
 
     /**
-     * Whether the candidate's maximum coverage is at least [liveMaxMillis]: some filter's `high`, clamped to
-     * [Long.MAX_VALUE] as `coverageEndMillis` is, reaches it. A candidate that covers no log is below any live coverage.
+     * Whether the candidate's maximum coverage is at least [liveMaxMillis]: some `high`, clamped to [Long.MAX_VALUE] as
+     * `coverageEndMillis` is, reaches it. A candidate that covers no log is below any live coverage.
      */
     private fun coverageAtLeast(
-        filters: List<FilterCoverage>,
+        coverageHighs: List<ULong>,
         liveMaxMillis: Long,
-    ): Boolean =
-        filters.any { f ->
-            val high = f.high ?: return@any false
-            minOf(high, Long.MAX_VALUE.toULong()).toLong() >= liveMaxMillis
-        }
+    ): Boolean = coverageHighs.any { minOf(it, Long.MAX_VALUE.toULong()).toLong() >= liveMaxMillis }
 
     /**
      * Whether [timestamp] is older than [watermark] by [window] or more (§7.1: "older by less than `rollbackWindow`

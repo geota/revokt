@@ -36,19 +36,16 @@ class SyncRulesTest {
         trustClass: TrustClass = TrustClass.SIGNED,
     ) = LiveGeneration(trustClass, ts, maxCoverage)
 
-    /** One filter whose latest `high` is [high], carried by a record of [lastModified] (default: [now]). */
-    private fun filter(
-        high: Long?,
-        lastModified: Long? = now,
-    ) = FilterCoverage(high?.toULong(), lastModified)
+    /** A candidate generation's coverage: the latest `high` of each filter that covers a log. */
+    private fun cov(vararg highs: Long): List<ULong> = highs.map { it.toULong() }
 
     private fun decide(
         ts: Long,
-        filters: List<FilterCoverage>,
+        coverageHighs: List<ULong>,
         live: LiveGeneration? = live(),
         watermark: Long? = this.watermark,
         clock: SyncClock = this.clock,
-    ) = SyncRules.decide(ts, watermark, live, filters, clock)
+    ) = SyncRules.decide(ts, watermark, live, coverageHighs, clock)
 
     private fun admit(
         ts: Long,
@@ -57,10 +54,22 @@ class SyncRulesTest {
         clock: SyncClock = this.clock,
     ) = SyncRules.admit(ts, watermark, live, clock)
 
+    private fun signedBound(
+        ts: Long,
+        coverageHighs: List<ULong>,
+        clock: SyncClock = this.clock,
+    ) = SyncRules.coverageWithinBound(TrustClass.SIGNED, coverageHighs, ts, clock)
+
+    private fun mirrorBound(
+        trustClass: TrustClass,
+        coverageHighs: List<ULong>,
+        clock: SyncClock = this.clock,
+    ) = SyncRules.coverageWithinBound(trustClass, coverageHighs, null, clock)
+
     @Test
     fun `data-path (a) a changeset older than the watermark by the window or more is ROLLBACK_REFUSED`() {
         // An older changeset with more coverage than the live one: only the window decides.
-        val more = listOf(filter(coverage + hour))
+        val more = cov(coverage + hour)
         assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(watermark - day, more))
         assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(watermark - day - 1, more))
         assertEquals(SyncDecision.INSTALL, decide(watermark - day + 1, more))
@@ -80,112 +89,98 @@ class SyncRulesTest {
     @Test
     fun `data-path (a) inside the window a lower maximum coverage is ROLLBACK_REFUSED and an equal one installs`() {
         val older = watermark - hour
-        assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(older, listOf(filter(coverage - 1))))
-        assertEquals(SyncDecision.INSTALL, decide(older, listOf(filter(coverage))))
-        assertEquals(SyncDecision.INSTALL, decide(older, listOf(filter(coverage + 1))))
+        assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(older, cov(coverage - 1)))
+        assertEquals(SyncDecision.INSTALL, decide(older, cov(coverage)))
+        assertEquals(SyncDecision.INSTALL, decide(older, cov(coverage + 1)))
         // The maximum over every filter counts, not the first or the last.
-        assertEquals(SyncDecision.INSTALL, decide(older, listOf(filter(1), filter(coverage), filter(2))))
-        assertEquals(
-            SyncDecision.ROLLBACK_REFUSED,
-            decide(older, listOf(filter(1), filter(coverage - 1), filter(null))),
-        )
+        assertEquals(SyncDecision.INSTALL, decide(older, cov(1, coverage, 2)))
+        assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(older, cov(1, coverage - 1, 2)))
         // A candidate that covers no log is below any live coverage.
-        assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(older, listOf(filter(null))))
         assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(older, emptyList()))
         // At the watermark itself (`timestamp ≤ watermark`), still inside the window.
-        assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(watermark, listOf(filter(coverage - 1)), live(ts = older)))
-        assertEquals(SyncDecision.INSTALL, decide(watermark, listOf(filter(coverage)), live(ts = older)))
+        assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(watermark, cov(coverage - 1), live(ts = older)))
+        assertEquals(SyncDecision.INSTALL, decide(watermark, cov(coverage), live(ts = older)))
         // The bound is the live SIGNED generation's: none for a MIRROR live generation or an unknown coverage.
-        val low = listOf(filter(1))
+        val low = cov(1)
         assertEquals(SyncDecision.INSTALL, decide(older, low, live(trustClass = TrustClass.MIRROR)))
         assertEquals(SyncDecision.INSTALL, decide(older, low, live(maxCoverage = null)))
         assertEquals(SyncDecision.INSTALL, decide(older, low, live = null))
         // A live coverage at Long.MAX_VALUE (an open-ended window, clamped) is reached only by a filter as high.
         val open = live(maxCoverage = Long.MAX_VALUE)
         val farClock = SyncClock(now, Long.MAX_VALUE, day)
-        assertEquals(SyncDecision.INSTALL, decide(older, listOf(filter(Long.MAX_VALUE)), open, clock = farClock))
-        assertEquals(
-            SyncDecision.ROLLBACK_REFUSED,
-            decide(older, listOf(filter(Long.MAX_VALUE - 1)), open, clock = farClock),
-        )
+        assertEquals(SyncDecision.INSTALL, decide(older, cov(Long.MAX_VALUE), open, clock = farClock))
+        assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(older, cov(Long.MAX_VALUE - 1), open, clock = farClock))
     }
 
     @Test
     fun `data-path (a) a newer changeset with lower coverage installs and advances the watermark`() {
         val newer = watermark + 1
-        assertEquals(SyncDecision.INSTALL, decide(newer, listOf(filter(1))))
-        assertEquals(SyncDecision.INSTALL, decide(newer, listOf(filter(null))))
+        assertEquals(SyncDecision.INSTALL, decide(newer, cov(1)))
+        assertEquals(SyncDecision.INSTALL, decide(newer, emptyList()))
         val record = UpdaterTransitions.after(updater(), RS, SyncOutcome.INSTALLED, now, signedTimestampMillis = newer)
         assertEquals(newer, record.watermarkMillis)
         assertEquals(newer, record.sources.getValue(RS).lastVerifiedLastModified)
         // No watermark yet (no seed, nothing installed): every changeset is newer.
-        assertEquals(SyncDecision.INSTALL, decide(Long.MIN_VALUE, listOf(filter(1)), watermark = null))
+        assertEquals(SyncDecision.INSTALL, decide(Long.MIN_VALUE, emptyList(), watermark = null))
     }
 
     @Test
-    fun `data-path (b) SIGNED coverage high beyond last_modified + clockSkew is FAILED at stage INDEX`() {
-        val lm = now - 3 * hour
-        assertEquals(SyncDecision.INSTALL, decide(watermark + 1, listOf(filter(lm + day, lm))))
-        assertEquals(SyncDecision.FAILED, decide(watermark + 1, listOf(filter(lm + day + 1, lm))))
+    fun `data-path (b) SIGNED coverage high beyond the signed ts + clockSkew is FAILED at stage INDEX`() {
+        val ts = watermark + 1
+        assertEquals(SyncDecision.INSTALL, decide(ts, cov(ts + day)))
+        assertEquals(SyncDecision.FAILED, decide(ts, cov(ts + day + 1)))
+        assertEquals(SyncDecision.FAILED, decide(ts, cov(1, ts + day + 1, 2)))
         assertEquals(SyncStage.INDEX, SyncDecision.FAILED.stage)
-        assertTrue(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(filter(lm + day, lm)), clock))
-        assertFalse(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(filter(lm + day + 1, lm)), clock))
-        // Each filter against its own record: a full from an older record cannot borrow a delta's later last_modified.
-        val full = filter(lm + day + 1, lm)
-        val delta = filter(lm + day + 1, lm + hour)
-        assertTrue(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(delta), clock))
-        assertFalse(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(delta, full), clock))
+        assertTrue(signedBound(ts, cov(ts + day)))
+        assertFalse(signedBound(ts, cov(ts + day + 1)))
+        // The bound is the signed <ts>, not local now: a changeset an hour old bounds coverage an hour earlier.
+        assertFalse(signedBound(now - hour, cov(now + day)))
+        assertTrue(signedBound(now + hour, cov(now + day + hour)))
         // The bound precedes the coverage-monotonic rule inside the window.
-        assertEquals(SyncDecision.FAILED, decide(watermark - hour, listOf(filter(coverage - 1), full)))
-        // A filter that covers no log has nothing to bound; a SIGNED filter without its record's last_modified fails.
-        assertTrue(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(filter(null, null)), clock))
-        assertFalse(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(filter(0, null)), clock))
-        // The sum saturates; a high past Long.MAX_VALUE, compared unsigned, is beyond it.
-        val top = Long.MAX_VALUE - 5
-        assertTrue(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(filter(Long.MAX_VALUE, top)), clock))
-        val past = FilterCoverage(Long.MAX_VALUE.toULong() + 1u, top)
-        assertFalse(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(past), clock))
-        assertFalse(
-            SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(FilterCoverage(ULong.MAX_VALUE, top)), clock),
-        )
-        // A bound below 0 (a record before 1970 − clockSkew) admits no coverage at all.
-        assertFalse(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(filter(0, -day - 1)), clock))
-        assertTrue(SyncRules.coverageWithinBound(TrustClass.SIGNED, listOf(filter(0, -day)), clock))
-        assertTrue(SyncRules.coverageWithinBound(TrustClass.SIGNED, emptyList(), clock))
-    }
-
-    @Test
-    fun `data-path (b) MIRROR coverage beyond now + clockSkew is FAILED, asserted on the coverage function`() {
-        // Maintainer decision (2026-11-05): no MIRROR source before 0.3, so this is asserted at the function.
-        for (trustClass in listOf(TrustClass.MIRROR, TrustClass.SYSTEM)) {
-            // The record's last_modified plays no part: a mirror's bound is local now + clockSkew.
-            assertTrue(SyncRules.coverageWithinBound(trustClass, listOf(filter(now + day, now - 9 * day)), clock))
-            assertFalse(SyncRules.coverageWithinBound(trustClass, listOf(filter(now + day + 1, null)), clock))
-            assertTrue(SyncRules.coverageWithinBound(trustClass, listOf(filter(null, null), filter(now, null)), clock))
-            assertFalse(
-                SyncRules.coverageWithinBound(trustClass, listOf(filter(now, null), filter(now + day + 1)), clock),
-            )
-            val saturated = SyncClock(Long.MAX_VALUE - 1, day, day)
-            assertTrue(SyncRules.coverageWithinBound(trustClass, listOf(filter(Long.MAX_VALUE, null)), saturated))
-            val past = FilterCoverage(Long.MAX_VALUE.toULong() + 1u, null)
-            assertFalse(SyncRules.coverageWithinBound(trustClass, listOf(past), saturated))
-            assertFalse(
-                SyncRules.coverageWithinBound(trustClass, listOf(filter(0, null)), SyncClock(-day - 1, day, day)),
-            )
-        }
+        val older = watermark - hour
+        assertEquals(SyncDecision.FAILED, decide(older, cov(coverage - 1, older + day + 1)))
+        // No coverage has nothing to bound; the sum saturates; a high past Long.MAX_VALUE, compared unsigned, is beyond.
+        assertTrue(signedBound(ts, emptyList()))
+        assertTrue(signedBound(Long.MAX_VALUE - 5, cov(Long.MAX_VALUE)))
+        assertFalse(signedBound(Long.MAX_VALUE - 5, listOf(Long.MAX_VALUE.toULong() + 1u)))
+        assertFalse(signedBound(Long.MAX_VALUE - 5, listOf(ULong.MAX_VALUE)))
+        // A bound below 0 (a <ts> before 1970 − clockSkew) admits no coverage at all.
+        assertFalse(signedBound(-day - 1, cov(0)))
+        assertTrue(signedBound(-day, cov(0)))
         assertFailsWith<IllegalArgumentException> {
             SyncRules.coverageWithinBound(
-                TrustClass.BUNDLED,
-                emptyList(),
+                TrustClass.SIGNED,
+                cov(0),
+                null,
                 clock,
             )
         }
     }
 
     @Test
+    fun `data-path (b) MIRROR coverage beyond now + clockSkew is FAILED, asserted on the coverage function`() {
+        // Maintainer decision (2026-11-05): no MIRROR source before 0.3, so this is asserted at the function.
+        for (trustClass in listOf(TrustClass.MIRROR, TrustClass.SYSTEM)) {
+            assertTrue(mirrorBound(trustClass, cov(now + day)), "$trustClass")
+            assertFalse(mirrorBound(trustClass, cov(now + day + 1)), "$trustClass")
+            assertTrue(mirrorBound(trustClass, cov(1, now, now + day)), "$trustClass")
+            assertFalse(mirrorBound(trustClass, cov(now, now + day + 1, 1)), "$trustClass")
+            assertTrue(mirrorBound(trustClass, emptyList()), "$trustClass")
+            val saturated = SyncClock(Long.MAX_VALUE - 1, day, day)
+            assertTrue(mirrorBound(trustClass, cov(Long.MAX_VALUE), saturated), "$trustClass")
+            assertFalse(mirrorBound(trustClass, listOf(Long.MAX_VALUE.toULong() + 1u), saturated), "$trustClass")
+            assertFalse(mirrorBound(trustClass, cov(0), SyncClock(-day - 1, day, day)), "$trustClass")
+            assertTrue(mirrorBound(trustClass, cov(0), SyncClock(-day, day, day)), "$trustClass")
+            // A mirror never carries a signed <ts>.
+            assertFailsWith<IllegalArgumentException> { SyncRules.coverageWithinBound(trustClass, cov(0), now, clock) }
+        }
+        assertFailsWith<IllegalArgumentException> { mirrorBound(TrustClass.BUNDLED, emptyList()) }
+    }
+
+    @Test
     fun `a changeset 25 h ahead of a live generation that is not clockBehind is CLOCK_SKEW until within clockSkew`() {
         val ahead = now + 25 * hour
-        val good = listOf(filter(coverage, ahead))
+        val good = cov(coverage)
         assertEquals(SyncDecision.CLOCK_SKEW, decide(ahead, good))
         assertEquals(SyncDecision.CLOCK_SKEW, admit(ahead))
         assertEquals(SyncStage.CHANGESET, SyncDecision.CLOCK_SKEW.stage)
@@ -212,7 +207,7 @@ class SyncRulesTest {
     @Test
     fun `the same changeset against no generation installs with clockBehind, watermark and cursor unchanged`() {
         val ahead = now + 25 * hour
-        val good = listOf(filter(coverage, ahead))
+        val good = cov(coverage)
         assertEquals(SyncDecision.INSTALL_CLOCK_BEHIND, decide(ahead, good, live = null, watermark = null))
         assertEquals(SyncDecision.INSTALL_CLOCK_BEHIND, decide(ahead, good, live = null))
         assertNull(SyncDecision.INSTALL_CLOCK_BEHIND.stage)
@@ -233,7 +228,7 @@ class SyncRulesTest {
         assertEquals(SyncDecision.UNCHANGED, decide(ahead, good, live(ts = ahead), watermark = null))
         // The carve-out is still under the rollback guard and the coverage rules.
         assertEquals(SyncDecision.ROLLBACK_REFUSED, admit(ahead, live = null, watermark = ahead + day))
-        assertEquals(SyncDecision.FAILED, decide(ahead, listOf(filter(ahead + day + 1, ahead)), live = null))
+        assertEquals(SyncDecision.FAILED, decide(ahead, cov(ahead + day + 1), live = null))
     }
 
     @Test
@@ -241,7 +236,7 @@ class SyncRulesTest {
         val ahead = now + 25 * hour
         assertEquals(
             SyncDecision.UNCHANGED,
-            decide(ahead, listOf(filter(coverage)), live(ts = ahead), watermark = ahead),
+            decide(ahead, cov(coverage), live(ts = ahead), watermark = ahead),
         )
         assertEquals(SyncDecision.UNCHANGED, admit(ahead, live(ts = ahead), watermark = null))
         assertEquals(SyncDecision.UNCHANGED, admit(watermark))
@@ -267,6 +262,10 @@ class SyncRulesTest {
         assertEquals(SyncDecision.CLOCK_SKEW, admit(now + 30 * hour, live(ts = now + day)))
         // A clock corrected since the last publish closes it at once.
         assertEquals(SyncDecision.CLOCK_SKEW, admit(liveTs + 2 * day, behind, clock = SyncClock(now + hour, day, day)))
+        // A MIRROR live generation never matches UNCHANGED; a future changeset at its timestamp is not newer either.
+        val mirror = live(ts = liveTs, maxCoverage = null, trustClass = TrustClass.MIRROR)
+        assertEquals(SyncDecision.CLOCK_SKEW, admit(liveTs, mirror))
+        assertEquals(SyncDecision.INSTALL_CLOCK_BEHIND, admit(liveTs + 1, mirror))
         // A changeset within clockSkew of a clockBehind live generation is an ordinary install or refusal.
         assertEquals(SyncDecision.INSTALL, admit(now, behind, watermark = now - 1))
     }
