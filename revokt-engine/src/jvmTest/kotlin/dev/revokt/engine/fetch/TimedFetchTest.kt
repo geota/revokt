@@ -9,6 +9,7 @@ import dev.revokt.FetchResponse
 import dev.revokt.HttpFetcher
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.SyncStage
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.lang.reflect.Proxy
@@ -38,7 +39,7 @@ class TimedFetchTest {
     private fun client(
         fetcher: HttpFetcher,
         timeoutMillis: Long = 200,
-        io: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
+        io: CoroutineDispatcher = Dispatchers.IO,
     ) = RemoteSettingsClient(
         MozillaRemoteSettings.DEFAULT,
         Dataset.CRLITE,
@@ -142,7 +143,10 @@ class TimedFetchTest {
     }
 
     @Test
-    fun `an inline dispatcher keeps an interrupt meant for the caller`() {
+    fun `an inline dispatcher keeps an interrupt meant for the caller`() = inlineCallerKeepsInterrupt()
+
+    /** The dispatcher is injected, as the engine's is: [inline] runs the fetch on the calling thread. */
+    private fun inlineCallerKeepsInterrupt(inline: CoroutineDispatcher = Dispatchers.Unconfined) {
         val fetcher =
             HttpFetcher {
                 // The fetch runs on the caller's thread: this is the caller being interrupted, by close() say.
@@ -150,7 +154,7 @@ class TimedFetchTest {
                 ok(monitor)
             }
         try {
-            assertEquals(42, client(fetcher, io = Dispatchers.Unconfined).pollChanges().assertOk())
+            assertEquals(42, client(fetcher, io = inline).pollChanges().assertOk())
             assertTrue(Thread.currentThread().isInterrupted, "the caller's interrupt was cleared")
         } finally {
             Thread.interrupted()

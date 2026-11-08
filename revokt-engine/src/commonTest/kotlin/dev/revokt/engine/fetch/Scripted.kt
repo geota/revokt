@@ -11,6 +11,7 @@ import dev.revokt.MozillaRemoteSettings
 import dev.revokt.SyncStage
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonObject
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -48,7 +49,8 @@ internal fun client(
     fetcher: HttpFetcher,
     source: MozillaRemoteSettings = MozillaRemoteSettings.DEFAULT,
     limits: FetchLimits = FetchLimits(),
-): RemoteSettingsClient = RemoteSettingsClient(source, Dataset.CRLITE, fetcher, Dispatchers.Default, limits)
+    io: CoroutineDispatcher = Dispatchers.Default,
+): RemoteSettingsClient = RemoteSettingsClient(source, Dataset.CRLITE, fetcher, io, limits)
 
 internal fun json(text: String): JsonObject = Json.parse(text.encodeToByteArray()) as JsonObject
 
