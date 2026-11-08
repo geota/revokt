@@ -138,10 +138,12 @@ class VerdictTest {
                 assertEquals(original.elapsedNanos, same.elapsedNanos)
             }
             val text = original.toString()
-            for (field in listOf("rules", "rule", "findings", "path", "crlite", "dataStates", "generationEpoch")) {
+            for (field in listOf("rules", "rule", "findings", "path", "crlite", "dataStates")) {
                 assertTrue("$field=" in text, "$field missing from $text")
             }
         }
+        assertEquals(3, accepted().newBuilder().build().generationEpoch, "newBuilder keeps the cache key")
+        assertEquals(3, rejected().newBuilder().build().generationEpoch, "newBuilder keeps the cache key")
         assertTrue(accepted().toString().startsWith("Accepted("), accepted().toString())
         assertTrue(rejected().toString().startsWith("Rejected("), rejected().toString())
         assertNotEquals<Any>(accepted(), "verdict")
@@ -149,18 +151,39 @@ class VerdictTest {
     }
 
     @Test
-    fun `elapsedNanos is a timing field, outside equality, hashing and toString`() {
+    fun `elapsedNanos and generationEpoch are outside equality, hashing and toString`() {
         for (verdict in listOf<Verdict>(accepted(), rejected())) {
-            val slower =
+            val other =
                 when (verdict) {
-                    is Verdict.Accepted -> verdict.newBuilder().elapsedNanos(9_999_999).build()
-                    is Verdict.Rejected -> verdict.newBuilder().elapsedNanos(9_999_999).build()
+                    is Verdict.Accepted -> {
+                        verdict
+                            .newBuilder()
+                            .elapsedNanos(9_999_999)
+                            .generationEpoch(8)
+                            .build()
+                    }
+
+                    is Verdict.Rejected -> {
+                        verdict
+                            .newBuilder()
+                            .elapsedNanos(9_999_999)
+                            .generationEpoch(8)
+                            .build()
+                    }
                 }
-            assertEquals(9_999_999, slower.elapsedNanos)
-            assertEquals(verdict, slower)
-            assertEquals(verdict.hashCode(), slower.hashCode())
-            assertEquals(verdict.toString(), slower.toString())
-            assertFalse("elapsedNanos" in slower.toString(), slower.toString())
+            assertEquals(9_999_999, other.elapsedNanos)
+            assertEquals(
+                8,
+                when (other) {
+                    is Verdict.Accepted -> other.generationEpoch
+                    is Verdict.Rejected -> other.generationEpoch
+                },
+            )
+            assertEquals(verdict, other)
+            assertEquals(verdict.hashCode(), other.hashCode())
+            assertEquals(verdict.toString(), other.toString())
+            assertFalse("elapsedNanos" in other.toString(), other.toString())
+            assertFalse("generationEpoch" in other.toString(), other.toString())
         }
     }
 
@@ -174,7 +197,6 @@ class VerdictTest {
                 "path" to { path(path(PathStatus.NO_ISSUER)) },
                 "crlite" to { crlite(null) },
                 "dataStates" to { dataStates(emptyMap()) },
-                "generationEpoch" to { generationEpoch(4) },
             )
         for ((field, change) in acceptedChanges) {
             assertNotEquals(accepted, accepted.newBuilder().change().build(), field)
@@ -188,7 +210,6 @@ class VerdictTest {
                 "path" to { path(path(PathStatus.NO_ISSUER)) },
                 "crlite" to { crlite(null) },
                 "dataStates" to { dataStates(emptyMap()) },
-                "generationEpoch" to { generationEpoch(4) },
             )
         for ((field, change) in rejectedChanges) {
             assertNotEquals(rejected, rejected.newBuilder().change().build(), field)
@@ -215,6 +236,20 @@ class VerdictTest {
             "rule is one of the fired rules (spec §4): got rule=REVOKED, rules=[NO_DATA, NOT_ENROLLED]",
             notFired,
         )
+    }
+
+    @Test
+    fun `Rejected never names an exempted rule`() {
+        val exemptedNoData =
+            Finding.Exempted
+                .Builder()
+                .rule(Rule.NO_DATA)
+                .build()
+        val broken = message { rejected().newBuilder().findings(listOf(path(), exemptedNoData)).build() }
+        assertEquals("rule is not an exempted rule (spec §4): got rule=NO_DATA, which a Finding.Exempted names", broken)
+        // NOT_ENROLLED was exempted, NO_DATA was not: the verdict names NO_DATA.
+        val fine = rejected().newBuilder().findings(listOf(path(), exempted)).build()
+        assertEquals(Rule.NO_DATA, fine.rule)
     }
 
     @Test

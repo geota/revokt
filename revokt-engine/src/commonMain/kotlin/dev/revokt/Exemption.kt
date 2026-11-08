@@ -35,25 +35,27 @@ public fun interface Exemption {
         }
 
         /**
-         * Exempt when the host is one of [hosts]. Both sides are compared as host' (§5.1 flow step 2): lowercased, one
-         * trailing dot stripped. [hosts] is copied when the exemption is made. A null `context.host` never matches. On
-         * an HTTP/2-coalesced connection the host is the one OkHttp handshook for (§5.1).
+         * Exempt when `context.host` is one of [hosts]. Each entry is compared as host' (§5.1 flow step 2: ASCII
+         * lowercased, one trailing dot stripped), the form `context.host` already has. [hosts] is copied when the
+         * exemption is made, and an entry that is not ASCII (a U-label: pass the A-label), is empty after
+         * normalisation or starts with a dot throws `IllegalArgumentException` then. A null `context.host` never
+         * matches. On an HTTP/2-coalesced connection the host is the one OkHttp handshook for (§5.1).
          */
         @JvmStatic
         public fun hostIn(hosts: Collection<String>): Exemption {
-            val names: Set<String> = buildSet { hosts.forEach { add(hostPrime(it)) } }
-            return Exemption { context -> context.host?.let(::hostPrime) in names }
+            val names = entries(hosts, "hostIn")
+            return Exemption { context -> context.host in names }
         }
 
         /**
-         * Exempt when host' equals one of [suffixes] or ends with `"." + suffix`, both sides compared as host', as for
-         * [hostIn]: a private CA serves many subdomains, so `"corp"` matches `"a.corp"` but not `"acorp"`. [suffixes]
-         * is copied when the exemption is made. A null `context.host` never matches.
+         * Exempt when `context.host` equals one of [suffixes] or ends with `"." + suffix`: a private CA serves many
+         * subdomains, so `"corp"` matches `"a.corp"` but not `"acorp"`. Entries are normalised and checked as for
+         * [hostIn]. A null `context.host` never matches.
          */
         @JvmStatic
         public fun hostSuffixIn(suffixes: Collection<String>): Exemption {
-            val names: Set<String> = buildSet { suffixes.forEach { add(hostPrime(it)) } }
-            return Exemption { context -> context.host?.let { hasSuffixIn(hostPrime(it), names) } == true }
+            val names = entries(suffixes, "hostSuffixIn")
+            return Exemption { context -> context.host?.let { hasSuffixIn(it, names) } == true }
         }
 
         /**
@@ -66,8 +68,21 @@ public fun interface Exemption {
 
         private val PLATFORM_ONLY = Exemption { context -> context.path.noIssuerReason == NoIssuerReason.PLATFORM_ONLY }
 
-        /** host' (§5.1 flow step 2): lowercased, one trailing dot stripped. */
-        private fun hostPrime(host: String): String = host.lowercase().removeSuffix(".")
+        /** [hosts] as host', copied into a set; rejects an entry no normalised host could equal (spec §4, #160). */
+        private fun entries(
+            hosts: Collection<String>,
+            helper: String,
+        ): Set<String> =
+            buildSet {
+                hosts.forEach { host ->
+                    require(host.all { it < '\u0080' }) { "$helper: \"$host\" is not ASCII; pass the A-label" }
+                    val name = hostPrime(host)
+                    require(name.isNotEmpty() && !name.startsWith('.')) {
+                        "$helper: \"$host\" is empty or starts with a dot"
+                    }
+                    add(name)
+                }
+            }
 
         /**
          * Whether [host] equals a suffix in [suffixes] or ends with `"." + suffix`. [host] itself, then what follows

@@ -7,8 +7,9 @@ package dev.revokt
  * The policy result of one evaluation (spec §4), independent of `Enforcement`: [Rejected] means "policy says reject",
  * and only the trust manager decides whether to throw. Closed: exactly [Accepted] and [Rejected]. Both are output types,
  * values with a private constructor and a `@RevoktTestingApi` builder; equality, hashing and `toString` are by content
- * except [elapsedNanos], a timing field. Every field is plain data: rules, findings and data states, no lambdas and no
- * platform objects, so the same facts can be handed to a policy language later (#81, #84).
+ * except [elapsedNanos], a timing field, and the internal cache key `generationEpoch`. Every field is plain data:
+ * rules, findings and data states, no lambdas and no platform objects, so the same facts can be handed to a policy
+ * language later (#81, #84).
  */
 public sealed interface Verdict {
     /**
@@ -59,7 +60,10 @@ public sealed interface Verdict {
 
         override val dataStates: Map<Dataset, Finding.DataState> = builder.dataStates
 
-        /** The generation epoch the verdict was computed under: a verdict-cache key, not stable across processes. */
+        /**
+         * The generation epoch the verdict was computed under: a verdict-cache key, not stable across processes, so not
+         * part of equality, hashing or `toString`.
+         */
         @RevoktInternalApi
         public val generationEpoch: Long = builder.generationEpoch
 
@@ -75,7 +79,7 @@ public sealed interface Verdict {
                 .dataStates(dataStates)
                 .generationEpoch(generationEpoch)
 
-        private fun fields(): List<Pair<String, Any?>> = fieldsOf(this, generationEpoch)
+        private fun fields(): List<Pair<String, Any?>> = fieldsOf(this)
 
         override fun equals(other: Any?): Boolean = other is Accepted && fields() == other.fields()
 
@@ -133,7 +137,8 @@ public sealed interface Verdict {
 
     /**
      * The policy rejects the chain: [rule] is the first fired, non-exempted `REJECT` rule in `Rule.PRECEDENCE`, never
-     * null (Java's `getRule()` is `@NotNull` here). The builder checks that [rule] is one of [rules].
+     * null (Java's `getRule()` is `@NotNull` here). The builder checks that [rule] is one of [rules] and that no
+     * `Finding.Exempted` in [findings] names it.
      */
     @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
     public class Rejected private constructor(
@@ -153,12 +158,18 @@ public sealed interface Verdict {
 
         override val dataStates: Map<Dataset, Finding.DataState> = builder.dataStates
 
-        /** The generation epoch the verdict was computed under: a verdict-cache key, not stable across processes. */
+        /**
+         * The generation epoch the verdict was computed under: a verdict-cache key, not stable across processes, so not
+         * part of equality, hashing or `toString`.
+         */
         @RevoktInternalApi
         public val generationEpoch: Long = builder.generationEpoch
 
         init {
             require(rule in rules) { "rule is one of the fired rules (spec §4): got rule=$rule, rules=$rules" }
+            require(findings.none { it is Finding.Exempted && it.rule == rule }) {
+                "rule is not an exempted rule (spec §4): got rule=$rule, which a Finding.Exempted names"
+            }
         }
 
         /** A builder holding this verdict's values, [elapsedNanos] included. */
@@ -174,7 +185,7 @@ public sealed interface Verdict {
                 .dataStates(dataStates)
                 .generationEpoch(generationEpoch)
 
-        private fun fields(): List<Pair<String, Any?>> = fieldsOf(this, generationEpoch)
+        private fun fields(): List<Pair<String, Any?>> = fieldsOf(this)
 
         override fun equals(other: Any?): Boolean = other is Rejected && fields() == other.fields()
 
@@ -239,13 +250,11 @@ public sealed interface Verdict {
 private fun inPrecedence(rules: Set<Rule>): Set<Rule> = buildSet { Rule.PRECEDENCE.filterTo(this) { it in rules } }
 
 /**
- * Every field of [verdict] but `elapsedNanos`, named, in declaration order: equality, hashing and `toString` of both
- * verdicts read this one list. `elapsedNanos` is left out because it is a timing field (spec §4).
+ * Every field of [verdict] but `elapsedNanos` and `generationEpoch`, named, in declaration order: equality, hashing and
+ * `toString` of both verdicts read this one list. `elapsedNanos` is a timing field (spec §4); `generationEpoch` is an
+ * internal cache key a consumer cannot see, and not stable across processes.
  */
-private fun fieldsOf(
-    verdict: Verdict,
-    generationEpoch: Long,
-): List<Pair<String, Any?>> =
+private fun fieldsOf(verdict: Verdict): List<Pair<String, Any?>> =
     listOf(
         "rules" to verdict.rules,
         "rule" to verdict.rule,
@@ -253,5 +262,4 @@ private fun fieldsOf(
         "path" to verdict.path,
         "crlite" to verdict.crlite,
         "dataStates" to verdict.dataStates,
-        "generationEpoch" to generationEpoch,
     )

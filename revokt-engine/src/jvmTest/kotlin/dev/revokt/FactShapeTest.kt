@@ -3,6 +3,7 @@
 
 package dev.revokt
 
+import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.lang.reflect.ParameterizedType
@@ -21,15 +22,17 @@ import kotlin.test.assertTrue
 @OptIn(RevoktInternalApi::class)
 class FactShapeTest {
     /** The fact types, each checked member by member; `Finding`'s subtypes are reached through `Verdict.findings`. */
-    private val facts: Set<Class<*>> =
+    private val checked: Set<Class<*>> =
         setOf(
             Verdict.Accepted::class.java,
             Verdict.Rejected::class.java,
             ExemptionContext::class.java,
             PresentedChain::class.java,
             WalkStats::class.java,
-        ) + Finding::class.java.declaredClasses.filter { Finding::class.java.isAssignableFrom(it) } +
-            Finding::class.java
+        ) + Finding::class.java.declaredClasses.filter { Finding::class.java.isAssignableFrom(it) }
+
+    /** What a fact member may return besides plain data: another fact type, or `Finding` itself (it has no members). */
+    private val facts: Set<Class<*>> = checked + Finding::class.java + Verdict::class.java
 
     private val plain: Set<Class<*>> =
         setOf(
@@ -60,16 +63,29 @@ class FactShapeTest {
                 m.name !in setOf("newBuilder", "equals", "hashCode", "toString")
         }
 
+    /** The public instance fields (`@JvmField`), which a policy runtime could read as well. */
+    private fun fields(type: Class<*>): List<Field> =
+        type.fields.filter { !Modifier.isStatic(it.modifiers) && !it.isSynthetic && '$' !in it.name }
+
     @Test
     fun `every fact member returns plain data`() {
         val offending =
-            facts.flatMap { type ->
-                members(type)
-                    .filterNot {
-                        isPlain(it.genericReturnType)
-                    }.map { "${type.simpleName}.${it.name}: ${it.genericReturnType}" }
+            checked.flatMap { type ->
+                members(type).filterNot { isPlain(it.genericReturnType) }.map {
+                    "${type.simpleName}.${it.name}(): ${it.genericReturnType}"
+                } +
+                    fields(type).filterNot { isPlain(it.genericType) }.map {
+                        "${type.simpleName}.${it.name}: ${it.genericType}"
+                    }
             }
         assertEquals(emptyList(), offending)
+    }
+
+    @Test
+    fun `every fact type has members to check`() {
+        val empty = checked.filter { members(it).isEmpty() && fields(it).isEmpty() }.map { it.simpleName }
+        assertEquals(emptyList(), empty)
+        assertTrue(checked.size >= 14, "the Finding subtypes were found: $checked")
     }
 
     @Test

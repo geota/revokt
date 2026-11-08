@@ -39,6 +39,11 @@ public class EvaluationRequest private constructor(
         require(presented != null || verifiedPaths != null) {
             "at least one of presented and verifiedPaths is set (spec §4)"
         }
+        require(presented == null || presented.isNotEmpty()) { "presented is set but empty: a chain has a leaf" }
+        require(verifiedPaths == null || verifiedPaths.isNotEmpty()) { "verifiedPaths is set but holds no path" }
+        require(verifiedPaths == null || verifiedPaths.none { it.isEmpty() }) {
+            "verifiedPaths holds an empty path: each runs leaf to anchor"
+        }
     }
 
     /** A builder holding this request's values. */
@@ -68,7 +73,10 @@ public class EvaluationRequest private constructor(
         "EvaluationRequest(presented=${presented?.let(::digests)}, " +
             "verifiedPaths=${verifiedPaths?.map(::digests)}, host=$host, nowMillis=$nowMillis)"
 
-    /** Builds an [EvaluationRequest]; [build] throws `IllegalArgumentException` unless a chain or a path is set. */
+    /**
+     * Builds an [EvaluationRequest]. [build] throws `IllegalArgumentException` unless a chain or a path is set, and
+     * for an empty chain, an empty path list or an empty path (the maintainer's decision on #182).
+     */
     public class Builder {
         internal var presented: List<ByteString>? = null
             private set

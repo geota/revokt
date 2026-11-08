@@ -8,6 +8,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -28,7 +29,7 @@ class ExemptionHelpersTest {
             .noIssuerReason(reason)
             .build()
 
-    /** A context as #120's testing builder makes it: [host] is passed through as given, not normalised. */
+    /** A context as the testing builder makes it: [host] is given raw, and the builder stores host'. */
     private fun context(
         host: String?,
         reason: NoIssuerReason? = null,
@@ -47,8 +48,10 @@ class ExemptionHelpersTest {
     private val no = Exemption { false }
     private val throws = Exemption { throw Boom() }
 
+    private fun rejects(block: () -> Any): String = assertFailsWith<IllegalArgumentException> { block() }.message!!
+
     @Test
-    fun `hostIn compares lowercased hosts with one trailing dot stripped, on both sides`() {
+    fun `hostIn compares host', ASCII lowercased with one trailing dot stripped`() {
         val exemption = Exemption.hostIn(listOf("Corp.Example.", "intranet"))
         for (host in listOf(
             "corp.example",
@@ -60,7 +63,7 @@ class ExemptionHelpersTest {
         )) {
             assertTrue(exemption.isExempt(context(host)), host)
         }
-        for (host in listOf("a.corp.example", "example", "corp.example..", "intranet.corp", "")) {
+        for (host in listOf("a.corp.example", "example", "corp.example..", "intranet.corp", "", ".")) {
             assertFalse(exemption.isExempt(context(host)), host)
         }
     }
@@ -71,7 +74,7 @@ class ExemptionHelpersTest {
         for (host in listOf("corp", "a.corp", "b.a.corp", "A.CORP", "a.corp.", "CORP.")) {
             assertTrue(exemption.isExempt(context(host)), host)
         }
-        for (host in listOf("acorp", "a.acorp", "corp.example", "cor", "", "a.corp..")) {
+        for (host in listOf("acorp", "a.acorp", "corp.example", "cor", "", ".", "a.corp..")) {
             assertFalse(exemption.isExempt(context(host)), host)
         }
         val mixed = Exemption.hostSuffixIn(listOf("Corp.Example.", "lab"))
@@ -82,11 +85,62 @@ class ExemptionHelpersTest {
     }
 
     @Test
-    fun `a null host never matches hostIn or hostSuffixIn`() {
-        assertFalse(Exemption.hostIn(listOf("corp")).isExempt(context(null)))
-        assertFalse(Exemption.hostSuffixIn(listOf("corp")).isExempt(context(null)))
-        assertFalse(Exemption.hostIn(listOf("", ".")).isExempt(context(null)))
-        assertFalse(Exemption.hostSuffixIn(listOf("", ".")).isExempt(context(null)))
+    fun `the host is normalised once, so a second trailing dot never matches`() {
+        val c = context("A.Corp..")
+        assertEquals("a.corp.", c.host, "one dot stripped, once")
+        assertEquals("a.corp.", c.newBuilder().build().host, "newBuilder keeps host' rather than normalising again")
+        assertEquals(c, c.newBuilder().build())
+        assertFalse(Exemption.hostSuffixIn(listOf("corp")).isExempt(c))
+        assertFalse(Exemption.hostIn(listOf("a.corp")).isExempt(c))
+        assertEquals("a.corp", hostPrime("A.CORP."))
+        assertEquals("a.corp.", hostPrime("a.corp.."))
+    }
+
+    @Test
+    fun `case folding is ASCII only, and a non-ASCII entry is rejected at construction`() {
+        val kelvin = "\u212A.corp" // KELVIN SIGN, which Unicode lowercasing turns into an ASCII k
+        assertEquals(kelvin, hostPrime(kelvin))
+        assertEquals(kelvin, context(kelvin).host)
+        assertFalse(Exemption.hostIn(listOf("k.corp")).isExempt(context(kelvin)))
+        assertFalse(Exemption.hostSuffixIn(listOf("k.corp")).isExempt(context("a.$kelvin")))
+        for (entry in listOf(kelvin, "b\u00FCcher.example", "xn--bcher-kva.\u00E9xample")) {
+            assertEquals(
+                "hostIn: \"$entry\" is not ASCII; pass the A-label",
+                rejects { Exemption.hostIn(listOf(entry)) },
+            )
+            assertEquals(
+                "hostSuffixIn: \"$entry\" is not ASCII; pass the A-label",
+                rejects { Exemption.hostSuffixIn(listOf("corp", entry)) },
+            )
+        }
+        assertTrue(Exemption.hostIn(listOf("xn--bcher-kva.example")).isExempt(context("XN--BCHER-KVA.example")))
+    }
+
+    @Test
+    fun `an entry that is empty once normalised, or starts with a dot, is rejected at construction`() {
+        for (entry in listOf("", ".", ".corp", "..", "..corp.")) {
+            assertEquals(
+                "hostIn: \"$entry\" is empty or starts with a dot",
+                rejects { Exemption.hostIn(listOf(entry)) },
+            )
+            assertEquals(
+                "hostSuffixIn: \"$entry\" is empty or starts with a dot",
+                rejects { Exemption.hostSuffixIn(listOf("corp", entry)) },
+            )
+        }
+        Exemption.hostIn(listOf("corp."))
+        Exemption.hostSuffixIn(listOf("corp."))
+    }
+
+    @Test
+    fun `an empty host is no host, and no host never matches`() {
+        assertNull(context("").host)
+        assertNull(context(".").host)
+        assertNull(context(null).host)
+        for (host in listOf("", ".", null)) {
+            assertFalse(Exemption.hostIn(listOf("corp")).isExempt(context(host)), "$host")
+            assertFalse(Exemption.hostSuffixIn(listOf("corp")).isExempt(context(host)), "$host")
+        }
     }
 
     @Test

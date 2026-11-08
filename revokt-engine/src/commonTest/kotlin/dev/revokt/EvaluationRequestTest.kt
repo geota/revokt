@@ -35,6 +35,28 @@ class EvaluationRequestTest {
     }
 
     @Test
+    fun `build throws for an empty chain, no verified path or an empty path`() {
+        val cases =
+            mapOf(
+                "presented is set but empty: a chain has a leaf" to
+                    { b: EvaluationRequest.Builder -> b.presented(emptyList()) },
+                "verifiedPaths is set but holds no path" to
+                    { b: EvaluationRequest.Builder -> b.verifiedPaths(emptyList()) },
+                "verifiedPaths holds an empty path: each runs leaf to anchor" to { b: EvaluationRequest.Builder ->
+                    b.verifiedPaths(listOf(listOf(der(1)), emptyList()))
+                },
+            )
+        for ((expected, set) in cases) {
+            val alone = assertFailsWith<IllegalArgumentException> { set(EvaluationRequest.Builder()).build() }
+            assertEquals(expected, alone.message)
+            // The other list being valid does not rescue an empty one.
+            val withChain = EvaluationRequest.Builder().presented(listOf(der(1))).verifiedPaths(listOf(listOf(der(1))))
+            val beside = assertFailsWith<IllegalArgumentException> { set(withChain).build() }
+            assertEquals(expected, beside.message)
+        }
+    }
+
+    @Test
     fun `chainSource is derived, PLATFORM whenever verified paths are given`() {
         val presented = EvaluationRequest.Builder().presented(listOf(der(1))).build()
         val verified = EvaluationRequest.Builder().verifiedPaths(listOf(listOf(der(1)))).build()
@@ -65,7 +87,7 @@ class EvaluationRequestTest {
         assertNull(
             EvaluationRequest
                 .Builder()
-                .verifiedPaths(emptyList())
+                .verifiedPaths(listOf(listOf(der(1))))
                 .build()
                 .presented,
         )
@@ -90,12 +112,12 @@ class EvaluationRequestTest {
         val changed =
             mapOf<String, EvaluationRequest.Builder.() -> EvaluationRequest.Builder>(
                 "presented" to { presented(listOf(der(1))) },
-                "verifiedPaths" to { verifiedPaths(emptyList()) },
+                "verifiedPaths" to { verifiedPaths(listOf(listOf(der(1), der(4)))) },
                 "host" to { host(null) },
                 "nowMillis" to { nowMillis(1) },
             )
         for ((field, change) in changed) {
-            assertNotEquals(base, base.newBuilder().change().build(), field)
+            assertNotEquals(base, change(base.newBuilder()).build(), field)
         }
     }
 
