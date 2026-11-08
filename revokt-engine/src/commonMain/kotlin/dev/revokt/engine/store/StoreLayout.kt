@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.GenerationFiles
 import dev.revokt.RevoktStorage
@@ -42,8 +43,8 @@ internal enum class BlobState { ABSENT, MATCH, MISMATCH }
 internal enum class BlobWrite { WRITTEN, REUSED, REWRITTEN }
 
 /**
- * Spec §6.5's layout over a [RevoktStorage] for one [dataset] and [channel] (the channel enum's name; a channel-less
- * dataset uses `ALL`), under the key prefix `<dataset>/<channel>/` in lowercase:
+ * Spec §6.5's layout over a [RevoktStorage] for one [dataset] and [channel], under the key prefix
+ * `<dataset>/<channel>/`, both lowercase enum names:
  * - `current`: the [Pointer];
  * - `gen-<timestamp>-<hash16>/`: `index.bin`, the delta files and, for `SIGNED`, `records.json`, each under the file's
  *   name in the generation, then `meta.json` last as the completeness marker;
@@ -56,14 +57,10 @@ internal enum class BlobWrite { WRITTEN, REUSED, REWRITTEN }
 internal class StoreLayout(
     private val storage: RevoktStorage,
     val dataset: Dataset,
-    val channel: String,
+    val channel: CrliteChannel,
 ) {
-    init {
-        require(isChannelName(channel)) { "'$channel' is not a channel name" }
-    }
-
     /** The key prefix of this dataset and channel, `<dataset>/<channel>`, both lowercase enum names. */
-    val root: String = dataset.name.lowercase() + "/" + channel.lowercase()
+    val root: String = dataset.name.lowercase() + "/" + channel.name.lowercase()
 
     private val currentKey = "$root/current"
     private val updaterKey = "$root/updater.json"
@@ -294,9 +291,5 @@ internal class StoreLayout(
         const val META: String = "meta.json"
         const val RECORDS: String = "records.json"
         private const val BLOBS_DIR = "blobs"
-
-        /** Whether [name] is shaped like an enum constant's name, `[A-Z][A-Z0-9_]*`, the form a channel is persisted in. */
-        fun isChannelName(name: String): Boolean =
-            name.isNotEmpty() && name[0] in 'A'..'Z' && name.all { it in 'A'..'Z' || it in '0'..'9' || it == '_' }
     }
 }

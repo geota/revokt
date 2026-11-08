@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
@@ -25,14 +26,14 @@ internal data class SignedMeta(
 }
 
 /**
- * A generation's `meta.json` (spec §6.5), the completeness marker written last in its directory. [channel] is the
- * channel enum's name; [blobs] maps each full filter's name in the generation (its derived name, never the attachment
+ * A generation's `meta.json` (spec §6.5), the completeness marker written last in its directory, which persists [channel]
+ * by its enum name; [blobs] maps each full filter's name in the generation (its derived name, never the attachment
  * filename) to the SHA-256 of its blob; [signed] is present exactly when [trustClass] is `SIGNED`. [collection] is the
  * Remote Settings collection, absent for a source that has none.
  */
 internal data class GenerationMeta(
     val dataset: Dataset,
-    val channel: String,
+    val channel: CrliteChannel,
     val trustClass: TrustClass,
     val generationId: String,
     val format: FilterFormat,
@@ -46,7 +47,6 @@ internal data class GenerationMeta(
     val directory: String = GenerationNames.directory(sourceTimestampMillis, generationId)
 
     init {
-        require(StoreLayout.isChannelName(channel)) { "'$channel' is not a channel name" }
         require((signed != null) == (trustClass == TrustClass.SIGNED)) { "signed members iff SIGNED, got $trustClass" }
         for ((name, sha256) in blobs) {
             require(C2spIndex.isFilename(name)) { "'$name' is not a generation file name" }
@@ -68,7 +68,7 @@ internal object MetaJson {
         StoreFields.encode(
             "metaVersion" to StoreFields.long(VERSION),
             "dataset" to StoreFields.string(meta.dataset.name),
-            "channel" to StoreFields.string(meta.channel),
+            "channel" to StoreFields.string(meta.channel.name),
             "trustClass" to StoreFields.string(meta.trustClass.name),
             "generationId" to StoreFields.string(meta.generationId),
             "format" to StoreFields.string(meta.format.name),
@@ -89,7 +89,7 @@ internal object MetaJson {
             val trustClass = f.enum<TrustClass>("trustClass")
             GenerationMeta(
                 dataset = f.enum("dataset"),
-                channel = f.string("channel"),
+                channel = f.enum("channel"),
                 trustClass = trustClass,
                 generationId = f.string("generationId"),
                 format = f.enum("format"),

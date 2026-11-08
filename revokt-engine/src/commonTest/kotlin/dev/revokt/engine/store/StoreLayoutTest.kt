@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.RevoktStorage
 import dev.revokt.TrustClass
@@ -18,7 +19,7 @@ import kotlin.test.assertNull
 /** Spec §6.5's key layout over `RevoktStorage.inMemory()` (#109). */
 class StoreLayoutTest {
     private val storage = StoreFixtures.Recording()
-    private val layout = StoreLayout(storage, Dataset.CRLITE, "COMPAT")
+    private val layout = StoreLayout(storage, Dataset.CRLITE, CrliteChannel.COMPAT)
 
     private val fullBytes = byteArrayOf(3, 0, 1, 2, 3)
     private val deltaBytes = byteArrayOf(3, 0, 9)
@@ -56,7 +57,7 @@ class StoreLayoutTest {
     @Test
     fun `the keys sit under the lowercase dataset and channel`() {
         assertEquals("crlite/compat", layout.root)
-        assertEquals("crlite/all", StoreLayout(storage, Dataset.CRLITE, "ALL").root)
+        assertEquals("crlite/default", StoreLayout(storage, Dataset.CRLITE, CrliteChannel.DEFAULT).root)
         val sha = StoreFixtures.sha256(fullBytes)
         assertEquals("crlite/compat/blobs/${sha.hex()}", layout.blobKey(sha))
         assertEquals(
@@ -65,25 +66,22 @@ class StoreLayoutTest {
         )
         assertFailsWith<IllegalArgumentException> { layout.fileKey("../x", "index.bin") }
         assertFailsWith<IllegalArgumentException> { layout.blobKey(ByteString.EMPTY) }
-        assertFailsWith<IllegalArgumentException> { StoreLayout(storage, Dataset.CRLITE, "compat") }
-        assertFailsWith<IllegalArgumentException> { StoreLayout(storage, Dataset.CRLITE, "") }
-        assertFailsWith<IllegalArgumentException> { StoreLayout(storage, Dataset.CRLITE, "1X") }
     }
 
     @Test
-    fun `a channel is an enum constant's name, so its lowercase segment is a key segment`() {
-        for (good in listOf(
-            "COMPAT",
-            "DEFAULT",
-            "ALL",
-            "A",
-            "A_B1",
-        )) {
-            assertEquals(true, StoreLayout.isChannelName(good), good)
+    fun `the channel's path segment and meta json value are the segments the string channel had`() {
+        // #178 keyed the store by the channel enum's name as a string; #130 takes CrliteChannel, with the same bytes.
+        for ((channel, segment) in listOf(CrliteChannel.COMPAT to "compat", CrliteChannel.DEFAULT to "default")) {
+            val l = StoreLayout(storage, Dataset.CRLITE, channel)
+            assertEquals("crlite/$segment", l.root)
+            assertEquals(
+                "crlite/$segment/gen-0000000000001-711430f6164e9380/meta.json",
+                l.fileKey(GenerationNames.directory(1, "g1"), "meta.json"),
+            )
+            val meta = MetaJson.write(StoreFixtures.meta(channel = channel)).decodeToString()
+            assertEquals(true, meta.contains("\"channel\":\"${channel.name}\""), meta)
         }
-        for (bad in listOf("", "compat", "Compat", "_A", "1A", "A-B", "A.B", "A/B", "A\nB", "AÉ", ".", "..")) {
-            assertEquals(false, StoreLayout.isChannelName(bad), bad)
-        }
+        assertEquals(listOf("COMPAT", "DEFAULT"), CrliteChannel.entries.map { it.name })
     }
 
     @Test
@@ -143,12 +141,12 @@ class StoreLayoutTest {
     @Test
     fun `layout unit for data-path (e) (not the fixture) - a meta json for the other channel is no generation`() {
         val directory = install()
-        val other = StoreLayout(storage, Dataset.CRLITE, "DEFAULT")
+        val other = StoreLayout(storage, Dataset.CRLITE, CrliteChannel.DEFAULT)
         val metaKey = "crlite/compat/$directory/meta.json"
         val moved =
             MetaJson.write(
                 StoreFixtures.meta(
-                    channel = "DEFAULT",
+                    channel = CrliteChannel.DEFAULT,
                     blobs =
                         mapOf(fullName to StoreFixtures.sha256(fullBytes)),
                 ),
@@ -227,7 +225,7 @@ class StoreLayoutTest {
         }
         assertFailsWith<IllegalArgumentException> { layout.writeGeneration(meta, byteArrayOf(0), deltas, records) }
         assertFailsWith<IllegalArgumentException> {
-            layout.writeGeneration(meta.copy(channel = "DEFAULT"), index, deltas, records)
+            layout.writeGeneration(meta.copy(channel = CrliteChannel.DEFAULT), index, deltas, records)
         }
         val absent = StoreFixtures.meta(blobs = mapOf(fullName to StoreFixtures.sha256(byteArrayOf(42))))
         assertFailsWith<IllegalArgumentException> { layout.writeGeneration(absent, index, deltas, records) }
@@ -448,7 +446,7 @@ class StoreLayoutTest {
             StoreLayout(
                 failing,
                 Dataset.CRLITE,
-                "COMPAT",
+                CrliteChannel.COMPAT,
             ).deleteGeneration(directory)
         }
         assertEquals(listOf("crlite/compat/$directory/meta.json"), inner.deletes)
@@ -472,12 +470,12 @@ class StoreLayoutTest {
 
     @Test
     fun `the layout reads and writes through any RevoktStorage`() {
-        val plain = StoreLayout(RevoktStorage.inMemory(), Dataset.CRLITE, "DEFAULT")
+        val plain = StoreLayout(RevoktStorage.inMemory(), Dataset.CRLITE, CrliteChannel.DEFAULT)
         plain.putBlob(fullBytes)
         val meta =
             StoreFixtures.meta(
                 TrustClass.BUNDLED,
-                channel = "DEFAULT",
+                channel = CrliteChannel.DEFAULT,
                 blobs =
                     mapOf(fullName to StoreFixtures.sha256(fullBytes)),
             )
