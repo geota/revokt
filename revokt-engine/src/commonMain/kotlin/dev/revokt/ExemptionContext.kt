@@ -25,7 +25,10 @@ public class ExemptionContext private constructor(
     /** The verdict's path finding; for an empty reported path its `anchorSha256` is null. */
     public val path: Finding.Path = requireNotNull(builder.path) { "path is not set" }
 
-    /** The host, normalised (lowercase, trailing dot stripped); null when the call carried none. */
+    /**
+     * The host as host' (§5.1 flow step 2: ASCII lowercased, one trailing dot stripped); null when the call carried
+     * none, or when it was empty once normalised.
+     */
     public val host: String? = builder.host
 
     public val nowMillis: Long = requireNotNull(builder.nowMillis) { "nowMillis is not set" }
@@ -48,7 +51,7 @@ public class ExemptionContext private constructor(
             .chain(chain)
             .credentialType(credentialType)
             .path(path)
-            .host(host)
+            .primedHost(host)
             .nowMillis(nowMillis)
             .dataStates(dataStates)
 
@@ -97,7 +100,11 @@ public class ExemptionContext private constructor(
 
         public fun path(path: Finding.Path): Builder = apply { this.path = path }
 
-        public fun host(host: String?): Builder = apply { this.host = host }
+        /** The host as the call carried it; stored as host' (an empty one as null). Pass it once, not normalised. */
+        public fun host(host: String?): Builder = apply { this.host = normalisedHost(host) }
+
+        /** A host that is already host', kept as it is: [hostPrime] strips one dot, so applying it twice would differ. */
+        internal fun primedHost(host: String?): Builder = apply { this.host = host }
 
         public fun nowMillis(millis: Long): Builder = apply { nowMillis = millis }
 

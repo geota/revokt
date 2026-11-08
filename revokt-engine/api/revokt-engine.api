@@ -133,14 +133,41 @@ public final class dev/revokt/EngineErrorProducer : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/EngineErrorProducer;
 }
 
+public final class dev/revokt/EvaluationRequest {
+	public synthetic fun <init> (Ldev/revokt/EvaluationRequest$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun newBuilder ()Ldev/revokt/EvaluationRequest$Builder;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/EvaluationRequest$Builder {
+	public fun <init> ()V
+	public final fun build ()Ldev/revokt/EvaluationRequest;
+	public final fun host (Ljava/lang/String;)Ldev/revokt/EvaluationRequest$Builder;
+	public final fun nowMillis (J)Ldev/revokt/EvaluationRequest$Builder;
+	public final fun presented (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
+	public final fun verifiedPaths (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
+}
+
+public abstract interface class dev/revokt/Evaluator {
+	public abstract fun evaluate (Ldev/revokt/EvaluationRequest;)Ldev/revokt/Verdict;
+}
+
 public abstract interface class dev/revokt/Exemption {
 	public static final field Companion Ldev/revokt/Exemption$Companion;
 	public static fun anchorIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public static fun hostIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public static fun hostSuffixIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
 	public abstract fun isExempt (Ldev/revokt/ExemptionContext;)Z
+	public static fun platformOnly ()Ldev/revokt/Exemption;
 }
 
 public final class dev/revokt/Exemption$Companion {
 	public final fun anchorIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public final fun hostIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public final fun hostSuffixIn (Ljava/util/Collection;)Ldev/revokt/Exemption;
+	public final fun platformOnly ()Ldev/revokt/Exemption;
 }
 
 public final class dev/revokt/ExemptionContext {
@@ -155,6 +182,11 @@ public final class dev/revokt/ExemptionContext {
 	public final fun getRule ()Ldev/revokt/Rule;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Exemptions {
+	public static final fun and (Ldev/revokt/Exemption;Ldev/revokt/Exemption;)Ldev/revokt/Exemption;
+	public static final fun or (Ldev/revokt/Exemption;Ldev/revokt/Exemption;)Ldev/revokt/Exemption;
 }
 
 public final class dev/revokt/FallbackReason : java/lang/Enum {
@@ -597,6 +629,57 @@ public final class dev/revokt/RevoktLoggers {
 	public static final fun jul ()Ldev/revokt/RevoktLogger;
 }
 
+public final class dev/revokt/RevoktPolicy {
+	public static final field Companion Ldev/revokt/RevoktPolicy$Companion;
+	public static final field DEFAULT Ldev/revokt/RevoktPolicy;
+	public static final field STRICT Ldev/revokt/RevoktPolicy;
+	public synthetic fun <init> (Ldev/revokt/engine/policy/PolicyForm;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clockSkew ()Ljava/time/Duration;
+	public final fun exemption (Ldev/revokt/Rule;)Ldev/revokt/Exemption;
+	public final fun getClockSkewMillis ()J
+	public final fun getRequiredDatasets ()Ljava/util/Set;
+	public final fun getRollbackWindowMillis ()J
+	public final fun getSignedSourceFailingAfterMillis ()J
+	public final fun minTrustClass (Ldev/revokt/Dataset;)Ldev/revokt/TrustClass;
+	public final fun newBuilder ()Ldev/revokt/RevoktPolicy$Builder;
+	public final fun outcome (Ldev/revokt/Rule;)Ldev/revokt/Outcome;
+	public final fun rollbackWindow ()Ljava/time/Duration;
+	public final fun signedSourceFailingAfter ()Ljava/time/Duration;
+	public final fun staleness (Ldev/revokt/Dataset;)Ldev/revokt/Staleness;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/RevoktPolicy$Builder {
+	public synthetic fun <init> (Ldev/revokt/engine/policy/PolicyForm;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun build ()Ldev/revokt/RevoktPolicy;
+	public final fun clearExemption (Ldev/revokt/Rule;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun clearStaleness (Ldev/revokt/Dataset;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun clockSkew (Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun clockSkewMillis (J)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun exempt (Ldev/revokt/Rule;Ldev/revokt/Exemption;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun exemptAnchors (Ljava/util/Collection;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun minTrustClass (Ldev/revokt/Dataset;Ldev/revokt/TrustClass;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rejectStaleAfter (Ldev/revokt/Dataset;Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rejectStaleAfterMillis (Ldev/revokt/Dataset;Ljava/lang/Long;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun requiredDatasets (Ljava/util/Set;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rollbackWindow (Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rollbackWindowMillis (J)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun rule (Ldev/revokt/Rule;Ldev/revokt/Outcome;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun signedSourceFailingAfter (Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun signedSourceFailingAfterMillis (J)Ldev/revokt/RevoktPolicy$Builder;
+	public final fun staleness (Ldev/revokt/Dataset;Ldev/revokt/Staleness;)Ldev/revokt/RevoktPolicy$Builder;
+}
+
+public final class dev/revokt/RevoktPolicy$Companion {
+}
+
+public final class dev/revokt/RevoktPolicyKt {
+	public static final synthetic fun clockSkew-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
+	public static final synthetic fun rejectStaleAfter-moChb0s (Ldev/revokt/RevoktPolicy$Builder;Ldev/revokt/Dataset;Lkotlin/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
+	public static final synthetic fun rollbackWindow-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
+	public static final synthetic fun signedSourceFailingAfter-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
+}
+
 public abstract interface class dev/revokt/RevoktStorage {
 	public static final field Companion Ldev/revokt/RevoktStorage$Companion;
 	public abstract fun delete (Ljava/lang/String;)V
@@ -687,6 +770,29 @@ public abstract interface class dev/revokt/SignatureVerifier {
 	public abstract fun verify ([B[B[B[B)Ldev/revokt/VerifyResult;
 }
 
+public final class dev/revokt/Staleness {
+	public static final field Companion Ldev/revokt/Staleness$Companion;
+	public synthetic fun <init> (JLjava/lang/Long;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRejectStaleAfterMillis ()Ljava/lang/Long;
+	public final fun getStaleAfterMillis ()J
+	public fun hashCode ()I
+	public static final fun of (Ljava/time/Duration;Ljava/time/Duration;)Ldev/revokt/Staleness;
+	public static final fun ofMillis (JLjava/lang/Long;)Ldev/revokt/Staleness;
+	public final fun rejectStaleAfter ()Ljava/time/Duration;
+	public final fun staleAfter ()Ljava/time/Duration;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Staleness$Companion {
+	public final fun of (Ljava/time/Duration;Ljava/time/Duration;)Ldev/revokt/Staleness;
+	public final fun ofMillis (JLjava/lang/Long;)Ldev/revokt/Staleness;
+}
+
+public final class dev/revokt/StalenessKt {
+	public static final synthetic fun of-OxNrBVY (Ldev/revokt/Staleness$Companion;JLkotlin/time/Duration;)Ldev/revokt/Staleness;
+}
+
 public final class dev/revokt/StoreLockedException : java/lang/RuntimeException {
 	public fun <init> (Ljava/lang/String;)V
 	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
@@ -760,6 +866,44 @@ public final class dev/revokt/TrustClass : java/lang/Enum {
 	public final fun getRank ()I
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/TrustClass;
 	public static fun values ()[Ldev/revokt/TrustClass;
+}
+
+public abstract interface class dev/revokt/Verdict {
+	public abstract fun getCrlite ()Ldev/revokt/Finding$Crlite;
+	public abstract fun getDataStates ()Ljava/util/Map;
+	public abstract fun getElapsedNanos ()J
+	public abstract fun getFindings ()Ljava/util/List;
+	public abstract fun getPath ()Ldev/revokt/Finding$Path;
+	public abstract fun getRule ()Ldev/revokt/Rule;
+	public abstract fun getRules ()Ljava/util/Set;
+}
+
+public final class dev/revokt/Verdict$Accepted : dev/revokt/Verdict {
+	public synthetic fun <init> (Ldev/revokt/Verdict$Accepted$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCrlite ()Ldev/revokt/Finding$Crlite;
+	public fun getDataStates ()Ljava/util/Map;
+	public fun getElapsedNanos ()J
+	public fun getFindings ()Ljava/util/List;
+	public fun getPath ()Ldev/revokt/Finding$Path;
+	public fun getRule ()Ldev/revokt/Rule;
+	public fun getRules ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/revokt/Verdict$Rejected : dev/revokt/Verdict {
+	public synthetic fun <init> (Ldev/revokt/Verdict$Rejected$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getCrlite ()Ldev/revokt/Finding$Crlite;
+	public fun getDataStates ()Ljava/util/Map;
+	public fun getElapsedNanos ()J
+	public fun getFindings ()Ljava/util/List;
+	public fun getPath ()Ldev/revokt/Finding$Path;
+	public fun getRule ()Ldev/revokt/Rule;
+	public fun getRules ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class dev/revokt/VerifyResult : java/lang/Enum {
