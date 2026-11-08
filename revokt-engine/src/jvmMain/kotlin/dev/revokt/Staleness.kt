@@ -47,12 +47,18 @@ public class Staleness private constructor(
             rejectStaleAfter: Long?,
         ): Staleness = Staleness(staleAfter, rejectStaleAfter)
 
-        /** [staleAfter] and [rejectStaleAfter] in whole milliseconds; `toMillis()` throws on overflow. */
+        /**
+         * [staleAfter] and [rejectStaleAfter] in whole milliseconds; a duration beyond `Long` milliseconds throws
+         * `IllegalArgumentException`.
+         */
         @JvmStatic
         public fun of(
             staleAfter: Duration,
             rejectStaleAfter: Duration?,
-        ): Staleness = ofMillis(staleAfter.toMillis(), rejectStaleAfter?.toMillis())
+        ): Staleness {
+            val reject = rejectStaleAfter?.let { durationMillis("rejectStaleAfter", it) }
+            return ofMillis(durationMillis("staleAfter", staleAfter), reject)
+        }
 
         internal fun of(table: StalenessTable): Staleness =
             ofMillis(table.staleAfterMillis, table.rejectStaleAfterMillis)
@@ -65,3 +71,14 @@ public fun Staleness.Companion.of(
     staleAfter: kotlin.time.Duration,
     rejectStaleAfter: kotlin.time.Duration?,
 ): Staleness = ofMillis(staleAfter.inWholeMilliseconds, rejectStaleAfter?.inWholeMilliseconds)
+
+/** [d] in whole milliseconds; an overflow of `toMillis()` is an argument error, as a negative value is. */
+internal fun durationMillis(
+    name: String,
+    d: Duration,
+): Long =
+    try {
+        d.toMillis()
+    } catch (e: ArithmeticException) {
+        throw IllegalArgumentException("$name does not fit in Long milliseconds: $d", e)
+    }

@@ -48,7 +48,7 @@ public class RevoktPolicy private constructor(
     public fun signedSourceFailingAfter(): Duration = Duration.ofMillis(signedSourceFailingAfterMillis)
 
     /** A builder holding this policy's values, deriving from the same preset. */
-    public fun newBuilder(): Builder = Builder(form)
+    public fun newBuilder(): Builder = Builder.from(form)
 
     override fun toString(): String = "RevoktPolicy(preset=${form.preset}, outcomes=${form.outcomes})"
 
@@ -63,10 +63,11 @@ public class RevoktPolicy private constructor(
     /**
      * Derives a policy from a preset (spec §4). Every method returns this builder; [build] runs the §4 B checks and
      * throws `IllegalArgumentException` on the first that fails: a `rejectStaleAfter` below its `staleAfter`, and an
-     * exemption on a rule that is not exemptable. Time arguments are non-negative milliseconds; Kotlin also has
-     * `kotlin.time.Duration` overloads as extensions.
+     * exemption on a rule that is not exemptable. Time arguments are non-negative milliseconds, and a negative one
+     * throws `IllegalArgumentException`; so does a `java.time.Duration` beyond `Long` milliseconds, whose `toMillis()`
+     * overflows. Kotlin also has `kotlin.time.Duration` overloads as extensions.
      */
-    public class Builder internal constructor(
+    public class Builder private constructor(
         from: PolicyForm,
     ) {
         private val preset = from.preset
@@ -124,7 +125,7 @@ public class RevoktPolicy private constructor(
         public fun rejectStaleAfter(
             dataset: Dataset,
             d: Duration?,
-        ): Builder = rejectStaleAfterMillis(dataset, d?.toMillis())
+        ): Builder = rejectStaleAfterMillis(dataset, d?.let { durationMillis("rejectStaleAfter", it) })
 
         /** [rejectStaleAfter] in milliseconds. */
         public fun rejectStaleAfterMillis(
@@ -146,16 +147,17 @@ public class RevoktPolicy private constructor(
             floor: TrustClass,
         ): Builder = apply { minTrustClass[dataset] = floor }
 
-        public fun rollbackWindow(d: Duration): Builder = rollbackWindowMillis(d.toMillis())
+        public fun rollbackWindow(d: Duration): Builder = rollbackWindowMillis(durationMillis("rollbackWindow", d))
 
         public fun rollbackWindowMillis(millis: Long): Builder =
             apply { rollbackWindowMillis = nonNegative("rollbackWindow", millis) }
 
-        public fun clockSkew(d: Duration): Builder = clockSkewMillis(d.toMillis())
+        public fun clockSkew(d: Duration): Builder = clockSkewMillis(durationMillis("clockSkew", d))
 
         public fun clockSkewMillis(millis: Long): Builder = apply { clockSkewMillis = nonNegative("clockSkew", millis) }
 
-        public fun signedSourceFailingAfter(d: Duration): Builder = signedSourceFailingAfterMillis(d.toMillis())
+        public fun signedSourceFailingAfter(d: Duration): Builder =
+            signedSourceFailingAfterMillis(durationMillis("signedSourceFailingAfter", d))
 
         public fun signedSourceFailingAfterMillis(millis: Long): Builder =
             apply { signedSourceFailingAfterMillis = nonNegative("signedSourceFailingAfter", millis) }
@@ -183,6 +185,11 @@ public class RevoktPolicy private constructor(
                     signedSourceFailingAfterMillis = signedSourceFailingAfterMillis,
                 ),
             )
+        }
+
+        internal companion object {
+            /** The only way to a builder: from a policy's form, so there is none from scratch (§4). */
+            fun from(form: PolicyForm): Builder = Builder(form)
         }
 
         private fun nonNegative(

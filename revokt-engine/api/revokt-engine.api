@@ -618,6 +618,7 @@ public final class dev/revokt/RevoktPolicy {
 }
 
 public final class dev/revokt/RevoktPolicy$Builder {
+	public synthetic fun <init> (Ldev/revokt/engine/policy/PolicyForm;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun build ()Ldev/revokt/RevoktPolicy;
 	public final fun clearExemption (Ldev/revokt/Rule;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun clearStaleness (Ldev/revokt/Dataset;)Ldev/revokt/RevoktPolicy$Builder;

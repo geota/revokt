@@ -287,6 +287,17 @@ class RevoktPolicyTest {
         )) {
             message { RevoktPolicy.DEFAULT.newBuilder().bad() }
         }
+        // A java.time.Duration beyond Long milliseconds is an argument error too, not an ArithmeticException.
+        val huge = Duration.ofSeconds(Long.MAX_VALUE)
+        for ((name, overflow) in listOf<Pair<String, RevoktPolicy.Builder.() -> Any>>(
+            "rollbackWindow" to { rollbackWindow(huge) },
+            "clockSkew" to { clockSkew(huge) },
+            "signedSourceFailingAfter" to { signedSourceFailingAfter(huge) },
+            "rejectStaleAfter" to { rejectStaleAfter(Dataset.CRLITE, huge) },
+        )) {
+            val e = assertFailsWith<IllegalArgumentException> { RevoktPolicy.DEFAULT.newBuilder().overflow() }
+            assertTrue(name in e.message!! && e.cause is ArithmeticException, "$name: $e")
+        }
     }
 
     @Test
@@ -373,6 +384,8 @@ class RevoktPolicyTest {
         Staleness.ofMillis(2 * day, day)
         message { Staleness.ofMillis(-1, null) }
         message { Staleness.ofMillis(0, -1) }
+        assertTrue("staleAfter" in message { Staleness.of(Duration.ofSeconds(Long.MAX_VALUE), null) })
+        assertTrue("rejectStaleAfter" in message { Staleness.of(Duration.ZERO, Duration.ofSeconds(Long.MAX_VALUE)) })
     }
 
     @Test
