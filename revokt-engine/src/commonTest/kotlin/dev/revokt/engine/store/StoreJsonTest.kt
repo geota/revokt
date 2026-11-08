@@ -294,13 +294,15 @@ class StoreJsonTest {
             UpdaterJson.read(bothBad, now),
         )
         assertEquals(UpdaterRead(UpdaterRecord()), UpdaterJson.read("{}".encodeToByteArray(), now))
+        // A sources member that is not an object reads as no sources and is reported (#131); null is absent.
         for (sources in listOf("[]", "7", "null", "\"x\"")) {
-            assertEquals(
-                UpdaterRead(UpdaterRecord(watermarkMillis = 5)),
-                UpdaterJson.read("{\"watermarkMillis\":5,\"sources\":$sources}".encodeToByteArray(), now),
-                sources,
-            )
+            val read = UpdaterJson.read("{\"watermarkMillis\":5,\"sources\":$sources}".encodeToByteArray(), now)
+            val malformed = sources != "null"
+            assertEquals(UpdaterRead(UpdaterRecord(watermarkMillis = 5), sourcesMalformed = malformed), read, sources)
+            assertEquals(if (malformed) 1 else 0, read?.storeFailures, sources)
         }
+        assertEquals(2, UpdaterJson.read(bothBad, now)?.storeFailures)
+        assertEquals(0, UpdaterJson.read("{}".encodeToByteArray(), now)?.storeFailures)
     }
 
     @Test
