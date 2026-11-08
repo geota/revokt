@@ -16,8 +16,10 @@ import dev.revokt.Rule
 import dev.revokt.TrustClass
 import dev.revokt.Verdict
 import dev.revokt.and
+import dev.revokt.engine.policy.PolicyForm
 import dev.revokt.engine.walker.ExpectedWalk
 import dev.revokt.engine.walker.Honest
+import dev.revokt.engine.walker.WalkerHarness
 import dev.revokt.engine.walker.garbage
 import dev.revokt.or
 import kotlin.test.Test
@@ -88,6 +90,37 @@ class ExemptionStageTest {
             listOf(Rule.NO_SCTS, Rule.UNSIGNED_DATA),
             s.findings.filterIsInstance<Finding.Exempted>().map { it.rule },
         )
+    }
+
+    @Test
+    fun `an exemption on a non-exemptable rule never runs, even in a form built around the builder's check`() {
+        val recording = Recording()
+        val strict = RevoktPolicy.STRICT.form
+        // NOT_COVERED allows in both presets; raised here so that its exemption would be asked if the check were missing.
+        val form =
+            PolicyForm(
+                strict.preset,
+                strict.outcomes + (Rule.NOT_COVERED to Outcome.REJECT),
+                mapOf(Rule.REVOKED to recording, Rule.NOT_COVERED to recording),
+                strict.requiredDatasets,
+                strict.staleness,
+                strict.minTrustClassEntries,
+                strict.rollbackWindowMillis,
+                strict.clockSkewMillis,
+                strict.signedSourceFailingAfterMillis,
+            )
+        for (result in listOf(CrliteQueryResult.REVOKED, CrliteQueryResult.NOT_COVERED)) {
+            val engine = StubEngine.always(result)
+            val v =
+                evaluate(
+                    EvaluationInput(honest.presented, null, snapshot(), form, WalkerHarness.SNAPSHOT_ID),
+                    NamedEngine(engine),
+                    { NOW },
+                    { now -> Run.decideFixture(honest, null, now) },
+                ).verdict
+            assertEquals(Rule.valueOf(result.name), assertIs<Verdict.Rejected>(v).rule, "$result")
+        }
+        assertEquals(emptyList(), recording.seen)
     }
 
     @Test
