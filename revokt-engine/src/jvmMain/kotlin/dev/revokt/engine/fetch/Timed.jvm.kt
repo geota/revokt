@@ -19,7 +19,15 @@ internal actual fun fetchWithin(
 ): Timed {
     val task = FutureTask(fetch)
     try {
-        io.asExecutor().execute(task)
+        io.asExecutor().execute {
+            // A cancel(true) the fetcher ignored leaves the worker interrupted; clear it so the next task on the
+            // worker does not inherit it. FutureTask.run returns only after a cancelling interrupt was delivered.
+            try {
+                task.run()
+            } finally {
+                Thread.interrupted()
+            }
+        }
     } catch (e: RejectedExecutionException) {
         // A shut-down executor: no fetch ran.
         return Timed.Threw(e)

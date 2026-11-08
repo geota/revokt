@@ -63,7 +63,7 @@ public class FetchResponse private constructor(
 
         /**
          * Replaces every header with a copy of [headers]. An entry with a null name, as `HttpURLConnection.getHeaderFields`
-         * gives the status line, is dropped.
+         * gives the status line, is dropped, and so are a null value list and a null value, which a Java map can hold.
          */
         public fun headers(headers: Map<String, List<String>>): Builder =
             apply {
@@ -71,8 +71,9 @@ public class FetchResponse private constructor(
                 for (entry in headers.entries) {
                     // A Java map can hold a null key whatever the Kotlin type says.
                     val name: Any? = entry.key
-                    if (name !is String) continue
-                    this.headers[name] = entry.value.toMutableList()
+                    val values: Any? = entry.value
+                    if (name !is String || values !is List<*>) continue
+                    this.headers[name] = values.filterIsInstanceTo(mutableListOf<String>())
                 }
             }
 

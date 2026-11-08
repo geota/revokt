@@ -12,11 +12,14 @@ import dev.revokt.SyncStage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.lang.reflect.Proxy
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.LockSupport
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -93,6 +96,47 @@ class TimedFetchTest {
             assertEquals(42, c.pollChanges().assertOk())
         } finally {
             release.countDown()
+        }
+    }
+
+    @Test
+    fun `a timed-out fetch that ignored its interrupt leaves no interrupt for the next task on its worker`() {
+        // One worker that, like Dispatchers.IO's and unlike a ThreadPoolExecutor's, does not clear the interrupt
+        // between tasks.
+        // Its idle wait neither throws on nor clears an interrupt.
+        val queue = ConcurrentLinkedQueue<Runnable>()
+        val stop = AtomicBoolean(false)
+        val worker =
+            Thread {
+                while (!stop.get()) queue.poll()?.run() ?: LockSupport.parkNanos(1_000_000)
+            }.apply {
+                isDaemon = true
+                start()
+            }
+        val executor = Executor { queue.add(it) }
+        val release = CountDownLatch(1)
+        val first = AtomicBoolean(true)
+        val nextSawInterrupt = AtomicBoolean(true)
+        val fetcher =
+            HttpFetcher {
+                if (first.getAndSet(false)) {
+                    // Spins without reading the interrupt, so cancel(true)'s interrupt stays set on the worker.
+                    while (release.count > 0) Thread.onSpinWait()
+                } else {
+                    nextSawInterrupt.set(Thread.currentThread().isInterrupted)
+                }
+                ok(monitor)
+            }
+        try {
+            val c = client(fetcher, timeoutMillis = 500, io = executor.asCoroutineDispatcher())
+            c.pollChanges().assertFailed(SyncStage.CHANGESET, ClientFailure.TIMEOUT)
+            release.countDown()
+            assertEquals(42, c.pollChanges().assertOk())
+            assertEquals(false, nextSawInterrupt.get(), "the next task on the one worker saw a stale interrupt")
+        } finally {
+            release.countDown()
+            stop.set(true)
+            worker.join()
         }
     }
 

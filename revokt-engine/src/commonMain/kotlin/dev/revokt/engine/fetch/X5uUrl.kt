@@ -49,7 +49,7 @@ internal class X5uUrlCheck private constructor(
  * The URL is read by a deliberately narrow grammar, so no URL parser downstream can see another host than the one
  * checked: `https://` (lowercase), an authority that is a DNS host name (labels of ASCII letters, digits and `-`,
  * separated by single dots, no trailing dot) and an optional port, then a path starting with `/` whose characters are
- * RFC 3986 `pchar`s, `/` and `?`, with every `%` followed by two hex digits. No fragment, no IP literal, no
+ * RFC 3986 `pchar`s, `/` and `?`, with every `%` followed by two hex digits. No fragment, no IP literal (nor a host whose last label is a number), no
  * percent-encoded or non-ASCII host (`java.net.URI.getHost()` would be null for the latter). What is fetched is
  * re-serialised from the parts: `https://`, the checked host, the path; an explicit `:443` is dropped.
  *
@@ -143,10 +143,20 @@ internal object X5uUrl {
 
     private fun isHostName(host: String): Boolean {
         if (host.isEmpty() || host.length > MAX_HOST) return false
-        return host.split('.').all { label ->
-            label.length in 1..MAX_LABEL &&
-                label.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' }
-        }
+        val labels = host.split('.')
+        val names =
+            labels.all { label ->
+                label.length in 1..MAX_LABEL &&
+                    label.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' }
+            }
+        // A last label that reads as a number makes the host an IPv4 address to WHATWG URL parsers (`1.2.3.4`,
+        // `0x7f.1`), so it is no DNS name here and "no IP literal" holds.
+        return names && !isNumeric(labels.last())
+    }
+
+    private fun isNumeric(label: String): Boolean {
+        val hex = label.length > 1 && label[0] == '0' && (label[1] == 'x' || label[1] == 'X')
+        return if (hex) label.drop(2).all(::isHex) else label.all { it in '0'..'9' }
     }
 
     private fun isPath(path: String): Boolean {

@@ -123,7 +123,8 @@ internal class RemoteSettingsClient(
 
     /**
      * The collection's changeset at [expected] (`_expected`, mandatory), the whole collection when [since] is null, else
-     * the changes after the verified cursor [since] (`_since="<since>"` and `If-None-Match: "<since>"`; a 304 is
+     * the changes after the verified cursor [since] (`_since=<since>`, bare, as Firefox's `RemoteSettingsClient` sends
+     * it at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, and `If-None-Match: "<since>"`, quoted, as §3 says; a 304 is
      * [ClientResult.Unchanged]). The body is parsed with the engine's JSON tree under `MAX_JSON_BYTES`; its `changes`
      * are objects and its `timestamp` an integer from 0 to `Long.MAX_VALUE`, else `FAILED` (`MALFORMED`). Nothing in it
      * is trusted until #137 verifies it.
@@ -139,7 +140,7 @@ internal class RemoteSettingsClient(
                 "_expected $expected, _since $since: not integers ≥ 0",
             )
         }
-        val query = "?_expected=$expected" + (since?.let { "&_since=%22$it%22" } ?: "")
+        val query = "?_expected=$expected" + (since?.let { "&_since=$it" } ?: "")
         val url = joinUrl(source.baseUrl, "buckets/${source.bucket}/collections/$collection/changeset$query")
         val body =
             when (val exchange = exchange(SyncStage.CHANGESET, url, limits.maxJsonBytes, cursor = since)) {

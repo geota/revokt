@@ -104,6 +104,17 @@ class X5uFetchTest {
             refused("https://$bad$path", X5uUrlFailure.SYNTAX)
         }
         refused("https://:443$path", X5uUrlFailure.SYNTAX)
+        // A last label that reads as a number is an IPv4 address to WHATWG parsers, not a DNS name.
+        for (numeric in listOf("1.2.3.4", "127.1", "2130706433", "0x7f.0.0.1", "a.0x7F", "a.0x", "cdn.mozilla.443")) {
+            refused("https://$numeric$path", X5uUrlFailure.SYNTAX)
+        }
+        val numericLabels =
+            MozillaRemoteSettings.DEFAULT
+                .newBuilder()
+                .x5uHosts(setOf("1a.2b.3c", "x.0xg"))
+                .build()
+        assertEquals("https://1a.2b.3c$path", fetched("https://1a.2b.3c$path", numericLabels))
+        assertEquals("https://x.0xg$path", fetched("https://x.0xg$path", numericLabels))
     }
 
     @Test

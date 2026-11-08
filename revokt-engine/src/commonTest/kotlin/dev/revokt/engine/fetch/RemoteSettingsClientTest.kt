@@ -117,14 +117,14 @@ class RemoteSettingsClientTest {
     }
 
     @Test
-    fun `fetchChangeset from a cursor sends _since and If-None-Match as the quoted cursor, and a 304 is UNCHANGED`() {
+    fun `a changeset fetch from a cursor sends _since bare and If-None-Match quoted, and a 304 is UNCHANGED`() {
         val fetcher = ScriptedFetcher { response(304, headers = arrayOf("Backoff" to "60")) }
         val result = client(fetcher).fetchChangeset(1793980622465, 1793900000000)
         val unchanged = assertIs<ClientResult.Unchanged>(result)
         assertEquals(304, unchanged.httpStatus)
         assertEquals(60_000, unchanged.backoffMillis)
         val request = fetcher.requests.single()
-        assertEquals("$changesetUrl?_expected=1793980622465&_since=%221793900000000%22", request.url)
+        assertEquals("$changesetUrl?_expected=1793980622465&_since=1793900000000", request.url)
         assertEquals(mapOf("User-Agent" to "revokt", "If-None-Match" to "\"1793900000000\""), request.headers)
     }
 
@@ -162,7 +162,7 @@ class RemoteSettingsClientTest {
         c.fetchChangeset(1, -1).assertFailed(SyncStage.CHANGESET, ClientFailure.QUERY_VALUE)
         assertEquals(0, fetcher.requests.size)
         c.fetchChangeset(0, 0).assertOk()
-        assertEquals("$changesetUrl?_expected=0&_since=%220%22", fetcher.requests.single().url)
+        assertEquals("$changesetUrl?_expected=0&_since=0", fetcher.requests.single().url)
     }
 
     @Test
@@ -290,6 +290,24 @@ class RemoteSettingsClientTest {
         assertEquals(503 to 10_000L, failed.httpStatus to failed.backoffMillis)
         val okResult = client(ScriptedFetcher { ok(monitor, "Backoff" to "7") }).pollChanges()
         assertEquals(200 to 7_000L, okResult.httpStatus to okResult.backoffMillis)
+    }
+
+    @Test
+    fun `null header values from a Java fetcher are dropped, not an NPE in the Backoff read`() {
+        val fields = linkedMapOf<String, List<String?>?>("Backoff" to null, "retry-after" to listOf(null, "9"))
+
+        @Suppress("UNCHECKED_CAST") // a Java fetcher's map, whose nulls the Kotlin type does not show
+        val headers = fields as Map<String, List<String>>
+        val result =
+            client(ScriptedFetcher { FetchResponse.of(200, headers, monitor.encodeToByteArray()) }).pollChanges()
+        assertEquals(1793980622465L to 9_000L, result.assertOk() to result.backoffMillis)
+        val onlyNull = linkedMapOf<String, List<String?>?>("Backoff" to listOf(null))
+
+        @Suppress("UNCHECKED_CAST") // as above
+        val nullValue = onlyNull as Map<String, List<String>>
+        assertNull(
+            client(ScriptedFetcher { FetchResponse.of(503, nullValue, ByteArray(0)) }).pollChanges().backoffMillis,
+        )
     }
 
     @Test
