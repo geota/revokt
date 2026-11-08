@@ -38,7 +38,8 @@ public fun interface Exemption {
          * Exempt when `context.host` is one of [hosts]. Each entry is compared as host' (§5.1 flow step 2: ASCII
          * lowercased, one trailing dot stripped), the form `context.host` already has. [hosts] is copied when the
          * exemption is made, and an entry that is not ASCII (a U-label: pass the A-label), is empty after
-         * normalisation or starts with a dot throws `IllegalArgumentException` then. A null `context.host` never
+         * normalisation, starts with a dot or holds a `*` (use [hostSuffixIn] for a wildcard) throws
+         * `IllegalArgumentException` then. A null `context.host` never
          * matches. On an HTTP/2-coalesced connection the host is the one OkHttp handshook for (§5.1).
          */
         @JvmStatic
@@ -80,6 +81,7 @@ public fun interface Exemption {
                     require(name.isNotEmpty() && !name.startsWith('.')) {
                         "$helper: \"$host\" is empty or starts with a dot"
                     }
+                    require('*' !in name) { "$helper: \"$host\" holds a '*'; hostSuffixIn is the wildcard form" }
                     add(name)
                 }
             }

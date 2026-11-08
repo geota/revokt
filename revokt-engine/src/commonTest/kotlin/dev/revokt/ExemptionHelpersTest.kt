@@ -133,6 +133,20 @@ class ExemptionHelpersTest {
     }
 
     @Test
+    fun `an entry holding a wildcard is rejected at construction`() {
+        for (entry in listOf("*.corp", "a*.corp", "corp*", "*")) {
+            assertEquals(
+                "hostIn: \"$entry\" holds a '*'; hostSuffixIn is the wildcard form",
+                rejects { Exemption.hostIn(listOf(entry)) },
+            )
+            assertEquals(
+                "hostSuffixIn: \"$entry\" holds a '*'; hostSuffixIn is the wildcard form",
+                rejects { Exemption.hostSuffixIn(listOf("corp", entry)) },
+            )
+        }
+    }
+
+    @Test
     fun `an empty host is no host, and no host never matches`() {
         assertNull(context("").host)
         assertNull(context(".").host)
@@ -211,6 +225,19 @@ class ExemptionHelpersTest {
                 assertEquals(outcome(a or b, c), outcome(b or a, c), "$x or $y")
             }
         }
+    }
+
+    @Test
+    fun `when both throw, the left operand's error propagates`() {
+        val c = context("corp")
+        val left = IllegalStateException("left")
+        val right = IllegalArgumentException("right")
+        val l = Exemption { throw left }
+        val r = Exemption { throw right }
+        assertSame(left, assertFailsWith<IllegalStateException> { (l and r).isExempt(c) })
+        assertSame(left, assertFailsWith<IllegalStateException> { (l or r).isExempt(c) })
+        assertSame(right, assertFailsWith<IllegalArgumentException> { (r and l).isExempt(c) })
+        assertSame(right, assertFailsWith<IllegalArgumentException> { (r or l).isExempt(c) })
     }
 
     @Test

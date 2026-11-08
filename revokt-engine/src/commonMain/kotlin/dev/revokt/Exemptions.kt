@@ -13,9 +13,9 @@ import kotlin.jvm.JvmName
  * the other side decides): this exemption runs first, and when it answers false the result is false and [other] does
  * not run; when [other] answers false the result is false even if this one threw; both true is true. Otherwise (one
  * threw and the other answered true, or both threw) the first throw propagates, and the evaluation records it as not
- * exempt plus a `Finding.EngineError` whose producer is `EXEMPTION`. An absorbed throw is not recorded, so the outcome
- * and the findings never depend on the operand order. A fatal error (§5.5's catch rule) always propagates at once.
- * Java: `Exemptions.and(a, b)`.
+ * exempt plus a `Finding.EngineError` whose producer is `EXEMPTION`. An absorbed throw is not recorded. The outcome
+ * never depends on operand order; when both throw, the left operand's error is the one recorded. A fatal error (§5.5's
+ * catch rule) always propagates at once. Java: `Exemptions.and(a, b)`.
  */
 public infix fun Exemption.and(other: Exemption): Exemption = combined(this, other, decisive = false)
 
