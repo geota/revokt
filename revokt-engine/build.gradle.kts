@@ -200,8 +200,11 @@ val matrixConscrypt =
                     GradleException("gradle/oracle-matrix.properties names Conscrypt key '$it', not a catalog version")
                 }.requiredVersion
         }
+val projectVersion = version.toString()
 tasks.withType<Test>().configureEach {
     inputs.file(rootProject.file("gradle/oracle-matrix.properties")).withPathSensitivity(PathSensitivity.RELATIVE)
     systemProperty("revokt.matrixJdks", matrixJdks)
     systemProperty("revokt.matrixConscrypt", matrixConscrypt)
+    // The policy's current minor must be this build's (RevoktPolicyTest; spec §4 flippedIn grace rules).
+    systemProperty("revokt.version", projectVersion)
 }

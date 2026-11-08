@@ -111,6 +111,12 @@ internal object PolicyTable {
             -> "0.1"
         }
 
+    /**
+     * The minor being built, `major.minor` of `revokt.version` (a test asserts they agree): the "current minor" of
+     * the `flippedIn` grace rules (spec §4 `EVIDENCE_LOWERED_BELOW_PRESET`, `RULE_FLIPPED_THIS_MINOR`).
+     */
+    val CURRENT_MINOR: String = "0.1"
+
     /** The one-minor `ALLOW → REJECT` flips made so far, by preset and rule: none yet. */
     private val FLIPPED: Map<Pair<Preset, Rule>, String> = emptyMap()
 
