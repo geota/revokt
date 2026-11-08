@@ -165,24 +165,80 @@ class ExemptionHelpersTest {
         assertSame(exemption, Exemption.platformOnly(), "stateless, so one instance")
     }
 
+    /** What an exemption answered, a throw included, so outcomes can be compared. */
+    private fun outcome(
+        exemption: Exemption,
+        c: ExemptionContext,
+    ): String =
+        try {
+            exemption.isExempt(c).toString()
+        } catch (e: Boom) {
+            "throws"
+        }
+
+    private val operands = mapOf("true" to yes, "false" to no, "throws" to throws)
+
     @Test
-    fun `and and or follow their truth tables`() {
+    fun `and and or follow CEL's truth tables, errors absorbed when the other side decides`() {
         val c = context("corp")
-        for ((a, b) in listOf(yes to yes, yes to no, no to yes, no to no)) {
-            val (x, y) = a.isExempt(c) to b.isExempt(c)
-            assertEquals(x && y, (a and b).isExempt(c), "$x and $y")
-            assertEquals(x || y, (a or b).isExempt(c), "$x or $y")
+        // Rows: left operand, right operand, then the CEL result of && and of ||.
+        val table =
+            listOf(
+                listOf("true", "true", "true", "true"),
+                listOf("true", "false", "false", "true"),
+                listOf("true", "throws", "throws", "true"),
+                listOf("false", "true", "false", "true"),
+                listOf("false", "false", "false", "false"),
+                listOf("false", "throws", "false", "throws"),
+                listOf("throws", "true", "throws", "true"),
+                listOf("throws", "false", "false", "throws"),
+                listOf("throws", "throws", "throws", "throws"),
+            )
+        for ((left, right, both, either) in table) {
+            val a = operands.getValue(left)
+            val b = operands.getValue(right)
+            assertEquals(both, outcome(a and b, c), "$left and $right")
+            assertEquals(either, outcome(a or b, c), "$left or $right")
         }
     }
 
     @Test
-    fun `a throwing operand propagates from and and or, whichever side it is on and whatever the other answers`() {
+    fun `and and or are commutative`() {
         val c = context("corp")
-        for (other in listOf(yes, no)) {
-            for (combined in listOf(throws and other, other and throws, throws or other, other or throws)) {
-                assertFailsWith<Boom> { combined.isExempt(c) }
+        for ((x, a) in operands) {
+            for ((y, b) in operands) {
+                assertEquals(outcome(a and b, c), outcome(b and a, c), "$x and $y")
+                assertEquals(outcome(a or b, c), outcome(b or a, c), "$x or $y")
             }
         }
+    }
+
+    @Test
+    fun `the right operand does not run when the left one decides`() {
+        val c = context("corp")
+        var runs = 0
+        val counted =
+            Exemption {
+                runs++
+                true
+            }
+        assertFalse((no and counted).isExempt(c))
+        assertTrue((yes or counted).isExempt(c))
+        assertEquals(0, runs)
+        assertTrue((yes and counted).isExempt(c))
+        assertTrue((no or counted).isExempt(c))
+        assertTrue((throws or counted).isExempt(c), "a throw on the left does not decide")
+        assertEquals(3, runs)
+    }
+
+    @Test
+    fun `with no decisive answer the first throw propagates`() {
+        val c = context("corp")
+        val second = Exemption { throw IllegalStateException("second") }
+        assertFailsWith<Boom> { (throws and second).isExempt(c) }
+        assertFailsWith<Boom> { (throws or second).isExempt(c) }
+        assertFailsWith<IllegalStateException> { (yes and second).isExempt(c) }
+        assertFailsWith<IllegalStateException> { (no or second).isExempt(c) }
     }
 
     @Test
