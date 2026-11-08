@@ -1,0 +1,155 @@
+// SPDX-FileCopyrightText: 2026 revokt contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package dev.revokt.buildlogic
+
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.Project
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.TaskProvider
+import org.gradle.kotlin.dsl.register
+import java.io.File
+
+/**
+ * One Jazzer `@FuzzTest` method (spec §9.1) and the libFuzzer flags its source names: `-max_len=<cap + 1>` (null when it
+ * names none) and `-timeout=<s>` where it overrides the harness's 10 s.
+ */
+internal data class FuzzTarget(
+    val module: String,
+    val className: String,
+    val method: String,
+    val source: String,
+    val maxLen: Long?,
+    val timeout: Int,
+) {
+    /** `Class.method`: the matrix entry, the dispatch input and the artifact suffix. */
+    val name: String get() = "${className.substringAfterLast('.')}.$method"
+
+    /** The Gradle path of the module (the repository's modules sit one level below the root). */
+    val project: String get() = ":" + module.replace('/', ':')
+}
+
+/** The discovery behind fuzz.yml's matrix (#115) and the nightly tier's (#119). */
+internal object FuzzTargets {
+    /** Spec §9.1 harness: `-timeout=10` unless the target says otherwise. */
+    const val DEFAULT_TIMEOUT = 10
+
+    private val packageLine = Regex("""^package\s+([A-Za-z0-9_.]+)""")
+    private val classLine = Regex("""^(?:(?:public|internal|open|abstract|final)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)""")
+    private val annotation = Regex("""^\s*@FuzzTest\b""")
+    private val function = Regex("""\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(""")
+    private val maxLenFlag = Regex("""-max_len=(\d+)""")
+    private val timeoutFlag = Regex("""-timeout=(\d+)""")
+
+    /**
+     * The targets in one Kotlin source: each method annotated `@FuzzTest` (at the start of a line, so a KDoc mention is
+     * not one) of the top-level class declared above it.
+     */
+    fun read(module: String, source: String, text: String): List<FuzzTarget> {
+        val lines = text.lines()
+        val pkg = lines.firstNotNullOfOrNull { packageLine.find(it)?.groupValues?.get(1) }
+        val maxLen = single(source, "-max_len", maxLenFlag, text)?.toLong()
+        val timeout = single(source, "-timeout", timeoutFlag, text)?.toInt() ?: DEFAULT_TIMEOUT
+        val out = ArrayList<FuzzTarget>()
+        var cls: String? = null
+        var pending = false
+        for (line in lines) {
+            classLine.find(line)?.let { cls = it.groupValues[1] }
+            val annotated = annotation.containsMatchIn(line)
+            if (annotated) pending = true
+            if (!pending) continue
+            // The annotation's own line may hold the function too; otherwise the next `fun` is the target.
+            val fn = function.find(if (annotated) line.substringAfter("@FuzzTest") else line) ?: continue
+            val owner = cls ?: throw GradleException("fuzzTargets: $source has a @FuzzTest method outside a top-level class; declare it in one.")
+            out += FuzzTarget(module, listOfNotNull(pkg, owner).joinToString("."), fn.groupValues[1], source, maxLen, timeout)
+            pending = false
+        }
+        return out
+    }
+
+    /** Every target under [sources] (files inside `<module>/src/jvmTest/kotlin` of [rootDir]), sorted by name. */
+    fun scan(rootDir: File, sources: Iterable<File>): List<FuzzTarget> {
+        val root = rootDir.canonicalFile
+        val targets = sources.asSequence()
+            .filter { it.isFile && it.name.endsWith(".kt") }
+            .flatMap { file ->
+                val source = file.canonicalFile.relativeTo(root).invariantSeparatorsPath
+                val module = source.substringBefore("/src/jvmTest/kotlin/", missingDelimiterValue = "")
+                if (module.isEmpty()) throw GradleException("fuzzTargets: $source is not under <module>/src/jvmTest/kotlin.")
+                read(module, source, file.readText())
+            }
+            .sortedBy { it.name }
+            .toList()
+        val clashes = targets.groupBy { it.name }.filterValues { it.size > 1 }
+        if (clashes.isNotEmpty()) {
+            throw GradleException(
+                "fuzzTargets: targets share a Class.method name ${clashes.keys}: rename one, as the name keys the matrix and its artifacts.",
+            )
+        }
+        return targets
+    }
+
+    /** The matrix for `fromJSON`: one object per target. */
+    fun json(targets: List<FuzzTarget>): String =
+        targets.joinToString(",\n", "[\n", "\n]\n") { t ->
+            listOf(
+                "name" to quote(t.name),
+                "project" to quote(t.project),
+                "module" to quote(t.module),
+                "class" to quote(t.className),
+                "method" to quote(t.method),
+                "source" to quote(t.source),
+                "maxLen" to (t.maxLen?.toString() ?: "null"),
+                "timeout" to t.timeout.toString(),
+            ).joinToString(", ", "  {", "}") { (k, v) -> "\"$k\": $v" }
+        }
+
+    private fun single(source: String, flag: String, pattern: Regex, text: String): String? {
+        val values = pattern.findAll(text).map { it.groupValues[1] }.toSet()
+        if (values.size > 1) throw GradleException("fuzzTargets: $source names $flag ${values.sorted()}: one value per file (split the targets).")
+        return values.singleOrNull()
+    }
+
+    private fun quote(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+}
+
+/** Writes [FuzzTargets.json] for every `@FuzzTest` method in the modules' jvmTest sources and lists them. */
+abstract class FuzzTargetsTask : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sources: ConfigurableFileCollection
+
+    @get:Internal
+    abstract val rootDir: DirectoryProperty
+
+    @get:OutputFile
+    abstract val output: RegularFileProperty
+
+    @TaskAction
+    fun write() {
+        val targets = FuzzTargets.scan(rootDir.get().asFile, sources.files)
+        for (t in targets) {
+            logger.lifecycle("${t.name} (${t.project}, -max_len=${t.maxLen ?: "unset"}, -timeout=${t.timeout})")
+            if (t.maxLen == null) logger.warn("fuzzTargets: ${t.source} names no -max_len; spec §9.1 runs each target at its cap + 1.")
+        }
+        output.get().asFile.apply { parentFile.mkdirs() }.writeText(FuzzTargets.json(targets))
+    }
+}
+
+internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
+    tasks.register<FuzzTargetsTask>("fuzzTargets") {
+        description = "Lists every Jazzer @FuzzTest method with its §9.1 flags into build/fuzz/targets.json (fuzz.yml's matrix)."
+        group = "revokt"
+        rootDir.set(layout.projectDirectory)
+        sources.from(subprojects.map { it.layout.projectDirectory.dir("src/jvmTest/kotlin").asFileTree.matching { include("**/*.kt") } })
+        output.set(layout.buildDirectory.file("fuzz/targets.json"))
+    }

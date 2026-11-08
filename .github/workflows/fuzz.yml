@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: 2026 revokt contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Manual fuzzing on the self-hosted `revokt-fuzz` runner (spec §9.1, CONTRIBUTING §6; decision CI1, #115): every
-# Jazzer @FuzzTest method in turn, for the chosen time each. Built but disabled: it runs only when a maintainer
-# dispatches it. Never on pull_request or pull_request_target: a self-hosted runner on a public repository must not
-# run a fork's code. No ClusterFuzzLite, no corpus token, no secret. Not the release gate (that is #119).
+# Manual fuzzing on the self-hosted `revokt-fuzz` runner (spec §9.1, CONTRIBUTING §6; decision CI1, #115): one matrix
+# entry per Jazzer @FuzzTest method, as `./gradlew fuzzTargets` discovers them, for the chosen time each. Built but
+# disabled: it runs only when a maintainer dispatches it. Never on pull_request or pull_request_target: a self-hosted
+# runner on a public repository must not run a fork's code. No ClusterFuzzLite, no corpus token, no secret. Not the
+# release gate (that is #119).
 name: fuzz
 
 on:
@@ -14,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "all, or one target as Class.method (the discovery step lists them)"
+        description: "all, or one target as Class.method (the targets job lists them)"
         type: string
         default: all
       seconds:
@@ -30,12 +31,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  fuzz:
-    name: fuzz (every @FuzzTest target in turn)
-    runs-on: [self-hosted, revokt-fuzz] # zizmor: ignore[self-hosted-runner] dispatch only, never a PR trigger
-    timeout-minutes: 600
+  targets:
+    name: targets (the @FuzzTest methods)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      # build-logic's FuzzTargets: each method with the -max_len (the cap + 1) and -timeout its source names.
+      - name: list
+        id: list
+        env:
+          TARGET: ${{ inputs.target || 'all' }}
+        run: |
+          set -euo pipefail
+          case $TARGET in ''|*[!A-Za-z0-9_.]*) echo "::error::target must be all or Class.method"; exit 1 ;; esac
+          ./gradlew fuzzTargets --no-daemon
+          targets=$(jq -c --arg t "$TARGET" '[.[] | select($t == "all" or .name == $t)]' build/fuzz/targets.json)
+          if [ "$targets" = "[]" ]; then echo "::error::no target named $TARGET (see the fuzzTargets output above)"; exit 1; fi
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    name: fuzz (${{ matrix.target.name }})
+    needs: targets
+    runs-on: [self-hosted, revokt-fuzz] # zizmor: ignore[self-hosted-runner] dispatch only, never a PR trigger
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.targets) }}
     steps:
       # Without the StepSecurity agent on the runner this only logs; kept so every job starts the same way.
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
@@ -52,71 +94,109 @@ jobs:
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-disabled: true
-      # Discovery: every @FuzzTest method under */src/jvmTest/kotlin, so a new target needs no edit here. Its flags are
-      # the §9.1 harness's: -rss_limit_mb=1024, -timeout=10 unless the target's source names another (the parser's
-      # -timeout=1), and the -max_len=<cap + 1> its source names. Jazzer's JUnit mode reads libFuzzer flags from the
-      # jazzer.internal.arg.<n> configuration parameters, which reach the test JVM as system properties; they come
-      # after Jazzer's own (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last. The test
-      # JVM keeps Gradle's 512 MiB heap: §9.1's -Xmx256m needs a build change, which #115 leaves open.
+      # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set), -rss_limit_mb=1024, the
+      # target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
+      # configuration parameters, which reach the test JVM as system properties; they come after Jazzer's own
+      # (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last.
       - name: fuzz
+        id: fuzz
         env:
-          TARGET: ${{ inputs.target || 'all' }}
           FUZZ_SECONDS: ${{ inputs.seconds || 300 }}
+          NAME: ${{ matrix.target.name }}
+          PROJECT: ${{ matrix.target.project }}
+          MODULE: ${{ matrix.target.module }}
+          CLASS: ${{ matrix.target.class }}
+          METHOD: ${{ matrix.target.method }}
+          SOURCE: ${{ matrix.target.source }}
+          MAX_LEN: ${{ matrix.target.maxLen }}
+          TIMEOUT: ${{ matrix.target.timeout }}
         run: |
           set -euo pipefail
           case $FUZZ_SECONDS in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1 ;; esac
           if [ "$FUZZ_SECONDS" -lt 1 ] || [ "$FUZZ_SECONDS" -gt 3600 ]; then echo "::error::seconds must be 1 to 3600"; exit 1; fi
-          case $TARGET in ''|*[!A-Za-z0-9_.]*) echo "::error::target must be all or Class.method"; exit 1 ;; esac
-          # One line per target: <module> <package.Class> <method> <file>.
-          targets=$({ git grep -l -E '^[[:space:]]*@FuzzTest' -- '*/src/jvmTest/kotlin/*.kt' || true; } | while read -r file; do
-            pkg=$(sed -n 's/^package \([A-Za-z0-9_.]*\)$/\1/p' "$file")
-            awk -v module="${file%%/*}" -v pkg="$pkg" -v file="$file" '
-              /^(internal |public )?class [A-Za-z0-9_]+/ { cls = $0; sub(/^(internal |public )?class /, "", cls); sub(/[^A-Za-z0-9_].*/, "", cls) }
-              /^[[:space:]]*@FuzzTest/ { want = 1; next }
-              want && /fun / { m = $0; sub(/.*fun /, "", m); sub(/\(.*/, "", m); print module, pkg "." cls, m, file; want = 0 }
-            ' "$file"
-          done)
-          if [ -z "$targets" ]; then echo "::error::no @FuzzTest method found"; exit 1; fi
-          echo "Targets:"; printf '%s\n' "$targets" | sed 's/^/  /'
+          args=(fake_argv0 "-max_total_time=$FUZZ_SECONDS" -rss_limit_mb=1024 "-timeout=$TIMEOUT")
+          if [ -n "$MAX_LEN" ]; then
+            args+=("-max_len=$MAX_LEN")
+          else
+            echo "::warning file=$SOURCE::$NAME: its source names no -max_len (spec §9.1: the cap + 1); libFuzzer's default applies"
+          fi
+          opts=""
+          for i in "${!args[@]}"; do opts+=" -Djazzer.internal.arg.$i=${args[$i]}"; done
+          echo "$NAME: ${args[*]:1}"
           mkdir -p fuzz-out
-          ran=0
-          failed=()
-          while read -r module cls method file; do
-            name="${cls##*.}.$method"
-            if [ "$TARGET" != all ] && [ "$TARGET" != "$name" ]; then continue; fi
-            ran=$((ran + 1))
-            maxlen=$({ grep -o -e '-max_len=[0-9]*' "$file" || true; } | sort -u | sed 's/-max_len=//')
-            timeout=$({ grep -o -e '-timeout=[0-9]*' "$file" || true; } | sort -u | sed 's/-timeout=//')
-            if [ "$(printf '%s' "$maxlen" | grep -c .)" -gt 1 ] || [ "$(printf '%s' "$timeout" | grep -c .)" -gt 1 ]; then
-              echo "::error file=$file::$name: its source names more than one -max_len or -timeout"; failed+=("$name"); continue
-            fi
-            if [ -z "$maxlen" ]; then echo "::warning file=$file::$name: its source names no -max_len (spec §9.1: the cap + 1); libFuzzer's default applies"; fi
-            args=(fake_argv0 "-max_total_time=$FUZZ_SECONDS" -rss_limit_mb=1024 "-timeout=${timeout:-10}")
-            if [ -n "$maxlen" ]; then args+=("-max_len=$maxlen"); fi
-            opts=""
-            for i in "${!args[@]}"; do opts+=" -Djazzer.internal.arg.$i=${args[$i]}"; done
-            echo "::group::$name (${args[*]:1})"
-            out="fuzz-out/$name"
-            mkdir -p "$out"
-            status=0
-            JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" \
-              ./gradlew ":$module:jvmTest" --tests "$cls.$method" --rerun --no-daemon < /dev/null 2>&1 | tee "$out/gradle.log" || status=$?
-            # Jazzer writes a finding (crash-, timeout-, oom-, leak-, slow-unit-) into the module directory, as these
-            # targets keep their inputs under src/jvmTest/resources and not src/test/resources.
-            find "$module" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' -o -name 'slow-unit-*' \) -exec mv {} "$out/" \;
-            cp "$module/build/test-results/jvmTest/"*.xml "$out/" 2>/dev/null || true
-            echo "::endgroup::"
-            if [ "$status" -ne 0 ]; then echo "::error file=$file::$name failed; see the fuzz-findings artifact"; failed+=("$name"); fi
-          done <<< "$targets"
-          if [ "$ran" -eq 0 ]; then echo "::error::no target named '$TARGET'"; exit 1; fi
-          if [ "${#failed[@]}" -gt 0 ]; then echo "::error::failed: ${failed[*]}"; exit 1; fi
+          status=0
+          JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" \
+            ./gradlew "$PROJECT:jvmTest" --tests "$CLASS.$METHOD" --rerun --no-daemon < /dev/null 2>&1 | tee fuzz-out/gradle.log || status=$?
+          # Jazzer writes a finding (crash-, timeout-, oom-, leak-, slow-unit-) into the module directory, as these
+          # targets keep their inputs under src/jvmTest/resources and not src/test/resources.
+          find "$MODULE" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' -o -name 'slow-unit-*' \) -exec mv {} fuzz-out/ \;
+          cp "$MODULE/build/test-results/jvmTest/"*.xml fuzz-out/ 2>/dev/null || true
+          if find fuzz-out -maxdepth 1 -type f ! -name gradle.log ! -name '*.xml' | grep -q .; then echo "finding=true" >> "$GITHUB_OUTPUT"; fi
+          if [ "$status" -ne 0 ]; then echo "::error file=$SOURCE::$NAME failed; see its fuzz-findings artifact"; exit "$status"; fi
       # The reproducers and logs only; they are public on a public repository, so a finding is triaged as a
-      # vulnerability report (SECURITY.md) and its fix follows CONTRIBUTING §8.
-      - name: findings on failure
-        if: failure()
+      # vulnerability report (SECURITY.md) and its fix follows CONTRIBUTING §8. The report job links the artifact. A
+      # failure without a finding (a build error) leaves its log in the job output only.
+      - name: findings
+        if: failure() && steps.fuzz.outputs.finding == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: fuzz-findings-${{ github.run_id }}-${{ github.run_attempt }}
+          name: fuzz-findings-${{ matrix.target.name }}
           path: fuzz-out/
           if-no-files-found: ignore
           retention-days: 7
+      # Jazzer's generated corpus for this target; merging it into the committed inputs stays a manual PR.
+      - name: corpus
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-corpus-${{ matrix.target.name }}
+          path: ${{ matrix.target.module }}/.cifuzz-corpus/${{ matrix.target.class }}/${{ matrix.target.method }}/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # One `security` issue per failed target, naming the target and linking its findings artifact; no input bytes. An open
+  # issue with the same title gets a comment instead of a duplicate. The only job that can write issues; it runs no
+  # repository code.
+  report:
+    name: report (security issues for the findings)
+    needs: fuzz
+    if: failure()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read # list this run's artifacts
+      issues: write # file or comment on the security issue
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - name: file the issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          found=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name | startswith("fuzz-findings-")) | "\(.id) \(.name)"')
+          if [ -z "$found" ]; then echo "::warning::a job failed without a finding (see $RUN_URL); no issue filed"; exit 0; fi
+          while read -r id name; do
+            target=${name#fuzz-findings-}
+            case $target in ''|*[!A-Za-z0-9_.]*) echo "::error::unexpected artifact name"; exit 1 ;; esac
+            title="fuzz: finding in $target"
+            body=$(printf '%s\n' \
+              "The fuzz workflow found a problem in the \`$target\` target (spec §9.1 Findings)." \
+              "" \
+              "- Run: $RUN_URL" \
+              "- Reproducer and log: $RUN_URL/artifacts/$id (kept for 7 days; download it before it expires)" \
+              "" \
+              "Triage it as a vulnerability report (SECURITY.md); a fix follows CONTRIBUTING §8. Do not paste the input here.")
+            existing=$(gh issue list -R "$REPO" --state open --label security --search "\"$title\" in:title" --json number,title < /dev/null \
+              | jq -r --arg t "$title" '[.[] | select(.title == $t)][0].number // empty')
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" -R "$REPO" --body "$body" < /dev/null
+            else
+              gh issue create -R "$REPO" --label security --title "$title" --body "$body" < /dev/null
+            fi
+          done <<< "$found"
