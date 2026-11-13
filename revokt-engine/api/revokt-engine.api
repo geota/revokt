@@ -87,6 +87,7 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field FORMAT_UNSUPPORTED Ldev/revokt/DiagnosticCode;
 	public static final field INDEX_INCONSISTENT Ldev/revokt/DiagnosticCode;
 	public static final field IN_MEMORY_STORE_WITH_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
+	public static final field IO_DISPATCHER_UNCONFINED Ldev/revokt/DiagnosticCode;
 	public static final field LOWER_CLASS_SOURCE_NEVER_INSTALLED Ldev/revokt/DiagnosticCode;
 	public static final field METERED_DEFERRED Ldev/revokt/DiagnosticCode;
 	public static final field MIRROR_WITH_SEED_NEVER_INSTALLED Ldev/revokt/DiagnosticCode;

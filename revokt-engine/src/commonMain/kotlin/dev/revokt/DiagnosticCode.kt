@@ -124,4 +124,10 @@ public enum class DiagnosticCode {
      * source; `NO_DATA` keeps firing. A mirror's sync is [SyncOutcome.FAILED] at stage `INDEX`.
      */
     SOURCE_EMPTY,
+
+    /**
+     * V: `ioDispatcher` is exactly `Dispatchers.Unconfined`, so fetches would run on the loader thread and defeat the
+     * per-fetch timeout (§4). A `WARNING` under both enforcements; other inline executors are not detected.
+     */
+    IO_DISPATCHER_UNCONFINED,
 }

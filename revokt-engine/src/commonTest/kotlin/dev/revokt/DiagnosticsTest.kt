@@ -71,8 +71,8 @@ class DiagnosticsTest {
 
     @Test
     fun `DiagnosticCode entries are the spec 4 list`() {
-        // Spec §4 (revision 55), `enum class DiagnosticCode`, in its order, 0.3's codes included, then SOURCE_EMPTY
-        // (revision 56, the §7.3 empty-generation warning). Growable: a new code is appended here and there together.
+        // Spec §4 (revision 56), `enum class DiagnosticCode`, in its order, 0.3's codes included. Growable: a new code is
+        // appended here and there together.
         val spec =
             "METERED_DEFERRED, CLOCK_BEHIND, NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, " +
                 "STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, " +
@@ -83,7 +83,7 @@ class DiagnosticsTest {
                 "STRICT_ON_ANDROID_WITHOUT_NO_ISSUER_EXEMPTION, BUDGET_ALLOWS, EVIDENCE_LOWERED_BELOW_PRESET, " +
                 "LOWER_CLASS_SOURCE_NEVER_INSTALLED, STALENESS_CLEARED_FOR_REQUIRED_DATASET, SEED_UNREADABLE, " +
                 "SEED_CHANNEL_MISMATCH, STORE_UNREADABLE, STORE_LOCKED, CHANNEL_UNSET, PLATFORM_TRUST_MISMATCH, " +
-                "CAP_NEAR_LIMIT, SYNC_FAILED, SYNC_SCHEMA_REJECTED, SOURCE_EMPTY"
+                "CAP_NEAR_LIMIT, SYNC_FAILED, SYNC_SCHEMA_REJECTED, SOURCE_EMPTY, IO_DISPATCHER_UNCONFINED"
         assertEquals(spec.split(", "), DiagnosticCode.entries.map { it.name })
         // Spec §4: NOT_STARTED is the unevaluated counter, never a diagnostic.
         assertTrue(DiagnosticCode.entries.none { it.name == "NOT_STARTED" })
