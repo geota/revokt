@@ -141,7 +141,12 @@ internal object X5uUrl {
         return Read.Parsed(host, port, path)
     }
 
-    private fun isHostName(host: String): Boolean {
+    /**
+     * A DNS host name as this grammar reads one: LDH labels of 1 to 63 characters, ASCII case kept, separated by single
+     * dots, at most 253 characters, no trailing dot, and a last label that is not a number. `MozillaRemoteSettings`
+     * holds its x5u hosts and rewrites to the same rule at build (spec §4), so both accept exactly the same names.
+     */
+    internal fun isHostName(host: String): Boolean {
         if (host.isEmpty() || host.length > MAX_HOST) return false
         val labels = host.split('.')
         val names =

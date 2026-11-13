@@ -155,13 +155,8 @@ class X5uFetchTest {
 
     @Test
     fun `data-path (d) the rewritten URI is re-parsed and re-checked whole, the port rule included`() {
-        // Targets the builder lets through but the x5u grammar does not read as a DNS host name.
-        refused(x5u, X5uUrlFailure.SYNTAX, mirror("1.2.3.4", "1.2.3.4"))
-        refused(x5u, X5uUrlFailure.SYNTAX, mirror("x5u mirror.example", "x5u mirror.example"))
-        refused(x5u, X5uUrlFailure.SYNTAX, mirror("x5u..mirror.example", "x5u..mirror.example"))
-
-        // MozillaRemoteSettings.Builder.build() now refuses these targets (spec §4, revision 56); the re-check still
-        // holds for the rewrite map on its own.
+        // MozillaRemoteSettings.Builder.build() refuses every one of these targets (spec §4, revision 56); the
+        // re-check still holds for the rewrite map on its own.
         fun rechecked(target: String): X5uUrlFailure? = X5uUrl.check(x5u, setOf(target), mapOf(host to target)).failure
         assertEquals(X5uUrlFailure.PORT, rechecked("x5u.mirror.example:8443"))
         assertEquals(X5uUrlFailure.USERINFO, rechecked("user@x5u.mirror.example"))
@@ -169,6 +164,9 @@ class X5uFetchTest {
         assertEquals(X5uUrlFailure.SYNTAX, rechecked("x5u.mirror.example?x"))
         assertEquals(X5uUrlFailure.SYNTAX, rechecked("x5u.mirrör.example"))
         assertEquals(X5uUrlFailure.SYNTAX, rechecked(""))
+        assertEquals(X5uUrlFailure.SYNTAX, rechecked("1.2.3.4"))
+        assertEquals(X5uUrlFailure.SYNTAX, rechecked("x5u mirror.example"))
+        assertEquals(X5uUrlFailure.SYNTAX, rechecked("x5u..mirror.example"))
         // A target of host:443 parses as the host, not the target exactly.
         assertEquals(X5uUrlFailure.REWRITE, rechecked("x5u.mirror.example:443"))
     }

@@ -3,6 +3,7 @@
 
 package dev.revokt
 
+import dev.revokt.engine.fetch.X5uUrl
 import okio.ByteString
 import okio.ByteString.Companion.decodeHex
 import okio.ByteString.Companion.toByteString
@@ -45,14 +46,14 @@ public class MozillaRemoteSettings private constructor(
 
     /**
      * The hosts an x5u URL may name, after [x5uHostRewrites]: default `content-signature-2.cdn.mozilla.net`. Each is a
-     * bare ASCII DNS name ([Builder]). Hosts are compared exactly, ASCII case included, so an entry should be lowercase
+     * DNS host name ([Builder]). Hosts are compared exactly, ASCII case included, so an entry should be lowercase
      * as Mozilla's are.
      */
     public val x5uHosts: Set<String> = buildSet { addAll(builder.x5uHosts) }
 
     /**
      * The x5u host rewrites, from a host to the one fetched instead: applied once to the parsed x5u URI host before the
-     * [x5uHosts] check. Every target is in [x5uHosts], and both sides are bare ASCII DNS names ([Builder]). Default
+     * [x5uHosts] check. Every target is in [x5uHosts], and both sides are DNS host names ([Builder]). Default
      * none. Hosts are compared exactly, ASCII case included. The client still re-parses the rewritten URI, re-applies
      * the scheme, userinfo and port rules to it, and requires its parsed host to equal the target (spec §7.1).
      */
@@ -82,9 +83,9 @@ public class MozillaRemoteSettings private constructor(
         what: String,
         host: String,
     ) {
-        require(host.isNotEmpty() && host.none { it in NOT_IN_BARE_HOST || it.code > ASCII_MAX }) {
-            "$what \"$host\" is not a bare ASCII DNS name: empty, non-ASCII, or holding one of $NOT_IN_BARE_HOST " +
-                "(spec §4, revision 56)"
+        require(X5uUrl.isHostName(host)) {
+            "$what \"$host\" is not a DNS host name: LDH labels of 1 to 63 characters separated by single dots, at " +
+                "most 253 characters, no trailing dot, and a last label that is not a number (spec §4, §7.1)"
         }
     }
 
@@ -127,9 +128,10 @@ public class MozillaRemoteSettings private constructor(
     /**
      * Builds a [MozillaRemoteSettings], starting from [DEFAULT]'s values, so a mirror configuration keeps Mozilla's pin.
      * [build] throws [IllegalArgumentException] in two cases (spec §4, revision 56): an [x5uHostRewrite] target outside
-     * [x5uHosts], and an [x5uHosts] entry or either side of an [x5uHostRewrite] that is not a bare ASCII DNS name, that
-     * is one that is empty, holds a non-ASCII character or holds any of `:`, `@`, `/`, `?`, `#` and `[`. Nothing else
-     * about a host is checked here: the fetch-time x5u rules still refuse what is not a DNS host name (spec §7.1).
+     * [x5uHosts], and an [x5uHosts] entry or either side of an [x5uHostRewrite] that is not a DNS host name as the x5u
+     * URL grammar reads one (spec §7.1): LDH labels of 1 to 63 characters separated by single dots, at most 253
+     * characters, no trailing dot, and a last label that is not a number, so no port, userinfo, path or IP literal.
+     * ASCII upper case is allowed, since hosts are compared exactly. The fetch-time check accepts exactly these names.
      */
     public class Builder {
         internal var baseUrl: String = DEFAULT_BASE_URL
@@ -166,7 +168,7 @@ public class MozillaRemoteSettings private constructor(
 
         /**
          * Rewrites the x5u URI host [from] to [to] before the [x5uHosts] check, so no JSON is rewritten on the wire;
-         * replaces an earlier rewrite of [from]. [to] must be in [x5uHosts] when [build] runs. Both are bare hosts,
+         * replaces an earlier rewrite of [from]. [to] must be in [x5uHosts] when [build] runs. Both are DNS host names,
          * compared exactly, ASCII case included; the client re-checks the rewritten URI ([x5uHostRewrites]).
          */
         public fun x5uHostRewrite(
@@ -195,10 +197,6 @@ public class MozillaRemoteSettings private constructor(
         private const val MOZILLA_X5U_HOST = "content-signature-2.cdn.mozilla.net"
         private const val DEFAULT_USER_AGENT = "revokt"
         private const val DEFAULT_SOURCE_ID = "mozilla-remote-settings"
-
-        // Spec §4 (revision 56): what keeps a port, userinfo, a path, a query, a fragment or an IP literal out of a host.
-        private const val NOT_IN_BARE_HOST = ":@/?#["
-        private const val ASCII_MAX = 0x7F
 
         /** Spec §7.1 and Appendix A (revision 49): the SPKI SHA-256 of `CN=root-ca-production-amo`. */
         private val ROOT_CA_PRODUCTION_AMO_SPKI_SHA256: ByteString =

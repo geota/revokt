@@ -75,7 +75,7 @@ public object RevoktLimits {
 
     /**
      * C2SP manifest attachments to fetch; a manifest listing more is rejected before any body fetch. 256 since revision
-     * 56 (32 before): a full and 255 deltas, where the live mirror listed 40 files on 2026-11-06.
+     * 56 (32 before; Remote Settings listed 53 records a channel on 2026-11-12).
      */
     @JvmField public val MAX_MANIFEST_ENTRIES: Int = 256
 

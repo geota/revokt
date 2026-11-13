@@ -3,6 +3,7 @@
 
 package dev.revokt
 
+import dev.revokt.engine.fetch.X5uUrl
 import okio.ByteString.Companion.decodeHex
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
@@ -63,9 +64,11 @@ class MozillaRemoteSettingsTest {
     }
 
     @Test
-    fun `an x5uHosts entry or a rewrite side that is not a bare ASCII DNS name throws from build`() {
-        // Spec §4 and §9's API rows (revision 56), plus an empty host and the first non-ASCII code point.
-        val notBare =
+    fun `an x5uHosts entry or a rewrite side that is not a DNS host name throws from build`() {
+        val label63 = "a".repeat(63)
+        val name253 = listOf(label63, label63, label63, "a".repeat(61)).joinToString(".")
+        // Spec §4 and §9's API rows (revision 56), then the rest of the x5u URL grammar's host rule (spec §7.1).
+        val notHostNames =
             listOf(
                 "mirror.example:443",
                 "user@mirror.example",
@@ -76,6 +79,23 @@ class MozillaRemoteSettingsTest {
                 "mirrör.example",
                 "mirror\u0080.example",
                 "",
+                "mirror.example.",
+                "mirror..example",
+                ".mirror.example",
+                "mirror example",
+                "mirror\t.example",
+                "mirror\u0000.example",
+                "mirror\u007F.example",
+                "mirror\\.example",
+                "mirror%2Eexample",
+                "mirror_x.example",
+                "*.mirror.example",
+                "a".repeat(64) + ".example",
+                name253.dropLast(1) + "ab",
+                "1.2.3.4",
+                "0x7f.1",
+                "mirror.0x",
+                "mirror.443",
             )
         // Each builder against the reason build() reports first: the x5uHosts entries are checked before the rewrites.
         val cases =
@@ -87,25 +107,29 @@ class MozillaRemoteSettingsTest {
                 "x5uHostRewrite to" to { bad -> MozillaRemoteSettings.Builder().x5uHostRewrite(mozillaX5u, bad) },
                 "x5uHostRewrite from" to { bad -> MozillaRemoteSettings.Builder().x5uHostRewrite(bad, mozillaX5u) },
             )
-        for (bad in notBare) {
+        for (bad in notHostNames) {
             for ((reason, builder) in cases) {
                 val e = assertFailsWith<IllegalArgumentException>("$reason \"$bad\"") { builder(bad).build() }
-                assertTrue(e.message.orEmpty().startsWith("$reason \"$bad\" is not a bare ASCII DNS name"), e.message)
+                assertTrue(e.message.orEmpty().startsWith("$reason \"$bad\" is not a DNS host name"), e.message)
             }
         }
-        // DEFAULT's host is bare, and DEFAULT builds.
+        // DEFAULT's host is one, and DEFAULT builds.
         assertEquals(MozillaRemoteSettings.DEFAULT, MozillaRemoteSettings.DEFAULT.newBuilder().build())
         assertEquals(MozillaRemoteSettings.DEFAULT, MozillaRemoteSettings.Builder().build())
-        // Nothing else about a host is checked here: the fetch-time x5u grammar refuses these (spec §7.1).
-        val other = setOf("1.2.3.4", "a b", "a..b", "Mirror.Example", "a\u007Fb")
-        assertEquals(
-            other,
+        // At the edges of the grammar: upper case (hosts are compared exactly), a 63-character label, a 253-character
+        // name, a single label, and numeric labels that are not last.
+        val hostNames = setOf("Mirror.Example", "$label63.example", name253, "mirror", "1a.2b.3c", "x.0xg", "1.2.3.a-b")
+        val built =
             MozillaRemoteSettings
                 .Builder()
-                .x5uHosts(other)
+                .x5uHosts(hostNames)
+                .apply { for (h in hostNames) x5uHostRewrite(h, h) }
                 .build()
-                .x5uHosts,
-        )
+        assertEquals(hostNames, built.x5uHosts)
+        // build() and the fetch-time check accept exactly the same hosts.
+        for (h in notHostNames + hostNames) {
+            assertEquals(h in hostNames, X5uUrl.check("https://$h/x", setOf(h), emptyMap()).url != null, h)
+        }
     }
 
     @Test
