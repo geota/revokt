@@ -37,7 +37,7 @@ class RevoktLimitsTest {
         assertEquals(16L shl 20, RevoktLimits.MAX_FILTER_BYTES)
         assertEquals(4L shl 20, RevoktLimits.MAX_JSON_BYTES)
         assertEquals(64L shl 10, RevoktLimits.MAX_X5U_BYTES)
-        assertEquals(32, RevoktLimits.MAX_MANIFEST_ENTRIES)
+        assertEquals(256, RevoktLimits.MAX_MANIFEST_ENTRIES)
         assertEquals(256, RevoktLimits.MAX_CHANGESET_RECORDS)
         assertEquals(128L shl 20, RevoktLimits.MAX_SYNC_BYTES)
         assertEquals(60_000, RevoktLimits.READONLY_POLL_INTERVAL)

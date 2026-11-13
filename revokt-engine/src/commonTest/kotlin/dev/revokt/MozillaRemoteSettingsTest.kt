@@ -13,7 +13,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotSame
 import kotlin.test.assertTrue
 
-/** `MozillaRemoteSettings` as spec §4 and §7.1 declare it (#111): the §7.1 defaults and the one build-time check. */
+/** `MozillaRemoteSettings` as spec §4 and §7.1 declare it (#111): the §7.1 defaults and the two build-time checks. */
 class MozillaRemoteSettingsTest {
     private val mozillaX5u = "content-signature-2.cdn.mozilla.net"
 
@@ -63,6 +63,52 @@ class MozillaRemoteSettingsTest {
     }
 
     @Test
+    fun `an x5uHosts entry or a rewrite side that is not a bare ASCII DNS name throws from build`() {
+        // Spec §4 and §9's API rows (revision 56), plus an empty host and the first non-ASCII code point.
+        val notBare =
+            listOf(
+                "mirror.example:443",
+                "user@mirror.example",
+                "mirror.example/x",
+                "mirror.example?x",
+                "mirror.example#x",
+                "[::1]",
+                "mirrör.example",
+                "mirror\u0080.example",
+                "",
+            )
+        // Each builder against the reason build() reports first: the x5uHosts entries are checked before the rewrites.
+        val cases =
+            listOf<Pair<String, (String) -> MozillaRemoteSettings.Builder>>(
+                "x5uHosts entry" to { bad -> MozillaRemoteSettings.Builder().x5uHosts(setOf(mozillaX5u, bad)) },
+                "x5uHosts entry" to { bad ->
+                    MozillaRemoteSettings.Builder().x5uHosts(setOf(mozillaX5u, bad)).x5uHostRewrite(mozillaX5u, bad)
+                },
+                "x5uHostRewrite to" to { bad -> MozillaRemoteSettings.Builder().x5uHostRewrite(mozillaX5u, bad) },
+                "x5uHostRewrite from" to { bad -> MozillaRemoteSettings.Builder().x5uHostRewrite(bad, mozillaX5u) },
+            )
+        for (bad in notBare) {
+            for ((reason, builder) in cases) {
+                val e = assertFailsWith<IllegalArgumentException>("$reason \"$bad\"") { builder(bad).build() }
+                assertTrue(e.message.orEmpty().startsWith("$reason \"$bad\" is not a bare ASCII DNS name"), e.message)
+            }
+        }
+        // DEFAULT's host is bare, and DEFAULT builds.
+        assertEquals(MozillaRemoteSettings.DEFAULT, MozillaRemoteSettings.DEFAULT.newBuilder().build())
+        assertEquals(MozillaRemoteSettings.DEFAULT, MozillaRemoteSettings.Builder().build())
+        // Nothing else about a host is checked here: the fetch-time x5u grammar refuses these (spec §7.1).
+        val other = setOf("1.2.3.4", "a b", "a..b", "Mirror.Example", "a\u007Fb")
+        assertEquals(
+            other,
+            MozillaRemoteSettings
+                .Builder()
+                .x5uHosts(other)
+                .build()
+                .x5uHosts,
+        )
+    }
+
+    @Test
     fun `a rewrite target in x5uHosts builds, and a later rewrite of the same host replaces the first`() {
         val mirror =
             MozillaRemoteSettings
@@ -96,15 +142,6 @@ class MozillaRemoteSettingsTest {
             assertEquals(url, s.baseUrl)
             assertEquals(url, s.attachmentBaseUrl)
         }
-        val hosts = setOf("user@mirror.example", "mirror.example:8443")
-        assertEquals(
-            hosts,
-            MozillaRemoteSettings
-                .Builder()
-                .x5uHosts(hosts)
-                .build()
-                .x5uHosts,
-        )
         // An empty allowlist and an empty pin set build too: every x5u fetch, or every chain, then fails closed.
         assertEquals(
             emptySet(),
