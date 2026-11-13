@@ -474,16 +474,20 @@ class EvaluateTest {
     }
 
     @Test
-    fun `a FOUND path with no issuer key is the boundary's error, never a clean answer`() {
-        val engine = StubEngine.always(CrliteQueryResult.NOT_REVOKED)
-        val v =
-            Run(listOf(h.leaf.der), policy = RevoktPolicy.STRICT, engine = engine) {
-                decision(PathStatus.FOUND)
-            }.evaluate().verdict
-        assertEquals(setOf(Rule.ENGINE_ERROR), v.rules)
-        assertEquals(Rule.ENGINE_ERROR, assertIs<Verdict.Rejected>(v).rule)
-        assertEquals(listOf(EngineErrorProducer.BOUNDARY), engineErrors(v).map { it.producer })
-        assertEquals(emptyList(), engine.queries)
+    fun `a FOUND or NOT_WALKED decision with no issuer key is the boundary's error, never a clean answer`() {
+        for (status in listOf(PathStatus.FOUND, PathStatus.NOT_WALKED)) {
+            val engine = StubEngine.always(CrliteQueryResult.NOT_REVOKED)
+            val v =
+                Run(listOf(h.leaf.der), policy = RevoktPolicy.STRICT, engine = engine) {
+                    decision(status)
+                }.evaluate().verdict
+            assertEquals(setOf(Rule.ENGINE_ERROR), v.rules, "$status")
+            assertEquals(Rule.ENGINE_ERROR, assertIs<Verdict.Rejected>(v).rule, "$status")
+            val error = engineErrors(v).single()
+            assertEquals(EngineErrorProducer.BOUNDARY, error.producer, "$status")
+            assertTrue("a $status decision with no leaf-issuer key" in error.message, error.message)
+            assertEquals(emptyList(), engine.queries, "$status")
+        }
     }
 
     // The verdict's other fields.

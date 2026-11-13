@@ -63,7 +63,9 @@ internal class Evaluated(
  *
  * - **Data rules, before the boundary:** one guarded read of [clock] (a throw is `ENGINE_ERROR(BOUNDARY)`, never an
  *   escape), then [dataStates] from the snapshot, merged into every verdict whatever happens next.
- * - **Steps 1 to 6:** [decide], given the clock read. A throw reports the path `NOT_WALKED`.
+ * - **Steps 1 to 6:** [decide], given the clock read. A throw reports the path `NOT_WALKED`. A decision with no
+ *   leaf-issuer key whose status fires no rule of its own (`FOUND`, `NOT_WALKED`) is the boundary's error, so no keys
+ *   is never read as a clean answer.
  * - **Step 7:** [queryCrlite], once per distinct leaf-issuer key.
  * - **Step 8:** [fire] over the facts gathered, then the exemptions for fired, exemptable `REJECT` rules, then the
  *   verdict ([verdict]). The exemptions' `PresentedChain` is built by [chainOf] (a test seam), and only once an
@@ -93,8 +95,9 @@ internal fun evaluate(
         guarded(acc) {
             val decision = decide(now)
             acc.decision = decision
-            check(decision.issuerKeys.isNotEmpty() || decision.path.status != PathStatus.FOUND) {
-                "a FOUND path with no leaf-issuer key: no keys is never a clean answer"
+            val status = decision.path.status
+            check(decision.issuerKeys.isNotEmpty() || (status != PathStatus.FOUND && status != PathStatus.NOT_WALKED)) {
+                "a $status decision with no leaf-issuer key: no keys is never a clean answer"
             }
             queryCrlite(decision, input.snapshot, published, engine.engine, acc)
         }
@@ -315,8 +318,8 @@ private fun described(t: Throwable): String =
 
 /**
  * What one evaluation has gathered so far, kept whole when the boundary catches a throw: the decision, the `Crlite`
- * findings of the keys answered, the boundary's error messages, and the rules exempted and the exemptions' errors. [engineName] names the engine's
- * errors.
+ * findings of the keys answered, the boundary's error messages, and the rules exempted and the exemptions' errors.
+ * [engineName] names the engine's errors.
  */
 private class Accumulator(
     private val engineName: String,
