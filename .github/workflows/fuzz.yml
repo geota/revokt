@@ -103,8 +103,9 @@ jobs:
       # target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
       # configuration parameters, which reach the test JVM as system properties; they come after Jazzer's own
       # (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last.
-      # Job logs are public and libFuzzer prints a crashing input, so once fuzzing has started the Gradle output stays
-      # in fuzz-out/ and only the run counts are echoed; a build that fails before fuzzing starts prints its log.
+      # Job logs are public and libFuzzer prints a crashing input, so the Gradle output stays in fuzz-out/ and fails
+      # closed: only the lines before `> Task <project>:jvmTest` are printed, nothing once the test-results XML exists or
+      # if those lines hold a fuzzer line, and the run counts.
       - name: fuzz
         id: fuzz
         env:
@@ -134,6 +135,8 @@ jobs:
           echo "$NAME: ${args[*]:1}"
           echo "flags=${args[*]:1}" >> "$GITHUB_OUTPUT"
           mkdir -p fuzz-out
+          # Stale results would read as a test run that never happened.
+          rm -rf "$MODULE/build/test-results/jvmTest"
           status=0
           JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" \
             ./gradlew "$PROJECT:jvmTest" --tests "$CLASS.$METHOD" --rerun -Prevokt.testJdk=25 \
@@ -142,11 +145,18 @@ jobs:
           # targets keep their inputs under src/jvmTest/resources and not src/test/resources.
           find "$MODULE" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' -o -name 'slow-unit-*' \) -exec mv {} fuzz-out/ \;
           cp "$MODULE/build/test-results/jvmTest/"*.xml fuzz-out/ 2>/dev/null || true
+          # The test task may have started (and with it the fuzzer) once its header is printed or its XML exists.
           started=0
-          if grep -q '^INFO: Seed: ' fuzz-out/gradle.log; then started=1; fi
-          if [ "$started" -eq 0 ]; then cat fuzz-out/gradle.log; else grep -E '^Done [0-9]+ runs in |^#[0-9]+[[:space:]]+DONE ' fuzz-out/gradle.log || true; fi
+          awk -v t="> Task $PROJECT:jvmTest" '$0 == t || index($0, t " ") == 1 { exit } { print }' fuzz-out/gradle.log > fuzz-out/before-test.log
+          if [ "$(wc -l < fuzz-out/before-test.log)" -lt "$(wc -l < fuzz-out/gradle.log)" ] || ls fuzz-out/*.xml > /dev/null 2>&1; then started=1; fi
+          if ls fuzz-out/*.xml > /dev/null 2>&1 || grep -qE 'Base64:|INFO: Seed:|^#[0-9]+[[:space:]]|==[0-9]+==' fuzz-out/before-test.log; then
+            echo "(the Gradle log is withheld: the test task ran, and its output may hold a fuzz input)"
+          else
+            cat fuzz-out/before-test.log
+          fi
+          grep -E '^Done [0-9]+ runs in [0-9]+ second' fuzz-out/gradle.log || true
           if [ "$status" -eq 0 ]; then exit 0; fi
-          # A failure once fuzzing has started is a finding, with or without a reproducer file.
+          # A failure once the test task may have started is a finding, with or without a reproducer file.
           if [ "$started" -eq 1 ]; then
             echo "finding=true" >> "$GITHUB_OUTPUT"
             echo "::error file=$SOURCE::$NAME: a finding; it is recorded as a private draft security advisory (CONTRIBUTING §6)"
@@ -154,7 +164,39 @@ jobs:
             echo "::error file=$SOURCE::$NAME: the build failed before fuzzing started"
           fi
           exit "$status"
-      # The only step with the advisory token; it reads fuzz-out/ on this runner, so nothing leaves the job in public.
+      # libFuzzer's -minimize_crash=1 on each crash input (the module's fuzzMinimize, at most 300 s), so it fits the
+      # advisory; its output stays in fuzz-out/.
+      - name: minimise
+        if: failure() && steps.fuzz.outputs.finding == 'true'
+        env:
+          PROJECT: ${{ matrix.target.project }}
+          CLASS: ${{ matrix.target.class }}
+          TIMEOUT: ${{ matrix.target.timeout }}
+        run: |
+          set -uo pipefail
+          for f in fuzz-out/crash-*; do
+            [ -f "$f" ] || continue
+            name=${f##*/}
+            ./gradlew "$PROJECT:fuzzMinimize" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
+              "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzInput=$PWD/$f" "-Prevokt.fuzzOutput=$PWD/fuzz-out/min-$name" \
+              "-Prevokt.fuzzTimeout=$TIMEOUT" --no-daemon < /dev/null > "fuzz-out/minimise-$name.log" 2>&1 || true
+            if [ -s "fuzz-out/min-$name" ]; then echo "minimised a crash input"; else echo "could not minimise a crash input"; fi
+          done
+      # Before the token is in reach, nothing the build started may still run: Gradle and Kotlin daemons, test workers
+      # and the minimiser's re-launched JVMs are all java processes of this user.
+      - name: stop the build's processes
+        if: failure() && steps.fuzz.outputs.finding == 'true'
+        run: |
+          set -uo pipefail
+          me=$(id -un)
+          pkill -u "$me" java || true
+          for _ in 1 2 3 4 5; do pgrep -u "$me" java > /dev/null || break; sleep 2; done
+          pkill -KILL -u "$me" java || true
+          sleep 1
+          if pgrep -u "$me" java > /dev/null; then echo "::error::java processes are still running; the advisory step does not run"; exit 1; fi
+          echo "no java process left"
+      # The only step with the advisory token. It runs the committed script (no earlier step can have edited it) under a
+      # clean environment, and reads fuzz-out/ on this runner, so nothing leaves the job in public.
       - name: draft security advisory
         if: failure() && steps.fuzz.outputs.finding == 'true'
         env:
@@ -171,7 +213,9 @@ jobs:
             echo "::error::the FUZZ_ADVISORY_TOKEN secret is not set (CONTRIBUTING §6); the finding is not recorded"
             exit 1
           fi
-          python3 -I .github/scripts/fuzz_advisory.py fuzz-out
+          /usr/bin/git show HEAD:.github/scripts/fuzz_advisory.py \
+            | /usr/bin/env -i PATH=/usr/bin:/bin GH_TOKEN="$GH_TOKEN" REPO="$REPO" RUN_URL="$RUN_URL" TARGET="$TARGET" \
+              PROJECT="$PROJECT" SOURCE="$SOURCE" FLAGS="$FLAGS" /usr/bin/python3 -I - fuzz-out
       # Jazzer's generated corpus, on request and only from a run without a finding; merging it into the committed
       # inputs stays a manual PR.
       - name: corpus

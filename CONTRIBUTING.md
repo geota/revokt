@@ -416,9 +416,11 @@ every required check in Appendix B passes**.
 - Ad-hoc fuzzing (`fuzz.yml`, #115): dispatch only, on GitHub-hosted runners, one job per target that
   `./gradlew fuzzTargets` lists. A finding lands as a private **draft security advisory** (private vulnerability
   reporting is enabled), visible only to administrators and security managers, with the stack trace and the
-  reproducer; nothing about it beyond the failed job is public (no issue, artifact or fuzzer log). It needs the
-  `FUZZ_ADVISORY_TOKEN` repository secret: a fine-grained personal access token of an administrator, for this
-  repository only, with "Repository security advisories: Read and write".
+  reproducer (minimised by libFuzzer's `-minimize_crash=1` first); nothing about it beyond the failed job is public
+  (no issue, artifact or fuzzer log). It needs the `FUZZ_ADVISORY_TOKEN` repository secret: a fine-grained personal
+  access token of an administrator, for this repository only, with "Repository security advisories: Read and write".
+  The token expires: renew it before then, because a finding after expiry fails the job loudly and is lost with the
+  runner.
 - Android emulator matrix (API 26, 31, 34, 36) on hosted Linux runners with KVM, from the mirrored system
   images (§11), including the null-host probe, the StrictMode main-thread probe and the API-26 futures
   fixture; triggered by schedule, `workflow_dispatch`, and the `run/android` label on a PR. Robolectric on the

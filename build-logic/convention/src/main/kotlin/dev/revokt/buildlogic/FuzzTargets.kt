@@ -15,9 +15,16 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.TaskProvider
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.jvm.toolchain.JavaToolchainService
+import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.register
+import org.gradle.process.CommandLineArgumentProvider
+import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import java.io.File
+import java.time.Duration
 
 /**
  * One Jazzer `@FuzzTest` method (spec §9.1) and the libFuzzer flags its source names: `-max_len=<cap + 1>` (null when it
@@ -160,3 +167,48 @@ internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
         sources.from(subprojects.map { it.layout.projectDirectory.dir("src/jvmTest/kotlin").asFileTree.matching { include("**/*.kt") } })
         output.set(layout.buildDirectory.file("fuzz/targets.json"))
     }
+
+/**
+ * `fuzzMinimize` (fuzz.yml, #115): libFuzzer's `-minimize_crash=1` over one crash input, so a finding fits a draft
+ * advisory. It runs Jazzer's standalone driver, which re-launches the JVM for each minimisation step, on the target's
+ * static `fuzzerTestOneInput` with the jvmTest classpath, in the §9.1 harness JVM (`-Xmx256m`, `-rss_limit_mb=1024`) on
+ * the tests' JDK. Properties: `revokt.fuzzClass`, `revokt.fuzzInput`, `revokt.fuzzOutput` (libFuzzer rewrites it with
+ * each smaller crashing input), `revokt.fuzzTimeout` (the target's `-timeout`, default 10), `revokt.fuzzSeconds` (each
+ * step's search, default 10) and `revokt.fuzzBudget` (the whole task, default 300 s: libFuzzer's loop has no bound of its
+ * own, so the task times out and the output holds the smallest input found so far). Jazzer's re-launched JVMs outlive a
+ * timeout; fuzz.yml stops them before it reads the output.
+ */
+internal fun Project.registerFuzzMinimize() {
+    val test = extensions.getByType<KotlinMultiplatformExtension>().jvm().compilations.getByName("test")
+    val property = { name: String -> providers.gradleProperty("revokt.$name") }
+    val testJdk = providers.gradleProperty("revokt.testJdk").map { it.toInt() }.orElse(Conventions.JDK_BUILD)
+    val launcher = extensions.getByType<JavaToolchainService>().launcherFor { languageVersion.set(testJdk.map { JavaLanguageVersion.of(it) }) }
+    tasks.register<JavaExec>("fuzzMinimize") {
+        description = "Minimises one Jazzer crash input with libFuzzer's -minimize_crash=1 (fuzz.yml, #115)."
+        group = "revokt"
+        classpath = files(test.output.allOutputs, test.runtimeDependencyFiles ?: files())
+        mainClass.set("com.code_intelligence.jazzer.Jazzer")
+        maxHeapSize = "256m"
+        javaLauncher.set(launcher)
+        val cls = property("fuzzClass")
+        val input = property("fuzzInput")
+        val output = property("fuzzOutput")
+        val perInput = property("fuzzTimeout").orElse(FuzzTargets.DEFAULT_TIMEOUT.toString())
+        val seconds = property("fuzzSeconds").orElse("10")
+        timeout.set(property("fuzzBudget").orElse("300").map { Duration.ofSeconds(it.toLong()) })
+        argumentProviders.add(
+            CommandLineArgumentProvider {
+                listOf(
+                    "--target_class=${cls.get()}",
+                    "--instrumentation_includes=dev.revokt.**",
+                    "-minimize_crash=1",
+                    "-max_total_time=${seconds.get()}",
+                    "-timeout=${perInput.get()}",
+                    "-rss_limit_mb=1024",
+                    "-exact_artifact_path=${output.get()}",
+                    input.get(),
+                )
+            },
+        )
+    }
+}
