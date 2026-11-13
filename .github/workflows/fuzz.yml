@@ -1,0 +1,228 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Ad-hoc fuzzing (spec §9.1, CONTRIBUTING §6; decision CI1, #115): one matrix entry per Jazzer @FuzzTest method, as
+# `./gradlew fuzzTargets` discovers them, for the chosen time each, on GitHub-hosted runners. Runs only when a
+# maintainer dispatches it; never on pull_request or pull_request_target. A finding becomes a private draft security
+# advisory: no reproducer, stack trace or fuzzer log reaches a public artifact, issue or job log. No ClusterFuzzLite;
+# the nightly tier and release gate are #119's.
+name: fuzz
+
+on:
+  # Off: this workflow is for dispatched runs (#119 is the nightly). Uncommenting it adds a nightly run of every target.
+  # schedule:
+  #   - cron: "47 3 * * *"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "all, or one target as Class.method (the targets job lists them)"
+        type: string
+        default: all
+      seconds:
+        description: "Fuzzing time per target, in seconds (1 to 3600)"
+        type: number
+        default: 300
+      upload_corpus:
+        description: "Upload each target's generated corpus (7 days; the account is near its storage budget)"
+        type: boolean
+        default: false
+
+permissions: read-all
+
+# One run at a time, so two runs never race to record the same finding. A concurrency group holds one running and one
+# pending run: a second dispatch waits for the first, and a third replaces the pending second.
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+jobs:
+  targets:
+    name: targets (the @FuzzTest methods)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      # build-logic's FuzzTargets: each method with the -max_len (the cap + 1) and -timeout its source names.
+      - name: list
+        id: list
+        env:
+          TARGET: ${{ inputs.target || 'all' }}
+        run: |
+          set -euo pipefail
+          case $TARGET in ''|*[!A-Za-z0-9_.]*) echo "::error::target must be all or Class.method"; exit 1 ;; esac
+          ./gradlew fuzzTargets --no-daemon
+          targets=$(jq -c --arg t "$TARGET" '[.[] | select($t == "all" or .name == $t)]' build/fuzz/targets.json)
+          if [ "$targets" = "[]" ]; then echo "::error::no target named $TARGET (see the fuzzTargets output above)"; exit 1; fi
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    name: fuzz (${{ matrix.target.name }})
+    needs: targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.targets) }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Spec §9.1 "Tiers and matrix": fuzzing runs on one pinned JDK >= 22 (Panama), 25 here; Gradle runs on 21.
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: |
+            25
+            21
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set), -rss_limit_mb=1024, the
+      # target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
+      # configuration parameters, which reach the test JVM as system properties; they come after Jazzer's own
+      # (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last.
+      # Job logs are public and libFuzzer prints a crashing input, so the Gradle output stays in fuzz-out/ and fails
+      # closed: only the lines before `> Task <project>:jvmTest` are printed, nothing once the test-results XML exists or
+      # if those lines hold a fuzzer line, and the run counts.
+      - name: fuzz
+        id: fuzz
+        env:
+          FUZZ_SECONDS: ${{ inputs.seconds }}
+          NAME: ${{ matrix.target.name }}
+          PROJECT: ${{ matrix.target.project }}
+          MODULE: ${{ matrix.target.module }}
+          CLASS: ${{ matrix.target.class }}
+          METHOD: ${{ matrix.target.method }}
+          SOURCE: ${{ matrix.target.source }}
+          MAX_LEN: ${{ matrix.target.maxLen }}
+          TIMEOUT: ${{ matrix.target.timeout }}
+        run: |
+          set -euo pipefail
+          # Empty only without a dispatch (the commented-out schedule); a dispatched 0 is rejected below.
+          FUZZ_SECONDS=${FUZZ_SECONDS:-300}
+          case $FUZZ_SECONDS in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1 ;; esac
+          if [ "$FUZZ_SECONDS" -lt 1 ] || [ "$FUZZ_SECONDS" -gt 3600 ]; then echo "::error::seconds must be 1 to 3600"; exit 1; fi
+          args=(fake_argv0 "-max_total_time=$FUZZ_SECONDS" -rss_limit_mb=1024 "-timeout=$TIMEOUT")
+          if [ -n "$MAX_LEN" ]; then
+            args+=("-max_len=$MAX_LEN")
+          else
+            echo "::warning file=$SOURCE::$NAME: its source names no -max_len (spec §9.1: the cap + 1); libFuzzer's default applies"
+          fi
+          opts=""
+          for i in "${!args[@]}"; do opts+=" -Djazzer.internal.arg.$i=${args[$i]}"; done
+          echo "$NAME: ${args[*]:1}"
+          echo "flags=${args[*]:1}" >> "$GITHUB_OUTPUT"
+          mkdir -p fuzz-out
+          # Stale results would read as a test run that never happened.
+          rm -rf "$MODULE/build/test-results/jvmTest"
+          status=0
+          JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" \
+            ./gradlew "$PROJECT:jvmTest" --tests "$CLASS.$METHOD" --rerun -Prevokt.testJdk=25 \
+            -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 --no-daemon < /dev/null > fuzz-out/gradle.log 2>&1 || status=$?
+          # Jazzer writes a finding (crash-, timeout-, oom-, leak-, slow-unit-) into the module directory, as these
+          # targets keep their inputs under src/jvmTest/resources and not src/test/resources.
+          find "$MODULE" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' -o -name 'slow-unit-*' \) -exec mv {} fuzz-out/ \;
+          cp "$MODULE/build/test-results/jvmTest/"*.xml fuzz-out/ 2>/dev/null || true
+          # The test task may have started (and with it the fuzzer) once its header is printed or its XML exists.
+          started=0
+          awk -v t="> Task $PROJECT:jvmTest" '$0 == t || index($0, t " ") == 1 { exit } { print }' fuzz-out/gradle.log > fuzz-out/before-test.log
+          if [ "$(wc -l < fuzz-out/before-test.log)" -lt "$(wc -l < fuzz-out/gradle.log)" ] || ls fuzz-out/*.xml > /dev/null 2>&1; then started=1; fi
+          if ls fuzz-out/*.xml > /dev/null 2>&1 || grep -qE 'Base64:|INFO: Seed:|^#[0-9]+[[:space:]]|==[0-9]+==' fuzz-out/before-test.log; then
+            echo "(the Gradle log is withheld: the test task ran, and its output may hold a fuzz input)"
+          else
+            cat fuzz-out/before-test.log
+          fi
+          grep -E '^Done [0-9]+ runs in [0-9]+ second' fuzz-out/gradle.log || true
+          if [ "$status" -eq 0 ]; then exit 0; fi
+          # A failure once the test task may have started is a finding, with or without a reproducer file.
+          if [ "$started" -eq 1 ]; then
+            echo "finding=true" >> "$GITHUB_OUTPUT"
+            echo "::error file=$SOURCE::$NAME: a finding; it is recorded as a private draft security advisory (CONTRIBUTING §6)"
+          else
+            echo "::error file=$SOURCE::$NAME: the build failed before fuzzing started"
+          fi
+          exit "$status"
+      # libFuzzer's -minimize_crash=1 on each crash input (the module's fuzzMinimize, at most 300 s), so it fits the
+      # advisory; its output stays in fuzz-out/.
+      - name: minimise
+        if: failure() && steps.fuzz.outputs.finding == 'true'
+        env:
+          PROJECT: ${{ matrix.target.project }}
+          CLASS: ${{ matrix.target.class }}
+          TIMEOUT: ${{ matrix.target.timeout }}
+        run: |
+          set -uo pipefail
+          for f in fuzz-out/crash-*; do
+            [ -f "$f" ] || continue
+            name=${f##*/}
+            ./gradlew "$PROJECT:fuzzMinimize" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
+              "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzInput=$PWD/$f" "-Prevokt.fuzzOutput=$PWD/fuzz-out/min-$name" \
+              "-Prevokt.fuzzTimeout=$TIMEOUT" --no-daemon < /dev/null > "fuzz-out/minimise-$name.log" 2>&1 || true
+            if [ -s "fuzz-out/min-$name" ]; then echo "minimised a crash input"; else echo "could not minimise a crash input"; fi
+          done
+      # Before the token is in reach, nothing the build started may still run: Gradle and Kotlin daemons, test workers
+      # and the minimiser's re-launched JVMs are all java processes of this user.
+      - name: stop the build's processes
+        if: failure() && steps.fuzz.outputs.finding == 'true'
+        run: |
+          set -uo pipefail
+          me=$(id -un)
+          pkill -u "$me" java || true
+          for _ in 1 2 3 4 5; do pgrep -u "$me" java > /dev/null || break; sleep 2; done
+          pkill -KILL -u "$me" java || true
+          sleep 1
+          if pgrep -u "$me" java > /dev/null; then echo "::error::java processes are still running; the advisory step does not run"; exit 1; fi
+          echo "no java process left"
+      # The only step with the advisory token. It runs the committed script (no earlier step can have edited it) under a
+      # clean environment, and reads fuzz-out/ on this runner, so nothing leaves the job in public.
+      - name: draft security advisory
+        if: failure() && steps.fuzz.outputs.finding == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.FUZZ_ADVISORY_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TARGET: ${{ matrix.target.name }}
+          PROJECT: ${{ matrix.target.project }}
+          SOURCE: ${{ matrix.target.source }}
+          FLAGS: ${{ steps.fuzz.outputs.flags }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the FUZZ_ADVISORY_TOKEN secret is not set (CONTRIBUTING §6); the finding is not recorded"
+            exit 1
+          fi
+          /usr/bin/git show HEAD:.github/scripts/fuzz_advisory.py \
+            | /usr/bin/env -i PATH=/usr/bin:/bin GH_TOKEN="$GH_TOKEN" REPO="$REPO" RUN_URL="$RUN_URL" TARGET="$TARGET" \
+              PROJECT="$PROJECT" SOURCE="$SOURCE" FLAGS="$FLAGS" /usr/bin/python3 -I - fuzz-out
+      # Jazzer's generated corpus, on request and only from a run without a finding; merging it into the committed
+      # inputs stays a manual PR.
+      - name: corpus
+        if: inputs.upload_corpus && steps.fuzz.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-corpus-${{ matrix.target.name }}
+          path: ${{ matrix.target.module }}/.cifuzz-corpus/${{ matrix.target.class }}/${{ matrix.target.method }}/
+          if-no-files-found: ignore
+          retention-days: 7

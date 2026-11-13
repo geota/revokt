@@ -85,6 +85,8 @@ class RootPlugin : Plugin<Project> {
             catalog.set(layout.projectDirectory.file("gradle/libs.versions.toml"))
             upkiIndex.set(layout.projectDirectory.file("revokt-engine/src/jvmTest/resources/dev/revokt/engine/c2sp/upki-index.tsv"))
         }
+        // Spec §9.1 and #115: the @FuzzTest methods fuzz.yml runs, one matrix entry each.
+        registerFuzzTargets()
         tasks.register<WriteCorpusManifestTask>("writeCorpusManifest") {
             description = "Regenerates corpus/manifest.sha256; only in a PR that admits corpus entries (docs/dev/corpus.md)."
             group = "revokt"
