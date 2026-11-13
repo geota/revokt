@@ -46,13 +46,16 @@ internal object FuzzTargets {
     private val packageLine = Regex("""^package\s+([A-Za-z0-9_.]+)""")
     private val classLine = Regex("""^(?:(?:public|internal|open|abstract|final)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)""")
     private val annotation = Regex("""^\s*@FuzzTest\b""")
-    private val function = Regex("""\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(""")
+    private val function = Regex("""\bfun\s+(`[^`]*`|[A-Za-z_][A-Za-z0-9_]*)\s*\(""")
+    private val plainName = Regex("""[A-Za-z0-9_.]+""")
     private val maxLenFlag = Regex("""-max_len=(\d+)""")
     private val timeoutFlag = Regex("""-timeout=(\d+)""")
 
     /**
      * The targets in one Kotlin source: each method annotated `@FuzzTest` (at the start of a line, so a KDoc mention is
-     * not one) of the top-level class declared above it.
+     * not one) of the top-level class declared above it. The flags are read from the whole file, comments included, as
+     * the targets state them in their KDoc. A target's `Class.method` must be plain (`[A-Za-z0-9_.]`, no backticked
+     * name): it is a Gradle test filter, a workflow input and an artifact name.
      */
     fun read(module: String, source: String, text: String): List<FuzzTarget> {
         val lines = text.lines()
@@ -70,7 +73,11 @@ internal object FuzzTargets {
             // The annotation's own line may hold the function too; otherwise the next `fun` is the target.
             val fn = function.find(if (annotated) line.substringAfter("@FuzzTest") else line) ?: continue
             val owner = cls ?: throw GradleException("fuzzTargets: $source has a @FuzzTest method outside a top-level class; declare it in one.")
-            out += FuzzTarget(module, listOfNotNull(pkg, owner).joinToString("."), fn.groupValues[1], source, maxLen, timeout)
+            val target = FuzzTarget(module, listOfNotNull(pkg, owner).joinToString("."), fn.groupValues[1], source, maxLen, timeout)
+            if (!plainName.matches(target.name)) {
+                throw GradleException("fuzzTargets: $source has the target ${target.name}; give it a plain name ([A-Za-z0-9_.], no backticks).")
+            }
+            out += target
             pending = false
         }
         return out

@@ -91,6 +91,24 @@ class FuzzTargetsTest {
     }
 
     @Test
+    fun `an annotation between @FuzzTest and its fun does not hide the target`() {
+        val text = "class T {\n    @FuzzTest(maxDuration = \"60s\")\n    @Tag(\"slow\")\n    fun a(data: ByteArray) = Unit\n}\n"
+        assertEquals(listOf("T.a"), FuzzTargets.read("m", "m/src/jvmTest/kotlin/T.kt", text).map { it.name })
+    }
+
+    @Test
+    fun `a @FuzzTest outside a top-level class fails`() {
+        val text = "@FuzzTest\nfun top(data: ByteArray) = Unit\n"
+        assertFailsWith<GradleException> { FuzzTargets.read("m", "m/src/jvmTest/kotlin/Top.kt", text) }
+    }
+
+    @Test
+    fun `a backticked target name fails`() {
+        val text = "class T {\n    @FuzzTest\n    fun `reads anything`(data: ByteArray) = Unit\n}\n"
+        assertFailsWith<GradleException> { FuzzTargets.read("m", "m/src/jvmTest/kotlin/T.kt", text) }
+    }
+
+    @Test
     fun `two targets with one Class·method name fail`() {
         val files = mapOf(
             "m/src/jvmTest/kotlin/p/T.kt" to "package p\nclass T {\n    @FuzzTest\n    fun a(data: ByteArray) = Unit\n}\n",

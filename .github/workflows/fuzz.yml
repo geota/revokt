@@ -25,7 +25,8 @@ on:
 
 permissions: read-all
 
-# One runner: a second dispatch waits for the first instead of cancelling it.
+# One runner. A concurrency group holds one running and one pending run: a second dispatch waits for the first, and a
+# third replaces the pending second.
 concurrency:
   group: fuzz
   cancel-in-progress: false
@@ -86,6 +87,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Spec §9.1 "Tiers and matrix": fuzzing runs on one pinned JDK >= 22 (Panama), 25 here; then 21 for Gradle. Its path
+      # goes to Gradle as an installation (rather than JAVA_HOME_25_<arch>), as the runner's architecture is not fixed.
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        id: jdk25
+        with:
+          distribution: temurin
+          java-version: "25"
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
@@ -101,7 +109,8 @@ jobs:
       - name: fuzz
         id: fuzz
         env:
-          FUZZ_SECONDS: ${{ inputs.seconds || 300 }}
+          FUZZ_SECONDS: ${{ inputs.seconds }}
+          JDK25: ${{ steps.jdk25.outputs.path }}
           NAME: ${{ matrix.target.name }}
           PROJECT: ${{ matrix.target.project }}
           MODULE: ${{ matrix.target.module }}
@@ -112,6 +121,8 @@ jobs:
           TIMEOUT: ${{ matrix.target.timeout }}
         run: |
           set -euo pipefail
+          # Empty only without a dispatch (the commented-out schedule); a dispatched 0 is rejected below.
+          FUZZ_SECONDS=${FUZZ_SECONDS:-300}
           case $FUZZ_SECONDS in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1 ;; esac
           if [ "$FUZZ_SECONDS" -lt 1 ] || [ "$FUZZ_SECONDS" -gt 3600 ]; then echo "::error::seconds must be 1 to 3600"; exit 1; fi
           args=(fake_argv0 "-max_total_time=$FUZZ_SECONDS" -rss_limit_mb=1024 "-timeout=$TIMEOUT")
@@ -126,7 +137,8 @@ jobs:
           mkdir -p fuzz-out
           status=0
           JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" \
-            ./gradlew "$PROJECT:jvmTest" --tests "$CLASS.$METHOD" --rerun --no-daemon < /dev/null 2>&1 | tee fuzz-out/gradle.log || status=$?
+            ./gradlew "$PROJECT:jvmTest" --tests "$CLASS.$METHOD" --rerun -Prevokt.testJdk=25 \
+            "-Porg.gradle.java.installations.paths=${JDK25:?}" --no-daemon < /dev/null 2>&1 | tee fuzz-out/gradle.log || status=$?
           # Jazzer writes a finding (crash-, timeout-, oom-, leak-, slow-unit-) into the module directory, as these
           # targets keep their inputs under src/jvmTest/resources and not src/test/resources.
           find "$MODULE" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' -o -name 'slow-unit-*' \) -exec mv {} fuzz-out/ \;
