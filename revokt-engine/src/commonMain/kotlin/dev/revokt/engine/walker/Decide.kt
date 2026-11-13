@@ -23,6 +23,7 @@ import dev.revokt.VerifyResult
 import dev.revokt.WalkEnd
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
+import dev.revokt.engine.parse.ParsedCertificate
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
@@ -30,7 +31,9 @@ import okio.ByteString.Companion.toByteString
  * What decision steps 1 to 6 hand to `evaluate`, steps 7 and 8 (spec §5.1 decision list): [path] is the
  * `Finding.Path`; [issuerKeys] are its `issuerSpkiSha256s`, the distinct leaf-issuer keys step 7 queries (walker keys
  * in candidate order, then the fallback key if new); [serial] and [scts] are the leaf's, null and empty when the leaf
- * is `PARSE_FAILED`, which is never queried; [findings] are the parse, walk and step-6 findings.
+ * is `PARSE_FAILED`, which is never queried; [findings] are the parse, walk and step-6 findings. [parses] holds the
+ * parse of each presented certificate, in presented order, null where the parser rejected it or decide never read it,
+ * so an exemption's `PresentedChain` (#133) parses nothing twice.
  *
  * [buildThrew] is true when step 6's `PathBuilderFallback.build` threw: the result is then cached nowhere, neither in
  * the path cache nor, through its verdict, in the verdict cache (§5.1 flow steps 2 and 3a, revision 50).
@@ -42,6 +45,7 @@ internal class PathDecision(
     val scts: List<CrliteSct>,
     val findings: List<Finding>,
     val buildThrew: Boolean,
+    val parses: List<ParsedCertificate?>,
 )
 
 /**
@@ -132,6 +136,7 @@ private class Decider(
     private val findings = ArrayList<Finding>()
     private var dropped = 0
     private var buildThrew = false
+    private val parses = arrayOfNulls<ParsedCertificate>(chain.size)
 
     fun run(presentedCut: Boolean): PathDecision {
         require(chain.isNotEmpty()) { "decide needs the leaf: the presented chain is empty" }
@@ -141,7 +146,7 @@ private class Decider(
         val leaf =
             when (val r = CertificateParser.parse(chain[0])) {
                 is CertificateParse.Failed -> return parseFailed(r.reason, clause = null)
-                is CertificateParse.Parsed -> index.cert(r.certificate)
+                is CertificateParse.Parsed -> index.cert(r.certificate).also { parses[0] = r.certificate }
             }
         mismatch(leaf, 0)
         if (index.isAnchorBytes(leaf)) return anchorLeaf(leaf)
@@ -167,8 +172,14 @@ private class Decider(
         certs += leaf
         for (i in 1 until chain.size) {
             when (val r = CertificateParser.parse(chain[i])) {
-                is CertificateParse.Failed -> dropped++
-                is CertificateParse.Parsed -> certs += index.cert(r.certificate).also { mismatch(it, i) }
+                is CertificateParse.Failed -> {
+                    dropped++
+                }
+
+                is CertificateParse.Parsed -> {
+                    parses[i] = r.certificate
+                    certs += index.cert(r.certificate).also { mismatch(it, i) }
+                }
             }
         }
         return certs
@@ -400,7 +411,15 @@ private class Decider(
                 .terminalKind(if (reported.isEmpty()) null else TerminalKind.ANCHOR)
                 .anchorSha256(reported.lastOrNull()?.toByteArray())
                 .build()
-        return PathDecision(path, keys, leaf?.serial, leaf?.scts.orEmpty(), findings.toList(), buildThrew)
+        return PathDecision(
+            path,
+            keys,
+            leaf?.serial,
+            leaf?.scts.orEmpty(),
+            findings.toList(),
+            buildThrew,
+            parses.toList(),
+        )
     }
 
     private fun WalkPath.hashes(): List<ByteString> = certs.map { it.bytesHash }

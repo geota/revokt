@@ -12,7 +12,7 @@
 - [ ] (f)
 - [ ] (h)
 
-## walker fixtures: 37 / 42 implemented
+## walker fixtures: 38 / 42 implemented
 
 - [x] (a)
 - [x] (b)
@@ -48,7 +48,7 @@
 - [x] (y2)
 - [x] (z)
 - [x] (aa)
-- [ ] (ab)
+- [x] (ab)
 - [x] (ac)
 - [x] (ad)
 - [x] (ae)
@@ -86,5 +86,5 @@ The re-decision threshold is 10^-4 of the unexpired leaves of index issuers (spe
 
 ## Totals
 
-- implemented-fixtures: 41
+- implemented-fixtures: 42
 - fixtures-in-spec: 50
