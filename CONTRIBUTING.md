@@ -413,6 +413,12 @@ every required check in Appendix B passes**.
 - Fuzzing: ClusterFuzzLite batch matrix, one job per §9.1 target, `base-builder-jvm` pinned by digest, the
   coverage cron and the corpus storage token configured, corpus merged back weekly; a crash is uploaded as a
   SARIF artifact and a workflow step files the `security` issue (ClusterFuzzLite does not file issues itself).
+- Ad-hoc fuzzing (`fuzz.yml`, #115): dispatch only, on GitHub-hosted runners, one job per target that
+  `./gradlew fuzzTargets` lists. A finding lands as a private **draft security advisory** (private vulnerability
+  reporting is enabled), visible only to administrators and security managers, with the stack trace and the
+  reproducer; nothing about it beyond the failed job is public (no issue, artifact or fuzzer log). It needs the
+  `FUZZ_ADVISORY_TOKEN` repository secret: a fine-grained personal access token of an administrator, for this
+  repository only, with "Repository security advisories: Read and write".
 - Android emulator matrix (API 26, 31, 34, 36) on hosted Linux runners with KVM, from the mirrored system
   images (§11), including the null-host probe, the StrictMode main-thread probe and the API-26 futures
   fixture; triggered by schedule, `workflow_dispatch`, and the `run/android` label on a PR. Robolectric on the

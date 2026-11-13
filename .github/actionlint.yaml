@@ -1,7 +1,0 @@
-# SPDX-FileCopyrightText: 2026 revokt contributors
-# SPDX-License-Identifier: Apache-2.0
-#
-# actionlint's runner-label check: the self-hosted runner labels the workflows use (fuzz.yml).
-self-hosted-runner:
-  labels:
-    - revokt-fuzz

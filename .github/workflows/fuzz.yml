@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: 2026 revokt contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Manual fuzzing on the self-hosted `revokt-fuzz` runner (spec §9.1, CONTRIBUTING §6; decision CI1, #115): one matrix
-# entry per Jazzer @FuzzTest method, as `./gradlew fuzzTargets` discovers them, for the chosen time each. Built but
-# disabled: it runs only when a maintainer dispatches it. Never on pull_request or pull_request_target: a self-hosted
-# runner on a public repository must not run a fork's code. No ClusterFuzzLite, no corpus token, no secret. Not the
-# release gate (that is #119).
+# Ad-hoc fuzzing (spec §9.1, CONTRIBUTING §6; decision CI1, #115): one matrix entry per Jazzer @FuzzTest method, as
+# `./gradlew fuzzTargets` discovers them, for the chosen time each, on GitHub-hosted runners. Runs only when a
+# maintainer dispatches it; never on pull_request or pull_request_target. A finding becomes a private draft security
+# advisory: no reproducer, stack trace or fuzzer log reaches a public artifact, issue or job log. No ClusterFuzzLite;
+# the nightly tier and release gate are #119's.
 name: fuzz
 
 on:
-  # Off until the maintainer registers the revokt-fuzz runner and turns the nightly run on by uncommenting this.
+  # Off: this workflow is for dispatched runs (#119 is the nightly). Uncommenting it adds a nightly run of every target.
   # schedule:
   #   - cron: "47 3 * * *"
   workflow_dispatch:
@@ -22,11 +22,15 @@ on:
         description: "Fuzzing time per target, in seconds (1 to 3600)"
         type: number
         default: 300
+      upload_corpus:
+        description: "Upload each target's generated corpus (7 days; the account is near its storage budget)"
+        type: boolean
+        default: false
 
 permissions: read-all
 
-# One runner. A concurrency group holds one running and one pending run: a second dispatch waits for the first, and a
-# third replaces the pending second.
+# One run at a time, so two runs never race to record the same finding. A concurrency group holds one running and one
+# pending run: a second dispatch waits for the first, and a third replaces the pending second.
 concurrency:
   group: fuzz
   cancel-in-progress: false
@@ -70,47 +74,41 @@ jobs:
   fuzz:
     name: fuzz (${{ matrix.target.name }})
     needs: targets
-    runs-on: [self-hosted, revokt-fuzz] # zizmor: ignore[self-hosted-runner] dispatch only, never a PR trigger
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
         target: ${{ fromJSON(needs.targets.outputs.targets) }}
     steps:
-      # Without the StepSecurity agent on the runner this only logs; kept so every job starts the same way.
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Spec §9.1 "Tiers and matrix": fuzzing runs on one pinned JDK >= 22 (Panama), 25 here; then 21 for Gradle. Its path
-      # goes to Gradle as an installation (rather than JAVA_HOME_25_<arch>), as the runner's architecture is not fixed.
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        id: jdk25
-        with:
-          distribution: temurin
-          java-version: "25"
+      # Spec §9.1 "Tiers and matrix": fuzzing runs on one pinned JDK >= 22 (Panama), 25 here; Gradle runs on 21.
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "21"
-      # The runner keeps its own ~/.gradle; nothing is written to the Actions cache.
+          java-version: |
+            25
+            21
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          cache-disabled: true
+          cache-read-only: true
       # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set), -rss_limit_mb=1024, the
       # target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
       # configuration parameters, which reach the test JVM as system properties; they come after Jazzer's own
       # (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last.
+      # Job logs are public and libFuzzer prints a crashing input, so once fuzzing has started the Gradle output stays
+      # in fuzz-out/ and only the run counts are echoed; a build that fails before fuzzing starts prints its log.
       - name: fuzz
         id: fuzz
         env:
           FUZZ_SECONDS: ${{ inputs.seconds }}
-          JDK25: ${{ steps.jdk25.outputs.path }}
           NAME: ${{ matrix.target.name }}
           PROJECT: ${{ matrix.target.project }}
           MODULE: ${{ matrix.target.module }}
@@ -134,81 +132,53 @@ jobs:
           opts=""
           for i in "${!args[@]}"; do opts+=" -Djazzer.internal.arg.$i=${args[$i]}"; done
           echo "$NAME: ${args[*]:1}"
+          echo "flags=${args[*]:1}" >> "$GITHUB_OUTPUT"
           mkdir -p fuzz-out
           status=0
           JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" \
             ./gradlew "$PROJECT:jvmTest" --tests "$CLASS.$METHOD" --rerun -Prevokt.testJdk=25 \
-            "-Porg.gradle.java.installations.paths=${JDK25:?}" --no-daemon < /dev/null 2>&1 | tee fuzz-out/gradle.log || status=$?
+            -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 --no-daemon < /dev/null > fuzz-out/gradle.log 2>&1 || status=$?
           # Jazzer writes a finding (crash-, timeout-, oom-, leak-, slow-unit-) into the module directory, as these
           # targets keep their inputs under src/jvmTest/resources and not src/test/resources.
           find "$MODULE" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' -o -name 'slow-unit-*' \) -exec mv {} fuzz-out/ \;
           cp "$MODULE/build/test-results/jvmTest/"*.xml fuzz-out/ 2>/dev/null || true
-          if find fuzz-out -maxdepth 1 -type f ! -name gradle.log ! -name '*.xml' | grep -q .; then echo "finding=true" >> "$GITHUB_OUTPUT"; fi
-          if [ "$status" -ne 0 ]; then echo "::error file=$SOURCE::$NAME failed; see its fuzz-findings artifact"; exit "$status"; fi
-      # The reproducers and logs only; they are public on a public repository, so a finding is triaged as a
-      # vulnerability report (SECURITY.md) and its fix follows CONTRIBUTING §8. The report job links the artifact. A
-      # failure without a finding (a build error) leaves its log in the job output only.
-      - name: findings
+          started=0
+          if grep -q '^INFO: Seed: ' fuzz-out/gradle.log; then started=1; fi
+          if [ "$started" -eq 0 ]; then cat fuzz-out/gradle.log; else grep -E '^Done [0-9]+ runs in |^#[0-9]+[[:space:]]+DONE ' fuzz-out/gradle.log || true; fi
+          if [ "$status" -eq 0 ]; then exit 0; fi
+          # A failure once fuzzing has started is a finding, with or without a reproducer file.
+          if [ "$started" -eq 1 ]; then
+            echo "finding=true" >> "$GITHUB_OUTPUT"
+            echo "::error file=$SOURCE::$NAME: a finding; it is recorded as a private draft security advisory (CONTRIBUTING §6)"
+          else
+            echo "::error file=$SOURCE::$NAME: the build failed before fuzzing started"
+          fi
+          exit "$status"
+      # The only step with the advisory token; it reads fuzz-out/ on this runner, so nothing leaves the job in public.
+      - name: draft security advisory
         if: failure() && steps.fuzz.outputs.finding == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: fuzz-findings-${{ matrix.target.name }}
-          path: fuzz-out/
-          if-no-files-found: ignore
-          retention-days: 7
-      # Jazzer's generated corpus for this target; merging it into the committed inputs stays a manual PR.
+        env:
+          GH_TOKEN: ${{ secrets.FUZZ_ADVISORY_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TARGET: ${{ matrix.target.name }}
+          PROJECT: ${{ matrix.target.project }}
+          SOURCE: ${{ matrix.target.source }}
+          FLAGS: ${{ steps.fuzz.outputs.flags }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the FUZZ_ADVISORY_TOKEN secret is not set (CONTRIBUTING §6); the finding is not recorded"
+            exit 1
+          fi
+          python3 -I .github/scripts/fuzz_advisory.py fuzz-out
+      # Jazzer's generated corpus, on request and only from a run without a finding; merging it into the committed
+      # inputs stays a manual PR.
       - name: corpus
-        if: always()
+        if: inputs.upload_corpus && steps.fuzz.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-corpus-${{ matrix.target.name }}
           path: ${{ matrix.target.module }}/.cifuzz-corpus/${{ matrix.target.class }}/${{ matrix.target.method }}/
           if-no-files-found: ignore
           retention-days: 7
-
-  # One `security` issue per failed target, naming the target and linking its findings artifact; no input bytes. An open
-  # issue with the same title gets a comment instead of a duplicate. The only job that can write issues; it runs no
-  # repository code.
-  report:
-    name: report (security issues for the findings)
-    needs: fuzz
-    if: failure()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      actions: read # list this run's artifacts
-      issues: write # file or comment on the security issue
-    steps:
-      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
-        with:
-          egress-policy: audit
-      - name: file the issues
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          found=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
-            --jq '.artifacts[] | select(.name | startswith("fuzz-findings-")) | "\(.id) \(.name)"')
-          if [ -z "$found" ]; then echo "::warning::a job failed without a finding (see $RUN_URL); no issue filed"; exit 0; fi
-          while read -r id name; do
-            target=${name#fuzz-findings-}
-            case $target in ''|*[!A-Za-z0-9_.]*) echo "::error::unexpected artifact name"; exit 1 ;; esac
-            title="fuzz: finding in $target"
-            body=$(printf '%s\n' \
-              "The fuzz workflow found a problem in the \`$target\` target (spec §9.1 Findings)." \
-              "" \
-              "- Run: $RUN_URL" \
-              "- Reproducer and log: $RUN_URL/artifacts/$id (kept for 7 days; download it before it expires)" \
-              "" \
-              "Triage it as a vulnerability report (SECURITY.md); a fix follows CONTRIBUTING §8. Do not paste the input here.")
-            existing=$(gh issue list -R "$REPO" --state open --label security --search "\"$title\" in:title" --json number,title < /dev/null \
-              | jq -r --arg t "$title" '[.[] | select(.title == $t)][0].number // empty')
-            if [ -n "$existing" ]; then
-              gh issue comment "$existing" -R "$REPO" --body "$body" < /dev/null
-            else
-              gh issue create -R "$REPO" --label security --title "$title" --body "$body" < /dev/null
-            fi
-          done <<< "$found"
