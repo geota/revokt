@@ -13,7 +13,8 @@ import dev.revokt.engine.store.UpdaterRecord
 /**
  * An `updater.json` as the loader reads it: its [record], and the store failures reading it cost (spec §6.5,
  * `storeFailures`, #178): a malformed file is one and reads as an empty record; each dropped source entry and a
- * `sources` member that is not an object are one each.
+ * `sources` member that is not an object are one each. The watermark an empty record loses is floored at the live
+ * `SIGNED` generation's timestamp by [SyncRules] (revision 56, #188).
  */
 internal class LoadedUpdater(
     val record: UpdaterRecord,
@@ -37,7 +38,10 @@ internal class LoadedUpdater(
  *   ("written at the end of every sync whatever its outcome, `STORE_LOCKED` excepted"); `STORE_LOCKED` writes nothing;
  * - `INSTALLED` advances the cursor (`lastVerifiedLastModified`) and `lastVerifiedAtMillis`, and the watermark to the
  *   higher of it and `<ts>`, after the pointer flip; under the §6.3 clock-behind carve-out it advances
- *   `lastVerifiedAtMillis` only;
+ *   `lastVerifiedAtMillis` only. The cursor is set to `<ts>`, not to the higher of the two: it names the installed
+ *   generation's verified record set, which the next `_since` changeset is merged with and verified against (§6.5),
+ *   so an install inside the rollback window moves it back with the generation, while the watermark stays a
+ *   high-water mark;
  * - `UNCHANGED` and `INSTALLED` end a run of failures (`consecutiveFailures = 0`);
  * - `FAILED`, `CLOCK_SKEW` and `STORE_FAILED` are failures: `consecutiveFailures + 1`, leaving the cursor,
  *   `lastVerified*` and the watermark untouched;

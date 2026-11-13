@@ -93,6 +93,12 @@ internal class SyncClock(
  * 5. ([decide] only) Inside the window (`<ts> ≤ watermark`), a maximum coverage below the live `SIGNED` generation's is
  *    `ROLLBACK_REFUSED`; equal or above installs. A changeset newer than the watermark installs whatever its coverage.
  *
+ * **The watermark floor** (revision 56, #188): the watermark both phases compare against is the higher of the stored one
+ * and the live generation's `sourceTimestampMillis`, when the live generation is `SIGNED` and not itself `clockBehind`
+ * ([floored]). A malformed or absent `updater.json` beside a live `SIGNED` generation (#178: it reads as an empty
+ * record, a store failure) therefore cannot reopen a rollback to anything older than what is installed, while a
+ * far-future live generation installed under the carve-out never pins the watermark, so it cannot freeze the feed.
+ *
  * Every sum saturates and every difference is checked, so no input overflows into a wrong answer.
  */
 internal object SyncRules {
@@ -112,9 +118,8 @@ internal object SyncRules {
         ) {
             return SyncDecision.UNCHANGED
         }
-        if (watermarkMillis != null &&
-            beyondWindow(signedTimestampMillis, watermarkMillis, clock.rollbackWindowMillis)
-        ) {
+        val watermark = floored(watermarkMillis, live, clock)
+        if (watermark != null && beyondWindow(signedTimestampMillis, watermark, clock.rollbackWindowMillis)) {
             return SyncDecision.ROLLBACK_REFUSED
         }
         val bound = clock.futureBoundMillis
@@ -140,7 +145,8 @@ internal object SyncRules {
         if (!coverageWithinBound(TrustClass.SIGNED, coverageHighs, signedTimestampMillis, clock)) {
             return SyncDecision.FAILED
         }
-        val insideWindow = watermarkMillis != null && signedTimestampMillis <= watermarkMillis
+        val watermark = floored(watermarkMillis, live, clock)
+        val insideWindow = watermark != null && signedTimestampMillis <= watermark
         if (insideWindow && live != null && live.trustClass == TrustClass.SIGNED) {
             val liveMax = live.maxCoverageMillis
             if (liveMax != null && !coverageAtLeast(coverageHighs, liveMax)) return SyncDecision.ROLLBACK_REFUSED
@@ -185,6 +191,24 @@ internal object SyncRules {
         coverageHighs: List<ULong>,
         liveMaxMillis: Long,
     ): Boolean = coverageHighs.any { minOf(it, Long.MAX_VALUE.toULong()).toLong() >= liveMaxMillis }
+
+    /**
+     * The watermark the rules compare against: [watermarkMillis] raised to the live generation's
+     * `sourceTimestampMillis` when that generation is `SIGNED` and not `clockBehind` (`sourceTimestampMillis ≤ now +
+     * clockSkew`, recomputed here), else [watermarkMillis] as stored; null when neither gives one.
+     */
+    private fun floored(
+        watermarkMillis: Long?,
+        live: LiveGeneration?,
+        clock: SyncClock,
+    ): Long? {
+        if (live == null || live.trustClass != TrustClass.SIGNED ||
+            live.sourceTimestampMillis > clock.futureBoundMillis
+        ) {
+            return watermarkMillis
+        }
+        return maxOf(watermarkMillis ?: Long.MIN_VALUE, live.sourceTimestampMillis)
+    }
 
     /**
      * Whether [timestamp] is older than [watermark] by [window] or more (§7.1: "older by less than `rollbackWindow`

@@ -7,6 +7,7 @@ import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
 import dev.revokt.TrustClass
 import dev.revokt.engine.store.SourceRecord
+import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -120,8 +121,57 @@ class SyncRulesTest {
         val record = UpdaterTransitions.after(updater(), RS, SyncOutcome.INSTALLED, now, signedTimestampMillis = newer)
         assertEquals(newer, record.watermarkMillis)
         assertEquals(newer, record.sources.getValue(RS).lastVerifiedLastModified)
-        // No watermark yet (no seed, nothing installed): every changeset is newer.
-        assertEquals(SyncDecision.INSTALL, decide(Long.MIN_VALUE, emptyList(), watermark = null))
+        // No watermark yet and no generation (no seed, nothing installed): every changeset is newer.
+        assertEquals(SyncDecision.INSTALL, decide(Long.MIN_VALUE, emptyList(), live = null, watermark = null))
+    }
+
+    @Test
+    fun `data-path (a) a lost watermark is floored at the live SIGNED generation, so an older changeset is refused`() {
+        // A malformed or absent updater.json reads as no watermark (a store failure for a malformed one, #178).
+        for (read in listOf(StoreRead.Malformed, StoreRead.Absent)) {
+            val lost = LoadedUpdater.of(read).record.watermarkMillis
+            assertNull(lost)
+            assertEquals(SyncDecision.ROLLBACK_REFUSED, admit(watermark - day, live(), lost), "$read")
+            assertEquals(
+                SyncDecision.ROLLBACK_REFUSED,
+                decide(watermark - day - 1, cov(coverage), live(), lost),
+                "$read",
+            )
+            assertEquals(SyncDecision.INSTALL, admit(watermark - day + 1, live(), lost), "$read")
+            // Inside the floored window the coverage-monotonic rule applies.
+            assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(watermark - hour, cov(coverage - 1), live(), lost))
+            assertEquals(SyncDecision.INSTALL, decide(watermark - hour, cov(coverage), live(), lost))
+            assertEquals(SyncDecision.INSTALL, decide(watermark + 1, cov(1), live(), lost))
+        }
+        // The floor only raises: a stored watermark below the live generation is raised, one above it is kept.
+        // A changeset just newer than the floor is newer than any watermark: it installs whatever its coverage.
+        assertEquals(SyncDecision.INSTALL, decide(watermark, cov(1), live(ts = watermark - 1), null))
+        assertEquals(SyncDecision.ROLLBACK_REFUSED, admit(watermark - day, live(), watermark - 2 * day))
+        assertEquals(SyncDecision.ROLLBACK_REFUSED, admit(watermark, live(ts = watermark - day), watermark + day))
+        assertEquals(SyncDecision.INSTALL, admit(watermark, live(ts = watermark - day), watermark + day - 1))
+        assertEquals(
+            SyncDecision.ROLLBACK_REFUSED,
+            decide(watermark - 2, cov(coverage - 1), live(ts = watermark - 1), null),
+        )
+        // Only a SIGNED live generation floors it.
+        assertEquals(SyncDecision.INSTALL, admit(watermark - 2 * day, live(trustClass = TrustClass.MIRROR), null))
+        assertEquals(SyncDecision.INSTALL, admit(watermark - 2 * day, live = null, watermark = null))
+    }
+
+    @Test
+    fun `a far-future live generation is not a floor, so it cannot freeze the feed`() {
+        // A live generation installed under the clock-behind carve-out: a sane changeset a day and more older installs.
+        val behind = live(ts = now + day + 1)
+        assertEquals(SyncDecision.INSTALL, admit(now, behind, watermark = null))
+        assertEquals(SyncDecision.INSTALL, decide(now, cov(coverage), behind, watermark = null))
+        assertEquals(SyncDecision.INSTALL, decide(now, cov(coverage), behind, watermark = now - 2 * day))
+        // At exactly now + clockSkew it is not clockBehind, so it floors the watermark: the same changeset is refused.
+        assertEquals(SyncDecision.ROLLBACK_REFUSED, admit(now, live(ts = now + day), watermark = null))
+        // A corrected clock makes it a floor at once.
+        assertEquals(
+            SyncDecision.ROLLBACK_REFUSED,
+            admit(now, behind, watermark = null, clock = SyncClock(now + 1, day, day)),
+        )
     }
 
     @Test
