@@ -99,6 +99,7 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field SEED_CHANNEL_MISMATCH Ldev/revokt/DiagnosticCode;
 	public static final field SEED_PAST_REJECT_THRESHOLD Ldev/revokt/DiagnosticCode;
 	public static final field SEED_UNREADABLE Ldev/revokt/DiagnosticCode;
+	public static final field SOURCE_EMPTY Ldev/revokt/DiagnosticCode;
 	public static final field STALENESS_CLEARED_FOR_REQUIRED_DATASET Ldev/revokt/DiagnosticCode;
 	public static final field STALE_REJECTS_WITHOUT_THRESHOLD Ldev/revokt/DiagnosticCode;
 	public static final field STORAGE_UNSET Ldev/revokt/DiagnosticCode;
