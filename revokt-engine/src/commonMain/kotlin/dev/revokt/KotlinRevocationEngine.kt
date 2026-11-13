@@ -49,6 +49,9 @@ public class KotlinRevocationEngine internal constructor(
             add(FilterFormat.V4)
         }
 
+    /** `"kotlin"` (spec §3.2 "Seam"). */
+    override val name: String get() = "kotlin"
+
     private val closing: Boolean get() = gate.get() and CLOSING != 0
 
     override val coverageEndMillis: Long? get() = live?.coverageEndMillis

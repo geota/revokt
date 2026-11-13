@@ -423,6 +423,7 @@ public final class dev/revokt/KotlinRevocationEngine : dev/revokt/RevocationEngi
 	public fun close ()V
 	public fun getCoverageEndMillis ()Ljava/lang/Long;
 	public fun getFormats ()Ljava/util/Set;
+	public fun getName ()Ljava/lang/String;
 	public fun install (Ldev/revokt/GenerationFiles;)Ljava/lang/String;
 	public fun prepare (Ldev/revokt/GenerationFiles;)Ldev/revokt/PreparedGeneration;
 	public fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
@@ -563,6 +564,7 @@ public abstract interface class dev/revokt/RevocationEngine : java/lang/AutoClos
 	public fun clear ()V
 	public abstract fun getCoverageEndMillis ()Ljava/lang/Long;
 	public abstract fun getFormats ()Ljava/util/Set;
+	public fun getName ()Ljava/lang/String;
 	public fun install (Ldev/revokt/GenerationFiles;)Ljava/lang/String;
 	public abstract fun prepare (Ldev/revokt/GenerationFiles;)Ldev/revokt/PreparedGeneration;
 	public abstract fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
@@ -570,6 +572,7 @@ public abstract interface class dev/revokt/RevocationEngine : java/lang/AutoClos
 
 public final class dev/revokt/RevocationEngine$DefaultImpls {
 	public static fun clear (Ldev/revokt/RevocationEngine;)V
+	public static fun getName (Ldev/revokt/RevocationEngine;)Ljava/lang/String;
 	public static fun install (Ldev/revokt/RevocationEngine;Ldev/revokt/GenerationFiles;)Ljava/lang/String;
 }
 

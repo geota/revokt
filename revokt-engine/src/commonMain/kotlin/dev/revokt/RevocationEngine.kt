@@ -16,6 +16,14 @@ public interface RevocationEngine : AutoCloseable {
     public val formats: Set<FilterFormat>
 
     /**
+     * The engine's name, `Finding.EngineError.engineName` on every `ENGINE_ERROR` whose producer is the engine (spec
+     * §3.2, §4, §5.5), so never null there: by default the class's simple name, or `"anonymous"` when the class has
+     * none. It must not throw, and revokt reads it once per instance. On Android under R8, which renames classes, an
+     * engine overrides it with a stable string.
+     */
+    public val name: String get() = this::class.simpleName ?: "anonymous"
+
+    /**
      * Builds an inactive state from [generation] (decode, validate). Throws on a corrupt generation; the engine's live
      * generation is untouched.
      */
