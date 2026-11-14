@@ -76,6 +76,26 @@ class PolicyFormTest {
     }
 
     @Test
+    fun `NO_ISSUER and ISSUER_UNVERIFIED share one outcome and one exemption, and a split pair is refused`() {
+        assertEquals(setOf(Rule.NO_ISSUER, Rule.ISSUER_UNVERIFIED), PolicyTable.shared(Rule.NO_ISSUER))
+        assertEquals(setOf(Rule.NO_ISSUER, Rule.ISSUER_UNVERIFIED), PolicyTable.shared(Rule.ISSUER_UNVERIFIED))
+        for (rule in Rule.entries - setOf(Rule.NO_ISSUER, Rule.ISSUER_UNVERIFIED)) {
+            assertEquals(setOf(rule), PolicyTable.shared(rule))
+        }
+        val strict = PolicyForm.of(Preset.STRICT)
+        assertFailsWith<IllegalArgumentException> {
+            copy(strict, outcomes = strict.outcomes + (Rule.ISSUER_UNVERIFIED to Outcome.ALLOW))
+        }
+        val exemption = Exemption { true }
+        assertFailsWith<IllegalArgumentException> { copy(strict, exemptions = mapOf(Rule.NO_ISSUER to exemption)) }
+        assertFailsWith<IllegalArgumentException> {
+            copy(strict, exemptions = mapOf(Rule.NO_ISSUER to exemption, Rule.ISSUER_UNVERIFIED to Exemption { true }))
+        }
+        val both = copy(strict, exemptions = mapOf(Rule.NO_ISSUER to exemption, Rule.ISSUER_UNVERIFIED to exemption))
+        assertEquals(exemption, both.exemption(Rule.ISSUER_UNVERIFIED))
+    }
+
+    @Test
     fun `an exemption is held as given`() {
         val exemption = Exemption { true }
         val form = copy(PolicyForm.of(Preset.STRICT), exemptions = mapOf(Rule.NO_SCTS to exemption))

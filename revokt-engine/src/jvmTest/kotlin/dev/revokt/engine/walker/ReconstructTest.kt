@@ -369,10 +369,11 @@ class ReconstructTest {
     private fun nullResult(): VerifyResult = unchecked<VerifyResult>(null)
 
     @Test
-    fun `walker UNSUPPORTED records the child's own OID against a related candidate only`() {
+    fun `walker the leaf's own unsupported OID is deferred until a related candidate is found`() {
         with(Honest()) {
             val other = w.name("Other")
-            // The leaf's own signature OID is unsupported; its only candidate is unrelated.
+            // The leaf's own signature OID is unsupported. As pkix defers an end-entity error, it counts only once an
+            // issuer candidate was found: not alone, and not against an unrelated candidate.
             val leaf2 =
                 w.cert(
                     "L2",
@@ -381,6 +382,7 @@ class ReconstructTest {
                     sigOid = SymOids.UNSUPPORTED_SIGNATURE,
                 )
             val unrelated = w.cert("U", other, other)
+            check(fixture("unsupported", "no candidate", listOf(leaf2), notFound(NoIssuerReason.NO_CANDIDATE)))
             check(
                 fixture(
                     "unsupported",
@@ -389,7 +391,6 @@ class ReconstructTest {
                     notFound(NoIssuerReason.NO_CANDIDATE).copy(verifications = 1),
                 ),
             )
-            // The same leaf against a related candidate: recorded.
             check(
                 fixture(
                     "unsupported",

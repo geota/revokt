@@ -418,29 +418,36 @@ class DecideFallbackTest {
     @Test
     fun `Budget keys are the partial keys then the fallback key if new, and the reported path is the partial one`() {
         val w = FixtureWorld()
-        val root = w.root("R", "Root")
+        val root = w.root("R", "Root", w.key(WalkerCerts.RSA_KEY), WalkerCerts.SHA256_RSA)
         val name = w.name("Intermediate")
-        val sub = w.cert("S", name, root.subject, signer = root.key)
-        val honest = w.cert("H", name, root.subject, signer = root.key)
+        // A store anchor named like the leaf's issuer with an RSA key, compatible with the leaf's RSA signature, is the
+        // first related candidate; 64 more with EC keys follow it, so the 65th aborts with A's path partial.
+        val anchor = w.cert("A", name, name, w.key(WalkerCerts.RSA_KEY), sigOid = WalkerCerts.SHA256_RSA)
+        val honest = w.cert("H", name, root.subject, w.key(WalkerCerts.RSA_KEY), signer = root.key)
         val leaf =
             w.cert(
                 "L",
                 w.name("leaf.example"),
                 name,
-                signer = sub.key,
+                signer = anchor.key,
+                sigOid = WalkerCerts.SHA256_RSA,
                 extensions = listOf(sctExtension()),
                 key = w.leafKey(),
             )
         w.verifies(leaf, honest.key)
-        // 64 store anchors named like the leaf's issuer: with S they are 65 related candidates at the leaf.
-        val junk = List(RevoktLimits.MAX_RELATED_PER_LEVEL) { w.cert("A$it", name, w.name("Junk issuer $it")) }
-        val f = w.fixture("budget", "", listOf(leaf, sub), listOf(root) + junk, notFound(NoIssuerReason.UNANCHORED))
+        val ec = { w.key(WalkerCerts.EC_KEY, WalkerCerts.P256) }
+        val junk = List(RevoktLimits.MAX_RELATED_PER_LEVEL) { w.cert("A$it", name, w.name("Junk issuer $it"), ec()) }
+        val f = w.fixture("budget", "", listOf(leaf), listOf(root, anchor) + junk, notFound(NoIssuerReason.UNANCHORED))
         val cases =
             listOf(
-                Triple("new key", FakeFallback.finds(leaf, honest, root) as PathBuilderFallback?, listOf(sub, honest)),
-                Triple("same key", FakeFallback.finds(leaf, sub, root), listOf(sub)),
-                Triple("failed", FakeFallback.fails(), listOf(sub)),
-                Triple("disabled", null, listOf(sub)),
+                Triple(
+                    "new key",
+                    FakeFallback.finds(leaf, honest, root) as PathBuilderFallback?,
+                    listOf(anchor, honest),
+                ),
+                Triple("same key", FakeFallback.finds(leaf, anchor), listOf(anchor)),
+                Triple("failed", FakeFallback.fails(), listOf(anchor)),
+                Triple("disabled", null, listOf(anchor)),
             )
         for ((case, fallback, keys) in cases) {
             val d = WalkerHarness.decide(f, fallback)
@@ -451,12 +458,48 @@ class DecideFallbackTest {
                     .endDepth(1)
                     .usedFallback(used)
                     .pathsFound(1)
-                    .reported(leaf, sub, root)
+                    .reported(leaf, anchor)
                     .keys(*keys.toTypedArray())
             }
             val reason = if (fallback == null) FallbackReason.DISABLED else FallbackReason.FAILED
             assertEquals(if (used) emptyList() else listOf(notUsed(reason)), d.findings, case)
             assertLeafQuery(d, leaf, case)
+        }
+    }
+
+    /**
+     * Firefox's candidate order at the leaf (spec §5.1 `related`): 64 store anchors named like the leaf's issuer come
+     * before the presented intermediate S, which is the 65th related candidate and is never explored. The walk ends
+     * `RELATED_BUDGET` with no partial path, so only a fallback path's key is evaluated.
+     */
+    @Test
+    fun `Budget behind 64 same-name store anchors has no partial path and keys only the fallback's`() {
+        val w = FixtureWorld()
+        val root = w.root("R", "Root")
+        val name = w.name("Intermediate")
+        val sub = w.cert("S", name, root.subject, signer = root.key)
+        val leaf =
+            w.cert(
+                "L",
+                w.name("leaf.example"),
+                name,
+                signer = sub.key,
+                extensions = listOf(sctExtension()),
+                key = w.leafKey(),
+            )
+        val junk = List(RevoktLimits.MAX_RELATED_PER_LEVEL) { w.cert("A$it", name, w.name("Junk issuer $it")) }
+        val f = w.fixture("budget", "", listOf(leaf, sub), listOf(root) + junk, notFound(NoIssuerReason.UNANCHORED))
+        for ((case, fallback) in listOf("found" to FakeFallback.finds(leaf, sub, root), "disabled" to null)) {
+            val d = WalkerHarness.decide(f, fallback)
+            assertPath(d, case) {
+                status(PathStatus.PATH_BUDGET_EXCEEDED)
+                    .endReason(WalkEnd.RELATED_BUDGET)
+                    .endDepth(1)
+                    .usedFallback(fallback != null)
+                    .pathsFound(0)
+                if (fallback != null) reported(leaf, sub, root).keys(sub)
+            }
+            assertEquals(RevoktLimits.MAX_RELATED_PER_LEVEL, d.path.walkStats.relatedExploredAtLeaf, case)
         }
     }
 
