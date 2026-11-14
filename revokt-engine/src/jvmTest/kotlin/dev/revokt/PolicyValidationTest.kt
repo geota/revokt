@@ -70,7 +70,9 @@ class PolicyValidationTest {
     @Test
     fun `EXEMPT_ON_ALLOW for each exempted rule that allows`() {
         assertAlways(
+            // NO_ISSUER's exemption is ISSUER_UNVERIFIED's too, and both allow.
             listOf(
+                Seen(DiagnosticCode.EXEMPT_ON_ALLOW, Severity.WARNING, Rule.ISSUER_UNVERIFIED),
                 Seen(DiagnosticCode.EXEMPT_ON_ALLOW, Severity.WARNING, Rule.NO_ISSUER),
                 Seen(DiagnosticCode.EXEMPT_ON_ALLOW, Severity.WARNING, Rule.NO_SCTS),
             ),

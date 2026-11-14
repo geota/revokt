@@ -113,9 +113,8 @@ class CandidateIndexWorldTest {
         (world.presented + world.anchors).forEach { der -> Jdk(der).let { jdk.putIfAbsent(it.bytesHash, it) } }
         var canonicalOnly = 0
         for ((position, child) in presented.withIndex()) {
-            val belowLeaf = position > 0
             val seen = setOf(presented[0].bytesHash, child.bytesHash)
-            val related = index.related(presented, child, seen, belowLeaf).toList()
+            val related = index.related(presented, child, seen).toList()
             val at = "$label node $position"
             val c = jdk.getValue(child.bytesHash)
             checkMembership(
@@ -127,7 +126,7 @@ class CandidateIndexWorldTest {
                 { related(jdk.getValue(it.bytesHash), c, oracle) },
                 at,
             )
-            checkOrder(index, presented, child, belowLeaf, related, at)
+            checkOrder(index, presented, child, related, at)
             canonicalOnly +=
                 related.count {
                     val j = jdk.getValue(it.bytesHash)
@@ -162,27 +161,26 @@ class CandidateIndexWorldTest {
         )
     }
 
-    /** One source, then the other; presented by first index, the earliest copy; the store by (group, family, hash). */
+    /**
+     * At every depth the store first, by (group, family, hash), then presented by first index, the earliest copy; a
+     * presented byte duplicate of a store certificate is the store's.
+     */
     private fun checkOrder(
         index: CandidateIndex,
         presented: List<Cert>,
         child: Cert,
-        belowLeaf: Boolean,
         related: List<Cert>,
         at: String,
     ) {
-        val fromPresented = { cert: Cert -> presented.any { it === cert } }
-        val (first, second) = related.partition { fromPresented(it) != belowLeaf }
-        assertEquals(first, related.take(first.size), "$at: sources interleave")
-        val presentedPart = if (belowLeaf) second else first
-        val storePart = if (belowLeaf) first else second
+        val fromStore = { cert: Cert -> index.store.any { it === cert } }
+        val storePart = related.takeWhile(fromStore)
+        val presentedPart = related.drop(storePart.size)
+        assertTrue(presentedPart.all { p -> presented.any { it === p } }, "$at: sources interleave")
         val positions = presentedPart.map { p -> presented.indexOfFirst { it.bytesHash == p.bytesHash } }
         assertEquals(positions.sorted(), positions, "$at: presented by index")
         presentedPart.zip(positions).forEach { (p, i) -> assertSame(presented[i], p, "$at: earliest copy") }
-        val laterPart = if (belowLeaf) presentedPart else storePart
-        val earlierHashes = (if (belowLeaf) index.store else presented).map { it.bytesHash }.toSet()
-        assertTrue(laterPart.none { it.bytesHash in earlierHashes }, "$at: a duplicate at its later position")
-        assertTrue(storePart.all { s -> index.store.any { it === s } }, "$at: store instances")
+        val storeHashes = index.store.map { it.bytesHash }.toSet()
+        assertTrue(presentedPart.none { it.bytesHash in storeHashes }, "$at: a duplicate at its later position")
         val family = KeyFamily.ofSignature(child.tbsSigOid)
         val ranks =
             storePart.map { s ->

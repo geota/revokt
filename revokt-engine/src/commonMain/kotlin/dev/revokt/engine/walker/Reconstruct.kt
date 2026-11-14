@@ -28,8 +28,14 @@ import okio.ByteString
  *   or no related path exists there (revision 48): then every unrelated one is.
  * - `MAX_DEPTH` is a local dead end. Any other limit aborts the whole walk with [Walk.Budget], which records the path
  *   size where the limit was detected and keeps the paths found so far.
- * - `UNSUPPORTED` adds the child's own signature OID to `unsupportedOids` only against a related candidate and only
- *   when [probe] lists it; a candidate's key or curve OID never counts (§10 item 14).
+ * - Every node the walk visits, the leaf included (an anchor is a terminal and never a node), adds its own signature OID
+ *   to `unsupportedOids` when [probe] lists it, before any candidate is searched and whether or not one exists:
+ *   issuer-independent, as mozilla::pkix checks a non-anchor's signature algorithm in
+ *   CheckIssuerIndependentProperties before it looks for an issuer. A candidate's key or curve OID never counts, and
+ *   an `UNSUPPORTED` link is never trusted (§10 item 14).
+ * - Related candidates come in [CandidateIndex.related]'s order at every depth: the store's anchors, then the
+ *   presented certificates by index. A store anchor that issues a node is therefore always tried first, whatever the
+ *   server presents, and decides the first found path, the reported one.
  *
  * [presented] must not be empty (decision step 3 parsed the leaf); it is read, never changed.
  */
@@ -129,10 +135,15 @@ private class Reconstruction(
         private var related = 0
 
         // The candidate sequences read `presented` and `seen` lazily; neither is changed while they are iterated.
-        fun walk(): WalkEnd? = exploreRelated() ?: exploreUnrelated(relatedPath = foundHere)
+        fun walk(): WalkEnd? {
+            // Issuer-independent: the child's own signature OID counts toward ISSUER_UNVERIFIED before any candidate
+            // is searched (decision step 6); a candidate's key or curve OID never does.
+            if (child.tbsSigOid in probe) unsupported += child.tbsSigOid
+            return exploreRelated() ?: exploreUnrelated(relatedPath = foundHere)
+        }
 
         private fun exploreRelated(): WalkEnd? {
-            for (candidate in index.related(presented, child, seen, belowLeaf = !isLeaf)) {
+            for (candidate in index.related(presented, child, seen)) {
                 if (isLeaf) relatedAtLeaf = true
                 if (!isLeaf && foundHere) break
                 if (related >= RevoktLimits.MAX_RELATED_PER_LEVEL) {
@@ -142,7 +153,7 @@ private class Reconstruction(
                 }
                 related++
                 if (isLeaf) relatedExploredAtLeaf++
-                explore(candidate, isRelated = true)?.let { return it }
+                explore(candidate)?.let { return it }
             }
             return null
         }
@@ -155,15 +166,12 @@ private class Reconstruction(
             for (candidate in index.unrelated(presented, child, seen)) {
                 if (foundHere && !collectAll) break
                 if (isLeaf) unrelatedExploredAtLeaf++
-                explore(candidate, isRelated = false)?.let { return it }
+                explore(candidate)?.let { return it }
             }
             return null
         }
 
-        private fun explore(
-            candidate: Cert,
-            isRelated: Boolean,
-        ): WalkEnd? {
+        private fun explore(candidate: Cert): WalkEnd? {
             if (explored >= RevoktLimits.MAX_EXPLORED) {
                 endDepth = path.size
                 return WalkEnd.EXPLORATION_BUDGET
@@ -176,14 +184,7 @@ private class Reconstruction(
                     return WalkEnd.VERIFICATION_BUDGET
                 }
 
-                VerifyResult.INVALID -> {
-                    return null
-                }
-
-                VerifyResult.UNSUPPORTED -> {
-                    // Only the child's own signature OID counts toward ISSUER_UNVERIFIED (decision step 6); a
-                    // candidate's key or curve OID is server-chosen.
-                    if (isRelated && child.tbsSigOid in probe) unsupported += child.tbsSigOid
+                VerifyResult.INVALID, VerifyResult.UNSUPPORTED -> {
                     return null
                 }
 

@@ -21,8 +21,8 @@ import okio.ByteString.Companion.toByteString
  *   `id-ecPublicKey`).
  * - [canonicalSubject] is computed once, at construction, and [canonicalIssuer] at most once, on first use (§5.1
  *   "Caches"); a canonicaliser that returns null or throws gives null, which matches nothing, so raw-byte and SKI
- *   matching still apply (§5.1 decision list); only a fatal error ([isFatal], §5.5) is rethrown. The canonicaliser
- *   gets a copy of the name.
+ *   matching still apply (§5.1 decision list); only a fatal error ([isFatal], §5.5) is rethrown, and an
+ *   `InterruptedException` keeps the thread's interrupt flag ([absorb]). The canonicaliser gets a copy of the name.
  * - [algorithmIdMismatch] is §5.1's per-certificate `AlgorithmIdMismatch`, computed by the parser after NULL/absent
  *   normalisation. §5.1 declares `findings: List<Finding>` here; decide turns this flag into that finding.
  * - [producerKeyable] and [keyabilityClause] are §9.2's keyability profile; only the leaf's are read (decision step 3).
@@ -87,7 +87,7 @@ internal class Cert private constructor(
             } catch (t: Throwable) {
                 // §5.1 decision list: a canonicaliser throw is "no canonical match", for any canonicaliser, so a custom
                 // delegate's NotImplementedError or a StackOverflowError on a crafted name cannot reach the boundary.
-                if (isFatal(t)) throw t
+                absorb(t)
                 null
             }
     }

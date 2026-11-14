@@ -369,10 +369,11 @@ class ReconstructTest {
     private fun nullResult(): VerifyResult = unchecked<VerifyResult>(null)
 
     @Test
-    fun `walker UNSUPPORTED records the child's own OID against a related candidate only`() {
+    fun `walker records a visited node's own unsupported OID with or without a related candidate`() {
         with(Honest()) {
             val other = w.name("Other")
-            // The leaf's own signature OID is unsupported; its only candidate is unrelated.
+            // The leaf's own signature OID is unsupported: recorded before any candidate is searched (issuer-independent),
+            // so also when its only candidate is unrelated.
             val leaf2 =
                 w.cert(
                     "L2",
@@ -386,10 +387,12 @@ class ReconstructTest {
                     "unsupported",
                     "unrelated candidate",
                     listOf(leaf2, unrelated),
-                    notFound(NoIssuerReason.NO_CANDIDATE).copy(verifications = 1),
+                    notFound(NoIssuerReason.NO_CANDIDATE).copy(
+                        unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE),
+                        verifications = 1,
+                    ),
                 ),
             )
-            // The same leaf against a related candidate: recorded.
             check(
                 fixture(
                     "unsupported",

@@ -83,8 +83,8 @@ internal class DecideContext(
  * - **Step 5:** [reconstruct]; a `Found` is final.
  * - **Step 6:** on a walk `NotFound` or `Budget`, the PKIX fallback runs when it is enabled and the chain has at most
  *   `FALLBACK_MAX_PRESENTED` certificates. A `build` that returns null or throws is a failed fallback; a throw is
- *   caught, except a fatal error ([isFatal], §5.5), and sets [PathDecision.buildThrew]. Exactly one
- *   `FallbackNotUsed` is reported when no fallback path was evaluated.
+ *   caught, except a fatal error ([isFatal], §5.5), keeps an interrupt ([absorb]) and sets [PathDecision.buildThrew].
+ *   Exactly one `FallbackNotUsed` is reported when no fallback path was evaluated.
  *
  * Every exit carries `AlgorithmIdMismatch` once per certificate parsed here whose outer and TBS signature algorithms
  * differ, and every walk `UnsupportedAlgorithm(oid, PATH, outcomeDepended = status == ISSUER_UNVERIFIED)` once per
@@ -250,7 +250,7 @@ private class Decider(
     /**
      * Step 6 on a walk `NotFound`: a fallback path is `FOUND`; otherwise a chain over `FALLBACK_MAX_PRESENTED` is
      * `PATH_BUDGET_EXCEEDED` (the fallback skipped or disabled, whether or not step 1 ran), and any other is
-     * `ISSUER_UNVERIFIED` when the walk met an unsupported own signature OID against a related candidate, else
+     * `ISSUER_UNVERIFIED` when a certificate the walk visited has an unsupported own signature OID, else
      * `NO_ISSUER`, promoted to `PLATFORM_ONLY` under [DecideContext.platformOnly].
      */
     private fun notFound(
@@ -331,7 +331,7 @@ private class Decider(
         return try {
             builder.build(chain.map { it.copyOf() }, snapshot, context.nowMillis)?.let { path(it, leaf) }
         } catch (t: Throwable) {
-            if (isFatal(t)) throw t
+            absorb(t)
             buildThrew = true
             null
         } ?: Fallback.NotUsed(FallbackReason.FAILED)

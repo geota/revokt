@@ -23,6 +23,7 @@ import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.policy.PolicyForm
 import dev.revokt.engine.update.GenerationSnapshot
 import dev.revokt.engine.walker.PathDecision
+import dev.revokt.engine.walker.absorb
 import dev.revokt.engine.walker.isFatal
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
@@ -75,7 +76,7 @@ internal class Evaluated(
  * `StackOverflowError`, rethrown) and adds `ENGINE_ERROR` with a `Finding.EngineError(BOUNDARY)` to the rules fired so
  * far, `REVOKED` included, never replacing them. After a catch no exemption runs: those that completed before it stand,
  * and the rest are not exempt. A throwing exemption is not exempt and adds `ENGINE_ERROR` with a
- * `Finding.EngineError(EXEMPTION)`.
+ * `Finding.EngineError(EXEMPTION)`. A caught `InterruptedException` sets the thread's interrupt flag again ([absorb]).
  */
 @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
 internal fun evaluate(
@@ -208,7 +209,7 @@ private fun exempt(
         try {
             if (exemption.isExempt(context)) acc.exempted += rule
         } catch (t: Throwable) {
-            if (isFatal(t)) throw t
+            absorb(t)
             acc.exemptionErrors += "the exemption for $rule threw ${described(t)}"
         }
     }
@@ -301,7 +302,7 @@ private inline fun <T> guarded(
     try {
         block()
     } catch (t: Throwable) {
-        if (isFatal(t)) throw t
+        absorb(t)
         acc.boundaryErrors += "caught ${described(t)}"
         null
     }

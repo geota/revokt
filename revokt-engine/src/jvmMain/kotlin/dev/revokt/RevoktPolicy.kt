@@ -4,6 +4,7 @@
 package dev.revokt
 
 import dev.revokt.engine.policy.PolicyForm
+import dev.revokt.engine.policy.PolicyTable
 import dev.revokt.engine.policy.Preset
 import dev.revokt.engine.policy.StalenessTable
 import dev.revokt.engine.policy.anchorExemptable
@@ -80,18 +81,27 @@ public class RevoktPolicy private constructor(
         private var clockSkewMillis = from.clockSkewMillis
         private var signedSourceFailingAfterMillis = from.signedSourceFailingAfterMillis
 
+        /**
+         * Sets [rule]'s outcome. `NO_ISSUER` and `ISSUER_UNVERIFIED` share one outcome, so setting either sets both: a
+         * server can turn one into the other, and only the diagnostic differs (spec §4, §8).
+         */
         public fun rule(
             rule: Rule,
             outcome: Outcome,
-        ): Builder = apply { outcomes[rule] = outcome }
+        ): Builder = apply { for (r in PolicyTable.shared(rule)) outcomes[r] = outcome }
 
-        /** Registers [exemption] for [rule]; a second call for the same rule replaces the first. */
+        /**
+         * Registers [exemption] for [rule]; a second call for the same rule replaces the first. `NO_ISSUER` and
+         * `ISSUER_UNVERIFIED` share one exemption, so registering it for either registers it for both.
+         */
         public fun exempt(
             rule: Rule,
             exemption: Exemption,
-        ): Builder = apply { exemptions[rule] = exemption }
+        ): Builder = apply { for (r in PolicyTable.shared(rule)) exemptions[r] = exemption }
 
-        public fun clearExemption(rule: Rule): Builder = apply { exemptions.remove(rule) }
+        /** Removes [rule]'s exemption; for `NO_ISSUER` or `ISSUER_UNVERIFIED`, the one both share. */
+        public fun clearExemption(rule: Rule): Builder =
+            apply { for (r in PolicyTable.shared(rule)) exemptions.remove(r) }
 
         /**
          * `exempt(rule, Exemption.anchorIn(sha256s))` for every exemptable rule that is not `EVIDENCE`, is not marked

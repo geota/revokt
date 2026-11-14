@@ -5,7 +5,7 @@
 
 package dev.revokt
 
-import dev.revokt.engine.walker.isFatal
+import dev.revokt.engine.walker.absorb
 import kotlin.jvm.JvmName
 
 /**
@@ -46,6 +46,9 @@ private fun combined(
         !decisive
     }
 
-/** [Exemption.isExempt] with a non-fatal throw caught into the result; a fatal one propagates. */
+/**
+ * [Exemption.isExempt] with a non-fatal throw caught into the result, the interrupt flag restored for an
+ * `InterruptedException`; a fatal one propagates.
+ */
 private fun Exemption.attempt(context: ExemptionContext): Result<Boolean> =
-    runCatching { isExempt(context) }.onFailure { if (isFatal(it)) throw it }
+    runCatching { isExempt(context) }.onFailure(::absorb)
