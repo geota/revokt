@@ -313,7 +313,7 @@ private fun described(t: Throwable): String =
     try {
         t.toString()
     } catch (e: Throwable) {
-        if (isFatal(e)) throw e
+        absorb(e)
         t::class.simpleName ?: "a throwable"
     }
 

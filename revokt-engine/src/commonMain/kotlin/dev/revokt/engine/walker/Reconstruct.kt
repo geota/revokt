@@ -33,7 +33,9 @@ import okio.ByteString
  *   lists it, as it is explored and whether or not it verifies the child, and so does a node the unrelated loop
  *   reached. The leaf's own OID is deferred, as pkix defers an end-entity error: it counts only when a related
  *   candidate was explored at the leaf, so a leaf with no candidate stays `NO_CANDIDATE`. A candidate's key or curve
- *   OID never counts, and an `UNSUPPORTED` link is never trusted (§10 item 14).
+ *   OID never counts, and an `UNSUPPORTED` link is never trusted (§10 item 14). The OIDs are recorded on every
+ *   outcome: on a `Found` walk they are diagnostics only (`UnsupportedAlgorithm(outcomeDepended = false)`), which is
+ *   expected, since a server can add such a related certificate on a dead branch (fixture (n)).
  * - Related candidates come in [CandidateIndex.related]'s order at every depth: the store's anchors, then the
  *   presented certificates by index. A store anchor that issues a node is therefore always tried first, whatever the
  *   server presents, and decides the first found path, the reported one.
@@ -142,8 +144,8 @@ private class Reconstruction(
 
         // The candidate sequences read `presented` and `seen` lazily; neither is changed while they are iterated.
         fun walk(): WalkEnd? {
-            // A node below the leaf verified its child; its own signature OID counts before its candidates are searched.
-            // A related one was already counted as a candidate; this covers one the unrelated loop reached.
+            // A node below the leaf verified its child; its own signature OID counts before its candidates are
+            // searched. A related one was already counted as a candidate; this covers one the unrelated loop reached.
             if (!isLeaf) countOwn(child)
             return exploreRelated() ?: exploreUnrelated(relatedPath = foundHere)
         }

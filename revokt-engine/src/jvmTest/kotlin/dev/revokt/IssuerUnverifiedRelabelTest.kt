@@ -4,14 +4,18 @@
 package dev.revokt
 
 import dev.revokt.engine.evaluate.snapshot
+import dev.revokt.engine.walker.DecideContext
 import dev.revokt.engine.walker.ExpectedWalk
 import dev.revokt.engine.walker.Honest
 import dev.revokt.engine.walker.WalkerFixture
 import dev.revokt.engine.walker.WalkerHarness
+import dev.revokt.engine.walker.decide
+import dev.revokt.engine.walker.fixture
 import dev.revokt.testing.SymOids
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /**
  * A server can relabel `NO_ISSUER` as `ISSUER_UNVERIFIED` (#196 F1, spec §5.1 decision step 6): a related non-anchor
@@ -19,9 +23,10 @@ import kotlin.test.assertIs
  * CheckIssuerIndependentProperties before VerifySignedData, and the leaf's own OID is deferred until it has an issuer
  * candidate. `[L]` is `NO_ISSUER`; `[L, D]`, where D verifies the leaf under a recovered key and signs itself with an
  * unsupported OID under an issuer no candidate matches, and `[L, J]`, where J does not verify the leaf, are
- * `ISSUER_UNVERIFIED`. The two rules
- * share one outcome and one exemption, so the relabel changes only the diagnostic: the verdict is the same under every
- * preset and every exemption, whichever rule it was registered on.
+ * `ISSUER_UNVERIFIED`. The two rules share one outcome and one exemption, so the relabel changes only the diagnostic:
+ * the verdict is the same under every preset and every exemption, whichever rule it was registered on. On a
+ * trust-manager binding (`platformOnly`) every one of them is `NO_ISSUER(PLATFORM_ONLY)`, so `platformOnly()` matches
+ * whatever the label would have been.
  */
 @OptIn(RevoktTestingApi::class)
 class IssuerUnverifiedRelabelTest {
@@ -59,6 +64,29 @@ class IssuerUnverifiedRelabelTest {
             )
         }
 
+    /** A leaf whose own signature OID is unsupported: its OID is deferred until it has an issuer candidate. */
+    private val leaf2 =
+        h.w.cert(
+            "L2",
+            h.w.name("leaf.example"),
+            h.intermediate.subject,
+            sigOid = SymOids.UNSUPPORTED_SIGNATURE,
+            key = h.w.leafKey(),
+        )
+
+    private val leaf2Only =
+        h.fixture("deferral", "[L2]", listOf(leaf2), ExpectedWalk.notFound(NoIssuerReason.NO_CANDIDATE))
+
+    private val leaf2WithIssuer =
+        h.fixture(
+            "deferral",
+            "[L2, I]",
+            listOf(leaf2, h.intermediate),
+            ExpectedWalk
+                .notFound(NoIssuerReason.ALL_CANDIDATES_INVALID)
+                .copy(unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE), verifications = 1),
+        )
+
     @Test
     fun `walker a related non-verifying candidate counts its own unsupported OID, as pkix checks it first`() {
         WalkerHarness.check(withJ)
@@ -69,28 +97,57 @@ class IssuerUnverifiedRelabelTest {
 
     @Test
     fun `decide the leaf's own unsupported OID counts only once an issuer candidate was found`() {
-        val leaf2 =
-            h.w.cert(
-                "L2",
-                h.w.name("leaf.example"),
-                h.intermediate.subject,
-                sigOid = SymOids.UNSUPPORTED_SIGNATURE,
-                key = h.w.leafKey(),
-            )
-        val alone =
-            h.fixture("deferral", "[L2]", listOf(leaf2), ExpectedWalk.notFound(NoIssuerReason.NO_CANDIDATE))
-        val decided = WalkerHarness.decide(alone, fallback = null)
+        WalkerHarness.check(leaf2Only)
+        WalkerHarness.check(leaf2WithIssuer)
+        val decided = WalkerHarness.decide(leaf2Only, fallback = null)
         assertEquals(PathStatus.NO_ISSUER, decided.path.status)
         assertEquals(NoIssuerReason.NO_CANDIDATE, decided.path.noIssuerReason)
         assertEquals(emptyList(), decided.findings.filterIsInstance<Finding.UnsupportedAlgorithm>())
-        val withIssuer =
-            h.fixture(
-                "deferral",
-                "[L2, I]",
-                listOf(leaf2, h.intermediate),
-                ExpectedWalk.notFound(NoIssuerReason.ALL_CANDIDATES_INVALID),
+        assertEquals(PathStatus.ISSUER_UNVERIFIED, WalkerHarness.decide(leaf2WithIssuer, fallback = null).path.status)
+    }
+
+    @Test
+    fun `walker a related store anchor's own unsupported OID never counts`() {
+        // A is named like the leaf's issuer and signs itself with an unsupported OID; no link verifies the leaf.
+        val anchor =
+            h.w.cert(
+                "A",
+                h.intermediate.subject,
+                h.intermediate.subject,
+                sigOid = SymOids.UNSUPPORTED_SIGNATURE,
             )
-        assertEquals(PathStatus.ISSUER_UNVERIFIED, WalkerHarness.decide(withIssuer, fallback = null).path.status)
+        val f =
+            h.w.fixture(
+                "relabel",
+                "[L], anchor A",
+                listOf(h.leaf),
+                listOf(h.root, anchor),
+                ExpectedWalk.notFound(NoIssuerReason.ALL_CANDIDATES_INVALID).copy(verifications = 1),
+            )
+        WalkerHarness.check(f)
+        val decision = WalkerHarness.decide(f, fallback = null)
+        assertEquals(PathStatus.NO_ISSUER, decision.path.status)
+        assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, decision.path.noIssuerReason)
+    }
+
+    @Test
+    fun `walker a node the unrelated loop reached counts its own unsupported OID`() {
+        // U is not related to the leaf but verifies it, and signs itself with an unsupported OID.
+        val u =
+            h.w
+                .cert("U", h.w.name("Other"), h.w.name("Nowhere"), sigOid = SymOids.UNSUPPORTED_SIGNATURE)
+                .also { h.w.verifies(h.leaf, it.key) }
+        val f =
+            h.fixture(
+                "relabel",
+                "[L, U]",
+                listOf(h.leaf, u),
+                ExpectedWalk
+                    .notFound(NoIssuerReason.NO_CANDIDATE)
+                    .copy(unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE), unrelatedExploredAtLeaf = 1),
+            )
+        WalkerHarness.check(f)
+        assertEquals(PathStatus.ISSUER_UNVERIFIED, WalkerHarness.decide(f, fallback = null).path.status)
     }
 
     @Test
@@ -156,10 +213,50 @@ class IssuerUnverifiedRelabelTest {
         assertEquals(listOf(Rule.NO_ISSUER), exemptedRules(verdict(leafOnly, exempted)))
     }
 
+    @Test
+    fun `decide under platformOnly a fallback-failed NotFound is NO_ISSUER(PLATFORM_ONLY) whatever the label`() {
+        for (f in listOf(leafOnly, withD, withJ, leaf2Only, leaf2WithIssuer)) {
+            val d = WalkerHarness.decide(f, fallback = null, platformOnly = true)
+            assertEquals(PathStatus.NO_ISSUER, d.path.status, "$f")
+            assertEquals(NoIssuerReason.PLATFORM_ONLY, d.path.noIssuerReason, "$f")
+            assertEquals(f.walk.reason, d.path.walkerReason, "$f: the walker's reason is kept")
+            val findings = d.findings.filterIsInstance<Finding.UnsupportedAlgorithm>()
+            assertEquals(f.walk.unsupportedOids, findings.map { it.oid }.toSet(), "$f: the OIDs are kept")
+            assertTrue(findings.none { it.outcomeDepended }, "$f: outcomeDepended follows the status")
+        }
+    }
+
+    @Test
+    fun `on a trust-manager binding hostSuffixIn and platformOnly exempts every label under STRICT`() {
+        val corp = Exemption.hostSuffixIn(listOf("example")) and Exemption.platformOnly()
+        val policy =
+            RevoktPolicy.STRICT
+                .newBuilder()
+                .exempt(Rule.NO_ISSUER, corp)
+                .build()
+        for (f in listOf(leafOnly, withD, withJ, leaf2Only, leaf2WithIssuer)) {
+            val v = verdict(f, policy, platformOnly = true)
+            assertIs<Verdict.Accepted>(v, "$f")
+            assertEquals(setOf(Rule.NO_ISSUER), v.rules, "$f")
+            assertEquals(listOf(Rule.NO_ISSUER), exemptedRules(v), "$f")
+            assertIs<Verdict.Rejected>(verdict(f, RevoktPolicy.STRICT, platformOnly = true), "$f: not exempt")
+        }
+    }
+
     private fun verdict(
         f: WalkerFixture,
         policy: RevoktPolicy,
-    ): Verdict = EvaluatorRig(f, policy, snapshot()).presented(f.presented, host = "www.example")
+        platformOnly: Boolean = false,
+    ): Verdict =
+        EvaluatorRig(
+            f,
+            policy,
+            snapshot(),
+            decidePresented = { chain, index, anchors, c ->
+                val context = DecideContext(c.verifier, c.probe, c.crossCallMemo, c.fallback, c.nowMillis, platformOnly)
+                decide(chain, index, anchors, context)
+            },
+        ).presented(f.presented, host = "www.example")
 
     private fun exemptedRules(v: Verdict): List<Rule> = v.findings.filterIsInstance<Finding.Exempted>().map { it.rule }
 }

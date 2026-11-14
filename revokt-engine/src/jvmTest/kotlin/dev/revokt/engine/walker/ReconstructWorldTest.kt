@@ -123,8 +123,9 @@ class ReconstructWorldTest {
             if (walk !is Walk.Found) fail("seed $seed: honest world not Found: $walk")
             assertEquals(setOf(world.honestKey), WalkerHarness.hex(walk.leafKeys), "seed $seed")
             // §5.1 "Cost": at most depth + 1, depth counted on the longest path found. That is the generator's depth
-            // except for a root-issued leaf with a cross-certificate of its root presented: at the leaf the store root
-            // is explored first (L/R), the presented cross-certificate is then a memo hit for L/X, and X/R' is verified.
+            // except for a root-issued leaf with a cross-certificate of its root presented: at the leaf the store
+            // root is explored first (L/R), the presented cross-certificate is then a memo hit for L/X, and X/R' is
+            // verified.
             val depth = walk.paths.maxOf { it.certs.size } - 2
             val v = walk.stats.verifications
             assertTrue(v <= depth + 1, "seed $seed: $v verifications at depth $depth")

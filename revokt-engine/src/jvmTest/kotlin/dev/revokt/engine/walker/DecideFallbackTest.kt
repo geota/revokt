@@ -208,7 +208,7 @@ class DecideFallbackTest {
     }
 
     @Test
-    fun `ISSUER_UNVERIFIED needs the child's own signature OID unsupported against a related candidate`() {
+    fun `ISSUER_UNVERIFIED needs the leaf's own unsupported OID against a related candidate, off the bindings`() {
         with(Honest()) {
             val leafU =
                 w.cert(
@@ -230,12 +230,17 @@ class DecideFallbackTest {
                 listOf(false, true).forEach { platformOnly ->
                     val at = "$reason platformOnly=$platformOnly"
                     val d = WalkerHarness.decide(f, fallback, platformOnly = platformOnly)
+                    // On a trust-manager binding the platform accepted the chain: NO_ISSUER(PLATFORM_ONLY) whatever the
+                    // label, with the walker's reason and the OID kept.
                     assertPath(d, at) {
-                        status(PathStatus.ISSUER_UNVERIFIED)
-                            .walkerReason(NoIssuerReason.ALL_CANDIDATES_INVALID)
+                        if (platformOnly) {
+                            status(PathStatus.NO_ISSUER).noIssuerReason(NoIssuerReason.PLATFORM_ONLY)
+                        } else {
+                            status(PathStatus.ISSUER_UNVERIFIED)
+                        }.walkerReason(NoIssuerReason.ALL_CANDIDATES_INVALID)
                             .endReason(WalkEnd.COMPLETE)
                     }
-                    assertEquals(listOf(unsupported(true), notUsed(reason)), d.findings, at)
+                    assertEquals(listOf(unsupported(!platformOnly), notUsed(reason)), d.findings, at)
                 }
             }
             // Over FALLBACK_MAX_PRESENTED the chain length decides first: PATH_BUDGET_EXCEEDED, the OID reported.

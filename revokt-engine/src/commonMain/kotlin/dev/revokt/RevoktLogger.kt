@@ -3,7 +3,7 @@
 
 package dev.revokt
 
-import dev.revokt.engine.walker.isFatal
+import dev.revokt.engine.walker.absorb
 
 /**
  * Where revokt logs (spec §3). On the JVM, `RevoktLoggers.jul()` logs through `java.util.logging`. A logger that throws
@@ -19,7 +19,7 @@ public fun interface RevoktLogger {
 
 /**
  * [RevoktLogger.log] as every revokt caller makes it (spec §3): a throwing logger is swallowed. A fatal error (§5.5) is
- * rethrown, as at every catch of consumer code.
+ * rethrown and an interrupt kept ([absorb]), as at every catch of consumer code.
  */
 @Suppress("TooGenericExceptionCaught") // §3: a throwing logger is swallowed; §5.5: every throwable but a fatal error
 internal fun RevoktLogger.safeLog(
@@ -30,6 +30,6 @@ internal fun RevoktLogger.safeLog(
     try {
         log(level, message, cause)
     } catch (t: Throwable) {
-        if (isFatal(t)) throw t
+        absorb(t)
     }
 }

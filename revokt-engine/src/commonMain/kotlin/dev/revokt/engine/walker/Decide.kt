@@ -55,9 +55,9 @@ internal class PathDecision(
  *   `unsupportedOids()`.
  * - [fallback] is step 6's PKIX builder, called at [nowMillis]; null when the fallback is disabled
  *   (`pkixFallback(false)`, and the walker-only harness's disabled path).
- * - [platformOnly] is step 6's `PLATFORM_ONLY` promotion of a `NO_ISSUER`: on for the trust-manager bindings and
- *   `Revokt.evaluate`, which run step 1; off for the walker-only harness and `Evaluator.evaluate`, where the walker's
- *   reason is reported directly.
+ * - [platformOnly] is step 6's `PLATFORM_ONLY` promotion of a walk `NotFound` whose fallback failed, an
+ *   `ISSUER_UNVERIFIED` one included: on for the trust-manager bindings and `Revokt.evaluate`, which run step 1; off
+ *   for the walker-only harness and `Evaluator.evaluate`, where the walker's label and reason are reported directly.
  */
 internal class DecideContext(
     val verifier: SignatureVerifier,
@@ -249,9 +249,11 @@ private class Decider(
 
     /**
      * Step 6 on a walk `NotFound`: a fallback path is `FOUND`; otherwise a chain over `FALLBACK_MAX_PRESENTED` is
-     * `PATH_BUDGET_EXCEEDED` (the fallback skipped or disabled, whether or not step 1 ran), and any other is
-     * `ISSUER_UNVERIFIED` when the walk recorded an unsupported own signature OID ([reconstruct]), else
-     * `NO_ISSUER`, promoted to `PLATFORM_ONLY` under [DecideContext.platformOnly].
+     * `PATH_BUDGET_EXCEEDED` (the fallback skipped or disabled, whether or not step 1 ran). Under
+     * [DecideContext.platformOnly] any other is `NO_ISSUER(PLATFORM_ONLY)`: the platform accepted the chain whatever
+     * the walk's label, so a server's relabel cannot change what `platformOnly()` matches; `walkerReason` and the
+     * `UnsupportedAlgorithm` findings keep the detail. Without it, any other is `ISSUER_UNVERIFIED` when the walk
+     * recorded an unsupported own signature OID ([reconstruct]), else `NO_ISSUER` with the walker's reason.
      */
     private fun notFound(
         walk: Walk.NotFound,
@@ -274,7 +276,7 @@ private class Decider(
                 builder.status(PathStatus.PATH_BUDGET_EXCEEDED)
             }
 
-            walk.unsupportedOids.isNotEmpty() -> {
+            !context.platformOnly && walk.unsupportedOids.isNotEmpty() -> {
                 builder.status(PathStatus.ISSUER_UNVERIFIED)
             }
 

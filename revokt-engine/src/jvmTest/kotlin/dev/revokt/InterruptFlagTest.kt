@@ -16,9 +16,9 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
- * A verifier, canonicaliser, fallback or exemption that throws `InterruptedException` is caught by the §5.5 catch
- * rule like any other non-fatal throw, and the thread's interrupt flag, which the thrower cleared, is set again (#196
- * F6), as it is at the boundary itself. JVM only: Kotlin/Native has no interrupt flag. Each test clears the flag.
+ * A verifier, canonicaliser, fallback, exemption or logger that throws `InterruptedException` is caught by the §5.5
+ * catch rule like any other non-fatal throw, and the thread's interrupt flag, which the thrower cleared, is set again
+ * (#196 F6), as it is at the boundary itself. JVM only: Kotlin/Native has no interrupt flag. Each test clears the flag.
  */
 @OptIn(RevoktTestingApi::class)
 class InterruptFlagTest {
@@ -125,6 +125,11 @@ class InterruptFlagTest {
         val either = strict(throwing or Exemption { true })
         val v = keepsInterrupt { EvaluatorRig(leafOnly, either, snapshot()).presented(leafOnly.presented) }
         assertIs<Verdict.Accepted>(v)
+    }
+
+    @Test
+    fun `a logger's InterruptedException is swallowed and keeps the interrupt`() {
+        keepsInterrupt { RevoktLogger { _, _, _ -> interrupts() }.safeLog(LogLevel.WARN, "message") }
     }
 
     @Test

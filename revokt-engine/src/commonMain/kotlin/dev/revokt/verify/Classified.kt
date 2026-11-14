@@ -20,8 +20,9 @@ internal class Classified(
 /**
  * [SignatureVerifier.verify] with spec §5.1's rule for a throw: a verifier throw is `INVALID` plus `VerifierError`, for
  * any verifier, so a provider's `RuntimeException` (which `JcaSignatureVerifier` wraps and rethrows) never escapes the
- * walk. A fatal error (§5.5) is rethrown, and an `InterruptedException` keeps the thread's interrupt flag. The walker and the verifier's other callers (the content signature, the seed
- * signature) share it, so the mapping is the same everywhere.
+ * walk. A fatal error (§5.5) is rethrown, and an `InterruptedException` keeps the thread's interrupt flag. The walker
+ * and the verifier's other callers (the content signature, the seed signature) share it, so the mapping is the same
+ * everywhere.
  */
 @Suppress("TooGenericExceptionCaught") // §5.5's rule: every throwable but a fatal error is caught
 internal fun SignatureVerifier.verifyClassified(
