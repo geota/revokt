@@ -25,8 +25,11 @@ internal enum class SignatureFailure {
     /** More than [ChangesetVerifier.MAX_SIGNATURES] entries; none was tried. */
     TOO_MANY_SIGNATURES,
 
-    /** Every entry was skipped: none has a `signature`, an `x5u` and a `mode` of `p384ecdsa`. */
+    /** Every entry was skipped: none has a non-empty `signature`, a non-empty `x5u` and a `mode` of `p384ecdsa`. */
     NONE_TRIED,
+
+    /** An element reached in the loop is JSON `null`, which Firefox's `const { x5u, signature, mode } = sig` throws on. */
+    NULL_ENTRY,
 
     /** The x5u fetch failed ([ChangesetVerification.Failed.clientFailure] says how), at stage `X5U`. */
     X5U_FETCH,
@@ -44,21 +47,32 @@ internal enum class SignatureFailure {
     CONTENT_SIGNATURE,
 }
 
-/** What [ChangesetVerifier.verify] found. [backoffMillis] is the longest `Backoff` or `Retry-After` of its x5u fetches. */
+/**
+ * What [ChangesetVerifier.verify] found. [backoffMillis] is the longest `Backoff` or `Retry-After` of the x5u fetches
+ * this call made, a failed entry's included; an x5u reused from an earlier call of the same verifier is not fetched, so
+ * its `Backoff` was reported by that call and is not reported again.
+ */
 internal sealed class ChangesetVerification {
     abstract val backoffMillis: Long?
 
     /**
-     * The entry at [index] of `metadata.signatures` verified: [x5uBody] is its x5u body as served and [path] the
-     * validated path, so a seed stores this entry's `signature` and [x5uBody] as `x5u.pem` (spec §6.5).
+     * The entry at [index] of `metadata.signatures` verified over exactly [records] at [timestamp], so these are what
+     * the sync installs (the payload's record set, never the changeset's `changes` for a `_since` changeset). [x5uBody]
+     * is the entry's x5u body as served and [path] the validated path, so a seed stores [entry]'s `signature` and
+     * [x5uBody] as `x5u.pem` (spec §6.5).
      */
     class Verified(
         val index: Int,
         val entry: SignatureEntry,
+        val records: List<JsonObject>,
+        val timestamp: Long,
         val x5uBody: ByteString,
         val path: X5uPath,
         override val backoffMillis: Long?,
-    ) : ChangesetVerification()
+    ) : ChangesetVerification() {
+        /** This result with [backoff] as the verification's backoff. */
+        fun of(backoff: Long?): Verified = Verified(index, entry, records, timestamp, x5uBody, path, backoff)
+    }
 
     /**
      * Nothing verified: a [SyncOutcome.FAILED] or [SyncOutcome.CLOCK_SKEW] sync at [stage]. For a failure of a tried
@@ -93,14 +107,18 @@ internal sealed class ChangesetVerification {
  *
  * - **The entries.** An empty `metadata.signatures` is [SignatureFailure.NO_SIGNATURES], and one of more than
  *   [MAX_SIGNATURES] entries is [SignatureFailure.TOO_MANY_SIGNATURES], before anything is fetched. The entries are
- *   then tried in array order. One with no `signature` or `x5u`, or a `mode` other than `p384ecdsa` (none included, a
- *   deliberate narrowing from Firefox), is skipped; when every one is, [SignatureFailure.NONE_TRIED]. These three are
- *   `FAILED` at stage `SIGNATURE`.
+ *   then tried in array order. One with no `signature` or `x5u`, an empty one included (Firefox's `!x5u ||
+ *   !signature`), or a `mode` other than `p384ecdsa` (none included, a deliberate narrowing from Firefox), is skipped;
+ *   when every one is, [SignatureFailure.NONE_TRIED]. A JSON `null` element reached in the loop is
+ *   [SignatureFailure.NULL_ENTRY], as Firefox's destructuring throws on it. These are `FAILED` at stage `SIGNATURE`.
  * - **One entry.** Its `x5u` is fetched through [client] (the §7.1 URL rules, the rewrite and `MAX_X5U_BYTES` are
- *   its), read as PEM, validated under [pinned] ([validateX5uChain]) and checked at [nowMillis] ([checkValidity]);
+ *   its), read as PEM, validated under the client's source's pinned roots ([validateX5uChain]; taken from the source
+ *   that served the changeset, so one source's changeset is never checked under another's pins) and checked at
+ *   [nowMillis] ([checkValidity]);
  *   then its `signature` is verified over the records under the leaf ([ContentSignature.verifyRecords]). The first
  *   entry that verifies is accepted.
- * - **One x5u result per URL per sync.** An `x5u` URL (as served, before the rewrite) is fetched and validated once by
+ * - **One x5u result per URL per sync.** An `x5u` URL (as served, exactly: before the rewrite, `:443` and case kept) is
+ *   fetched and validated once by
  *   this verifier: a later entry naming it reuses the validated path, and one whose fetch or validation failed is not
  *   retried and fails the same way.
  * - **The failure.** When no tried entry verifies, the last tried entry's failure is the outcome (Firefox throws its
@@ -111,7 +129,6 @@ internal sealed class ChangesetVerification {
  */
 internal class ChangesetVerifier(
     private val client: RemoteSettingsClient,
-    private val pinned: Set<ByteString>,
     private val verifier: SignatureVerifier,
     private val nowMillis: Long,
 ) {
@@ -149,41 +166,47 @@ internal class ChangesetVerifier(
         var backoff: Long? = null
         var last: ChangesetVerification.Failed? = null
         for ((index, entry) in entries.withIndex()) {
+            if (entry == null) {
+                return failed(SignatureFailure.NULL_ENTRY, "metadata.signatures[$index] is null").of(index, backoff)
+            }
             val signature = entry.signature
             val url = entry.x5u
-            if (signature == null || url == null || entry.mode != ContentSignature.MODE) continue
+            if (signature.isNullOrEmpty() || url.isNullOrEmpty() || entry.mode != ContentSignature.MODE) continue
             val x5u =
                 x5us.getOrPut(url) {
                     val (fetched, fetchBackoff) = fetch(url)
                     backoff = longest(backoff, fetchBackoff)
                     fetched
                 }
-            last =
-                when (x5u) {
-                    is X5u.Invalid -> {
-                        x5u.failure.of(index, null)
-                    }
-
-                    is X5u.Valid -> {
-                        val checked =
-                            ContentSignature.verifyRecords(
-                                verifier,
-                                records,
-                                changeset.timestamp,
-                                signature,
-                                entry.mode,
-                                x5u.path.leafSpki,
-                            )
-                        if (checked.verified) {
-                            return ChangesetVerification.Verified(index, entry, x5u.body, x5u.path, backoff)
-                        }
-                        val error = checked.verifierError?.let { ", $it" } ?: ""
-                        failed(SignatureFailure.CONTENT_SIGNATURE, "${checked.failure}$error").of(index, null)
-                    }
-                }
+            when (val tried = attempt(index, entry, signature, x5u, changeset.timestamp, records)) {
+                is ChangesetVerification.Verified -> return tried.of(backoff)
+                is ChangesetVerification.Failed -> last = tried
+            }
         }
         return last?.of(last.index, backoff)
             ?: failed(SignatureFailure.NONE_TRIED, "no entry has a signature, an x5u and mode ${ContentSignature.MODE}")
+    }
+
+    /** One tried entry: [signature] over [records] at [timestamp] under [x5u]'s leaf, or [x5u]'s own failure. */
+    private fun attempt(
+        index: Int,
+        entry: SignatureEntry,
+        signature: String,
+        x5u: X5u,
+        timestamp: Long,
+        records: List<JsonObject>,
+    ): ChangesetVerification {
+        val path =
+            when (x5u) {
+                is X5u.Invalid -> return x5u.failure.of(index, null)
+                is X5u.Valid -> x5u.path
+            }
+        val checked = ContentSignature.verifyRecords(verifier, records, timestamp, signature, entry.mode, path.leafSpki)
+        if (checked.verified) {
+            return ChangesetVerification.Verified(index, entry, records, timestamp, x5u.body, path, null)
+        }
+        val error = checked.verifierError?.let { ", $it" } ?: ""
+        return failed(SignatureFailure.CONTENT_SIGNATURE, "${checked.failure}$error").of(index, null)
     }
 
     /** The x5u at [url], fetched, read as PEM, validated and checked at [nowMillis]; with the fetch's backoff. */
@@ -229,7 +252,7 @@ internal class ChangesetVerifier(
                 is X5uPemRead.Failed -> return invalid(SignatureFailure.X5U_PEM, "${read.reason}: ${read.detail}")
             }
         val path =
-            when (val chain = validateX5uChain(ders, pinned, verifier)) {
+            when (val chain = validateX5uChain(ders, client.source.pinnedRootSpkis, verifier)) {
                 is X5uChainResult.Valid -> chain.path
                 is X5uChainResult.Failed -> return invalid(SignatureFailure.X5U_CHAIN, chain.toString())
             }

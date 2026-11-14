@@ -103,26 +103,27 @@ class RemoteSettingsClientTest {
                 listOf("other", "https://elsewhere.example/x.chain", "other"),
                 listOf("sig2", "https://content-signature-2.cdn.mozilla.net/g/chains/y.chain", "p384ecdsa"),
             ),
-            got.signatures.map { listOf(it.signature, it.x5u, it.mode) },
+            got.signatures.map { listOf(it?.signature, it?.x5u, it?.mode) },
         )
         // The timestamp is the envelope's, the payload's <ts>; metadata.last_modified is not read.
         assertEquals(1793980622465, got.timestamp)
 
-        // An absent, mistyped or empty array is no entries; an element that is not an object, or a mistyped field,
-        // reads as null. Nothing here is checked before verification (ChangesetVerifier).
-        fun entries(metadata: String): List<List<String?>> =
+        // An absent, mistyped or empty array is no entries; a JSON null element is null; another element that is not an
+        // object, or a mistyped field, reads as null fields. Nothing here is checked before verification
+        // (ChangesetVerifier).
+        fun entries(metadata: String): List<List<String?>?> =
             client(ScriptedFetcher { ok("""{"metadata":$metadata,"timestamp":5,"changes":[]}""") })
                 .fetchChangeset(1, null)
                 .assertOk()
                 .signatures
-                .map { listOf(it.signature, it.x5u, it.mode) }
+                .map { it?.let { e -> listOf(e.signature, e.x5u, e.mode) } }
         assertEquals(emptyList(), entries("""{}"""))
         assertEquals(emptyList(), entries("""{"signature":{"x5u":"https://h/x","mode":"p384ecdsa","signature":"s"}}"""))
         assertEquals(emptyList(), entries("""{"signatures":{"x5u":"https://h/x"}}"""))
         assertEquals(emptyList(), entries("""{"signatures":[]}"""))
         assertEquals(
-            listOf(listOf(null, null, null), listOf(null, null, null), listOf("s", null, null)),
-            entries("""{"signatures":[1,{"x5u":1,"mode":null},{"signature":"s","x5u":["https://h/x"]}]}"""),
+            listOf(listOf(null, null, null), null, listOf(null, null, null), listOf("s", null, null)),
+            entries("""{"signatures":[1,null,{"x5u":1,"mode":null},{"signature":"s","x5u":["https://h/x"]}]}"""),
         )
         val bare = client(ScriptedFetcher { ok("""{"timestamp":5,"changes":[]}""") }).fetchChangeset(1, null).assertOk()
         assertEquals(emptyList(), bare.signatures)

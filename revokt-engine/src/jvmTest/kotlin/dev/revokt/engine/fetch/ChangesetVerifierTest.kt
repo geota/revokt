@@ -3,9 +3,14 @@
 
 package dev.revokt.engine.fetch
 
+import dev.revokt.FetchResponse
+import dev.revokt.MozillaRemoteSettings
+import dev.revokt.SignatureVerifier
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
+import dev.revokt.VerifyResult
 import dev.revokt.engine.json.JsonObject
+import dev.revokt.engine.json.JsonString
 import dev.revokt.engine.verify.ContentSignature
 import dev.revokt.engine.verify.X5uChainFixture
 import dev.revokt.verify.JcaFixtures
@@ -17,6 +22,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /**
  * The changeset signature check (spec §7.1, revision 56, #191) over the §9 rows: a changeset whose first `signatures`
@@ -75,13 +81,21 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         bodies[request.url]?.let { ok(it, *headers) } ?: response(404, headers = arrayOf(*headers))
     }
 
+    /** Mozilla's source with the fixture's test root pinned in place of `root-ca-production-amo`. */
+    private val source =
+        MozillaRemoteSettings.DEFAULT
+            .newBuilder()
+            .pinnedRootSpkiSha256s(pinned.map { it.toByteArray() })
+            .build()
+
     private fun verifier(
         fetcher: ScriptedFetcher,
         now: Long = NOW,
-    ) = ChangesetVerifier(client(fetcher), pinned, verifier, now)
+        with: SignatureVerifier = verifier,
+    ) = ChangesetVerifier(client(fetcher, source), with, now)
 
     private fun verify(
-        vararg entries: SignatureEntry,
+        vararg entries: SignatureEntry?,
         fetcher: ScriptedFetcher = served(),
     ): ChangesetVerification = verifier(fetcher).verify(Changeset(ts, records, entries.toList()), records)
 
@@ -107,6 +121,15 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
     }
 
     @Test
+    fun `the chain is validated under the client's source's pins`() {
+        // Mozilla's DEFAULT pins root-ca-production-amo, not the fixture's root, so the same chain is not pinned there.
+        ChangesetVerifier(client(served(), MozillaRemoteSettings.DEFAULT), verifier, NOW)
+            .verify(Changeset(ts, records, listOf(entry())), records)
+            .assertFailed(SignatureFailure.X5U_CHAIN, 0)
+            .also { assertTrue("NOT_PINNED" in it.detail, it.detail) }
+    }
+
+    @Test
     fun `one entry that verifies is accepted, with its x5u body as served`() {
         val fetcher = served()
         val verified = verify(entry(), fetcher = fetcher).assertVerified(0)
@@ -114,11 +137,14 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         assertContentEquals(goodPem.encodeToByteArray(), verified.x5uBody.toByteArray())
         assertContentEquals(leafKey.public.encoded, verified.path.leafSpki)
         assertEquals(listOf(a), fetcher.requests.map { it.url })
+        assertEquals(records, verified.records)
+        assertEquals(ts, verified.timestamp)
     }
 
     @Test
-    fun `a first entry that fails and a second that verifies installs`() {
-        verify(entry(signature = bad), entry(x5u = b)).assertVerified(1)
+    fun `a first entry that fails and a second that verifies installs, under the second`() {
+        val second = verify(entry(signature = bad), entry(x5u = b)).assertVerified(1)
+        assertEquals(listOf(good, b), listOf(second.entry.signature, second.entry.x5u))
         // The first entry's x5u is missing (404) and the second's verifies.
         verify(entry(x5u = "$host/missing.chain"), entry(x5u = b)).assertVerified(1)
         // The first entry's chain does not validate.
@@ -132,7 +158,14 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         verify(*Array(5) { entry() }, fetcher = fetcher).assertFailed(SignatureFailure.TOO_MANY_SIGNATURES, null)
         assertEquals(0, fetcher.requests.size)
         // At the cap every entry is tried: three that fail, then one that verifies.
-        verify(entry(signature = bad), entry(signature = bad), entry(signature = bad), entry()).assertVerified(3)
+        val fourth =
+            verify(
+                entry(signature = bad),
+                entry(signature = bad),
+                entry(signature = bad),
+                entry(),
+            ).assertVerified(3)
+        assertEquals(good, fourth.entry.signature)
         assertEquals(4, ChangesetVerifier.MAX_SIGNATURES)
     }
 
@@ -291,5 +324,108 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         )
         assertEquals(null, verify(entry()).assertVerified(0).backoffMillis)
         assertEquals(goodPem.encodeToByteArray().toByteString(), verify(entry()).assertVerified(0).x5uBody)
+    }
+
+    @Test
+    fun `a _since changeset verifies over the merged records, not its changes, and Verified carries the merge`() {
+        val stored = records
+        val changes =
+            listOf(
+                json("""{"id":"r1","last_modified":1793980623000,"deleted":true}"""),
+                json("""{"id":"r3","last_modified":1793980624000,"channel":"default"}"""),
+            )
+        val merged = checkNotNull(ContentSignature.merge(stored, changes))
+        assertEquals(listOf("r2", "r3"), merged.map { (it["id"] as JsonString).value })
+        val delta = Changeset(ts, changes, listOf(entry(signature = sign(over = merged))))
+        val verified = verifier(served()).verify(delta, merged).assertVerified(0)
+        assertEquals(merged, verified.records)
+        assertEquals(ts, verified.timestamp)
+        // The changes alone are not what was signed.
+        verifier(served()).verify(delta, changes).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 0)
+    }
+
+    @Test
+    fun `only a VERIFIED content signature is accepted - UNSUPPORTED and RECORDS are failures`() {
+        val prefix = "Content-Signature:\u0000".encodeToByteArray()
+        // The chain verifies as usual; only the content signature is answered UNSUPPORTED.
+        val unsupported =
+            stub { alg, spki, message, signature ->
+                if (message.size >= prefix.size && message.copyOf(prefix.size).contentEquals(prefix)) {
+                    VerifyResult.UNSUPPORTED
+                } else {
+                    verifier.verify(alg, spki, message, signature)
+                }
+            }
+        verifier(served(), with = unsupported)
+            .verify(Changeset(ts, records, listOf(entry())), records)
+            .assertFailed(SignatureFailure.CONTENT_SIGNATURE, 0)
+            .also { assertTrue("UNSUPPORTED" in it.detail, it.detail) }
+        // Two records sharing an id leave no payload to verify.
+        val twice = records + records.take(1)
+        verifier(served())
+            .verify(Changeset(ts, twice, listOf(entry())), twice)
+            .assertFailed(SignatureFailure.CONTENT_SIGNATURE, 0)
+            .also { assertTrue("RECORDS" in it.detail, it.detail) }
+    }
+
+    @Test
+    fun `the longest Backoff of the call's fetches is carried, a failed entry's onto a later success`() {
+        fun fetcher(
+            aAnswer: () -> FetchResponse,
+            bAnswer: () -> FetchResponse,
+        ) = ScriptedFetcher { request -> if (request.url == a) aAnswer() else bAnswer() }
+        val missing120 = { response(404, headers = arrayOf("Backoff" to "120")) }
+        val good60 = { ok(goodPem, "Backoff" to "60") }
+        val missing60 = { response(404, headers = arrayOf("Backoff" to "60")) }
+        val good120 = { ok(goodPem, "Backoff" to "120") }
+        val entries = arrayOf(entry(x5u = a), entry(x5u = b))
+        assertEquals(120_000, verify(*entries, fetcher = fetcher(missing120, good60)).assertVerified(1).backoffMillis)
+        assertEquals(120_000, verify(*entries, fetcher = fetcher(missing60, good120)).assertVerified(1).backoffMillis)
+        // A reused x5u is not fetched again, so a later call of the same verifier does not report its Backoff again.
+        val sync = verifier(fetcher(missing120, good60))
+        assertEquals(120_000, sync.verify(Changeset(ts, records, entries.toList()), records).backoffMillis)
+        assertEquals(null, sync.verify(Changeset(ts, records, entries.toList()), records).backoffMillis)
+    }
+
+    @Test
+    fun `an empty x5u or signature is skipped as Firefox's !x5u and !signature skip it`() {
+        val fetcher = served()
+        verify(entry(x5u = ""), entry(signature = ""), entry(x5u = "", signature = ""), fetcher = fetcher)
+            .assertFailed(SignatureFailure.NONE_TRIED, null)
+        assertEquals(0, fetcher.requests.size)
+        verify(entry(signature = ""), entry(x5u = b)).assertVerified(1)
+    }
+
+    @Test
+    fun `a null element reached in the loop is FAILED at SIGNATURE, as Firefox's destructuring throws`() {
+        val fetcher = served()
+        verify(null, entry(), fetcher = fetcher).assertFailed(SignatureFailure.NULL_ENTRY, 0)
+        assertEquals(0, fetcher.requests.size)
+        verify(entry(signature = bad), null, entry()).assertFailed(SignatureFailure.NULL_ENTRY, 1)
+        // Firefox returns at the first entry that verifies, so a null after it is never reached.
+        verify(entry(), null).assertVerified(0)
+        // Through the client's parse: a JSON null element is null; another non-object one is skipped.
+        val parsed =
+            ScriptedFetcher { request ->
+                if ("changeset" in request.url) {
+                    ok(body("""{"signatures":[1,null]}"""))
+                } else {
+                    ok(goodPem)
+                }
+            }
+        val changeset = client(parsed, source).fetchChangeset(ts, null).assertOk()
+        assertEquals(null, changeset.signatures[1])
+        verifier(parsed).verify(changeset, records).assertFailed(SignatureFailure.NULL_ENTRY, 1)
+    }
+
+    @Test
+    fun `the x5u cache key is the URL exactly as served`() {
+        val upper = "$host/A.chain"
+        val port = "https://content-signature-2.cdn.mozilla.net:443/g/chains/a.chain"
+        val fetcher = served(mapOf(a to goodPem, upper to goodPem))
+        verify(entry(signature = bad), entry(x5u = upper, signature = bad), entry(x5u = port), fetcher = fetcher)
+            .assertVerified(2)
+        // A path differing in case is another URL, and so is the same one with :443 (fetched without it).
+        assertEquals(listOf(a, upper, a), fetcher.requests.map { it.url })
     }
 }

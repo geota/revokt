@@ -15,6 +15,7 @@ import dev.revokt.SyncStage
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonInteger
+import dev.revokt.engine.json.JsonNull
 import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.json.JsonParseException
 import dev.revokt.engine.json.JsonString
@@ -51,21 +52,21 @@ internal data class FetchLimits(
  * `timestamp`, the `<ts>` the content-signature payload is built with (`"last_modified": "<ts>"`, as Firefox builds it
  * and as Mozilla's signature over the corpus changeset verifies, #163): it is the signed `<ts>` once, and only once,
  * the signature verifies over it. No other timestamp of the envelope (`metadata.last_modified`, a record's
- * `last_modified`) is read. [signatures] is `metadata.signatures`, one [SignatureEntry] per array element in array order,
- * and empty when it is absent or not an array; `metadata.signature` is not read (spec §7.1, revision 56, #191).
- * [ChangesetVerifier] verifies it.
+ * `last_modified`) is read. [signatures] is `metadata.signatures`, one element per array element in array order (null
+ * for a JSON `null`, which Firefox's destructuring throws on), and empty when it is absent or not an array;
+ * `metadata.signature` is not read (spec §7.1, revision 56, #191). [ChangesetVerifier] verifies it.
  */
 internal class Changeset(
     val timestamp: Long,
     val changes: List<JsonObject>,
-    val signatures: List<SignatureEntry>,
+    val signatures: List<SignatureEntry?>,
 ) {
     override fun toString(): String = "Changeset(timestamp=$timestamp, ${changes.size} changes, signatures=$signatures)"
 }
 
 /**
  * One `metadata.signatures[]` element's three fields as served (spec §7.1), each null when absent or not a string; an
- * element that is not an object has all three null. Unsigned: [x5u] and [mode] say how to verify [signature], and
+ * element that is neither an object nor `null` has all three null, as Firefox's destructuring reads it. Unsigned: [x5u] and [mode] say how to verify [signature], and
  * only a verified one is trusted.
  */
 internal class SignatureEntry(
@@ -95,7 +96,7 @@ internal class SignatureEntry(
  */
 @OptIn(RevoktTestingApi::class) // FetchRequest has no constructor but its Builder.
 internal class RemoteSettingsClient(
-    private val source: MozillaRemoteSettings,
+    val source: MozillaRemoteSettings,
     private val dataset: Dataset,
     private val fetcher: HttpFetcher,
     private val io: CoroutineDispatcher,
@@ -171,6 +172,7 @@ internal class RemoteSettingsClient(
         val timestamp = count(root["timestamp"]) ?: return malformed(body, "timestamp is not an integer ≥ 0")
         val signatures =
             ((root["metadata"] as? JsonObject)?.get("signatures") as? JsonArray)?.items.orEmpty().map {
+                if (it == JsonNull) return@map null
                 val fields = it as? JsonObject ?: JsonObject.EMPTY
                 SignatureEntry(string(fields["signature"]), string(fields["x5u"]), string(fields["mode"]))
             }
