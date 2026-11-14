@@ -23,8 +23,9 @@ internal class WalkPath(
 }
 
 /**
- * What [reconstruct] found (spec §5.1 declarations). Every variant carries [unsupportedOids] (the own signature OIDs
- * of the visited nodes that the verifier's probe lists), the walk's [findings] and its [stats].
+ * What [reconstruct] found (spec §5.1 declarations). Every variant carries [unsupportedOids] (the probe-listed own
+ * signature OIDs of the explored related non-anchors, the nodes, and the leaf once it had a related candidate), the
+ * walk's [findings] and its [stats].
  */
 @OptIn(RevoktInternalApi::class)
 internal sealed interface Walk {

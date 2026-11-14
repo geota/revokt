@@ -250,7 +250,7 @@ private class Decider(
     /**
      * Step 6 on a walk `NotFound`: a fallback path is `FOUND`; otherwise a chain over `FALLBACK_MAX_PRESENTED` is
      * `PATH_BUDGET_EXCEEDED` (the fallback skipped or disabled, whether or not step 1 ran), and any other is
-     * `ISSUER_UNVERIFIED` when a certificate the walk visited has an unsupported own signature OID, else
+     * `ISSUER_UNVERIFIED` when the walk recorded an unsupported own signature OID ([reconstruct]), else
      * `NO_ISSUER`, promoted to `PLATFORM_ONLY` under [DecideContext.platformOnly].
      */
     private fun notFound(

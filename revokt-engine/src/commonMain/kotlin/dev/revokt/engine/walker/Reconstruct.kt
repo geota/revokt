@@ -28,11 +28,12 @@ import okio.ByteString
  *   or no related path exists there (revision 48): then every unrelated one is.
  * - `MAX_DEPTH` is a local dead end. Any other limit aborts the whole walk with [Walk.Budget], which records the path
  *   size where the limit was detected and keeps the paths found so far.
- * - Every node the walk visits, the leaf included (an anchor is a terminal and never a node), adds its own signature OID
- *   to `unsupportedOids` when [probe] lists it, before any candidate is searched and whether or not one exists:
- *   issuer-independent, as mozilla::pkix checks a non-anchor's signature algorithm in
- *   CheckIssuerIndependentProperties before it looks for an issuer. A candidate's key or curve OID never counts, and
- *   an `UNSUPPORTED` link is never trusted (§10 item 14).
+ * - `unsupportedOids` follows mozilla::pkix's issuer-independent check (CheckIssuerIndependentProperties, run before
+ *   the link's VerifySignedData): every related candidate that is not an anchor adds its own signature OID when [probe]
+ *   lists it, as it is explored and whether or not it verifies the child, and so does a node the unrelated loop
+ *   reached. The leaf's own OID is deferred, as pkix defers an end-entity error: it counts only when a related
+ *   candidate was explored at the leaf, so a leaf with no candidate stays `NO_CANDIDATE`. A candidate's key or curve
+ *   OID never counts, and an `UNSUPPORTED` link is never trusted (§10 item 14).
  * - Related candidates come in [CandidateIndex.related]'s order at every depth: the store's anchors, then the
  *   presented certificates by index. A store anchor that issues a node is therefore always tried first, whatever the
  *   server presents, and decides the first found path, the reported one.
@@ -97,6 +98,11 @@ private class Reconstruction(
             else -> NoIssuerReason.UNANCHORED
         }
 
+    /** Adds [c]'s own signature OID to `unsupportedOids` when the probe lists it; a key or curve OID never counts. */
+    private fun countOwn(c: Cert) {
+        if (c.tbsSigOid in probe) unsupported += c.tbsSigOid
+    }
+
     /** The memoised verification of [child] under [candidate]'s key; null when `MAX_VERIFICATIONS` stops it. */
     private fun verifyOnce(
         child: Cert,
@@ -136,9 +142,9 @@ private class Reconstruction(
 
         // The candidate sequences read `presented` and `seen` lazily; neither is changed while they are iterated.
         fun walk(): WalkEnd? {
-            // Issuer-independent: the child's own signature OID counts toward ISSUER_UNVERIFIED before any candidate
-            // is searched (decision step 6); a candidate's key or curve OID never does.
-            if (child.tbsSigOid in probe) unsupported += child.tbsSigOid
+            // A node below the leaf verified its child; its own signature OID counts before its candidates are searched.
+            // A related one was already counted as a candidate; this covers one the unrelated loop reached.
+            if (!isLeaf) countOwn(child)
             return exploreRelated() ?: exploreUnrelated(relatedPath = foundHere)
         }
 
@@ -153,7 +159,7 @@ private class Reconstruction(
                 }
                 related++
                 if (isLeaf) relatedExploredAtLeaf++
-                explore(candidate)?.let { return it }
+                explore(candidate, isRelated = true)?.let { return it }
             }
             return null
         }
@@ -166,17 +172,32 @@ private class Reconstruction(
             for (candidate in index.unrelated(presented, child, seen)) {
                 if (foundHere && !collectAll) break
                 if (isLeaf) unrelatedExploredAtLeaf++
-                explore(candidate)?.let { return it }
+                explore(candidate, isRelated = false)?.let { return it }
             }
             return null
         }
 
-        private fun explore(candidate: Cert): WalkEnd? {
+        /**
+         * Decision step 6's issuer-independent check, in Firefox's order: a related candidate that is not an anchor
+         * counts its own signature OID before its link is verified, whether or not it verifies [child]
+         * (CheckIssuerIndependentProperties runs before VerifySignedData). The leaf's own OID is deferred, as pkix
+         * defers an end-entity error: it counts only once a related candidate, an issuer, was found for it.
+         */
+        private fun countIssuerIndependent(candidate: Cert) {
+            if (isLeaf) countOwn(child)
+            if (!index.isAnchorBytes(candidate)) countOwn(candidate)
+        }
+
+        private fun explore(
+            candidate: Cert,
+            isRelated: Boolean,
+        ): WalkEnd? {
             if (explored >= RevoktLimits.MAX_EXPLORED) {
                 endDepth = path.size
                 return WalkEnd.EXPLORATION_BUDGET
             }
             explored++
+            if (isRelated) countIssuerIndependent(candidate)
             val result = verifyOnce(child, candidate)
             when (result) {
                 null -> {

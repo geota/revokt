@@ -14,10 +14,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
 /**
- * A server can relabel `NO_ISSUER` as `ISSUER_UNVERIFIED` (#196 F1, spec §5.1 decision step 6): every certificate the
- * walk visits counts its own unsupported signature OID, as mozilla::pkix checks a non-anchor's signature algorithm
- * before it looks for an issuer. `[L]` is `NO_ISSUER`; `[L, D]`, where D verifies the leaf under a recovered key and
- * signs itself with an unsupported OID under an issuer no candidate matches, is `ISSUER_UNVERIFIED`. The two rules
+ * A server can relabel `NO_ISSUER` as `ISSUER_UNVERIFIED` (#196 F1, spec §5.1 decision step 6): a related non-anchor
+ * counts its own unsupported signature OID before its link is verified, as mozilla::pkix runs
+ * CheckIssuerIndependentProperties before VerifySignedData, and the leaf's own OID is deferred until it has an issuer
+ * candidate. `[L]` is `NO_ISSUER`; `[L, D]`, where D verifies the leaf under a recovered key and signs itself with an
+ * unsupported OID under an issuer no candidate matches, and `[L, J]`, where J does not verify the leaf, are
+ * `ISSUER_UNVERIFIED`. The two rules
  * share one outcome and one exemption, so the relabel changes only the diagnostic: the verdict is the same under every
  * preset and every exemption, whichever rule it was registered on.
  */
@@ -43,6 +45,53 @@ class IssuerUnverifiedRelabelTest {
                     NoIssuerReason.UNANCHORED,
                 ).copy(unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE)),
         )
+
+    /** J is named like the leaf's issuer and signs itself with an unsupported OID, but no link verifies the leaf. */
+    private val withJ =
+        h.w.cert("J", h.intermediate.subject, h.w.name("Nowhere"), sigOid = SymOids.UNSUPPORTED_SIGNATURE).let { j ->
+            h.fixture(
+                "relabel",
+                "[L, J]",
+                listOf(h.leaf, j),
+                ExpectedWalk
+                    .notFound(NoIssuerReason.ALL_CANDIDATES_INVALID)
+                    .copy(unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE), verifications = 1),
+            )
+        }
+
+    @Test
+    fun `walker a related non-verifying candidate counts its own unsupported OID, as pkix checks it first`() {
+        WalkerHarness.check(withJ)
+        val decision = WalkerHarness.decide(withJ, fallback = null)
+        assertEquals(PathStatus.ISSUER_UNVERIFIED, decision.path.status)
+        assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, decision.path.walkerReason)
+    }
+
+    @Test
+    fun `decide the leaf's own unsupported OID counts only once an issuer candidate was found`() {
+        val leaf2 =
+            h.w.cert(
+                "L2",
+                h.w.name("leaf.example"),
+                h.intermediate.subject,
+                sigOid = SymOids.UNSUPPORTED_SIGNATURE,
+                key = h.w.leafKey(),
+            )
+        val alone =
+            h.fixture("deferral", "[L2]", listOf(leaf2), ExpectedWalk.notFound(NoIssuerReason.NO_CANDIDATE))
+        val decided = WalkerHarness.decide(alone, fallback = null)
+        assertEquals(PathStatus.NO_ISSUER, decided.path.status)
+        assertEquals(NoIssuerReason.NO_CANDIDATE, decided.path.noIssuerReason)
+        assertEquals(emptyList(), decided.findings.filterIsInstance<Finding.UnsupportedAlgorithm>())
+        val withIssuer =
+            h.fixture(
+                "deferral",
+                "[L2, I]",
+                listOf(leaf2, h.intermediate),
+                ExpectedWalk.notFound(NoIssuerReason.ALL_CANDIDATES_INVALID),
+            )
+        assertEquals(PathStatus.ISSUER_UNVERIFIED, WalkerHarness.decide(withIssuer, fallback = null).path.status)
+    }
 
     @Test
     fun `walker the leaf alone records nothing and D's own unsupported OID is recorded without a candidate for D`() {
@@ -88,13 +137,14 @@ class IssuerUnverifiedRelabelTest {
             )
         for ((name, policy) in policies) {
             val alone = verdict(leafOnly, policy)
-            val relabelled = verdict(withD, policy)
             assertEquals(setOf(Rule.NO_ISSUER), alone.rules, name)
-            assertEquals(setOf(Rule.ISSUER_UNVERIFIED), relabelled.rules, name)
-            assertEquals(alone::class, relabelled::class, "$name: one verdict for both labels")
-            if (alone is Verdict.Rejected) {
-                assertEquals(Rule.NO_ISSUER, alone.rule, name)
-                assertEquals(Rule.ISSUER_UNVERIFIED, assertIs<Verdict.Rejected>(relabelled).rule, name)
+            for (relabelled in listOf(verdict(withD, policy), verdict(withJ, policy))) {
+                assertEquals(setOf(Rule.ISSUER_UNVERIFIED), relabelled.rules, name)
+                assertEquals(alone::class, relabelled::class, "$name: one verdict for both labels")
+                if (alone is Verdict.Rejected) {
+                    assertEquals(Rule.NO_ISSUER, alone.rule, name)
+                    assertEquals(Rule.ISSUER_UNVERIFIED, assertIs<Verdict.Rejected>(relabelled).rule, name)
+                }
             }
         }
         val exempted =
