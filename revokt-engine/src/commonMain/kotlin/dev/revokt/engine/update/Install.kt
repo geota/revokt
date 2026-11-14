@@ -26,6 +26,7 @@ import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
+import dev.revokt.engine.walker.absorb
 import dev.revokt.engine.walker.isFatal
 import dev.revokt.safeLog
 import okio.ByteString
@@ -264,7 +265,8 @@ private class Install(
 
     /**
      * [p]'s answer to a self-check probe. A throw breaks `query`'s never-throws contract and fails the check as
-     * [CrliteQueryResult.ENGINE_ERROR], which no probe expects; a fatal error is rethrown to [run].
+     * [CrliteQueryResult.ENGINE_ERROR], which no probe expects; a fatal error is rethrown to [run], and an interrupt is
+     * kept.
      */
     @Suppress("TooGenericExceptionCaught") // §3.2: query never throws, so any throwable is the engine's error.
     private fun probe(
@@ -274,7 +276,7 @@ private class Install(
         try {
             p.query(q)
         } catch (t: Throwable) {
-            if (isFatal(t)) throw t
+            absorb(t)
             CrliteQueryResult.ENGINE_ERROR
         }
 
@@ -305,7 +307,7 @@ private class Install(
             try {
                 engine.coverageEndMillis
             } catch (t: Throwable) {
-                if (isFatal(t)) throw t
+                absorb(t)
                 null
             }
         val epoch = current.generationEpoch + 1

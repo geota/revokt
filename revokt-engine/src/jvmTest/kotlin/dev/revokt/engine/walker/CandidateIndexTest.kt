@@ -35,9 +35,8 @@ class CandidateIndexTest {
     private fun CandidateIndex.relatedList(
         presented: List<Cert>,
         child: Cert,
-        belowLeaf: Boolean,
         seen: Set<ByteString> = setOf(child.bytesHash),
-    ) = related(presented, child, seen, belowLeaf).toList()
+    ) = related(presented, child, seen).toList()
 
     private fun CandidateIndex.unrelatedList(
         presented: List<Cert>,
@@ -48,7 +47,7 @@ class CandidateIndexTest {
     private fun hashes(certs: List<Cert>) = certs.map { it.bytesHash }
 
     @Test
-    fun `candidate index orders presented by index before the store at the leaf`() {
+    fun `candidate index orders the store's anchors before presented by index at the leaf`() {
         val anchor = der(root, root)
         val index = index(anchor)
         val leaf = index.cert(WalkerCerts.parse(der(leafName, root)))
@@ -56,13 +55,13 @@ class CandidateIndexTest {
         val p2 = index.cert(WalkerCerts.parse(der(root, other)))
         val presented = listOf(leaf, p2, p1)
         assertEquals(
-            hashes(listOf(p2, p1, index.store[0])),
-            hashes(index.relatedList(presented, leaf, belowLeaf = false)),
+            hashes(listOf(index.store[0], p2, p1)),
+            hashes(index.relatedList(presented, leaf)),
         )
     }
 
     @Test
-    fun `candidate index orders the store before presented below the leaf`() {
+    fun `candidate index orders the store's anchors before presented below the leaf`() {
         val anchor = der(root, root)
         val index = index(anchor)
         val intermediate = index.cert(WalkerCerts.parse(der(SymName("I"), root)))
@@ -75,7 +74,6 @@ class CandidateIndexTest {
                 index.relatedList(
                     presented,
                     intermediate,
-                    belowLeaf = true,
                     seen = hashes(listOf(leaf, intermediate)).toSet(),
                 ),
             ),
@@ -96,9 +94,7 @@ class CandidateIndexTest {
         val child = index.cert(WalkerCerts.parse(der(leafName, root, aki = akiKeyId(keyId))))
         val byHash = { ders: List<ByteArray> -> ders.map { WalkerCerts.cert(it).bytesHash }.sorted() }
         val expected = byHash(listOf(rawA, rawB)) + byHash(listOf(canonicalA, canonicalB)) + byHash(listOf(skiA, skiB))
-        for (belowLeaf in listOf(false, true)) {
-            assertEquals(expected, hashes(index.relatedList(listOf(child), child, belowLeaf)), "belowLeaf=$belowLeaf")
-        }
+        assertEquals(expected, hashes(index.relatedList(listOf(child), child)))
     }
 
     @Test
@@ -110,33 +106,28 @@ class CandidateIndexTest {
         val rsaSigned = index.cert(WalkerCerts.parse(der(leafName, root, sigOid = SHA256_RSA)))
         val ecSigned = index.cert(WalkerCerts.parse(der(leafName, root, sigOid = ECDSA_SHA256)))
         val unknownSigned = index.cert(WalkerCerts.parse(der(leafName, root, sigOid = "1.3.6.1.4.1.99999.91.2")))
-        assertEquals(byHash(rsa) + byHash(ec), hashes(index.relatedList(listOf(rsaSigned), rsaSigned, false)))
-        assertEquals(byHash(ec) + byHash(rsa), hashes(index.relatedList(listOf(ecSigned), ecSigned, false)))
+        assertEquals(byHash(rsa) + byHash(ec), hashes(index.relatedList(listOf(rsaSigned), rsaSigned)))
+        assertEquals(byHash(ec) + byHash(rsa), hashes(index.relatedList(listOf(ecSigned), ecSigned)))
         // An unknown signature OID is compatible with every key: bytesHash alone.
-        assertEquals(byHash(rsa + ec), hashes(index.relatedList(listOf(unknownSigned), unknownSigned, true)))
+        assertEquals(byHash(rsa + ec), hashes(index.relatedList(listOf(unknownSigned), unknownSigned)))
     }
 
     @Test
-    fun `candidate index yields a presented and store byte duplicate once, presented at the leaf, store below it`() {
+    fun `candidate index yields a presented and store byte duplicate once, the store's at every depth`() {
         val anchorDer = der(root, root)
         val index = index(anchorDer, der(root, root))
         val storeCopy = index.store.single { it.der.contentEquals(anchorDer) }
         val presentedCopy = index.cert(WalkerCerts.parse(anchorDer.copyOf()))
         val decoy = index.cert(WalkerCerts.parse(der(root, other)))
         val leaf = index.cert(WalkerCerts.parse(der(leafName, root)))
-        val presented = listOf(leaf, decoy, presentedCopy)
-
-        val atLeaf = index.relatedList(presented, leaf, belowLeaf = false)
-        assertEquals(3, atLeaf.size)
-        assertEquals(listOf(decoy.bytesHash, presentedCopy.bytesHash), hashes(atLeaf.take(2)))
-        assertSame(presentedCopy, atLeaf[1], "at the leaf the duplicate is the presented certificate")
-        assertTrue(atLeaf[2] in index.store && atLeaf[2].bytesHash != presentedCopy.bytesHash)
-
         val intermediate = index.cert(WalkerCerts.parse(der(SymName("I"), root)))
-        val below = index.relatedList(listOf(leaf, decoy, presentedCopy), intermediate, belowLeaf = true)
+        val presented = listOf(leaf, decoy, presentedCopy)
         val storeOrder = index.store.map { it.bytesHash }.sorted()
-        assertEquals(storeOrder + decoy.bytesHash, hashes(below))
-        assertSame(storeCopy, below.single { it.bytesHash == storeCopy.bytesHash }, "below the leaf it is the store's")
+        for ((at, child) in listOf("leaf" to leaf, "below the leaf" to intermediate)) {
+            val related = index.relatedList(presented, child)
+            assertEquals(storeOrder + decoy.bytesHash, hashes(related), at)
+            assertSame(storeCopy, related.single { it.bytesHash == storeCopy.bytesHash }, "$at: it is the store's")
+        }
     }
 
     @Test
@@ -149,7 +140,7 @@ class CandidateIndexTest {
         val junk = index.cert(WalkerCerts.parse(der(other, root)))
         val junkAgain = index.cert(WalkerCerts.parse(junk.der.copyOf()))
         val presented = listOf(leaf, junk, first, junkAgain, second)
-        val related = index.relatedList(presented, leaf, belowLeaf = false)
+        val related = index.relatedList(presented, leaf)
         assertEquals(1, related.size)
         assertSame(first, related[0])
         val unrelated = index.unrelatedList(presented, leaf)
@@ -166,8 +157,7 @@ class CandidateIndexTest {
         val unrelated = index.cert(WalkerCerts.parse(der(other, other)))
         val presented = listOf(leaf, related, unrelated)
         val seen = setOf(leaf.bytesHash, related.bytesHash, index.store[0].bytesHash, unrelated.bytesHash)
-        assertEquals(emptyList(), index.relatedList(presented, leaf, false, seen))
-        assertEquals(emptyList(), index.relatedList(presented, leaf, true, seen))
+        assertEquals(emptyList(), index.relatedList(presented, leaf, seen))
         assertEquals(emptyList(), index.unrelatedList(presented, leaf, seen))
         // The child itself is excluded through seen, as the walker passes it.
         assertEquals(
@@ -176,7 +166,6 @@ class CandidateIndexTest {
                 index.relatedList(
                     presented,
                     leaf,
-                    false,
                     seen - related.bytesHash,
                 ),
             ),
@@ -191,7 +180,7 @@ class CandidateIndexTest {
         val index = index(skiOnly, both)
         val child = index.cert(WalkerCerts.parse(der(leafName, root, aki = akiKeyId(keyId))))
         val expected = listOf(both, skiOnly).map { WalkerCerts.cert(it).bytesHash }
-        assertEquals(expected, hashes(index.relatedList(listOf(child), child, true)))
+        assertEquals(expected, hashes(index.relatedList(listOf(child), child)))
     }
 
     @Test
@@ -204,8 +193,8 @@ class CandidateIndexTest {
         val presented = listOf(leaf, u2, related, u1)
         assertEquals(hashes(listOf(u2, u1)), hashes(index.unrelatedList(presented, leaf)))
         assertEquals(
-            hashes(listOf(related, index.store.single { it.subjectRaw.contentEquals(root.der()) })),
-            hashes(index.relatedList(presented, leaf, false)),
+            hashes(listOf(index.store.single { it.subjectRaw.contentEquals(root.der()) }, related)),
+            hashes(index.relatedList(presented, leaf)),
         )
     }
 
@@ -219,7 +208,7 @@ class CandidateIndexTest {
         assertEquals(null, child.akiKeyId)
         assertEquals(
             listOf(WalkerCerts.cert(sameName).bytesHash),
-            hashes(index.relatedList(listOf(child), child, true)),
+            hashes(index.relatedList(listOf(child), child)),
         )
         val presentedOtherName = index.cert(WalkerCerts.parse(der(other, other, ski = keyId)))
         assertEquals(
@@ -237,7 +226,7 @@ class CandidateIndexTest {
         val child = index.cert(WalkerCerts.parse(der(leafName, root, aki = akiKeyId(keyId))))
         assertEquals(
             listOf(WalkerCerts.cert(noSkiSameName).bytesHash),
-            hashes(index.relatedList(listOf(child), child, false)),
+            hashes(index.relatedList(listOf(child), child)),
         )
     }
 
@@ -250,8 +239,7 @@ class CandidateIndexTest {
         val otherSki = index.cert(WalkerCerts.parse(der(SymName("Other SKI"), other, ski = ByteArray(20) { 1 })))
         val matching = index.cert(WalkerCerts.parse(der(SymName("Matching SKI"), other, ski = keyId)))
         val presented = listOf(child, noSki, otherSki, matching)
-        assertEquals(listOf(matching.bytesHash), hashes(index.relatedList(presented, child, false)))
-        assertEquals(listOf(matching.bytesHash), hashes(index.relatedList(presented, child, true)))
+        assertEquals(listOf(matching.bytesHash), hashes(index.relatedList(presented, child)))
         assertEquals(hashes(listOf(noSki, otherSki)), hashes(index.unrelatedList(presented, child)))
     }
 
@@ -263,15 +251,13 @@ class CandidateIndexTest {
         val rsaSecond = index.cert(WalkerCerts.parse(der(root, other, key = rsaKey())))
         val presented = listOf(leaf, ecFirst, rsaSecond)
         assertEquals(KeyFamily.EC, ecFirst.keyFamily)
-        assertEquals(
-            hashes(listOf(ecFirst, rsaSecond, index.store[0])),
-            hashes(index.relatedList(presented, leaf, belowLeaf = false)),
-        )
         val intermediate = index.cert(WalkerCerts.parse(der(SymName("I"), root, sigOid = SHA256_RSA)))
-        assertEquals(
-            hashes(listOf(index.store[0], ecFirst, rsaSecond)),
-            hashes(index.relatedList(presented, intermediate, belowLeaf = true)),
-        )
+        for (child in listOf(leaf, intermediate)) {
+            assertEquals(
+                hashes(listOf(index.store[0], ecFirst, rsaSecond)),
+                hashes(index.relatedList(presented, child)),
+            )
+        }
     }
 
     @Test
@@ -289,7 +275,7 @@ class CandidateIndexTest {
 
         fun orderUnder(sigOid: String): List<ByteString> {
             val child = index.cert(WalkerCerts.parse(der(leafName, root, sigOid = sigOid)))
-            return hashes(index.relatedList(listOf(child), child, true))
+            return hashes(index.relatedList(listOf(child), child))
         }
 
         fun rest(vararg first: List<ByteString>): List<ByteString> {
@@ -314,10 +300,10 @@ class CandidateIndexTest {
         val index = index(*Array(3) { der(root, root) })
         val leaf = index.cert(WalkerCerts.parse(der(leafName, root)))
         val p = index.cert(WalkerCerts.parse(der(root, other)))
-        val s = index.related(listOf(leaf, p, p), leaf, setOf(leaf.bytesHash), belowLeaf = false)
+        val s = index.related(listOf(leaf, p, p), leaf, setOf(leaf.bytesHash))
         assertEquals(s.toList().map { it.bytesHash }, s.toList().map { it.bytesHash })
         assertEquals(4, s.count())
-        assertEquals(listOf(p.bytesHash), s.take(1).map { it.bytesHash }.toList())
+        assertEquals(listOf(index.store.minOf { it.bytesHash }), s.take(1).map { it.bytesHash }.toList())
         val u = index.unrelated(listOf(leaf, p), leaf, emptySet())
         assertEquals(u.toList(), u.toList())
     }
@@ -335,8 +321,8 @@ class CandidateIndexTest {
         assertFalse(platform.store[0].subjectRaw.contentEquals(leaf.issuerRaw), "raw bytes differ")
         assertEquals(platform.store[0].canonicalSubject, leaf.canonicalIssuer)
         assertEquals(
-            hashes(listOf(presented, platform.store[0])),
-            hashes(platform.relatedList(listOf(leaf, presented), leaf, false)),
+            hashes(listOf(platform.store[0], presented)),
+            hashes(platform.relatedList(listOf(leaf, presented), leaf)),
         )
         assertEquals(emptyList(), platform.unrelatedList(listOf(leaf, presented), leaf))
 
@@ -347,7 +333,7 @@ class CandidateIndexTest {
             val raw = index(anchorDer, canonicaliser = canonicaliser)
             val rawLeaf = raw.cert(WalkerCerts.parse(child))
             val rawPresented = raw.cert(WalkerCerts.parse(presentedDer))
-            assertEquals(emptyList(), raw.relatedList(listOf(rawLeaf, rawPresented), rawLeaf, false), name)
+            assertEquals(emptyList(), raw.relatedList(listOf(rawLeaf, rawPresented), rawLeaf), name)
             assertEquals(
                 listOf(rawPresented.bytesHash),
                 hashes(raw.unrelatedList(listOf(rawLeaf, rawPresented), rawLeaf)),
@@ -370,9 +356,9 @@ class CandidateIndexTest {
             val presentedSki = index.cert(WalkerCerts.parse(der(SymName("P"), other, ski = keyId)))
             assertEquals(null, child.canonicalIssuer)
             assertEquals(
-                hashes(listOf(presentedRaw, presentedSki)) +
-                    listOf(rawMatch, skiMatch).map { WalkerCerts.cert(it).bytesHash },
-                hashes(index.relatedList(listOf(child, presentedRaw, presentedSki), child, false)),
+                listOf(rawMatch, skiMatch).map { WalkerCerts.cert(it).bytesHash } +
+                    hashes(listOf(presentedRaw, presentedSki)),
+                hashes(index.relatedList(listOf(child, presentedRaw, presentedSki), child)),
             )
         }
     }
@@ -405,8 +391,7 @@ class CandidateIndexTest {
         val leaf = index.cert(WalkerCerts.parse(der(leafName, root)))
         val presented = listOf(leaf, index.cert(WalkerCerts.parse(der(root, other))))
         repeat(3) {
-            index.relatedList(presented, leaf, false)
-            index.relatedList(presented, leaf, true)
+            index.relatedList(presented, leaf)
             index.unrelatedList(presented, leaf)
         }
         // The leaf's subject and issuer, the presented certificate's subject; its issuer is never needed here.

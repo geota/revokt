@@ -170,6 +170,27 @@ class RevoktPolicyTest {
     }
 
     @Test
+    fun `rule, exempt and clearExemption on NO_ISSUER or ISSUER_UNVERIFIED apply to both`() {
+        val pair = listOf(Rule.NO_ISSUER, Rule.ISSUER_UNVERIFIED)
+        for ((set, other) in listOf(pair, pair.reversed())) {
+            val raised = RevoktPolicy.DEFAULT.newBuilder().rule(set, Outcome.REJECT)
+            assertEquals(Outcome.REJECT, raised.build().outcome(other), "rule($set)")
+            val exemption = Exemption { true }
+            val exempting = raised.exempt(set, exemption)
+            assertSame(exemption, exempting.build().exemption(other), "exempt($set)")
+            assertNull(exempting.clearExemption(other).build().exemption(set), "clearExemption($other)")
+            assertEquals(Outcome.ALLOW, raised.rule(other, Outcome.ALLOW).build().outcome(set), "rule($other)")
+        }
+        // exemptAnchors still leaves both alone: they fire only on an empty reported path.
+        val anchors =
+            RevoktPolicy.STRICT
+                .newBuilder()
+                .exemptAnchors(listOf(privateCa))
+                .build()
+        for (rule in pair) assertNull(anchors.exemption(rule), "$rule")
+    }
+
+    @Test
     fun `rejectStaleAfter sets or clears only the reject threshold, and creates a missing entry`() {
         val strict = RevoktPolicy.STRICT.newBuilder()
         assertEquals(

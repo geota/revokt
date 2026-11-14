@@ -59,22 +59,21 @@ internal class CandidateIndex(
 
     /**
      * The candidates related to [child], minus [seen] (bytes hashes), each exact-byte duplicate once at its earliest
-     * position. At the leaf (`belowLeaf == false`) the presented ones come first, by index, then the store; below it
-     * the store comes first (its certificates are terminals in M1), then the presented ones. Within the store: raw-name
-     * matches, then canonical-name matches, then SKI matches; within each group the candidates whose key family is
-     * compatible with `child.tbsSigOid` first, each part by bytesHash. Lazy: a walker that stops early (a found path
-     * below the leaf, `MAX_RELATED_PER_LEVEL`) never pays for the rest of a large group. The sequence reads
+     * position. At every depth the store's anchors come first, then the presented certificates by index, then (M2) the
+     * store's non-anchors: Firefox's order (NSSCertDBTrustDomain::FindIssuer offers root-store candidates before the
+     * others), so the reported path, the first found, does not depend on the order the server presents. Within the
+     * store: raw-name matches, then canonical-name matches, then SKI matches; within each group the candidates whose
+     * key family is compatible with `child.tbsSigOid` first, each part by bytesHash. Lazy: a walker that stops early (a
+     * found path below the leaf, `MAX_RELATED_PER_LEVEL`) never pays for the rest of a large group. The sequence reads
      * [presented] and [seen] as it is iterated, so the caller must not mutate either while iterating it.
      */
     fun related(
         presented: List<Cert>,
         child: Cert,
         seen: Set<ByteString>,
-        belowLeaf: Boolean,
     ): Sequence<Cert> {
         val fromPresented = presented.asSequence().filter { isRelated(it, child) }
-        val fromStore = storeRelated(child)
-        return distinct(if (belowLeaf) fromStore + fromPresented else fromPresented + fromStore, seen)
+        return distinct(storeRelated(child) + fromPresented, seen)
     }
 
     /**
