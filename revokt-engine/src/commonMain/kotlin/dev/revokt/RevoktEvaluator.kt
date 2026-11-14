@@ -28,10 +28,11 @@ import dev.revokt.engine.walker.decideVerified
  *   through the whole evaluation.
  * - **`presented`** is decided over that index ([decide]: steps 2, 3, 5 and 6 with [walk]'s verifier, probe, shared
  *   cross-call memo and PKIX fallback, null under `pkixFallback(false)`), `anchorSnapshotId` being the snapshot's id.
- * - **`verifiedPaths`** are trusted without re-verification ([decideVerified]): no walk, `source = PLATFORM`,
- *   `anchorSnapshotId = 0`. When a request carries both, the verified paths win and the walk is skipped, as on the
- *   trust-manager flow where a platform-verified chain (step 4) makes the walk unnecessary (§4 says only "at least
- *   one"; #135's reading); the exemptions then see the presented chain.
+ * - **`verifiedPath`** is trusted without re-verification ([decideVerified]): no walk, `source = PLATFORM`,
+ *   `anchorSnapshotId = 0`, and the path is both the reported path and the exemptions' chain. When a request carries
+ *   both, the verified path wins and the walk is skipped, as on the trust-manager flow where a platform-verified chain
+ *   (step 4) makes the walk unnecessary; `EvaluationRequest` has already checked that it starts with the presented
+ *   leaf (the maintainer's decision on #195).
  * - **The time** is the request's `nowMillis`, else one read of [clock]; the host is host' (§5.1 flow step 2).
  */
 internal class RevoktEvaluator(
@@ -53,9 +54,11 @@ internal class RevoktEvaluator(
         val indexed = checkNotNull(anchors()) { "Evaluator.evaluate has no candidate index: no anchor snapshot exists" }
         val snapshot = generation()
         val form = policy()
-        val verified = request.verifiedPaths?.map { path -> path.map { it.toByteArray() } }
-        val presented = request.presented?.map { it.toByteArray() }
-        val chain = checkNotNull(presented ?: verified?.first()) { "a request holds a chain or a path (spec §4)" }
+        val verified = request.verifiedPath?.map { it.toByteArray() }
+        val chain =
+            checkNotNull(verified ?: request.presented?.map { it.toByteArray() }) {
+                "a request holds a chain or a path (spec §4)"
+            }
         val input =
             EvaluationInput(
                 chain,
@@ -72,7 +75,7 @@ internal class RevoktEvaluator(
             clock = if (now != null) ({ now }) else clock,
             decide = { nowMillis ->
                 if (verified != null) {
-                    decideVerified(verified, chain)
+                    decideVerified(chain)
                 } else {
                     decidePresented(chain, indexed.index, indexed.snapshot, walk.at(nowMillis, platformOnly = false))
                 }

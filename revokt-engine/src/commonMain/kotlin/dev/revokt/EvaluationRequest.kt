@@ -8,10 +8,11 @@ import okio.ByteString.Companion.toByteString
 
 /**
  * What [Evaluator.evaluate] is asked about (spec §4): a presented chain, which is walked (decision steps 2 to 6), or
- * platform-verified paths, which are trusted without re-verification and skip the walk, or both; plus the host and the
- * evaluation time. Raw DER here is presumed to come from a platform-accepted chain: `PARSE_FAILED` on caller-fabricated
- * bytes is the caller's to police (§9.2), and these bytes get no §9.2 read fallback. A value with a private constructor
- * and a builder; equality is by content, and the DER is copied when it is set.
+ * one platform-verified path, which is trusted without re-verification and skips the walk, or both, the path then
+ * starting with the presented leaf; plus the host and the evaluation time. Raw DER here is presumed to come from a
+ * platform-accepted chain: `PARSE_FAILED` on caller-fabricated bytes is the caller's to police (§9.2), and these bytes
+ * get no §9.2 read fallback. A value with a private constructor and a builder; equality is by content, and the DER is
+ * copied when it is set.
  */
 public class EvaluationRequest private constructor(
     builder: Builder,
@@ -22,8 +23,8 @@ public class EvaluationRequest private constructor(
     /** The presented chain, leaf first, as sent; null when not set. */
     internal val presented: List<ByteString>? = builder.presented
 
-    /** The verified paths, each leaf to anchor; null when not set. */
-    internal val verifiedPaths: List<List<ByteString>>? = builder.verifiedPaths
+    /** The verified path, leaf to anchor; null when not set. */
+    internal val verifiedPath: List<ByteString>? = builder.verifiedPath
 
     /** The host as given; the evaluation derives host' from it. */
     internal val host: String? = builder.host
@@ -31,18 +32,20 @@ public class EvaluationRequest private constructor(
     /** The evaluation time; null when not set, and the evaluator then reads its clock. */
     internal val nowMillis: Long? = builder.nowMillis
 
-    /** Derived: `PLATFORM` when verified paths are given, since they skip the walk; else `RECONSTRUCTED`. */
+    /** Derived: `PLATFORM` when a verified path is given, since it skips the walk; else `RECONSTRUCTED`. */
     internal val chainSource: ChainSource =
-        if (verifiedPaths != null) ChainSource.PLATFORM else ChainSource.RECONSTRUCTED
+        if (verifiedPath != null) ChainSource.PLATFORM else ChainSource.RECONSTRUCTED
 
     init {
-        require(presented != null || verifiedPaths != null) {
-            "at least one of presented and verifiedPaths is set (spec §4)"
+        require(presented != null || verifiedPath != null) {
+            "at least one of presented and verifiedPath is set (spec §4)"
         }
         require(presented == null || presented.isNotEmpty()) { "presented is set but empty: a chain has a leaf" }
-        require(verifiedPaths == null || verifiedPaths.isNotEmpty()) { "verifiedPaths is set but holds no path" }
-        require(verifiedPaths == null || verifiedPaths.none { it.isEmpty() }) {
-            "verifiedPaths holds an empty path: each runs leaf to anchor"
+        require(verifiedPath == null || verifiedPath.isNotEmpty()) {
+            "verifiedPath is set but empty: it runs leaf to anchor"
+        }
+        require(presented == null || verifiedPath == null || presented[0] == verifiedPath[0]) {
+            "verifiedPath does not start with the presented leaf"
         }
     }
 
@@ -50,7 +53,7 @@ public class EvaluationRequest private constructor(
     public fun newBuilder(): Builder {
         val builder = Builder().host(host)
         presented?.let { chain -> builder.presented(chain.map { it.toByteArray() }) }
-        verifiedPaths?.let { paths -> builder.verifiedPaths(paths.map { path -> path.map { it.toByteArray() } }) }
+        verifiedPath?.let { path -> builder.verifiedPath(path.map { it.toByteArray() }) }
         nowMillis?.let { builder.nowMillis(it) }
         return builder
     }
@@ -59,7 +62,7 @@ public class EvaluationRequest private constructor(
     private fun fields(): List<Pair<String, Any?>> =
         listOf(
             "presented" to presented,
-            "verifiedPaths" to verifiedPaths,
+            "verifiedPath" to verifiedPath,
             "host" to host,
             "nowMillis" to nowMillis,
         )
@@ -71,16 +74,17 @@ public class EvaluationRequest private constructor(
     /** Each certificate is shown by the SHA-256 of its DER, so a chain prints in a line. */
     override fun toString(): String =
         "EvaluationRequest(presented=${presented?.let(::digests)}, " +
-            "verifiedPaths=${verifiedPaths?.map(::digests)}, host=$host, nowMillis=$nowMillis)"
+            "verifiedPath=${verifiedPath?.let(::digests)}, host=$host, nowMillis=$nowMillis)"
 
     /**
-     * Builds an [EvaluationRequest]. [build] throws `IllegalArgumentException` unless a chain or a path is set, and
-     * for an empty chain, an empty path list or an empty path (the maintainer's decision on #182).
+     * Builds an [EvaluationRequest]. [build] throws `IllegalArgumentException` unless a chain or a path is set, for an
+     * empty chain or an empty path (the maintainer's decision on #182), and when both are set and the path's first
+     * certificate is not the presented leaf, byte for byte (the maintainer's decision on #195).
      */
     public class Builder {
         internal var presented: List<ByteString>? = null
             private set
-        internal var verifiedPaths: List<List<ByteString>>? = null
+        internal var verifiedPath: List<ByteString>? = null
             private set
         internal var host: String? = null
             private set
@@ -91,11 +95,11 @@ public class EvaluationRequest private constructor(
         public fun presented(chain: List<ByteArray>): Builder = apply { presented = chain.map { it.toByteString() } }
 
         /**
-         * Platform-verified paths, each leaf to anchor, trusted without re-verification: the source is `PLATFORM` and
-         * the walk is skipped. Copied.
+         * One platform-verified path, leaf to anchor, as the platform's validator returned it (upki's single webpki
+         * `VerifiedPath`), trusted without re-verification: the source is `PLATFORM` and the walk is skipped. Copied.
          */
-        public fun verifiedPaths(paths: List<List<ByteArray>>): Builder =
-            apply { verifiedPaths = paths.map { path -> path.map { it.toByteString() } } }
+        public fun verifiedPath(path: List<ByteArray>): Builder =
+            apply { verifiedPath = path.map { it.toByteString() } }
 
         /** The host the chain was presented for, used for host' only; null for none. */
         public fun host(host: String?): Builder = apply { this.host = host }

@@ -149,7 +149,7 @@ public final class dev/revokt/EvaluationRequest$Builder {
 	public final fun host (Ljava/lang/String;)Ldev/revokt/EvaluationRequest$Builder;
 	public final fun nowMillis (J)Ldev/revokt/EvaluationRequest$Builder;
 	public final fun presented (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
-	public final fun verifiedPaths (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
+	public final fun verifiedPath (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
 }
 
 public abstract interface class dev/revokt/Evaluator {

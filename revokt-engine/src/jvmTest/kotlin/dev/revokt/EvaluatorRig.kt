@@ -21,7 +21,7 @@ import dev.revokt.testing.SymVerifier
 /**
  * A [RevoktEvaluator] over one walker fixture's world, its suppliers faked as `Revokt` (#143) will publish them: the
  * fields are what the next evaluation reads, and each supplier counts its reads. The verifier is the fixture's
- * [SymVerifier], counted in [verifications].
+ * [SymVerifier], counted in [verifications] and wrapped by `verifier`.
  */
 @OptIn(RevoktTestingApi::class)
 internal class EvaluatorRig(
@@ -31,6 +31,7 @@ internal class EvaluatorRig(
     engine: RevocationEngine = StubEngine.always(CrliteQueryResult.NOT_REVOKED),
     fallback: PathBuilderFallback? = null,
     clock: () -> Long = { NOW },
+    verifier: (SignatureVerifier) -> SignatureVerifier = { it },
     decidePresented: (List<ByteArray>, CandidateIndex, AnchorSnapshot, DecideContext) -> PathDecision = ::decide,
 ) {
     var lifecycle: RevoktLifecycle = RevoktLifecycle.STARTED
@@ -43,7 +44,7 @@ internal class EvaluatorRig(
 
     private val sym = SymVerifier(f.ok, f.unsupported)
 
-    private val verifier =
+    private val counting =
         object : SignatureVerifier {
             override fun verify(
                 sigAlg: ByteArray,
@@ -67,7 +68,7 @@ internal class EvaluatorRig(
             engine = engine,
             walk =
                 DecideInputs(
-                    verifier,
+                    verifier(counting),
                     sym.unsupportedOids(),
                     LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
                     fallback,

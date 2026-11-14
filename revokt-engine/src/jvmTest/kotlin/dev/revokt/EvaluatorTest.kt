@@ -34,8 +34,8 @@ import kotlin.test.assertTrue
 /**
  * `Evaluator.evaluate` over one candidate index (spec §4 `revokt.evaluator`, `EvaluationRequest`; §5.1 decision steps
  * 1 to 8 with no step 1 or 4; §5.5; §11's 0.2 row): the lifecycle and index checks before any boundary, the one read
- * of each input at entry, `presented` and `verifiedPaths`, `pkixFallback(false)`, the time and host', and hostile
- * input, which never throws.
+ * of each input at entry, `presented` and `verifiedPath`, `pkixFallback(false)`, the time and host', and hostile
+ * input, which never throws and never misses a revoked key on a found path.
  */
 @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
 class EvaluatorTest {
@@ -48,7 +48,7 @@ class EvaluatorTest {
 
     private fun request(
         presented: List<FixtureCert>? = null,
-        verified: List<List<FixtureCert>>? = null,
+        verified: List<FixtureCert>? = null,
         host: String? = null,
         nowMillis: Long? = null,
     ): EvaluationRequest =
@@ -56,7 +56,7 @@ class EvaluatorTest {
             .Builder()
             .apply {
                 presented?.let { presented(it.map(FixtureCert::der)) }
-                verified?.let { paths -> verifiedPaths(paths.map { p -> p.map(FixtureCert::der) }) }
+                verified?.let { path -> verifiedPath(path.map(FixtureCert::der)) }
                 host(host)
                 nowMillis?.let { nowMillis(it) }
             }.build()
@@ -68,7 +68,7 @@ class EvaluatorTest {
         val engine = StubEngine.always(CrliteQueryResult.REVOKED)
         var clockReads = 0
         val rig = EvaluatorRig(honest, engine = engine, clock = { NOW.also { clockReads++ } })
-        val requests = listOf(request(presented = listOf(h.leaf, h.intermediate)), request(verified = listOf(h.path)))
+        val requests = listOf(request(presented = listOf(h.leaf, h.intermediate)), request(verified = h.path))
         for (state in listOf(RevoktLifecycle.CREATED, RevoktLifecycle.CLOSED)) {
             rig.lifecycle = state
             requests.forEach { assertFailsWith<IllegalStateException>("$state") { rig.evaluate(it) } }
@@ -132,11 +132,10 @@ class EvaluatorTest {
     }
 
     @Test
-    fun `verifiedPaths only is PLATFORM with anchorSnapshotId 0, no walk and no verifier call`() {
-        val other = h.w.cert("I2", h.w.name("Other intermediate"), h.root.subject, signer = h.root.key)
+    fun `verifiedPath only is PLATFORM with anchorSnapshotId 0, no walk and no verifier call`() {
         val engine = StubEngine.always(CrliteQueryResult.NOT_REVOKED)
         val rig = EvaluatorRig(honest, engine = engine)
-        val v = rig.evaluate(request(verified = listOf(h.path, listOf(h.leaf, other, h.root), listOf(h.leaf))))
+        val v = rig.evaluate(request(verified = h.path))
         assertIs<Verdict.Accepted>(v)
         assertEquals(PathStatus.FOUND, v.path.status)
         assertEquals(ChainSource.PLATFORM, v.path.source)
@@ -145,17 +144,21 @@ class EvaluatorTest {
         assertNull(v.path.endDepth)
         assertNull(v.path.walkerReason)
         assertFalse(v.path.usedFallback)
-        assertEquals(3, v.path.pathsFound)
+        assertEquals(1, v.path.pathsFound)
         assertEquals(0, rig.verifications, "trusted without re-verification")
-        val leafKey = h.leaf.keyHash
-        // Each path's second certificate, the leaf's own key for the one-certificate path, in path order.
-        assertEquals(listOf(h.intermediate.keyHash, other.keyHash, leafKey), keys(v))
+        assertEquals(listOf(h.intermediate.keyHash), keys(v), "the path's second certificate")
         assertEquals(keys(v), engine.queries.map { it.issuerSpkiHash.toByteString() })
-        engine.queries.forEach { assertContentEquals(WalkerCerts.cert(h.leaf.der).serial, it.serial) }
+        assertContentEquals(WalkerCerts.cert(h.leaf.der).serial, engine.queries.single().serial)
         assertEquals(h.path.map { it.bytesHash }, v.path.reportedPathSha256s.map { it.toByteString() })
         assertEquals(TerminalKind.ANCHOR, v.path.terminalKind)
         assertEquals(h.root.bytesHash, v.path.anchorSha256?.toByteString())
         assertEquals(listOf<Finding>(), v.findings.filterIsInstance<Finding.FallbackNotUsed>())
+        // A one-certificate path is the anchor: keyed by its own SPKI as step 2 does, though outside the keyability
+        // profile (the fixture root's key fails K's KEY clause).
+        assertEquals(KeyabilityClause.KEY, WalkerCerts.cert(h.root.der).keyabilityClause)
+        val alone = rig.evaluate(request(verified = listOf(h.root)))
+        assertEquals(listOf(h.root.keyHash), keys(alone))
+        assertEquals(listOf(h.root.bytesHash), alone.path.reportedPathSha256s.map { it.toByteString() })
     }
 
     @Test
@@ -166,7 +169,7 @@ class EvaluatorTest {
             }
         val engine = StubEngine.always(CrliteQueryResult.REVOKED)
         val rig = EvaluatorRig(honest, engine = engine)
-        val k6 = rig.evaluate(request(verified = listOf(listOf(leaf6, h.intermediate, h.root))))
+        val k6 = rig.evaluate(request(verified = listOf(leaf6, h.intermediate, h.root)))
         assertEquals(PathStatus.PARSE_FAILED, k6.path.status)
         assertEquals(ParseReason.PRODUCER_UNKEYABLE, k6.path.parseReason)
         assertEquals(KeyabilityClause.TIME, k6.path.keyabilityClause)
@@ -177,7 +180,7 @@ class EvaluatorTest {
             rig.evaluate(
                 EvaluationRequest
                     .Builder()
-                    .verifiedPaths(listOf(listOf(garbage(40), h.intermediate.der)))
+                    .verifiedPath(listOf(garbage(40), h.intermediate.der))
                     .build(),
             )
         assertEquals(PathStatus.PARSE_FAILED, broken.path.status)
@@ -187,55 +190,37 @@ class EvaluatorTest {
     }
 
     @Test
-    fun `a verified path whose issuer does not parse gives no key, and with no key at all it is ENGINE_ERROR`() {
+    fun `a verified path whose issuer does not parse has no key, which is ENGINE_ERROR, never a clean answer`() {
         val engine = StubEngine.always(CrliteQueryResult.NOT_REVOKED)
-        val rig = EvaluatorRig(honest, engine = engine)
-        val paths = listOf(listOf(h.leaf.der, garbage(40), h.root.der), h.path.map(FixtureCert::der))
-        val v = rig.evaluate(EvaluationRequest.Builder().verifiedPaths(paths).build())
-        assertEquals(listOf(h.intermediate.keyHash), keys(v), "only the readable key")
-        assertEquals(h.path.map { it.bytesHash }, v.path.reportedPathSha256s.map { it.toByteString() })
-        assertEquals(2, v.path.pathsFound)
-        assertIs<Verdict.Accepted>(v)
-        val none =
-            rig.evaluate(
-                EvaluationRequest
-                    .Builder()
-                    .verifiedPaths(listOf(listOf(h.leaf.der, garbage(40))))
-                    .build(),
-            )
-        assertEquals(setOf(Rule.ENGINE_ERROR), none.rules, "no keys is never a clean answer")
-        assertEquals(listOf(EngineErrorProducer.BOUNDARY), engineErrors(none).map { it.producer })
-        assertEquals(ChainSource.PLATFORM, none.path.source)
-    }
-
-    @Test
-    fun `with presented and verifiedPaths the verified paths win and the exemptions see the presented chain`() {
-        val seen = ArrayList<ExemptionContext>()
-        val policy =
-            RevoktPolicy.DEFAULT
-                .newBuilder()
-                .rule(Rule.NO_SCTS, Outcome.REJECT)
-                .exempt(Rule.NO_SCTS) {
-                    seen += it
-                    true
-                }.build()
-        val rig = EvaluatorRig(honest, policy = policy, engine = StubEngine.always(CrliteQueryResult.NO_SCTS))
-        val decoy = h.w.cert("X", h.w.name("Decoy"), h.w.name("Nobody"))
-        val v = rig.evaluate(request(presented = listOf(h.leaf, decoy), verified = listOf(h.path)))
+        val request =
+            EvaluationRequest
+                .Builder()
+                .verifiedPath(listOf(h.leaf.der, garbage(40), h.root.der))
+                .build()
+        val v = EvaluatorRig(honest, engine = engine).evaluate(request)
+        assertEquals(setOf(Rule.ENGINE_ERROR), v.rules)
+        assertEquals(emptyList(), keys(v))
+        assertEquals(emptyList(), engine.queries)
+        assertEquals(listOf(EngineErrorProducer.BOUNDARY), engineErrors(v).map { it.producer })
         assertEquals(ChainSource.PLATFORM, v.path.source)
-        assertEquals(0, v.path.anchorSnapshotId)
-        assertEquals(0, rig.verifications, "no walk")
-        assertEquals(listOf(h.intermediate.keyHash), keys(v))
-        val presented = assertNotNull(seen.single().chain)
-        assertEquals(2, presented.size)
-        assertContentEquals(decoy.der, presented.der(1))
-        assertTrue(presented.parsed(0), "the leaf the decision parsed")
-        assertFalse(presented.parsed(1), "a certificate the decision never read")
-        assertIs<Verdict.Accepted>(v)
+        val strict = EvaluatorRig(honest, RevoktPolicy.STRICT, engine = engine).evaluate(request)
+        assertEquals(Rule.ENGINE_ERROR, assertIs<Verdict.Rejected>(strict).rule)
     }
 
     @Test
-    fun `with only verifiedPaths the exemptions see the first verified path`() {
+    fun `a verified path for another leaf cannot be paired with a presented chain`() {
+        // #195 review: the leaf's serial queried under another chain's issuer missed a revoked leaf under STRICT.
+        val i9 = h.w.cert("I9", h.w.name("Intermediate 9"), h.root.subject, signer = h.root.key)
+        val leaf1 = h.w.cert("L1", h.w.name("other.example"), i9.subject, signer = i9.key, key = h.w.leafKey())
+        val e =
+            assertFailsWith<IllegalArgumentException> {
+                request(presented = listOf(h.leaf, h.intermediate), verified = listOf(leaf1, i9, h.root))
+            }
+        assertEquals("verifiedPath does not start with the presented leaf", e.message)
+    }
+
+    @Test
+    fun `with presented and verifiedPath the verified path wins and is the exemptions' chain`() {
         val seen = ArrayList<ExemptionContext>()
         val policy =
             RevoktPolicy.DEFAULT
@@ -246,10 +231,15 @@ class EvaluatorTest {
                     false
                 }.build()
         val rig = EvaluatorRig(honest, policy = policy, engine = StubEngine.always(CrliteQueryResult.NO_SCTS))
-        val v = rig.evaluate(request(verified = listOf(h.path), host = "Leaf.Example."))
+        val decoy = h.w.cert("X", h.w.name("Decoy"), h.w.name("Nobody"))
+        val v = rig.evaluate(request(presented = listOf(h.leaf, decoy), verified = h.path, host = "Leaf.Example."))
         assertEquals(Rule.NO_SCTS, assertIs<Verdict.Rejected>(v).rule)
+        assertEquals(ChainSource.PLATFORM, v.path.source)
+        assertEquals(0, v.path.anchorSnapshotId)
+        assertEquals(0, rig.verifications, "no walk")
+        assertEquals(listOf(h.intermediate.keyHash), keys(v))
         val chain = assertIs<PresentedChain>(seen.single().chain)
-        assertEquals(3, chain.size)
+        assertEquals(3, chain.size, "the reported path, not the presented chain")
         h.path.forEachIndexed { i, c -> assertContentEquals(c.der, chain.der(i)) }
         assertEquals(listOf(true, true, false), List(3) { chain.parsed(it) }, "the leaf and the issuer were read")
         assertEquals("leaf.example", seen.single().host)
@@ -344,7 +334,7 @@ class EvaluatorTest {
         assertEquals(WalkerHarness.SNAPSHOT_ID, throwing.path.anchorSnapshotId)
         assertEquals(listOf(EngineErrorProducer.BOUNDARY), engineErrors(throwing).map { it.producer })
         // A path never reached still reports what the request would have consulted: no snapshot for verified paths.
-        val verified = broken.evaluate(request(verified = listOf(h.path)))
+        val verified = broken.evaluate(request(verified = h.path))
         assertEquals(PathStatus.NOT_WALKED, verified.path.status)
         assertEquals(ChainSource.PLATFORM, verified.path.source)
         assertEquals(0, verified.path.anchorSnapshotId)
@@ -373,13 +363,16 @@ class EvaluatorTest {
     }
 
     @Test
-    fun `hostile input never throws - garbage chains and paths, and a throwing verifier, engine or fallback`() {
+    fun `hostile input never throws, and a found path with a revoked key is always Rejected(REVOKED)`() {
         val random = Random(135)
         val inputs =
             buildList {
                 add(listOf(ByteArray(0)))
                 add(listOf(garbage(RevoktLimits.MAX_CERT_BYTES + 1)))
                 add(listOf(h.leaf.der, ByteArray(0), garbage(3)))
+                add(chain)
+                add(h.path.map(FixtureCert::der))
+                add(chain + garbage(40))
                 repeat(200) {
                     add(List(random.nextInt(1, 6)) { random.nextBytes(random.nextInt(0, 300)) })
                 }
@@ -388,27 +381,72 @@ class EvaluatorTest {
                     der[random.nextInt(der.size)] = random.nextInt().toByte()
                     add(listOf(der, h.intermediate.der))
                 }
+                repeat(50) {
+                    val path = h.path.map { it.der.copyOf() }
+                    val c = path[random.nextInt(path.size)]
+                    c[random.nextInt(c.size)] = random.nextInt().toByte()
+                    add(path)
+                }
             }
-        val rigs =
-            listOf(
-                EvaluatorRig(honest),
-                EvaluatorRig(honest, engine = StubEngine { error("engine") }),
-                EvaluatorRig(honest, fallback = FakeFallback.throws(IllegalStateException("fallback"))),
-                EvaluatorRig(honest, decidePresented = { _, _, _, _ -> throw NotImplementedError("decide") }),
-            )
-        for (rig in rigs) {
-            for (input in inputs) {
-                rig.presented(input)
-                rig.evaluate(EvaluationRequest.Builder().verifiedPaths(listOf(input, input.reversed())).build())
-                rig.evaluate(
-                    EvaluationRequest
-                        .Builder()
-                        .presented(input)
-                        .verifiedPaths(listOf(input))
-                        .build(),
-                )
+        val throwingVerifier: (SignatureVerifier) -> SignatureVerifier = { sym ->
+            object : SignatureVerifier by sym {
+                override fun verify(
+                    sigAlg: ByteArray,
+                    spki: ByteArray,
+                    message: ByteArray,
+                    signature: ByteArray,
+                ): VerifyResult = error("verifier")
             }
         }
+        val revoking = { StubEngine.always(CrliteQueryResult.REVOKED) }
+        val oracles =
+            listOf(
+                EvaluatorRig(honest, engine = revoking()),
+                EvaluatorRig(honest, engine = revoking(), verifier = throwingVerifier),
+                EvaluatorRig(honest, engine = revoking(), fallback = FakeFallback.throws(IllegalStateException("x"))),
+                EvaluatorRig(honest, RevoktPolicy.STRICT, engine = revoking()),
+            )
+        val others =
+            listOf(
+                EvaluatorRig(honest, engine = StubEngine { error("engine") }),
+                EvaluatorRig(honest, decidePresented = { _, _, _, _ -> throw NotImplementedError("decide") }),
+            )
+        var found = 0
+        for (rig in oracles + others) {
+            for (input in inputs) {
+                val verdicts =
+                    listOf(
+                        rig.presented(input),
+                        rig.evaluate(EvaluationRequest.Builder().verifiedPath(input).build()),
+                        rig.evaluate(
+                            EvaluationRequest
+                                .Builder()
+                                .presented(listOf(input[0]) + input.reversed())
+                                .verifiedPath(input)
+                                .build(),
+                        ),
+                    )
+                if (rig in oracles) found += verdicts.count { revokedOracle(it, "$input") }
+            }
+        }
+        assertTrue(found > 0, "the oracle saw found paths with a key")
+    }
+
+    /**
+     * The oracle under an engine that revokes every key: a found path with a key is `Rejected(REVOKED)`, and one with
+     * no key (an issuer revokt cannot parse) is never a clean answer. True when [v] is a found path with a key.
+     */
+    private fun revokedOracle(
+        v: Verdict,
+        case: String,
+    ): Boolean {
+        if (v.path.status != PathStatus.FOUND) return false
+        if (v.path.issuerSpkiSha256s.isEmpty()) {
+            assertTrue(Rule.ENGINE_ERROR in v.rules, case)
+            return false
+        }
+        assertEquals(Rule.REVOKED, assertIs<Verdict.Rejected>(v, case).rule, case)
+        return true
     }
 
     private companion object {
