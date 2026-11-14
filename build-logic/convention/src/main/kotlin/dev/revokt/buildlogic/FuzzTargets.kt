@@ -15,14 +15,19 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.jvm.toolchain.JavaLauncher
 import org.gradle.jvm.toolchain.JavaToolchainService
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.register
+import org.gradle.kotlin.dsl.withType
 import org.gradle.process.CommandLineArgumentProvider
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
+import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 import java.io.File
 import java.time.Duration
 
@@ -169,8 +174,8 @@ internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
     }
 
 /**
- * `fuzzMinimize` (fuzz.yml, #115): libFuzzer's `-minimize_crash=1` over one crash input, so a finding fits a draft
- * advisory. It runs Jazzer's standalone driver, which re-launches the JVM for each minimisation step, on the target's
+ * `fuzzMinimize` (fuzz.yml, #115): libFuzzer's `-minimize_crash=1` over one crash, timeout or oom input (it treats any
+ * non-zero exit as the crash), so a finding fits a draft advisory. It runs Jazzer's standalone driver, which re-launches the JVM for each minimisation step, on the target's
  * static `fuzzerTestOneInput` with the jvmTest classpath, in the §9.1 harness JVM (`-Xmx256m`, `-rss_limit_mb=1024`) on
  * the tests' JDK. Properties: `revokt.fuzzClass`, `revokt.fuzzInput`, `revokt.fuzzOutput` (libFuzzer rewrites it with
  * each smaller crashing input), `revokt.fuzzTimeout` (the target's `-timeout`, default 10), `revokt.fuzzSeconds` (each
@@ -179,12 +184,22 @@ internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
  * timeout; fuzz.yml stops them before it reads the output.
  */
 internal fun Project.registerFuzzMinimize() {
-    val test = extensions.getByType<KotlinMultiplatformExtension>().jvm().compilations.getByName("test")
     val property = { name: String -> providers.gradleProperty("revokt.$name") }
     val testJdk = providers.gradleProperty("revokt.testJdk").map { it.toInt() }.orElse(Conventions.JDK_BUILD)
     val launcher = extensions.getByType<JavaToolchainService>().launcherFor { languageVersion.set(testJdk.map { JavaLanguageVersion.of(it) }) }
+    // Only for a module with a `jvm` target, selected lazily: a KMP module without one gets no task.
+    extensions.getByType<KotlinMultiplatformExtension>().targets.withType<KotlinJvmTarget>().matching { it.name == "jvm" }.configureEach {
+        registerFuzzMinimizeTask(compilations.getByName("test"), property, launcher)
+    }
+}
+
+private fun Project.registerFuzzMinimizeTask(
+    test: KotlinCompilation<*>,
+    property: (String) -> Provider<String>,
+    launcher: Provider<JavaLauncher>,
+) {
     tasks.register<JavaExec>("fuzzMinimize") {
-        description = "Minimises one Jazzer crash input with libFuzzer's -minimize_crash=1 (fuzz.yml, #115)."
+        description = "Minimises one Jazzer finding input with libFuzzer's -minimize_crash=1 (fuzz.yml, #115)."
         group = "revokt"
         classpath = files(test.output.allOutputs, test.runtimeDependencyFiles ?: files())
         mainClass.set("com.code_intelligence.jazzer.Jazzer")

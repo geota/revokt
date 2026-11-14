@@ -3,9 +3,10 @@
 """Record a fuzz finding as a private draft repository security advisory (fuzz.yml, #115; CONTRIBUTING §6).
 
 A draft advisory is visible only to the repository's administrators and security managers, so the reproducer never
-appears in a public issue, artifact or log. The summary is `fuzz: <target> <sha8>`, the first 8 hex digits of the
-reproducer's SHA-256 (the minimised input when fuzz.yml produced one, `min-<name>`); a draft with the same summary is
-left as it is, so a different crash in the same target still gets its own advisory. The description holds the run
+appears in a public issue, artifact or log. The summary is `fuzz: <target> <key8>`: the first 8 hex digits of Jazzer's
+`DEDUP_TOKEN` from the fuzz or minimiser log (a hash of the finding's stack, stable across runs and minimisation),
+else of the reproducer's SHA-256 (the minimised input when fuzz.yml produced one, `min-<name>`). A draft with the same
+summary is left as it is, so a different crash in the same target still gets its own advisory. The description holds the run
 link, the libFuzzer flags and seed, the stack trace from the JUnit XML (at most 12 000 characters) and each finding:
 base64-encoded when it is at most 36 KiB and the description still fits the API's 65 535 characters, otherwise its
 size and SHA-256 with a note that the advisory cannot reproduce it.
@@ -65,10 +66,22 @@ def stack_traces(findings: Path) -> str:
     return text if len(text) <= MAX_TRACE else text[:MAX_TRACE] + "\n… (truncated)"
 
 
+def from_log(findings: Path, pattern: str) -> str | None:
+    """The first match in the fuzz log, then in the minimiser's logs."""
+    for log in [findings / "gradle.log", *sorted(findings.glob("minimise-*.log"))]:
+        found = re.search(pattern, log.read_text(errors="replace")) if log.is_file() else None
+        if found:
+            return found.group(1)
+    return None
+
+
 def seed(findings: Path) -> str:
-    log = findings / "gradle.log"
-    found = re.search(r"INFO: Seed: (\d+)", log.read_text(errors="replace")) if log.is_file() else None
-    return found.group(1) if found else "unknown"
+    return from_log(findings, r"INFO: Seed: (\d+)") or "unknown"
+
+
+def dedup_token(findings: Path) -> str | None:
+    """Jazzer's hash of the finding's stack frames, printed as `DEDUP_TOKEN: <hex>`."""
+    return from_log(findings, r"DEDUP_TOKEN: ([0-9a-f]{8,})")
 
 
 def findings_of(findings: Path) -> list[tuple[Path, bytes]]:
@@ -82,7 +95,9 @@ def findings_of(findings: Path) -> list[tuple[Path, bytes]]:
     return out
 
 
-def summary(target: str, found: list[tuple[Path, bytes]], trace: str) -> str:
+def summary(target: str, token: str | None, found: list[tuple[Path, bytes]], trace: str) -> str:
+    if token:
+        return f"fuzz: {target} {token[:8]}"
     key = found[0][1] if found else trace.splitlines()[0].encode()
     return f"fuzz: {target} {hashlib.sha256(key).hexdigest()[:8]}"
 
@@ -92,7 +107,7 @@ def description(env: dict, findings: Path, found: list[tuple[Path, bytes]], trac
         f"`{env['TARGET']}` (`{env['SOURCE']}`) failed under Jazzer (spec §9.1 Findings).",
         "",
         f"- Run: {env['RUN_URL']}",
-        f"- libFuzzer flags: `{env['FLAGS']}`; seed {seed(findings)}",
+        f"- libFuzzer flags: `{env['FLAGS']}`; seed {seed(findings)}; Jazzer DEDUP_TOKEN {dedup_token(findings) or 'none'}",
         "",
         "Triage under SECURITY.md; the fix follows CONTRIBUTING §8. Reproduce by saving a finding below to "
         f"`{env['SOURCE'].split('/src/')[0]}/src/jvmTest/resources/<package>/<Class>Inputs/` or by passing it to the target.",
@@ -127,7 +142,7 @@ def main() -> int:
     api = os.environ.get("API_URL", "https://api.github.com").rstrip("/")
     found = findings_of(findings)
     trace = stack_traces(findings)
-    title = summary(env["TARGET"], found, trace)
+    title = summary(env["TARGET"], dedup_token(findings), found, trace)
     if title in draft_summaries(api, env["REPO"], env["GH_TOKEN"]):
         print("A draft advisory for this finding already exists; not creating another.")
         return 0
