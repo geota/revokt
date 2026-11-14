@@ -17,7 +17,7 @@ import dev.revokt.verify.verifyClassified
 
 /** Why a content signature failed; every one is `SyncOutcome.FAILED` at stage `SIGNATURE` (spec §7.1). */
 internal enum class ContentSignatureFailure {
-    /** `metadata.signature.mode` is absent or not [ContentSignature.MODE]. */
+    /** The entry's `mode` is absent or not [ContentSignature.MODE]. */
     MODE,
 
     /** The `signature` field is absent or not the unpadded base64url of an `r ‖ s` pair ([RawSignature.decode]). */
@@ -112,8 +112,8 @@ internal object ContentSignature {
 
     /**
      * Verifies [signature] over the payload of [records] at [lastModified] (a live sync, after [merge]) under
-     * [leafSpki], the x5u leaf's `SubjectPublicKeyInfo`. [signature] and [mode] are `metadata.signature`'s fields
-     * (spec §4), null when absent.
+     * [leafSpki], the x5u leaf's `SubjectPublicKeyInfo`. [signature] and [mode] are one `metadata.signatures[]` entry's
+     * fields (spec §7.1), null when absent.
      */
     fun verifyRecords(
         verifier: SignatureVerifier,

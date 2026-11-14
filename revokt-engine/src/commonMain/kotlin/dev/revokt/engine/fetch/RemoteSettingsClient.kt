@@ -15,6 +15,7 @@ import dev.revokt.SyncStage
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonInteger
+import dev.revokt.engine.json.JsonNull
 import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.json.JsonParseException
 import dev.revokt.engine.json.JsonString
@@ -51,17 +52,29 @@ internal data class FetchLimits(
  * `timestamp`, the `<ts>` the content-signature payload is built with (`"last_modified": "<ts>"`, as Firefox builds it
  * and as Mozilla's signature over the corpus changeset verifies, #163): it is the signed `<ts>` once, and only once,
  * the signature verifies over it. No other timestamp of the envelope (`metadata.last_modified`, a record's
- * `last_modified`) is read. [signature], [x5u] and [mode] are exactly `metadata.signature`'s three fields (§4, §7.1;
- * the live collection also carries a `metadata.signatures` array, which is not read), null when absent or not a string.
+ * `last_modified`) is read. [signatures] is `metadata.signatures`, one element per array element in array order (null
+ * for a JSON `null`, which Firefox's destructuring throws on), and empty when it is absent or not an array;
+ * `metadata.signature` is not read (spec §7.1, revision 56, #191). [ChangesetVerifier] verifies it.
  */
 internal class Changeset(
     val timestamp: Long,
     val changes: List<JsonObject>,
+    val signatures: List<SignatureEntry?>,
+) {
+    override fun toString(): String = "Changeset(timestamp=$timestamp, ${changes.size} changes, signatures=$signatures)"
+}
+
+/**
+ * One `metadata.signatures[]` element's three fields as served (spec §7.1), each null when absent or not a string; an
+ * element that is neither an object nor `null` has all three null, as Firefox's destructuring reads it. Unsigned: [x5u] and [mode] say how to verify [signature], and
+ * only a verified one is trusted.
+ */
+internal class SignatureEntry(
     val signature: String?,
     val x5u: String?,
     val mode: String?,
 ) {
-    override fun toString(): String = "Changeset(timestamp=$timestamp, ${changes.size} changes, x5u=$x5u, mode=$mode)"
+    override fun toString(): String = "SignatureEntry(x5u=$x5u, mode=$mode)"
 }
 
 /**
@@ -83,11 +96,11 @@ internal class Changeset(
  */
 @OptIn(RevoktTestingApi::class) // FetchRequest has no constructor but its Builder.
 internal class RemoteSettingsClient(
-    private val source: MozillaRemoteSettings,
+    val source: MozillaRemoteSettings,
     private val dataset: Dataset,
     private val fetcher: HttpFetcher,
     private val io: CoroutineDispatcher,
-    private val limits: FetchLimits = FetchLimits(),
+    val limits: FetchLimits = FetchLimits(),
 ) {
     private val collection: String =
         requireNotNull(source.collection(dataset)) { "${source.sourceId} has no collection for $dataset" }
@@ -127,7 +140,7 @@ internal class RemoteSettingsClient(
      * it at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, and `If-None-Match: "<since>"`, quoted, as §3 says; a 304 is
      * [ClientResult.Unchanged]). The body is parsed with the engine's JSON tree under `MAX_JSON_BYTES`; its `changes`
      * are objects and its `timestamp` an integer from 0 to `Long.MAX_VALUE`, else `FAILED` (`MALFORMED`). Nothing in it
-     * is trusted until #137 verifies it.
+     * is trusted until [ChangesetVerifier] verifies it.
      */
     fun fetchChangeset(
         expected: Long,
@@ -157,10 +170,13 @@ internal class RemoteSettingsClient(
             }
                 ?: return malformed(body, "changes is not an array")
         val timestamp = count(root["timestamp"]) ?: return malformed(body, "timestamp is not an integer ≥ 0")
-        val fields = ((root["metadata"] as? JsonObject)?.get("signature") as? JsonObject) ?: JsonObject.EMPTY
-        val changeset =
-            Changeset(timestamp, changes, string(fields["signature"]), string(fields["x5u"]), string(fields["mode"]))
-        return ClientResult.Ok(changeset, body.status, body.backoffMillis)
+        val signatures =
+            ((root["metadata"] as? JsonObject)?.get("signatures") as? JsonArray)?.items.orEmpty().map {
+                if (it == JsonNull) return@map null
+                val fields = it as? JsonObject ?: JsonObject.EMPTY
+                SignatureEntry(string(fields["signature"]), string(fields["x5u"]), string(fields["mode"]))
+            }
+        return ClientResult.Ok(Changeset(timestamp, changes, signatures), body.status, body.backoffMillis)
     }
 
     /**
