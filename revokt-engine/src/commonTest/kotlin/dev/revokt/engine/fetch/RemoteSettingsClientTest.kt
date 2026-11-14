@@ -35,7 +35,9 @@ class RemoteSettingsClientTest {
         """{"metadata":{"id":"cert-revocations","last_modified":1,
              "signature":{"x5u":"https://content-signature-2.cdn.mozilla.net/g/chains/x.chain","mode":"p384ecdsa",
                           "signature":"sig","ref":"r"},
-             "signatures":[{"x5u":"https://elsewhere.example/x.chain","mode":"other","signature":"other"}]},
+             "signatures":[{"x5u":"https://elsewhere.example/x.chain","mode":"other","signature":"other"},
+                           {"x5u":"https://content-signature-2.cdn.mozilla.net/g/chains/y.chain","mode":"p384ecdsa",
+                            "signature":"sig2","ref":"r2"}]},
            "timestamp":1793980622465,
            "changes":[{"id":"r1","last_modified":1793980622465},{"id":"r2","last_modified":1793980622000}]}"""
 
@@ -94,26 +96,36 @@ class RemoteSettingsClientTest {
     }
 
     @Test
-    fun `the changeset's three signature fields are metadata signature's, never metadata signatures'`() {
+    fun `the changeset's signature entries are metadata signatures', in order, never metadata signature's`() {
         val got = client(ScriptedFetcher { ok(changeset) }).fetchChangeset(1, null).assertOk()
-        assertEquals("sig", got.signature)
-        assertEquals("https://content-signature-2.cdn.mozilla.net/g/chains/x.chain", got.x5u)
-        assertEquals("p384ecdsa", got.mode)
+        assertEquals(
+            listOf(
+                listOf("other", "https://elsewhere.example/x.chain", "other"),
+                listOf("sig2", "https://content-signature-2.cdn.mozilla.net/g/chains/y.chain", "p384ecdsa"),
+            ),
+            got.signatures.map { listOf(it.signature, it.x5u, it.mode) },
+        )
         // The timestamp is the envelope's, the payload's <ts>; metadata.last_modified is not read.
         assertEquals(1793980622465, got.timestamp)
-        // Absent or mistyped fields read as null; nothing here is checked before verification.
-        val bare = client(ScriptedFetcher { ok("""{"timestamp":5,"changes":[]}""") }).fetchChangeset(1, null).assertOk()
-        assertEquals(listOf(null, null, null), listOf(bare.signature, bare.x5u, bare.mode))
-        val mistyped =
-            client(
-                ScriptedFetcher {
-                    ok(
-                        """{"metadata":{"signature":{"x5u":1,"mode":null}},"timestamp":5,"changes":[]}""",
-                    )
-                },
-            ).fetchChangeset(1, null)
+
+        // An absent, mistyped or empty array is no entries; an element that is not an object, or a mistyped field,
+        // reads as null. Nothing here is checked before verification (ChangesetVerifier).
+        fun entries(metadata: String): List<List<String?>> =
+            client(ScriptedFetcher { ok("""{"metadata":$metadata,"timestamp":5,"changes":[]}""") })
+                .fetchChangeset(1, null)
                 .assertOk()
-        assertEquals(listOf(null, null, null), listOf(mistyped.signature, mistyped.x5u, mistyped.mode))
+                .signatures
+                .map { listOf(it.signature, it.x5u, it.mode) }
+        assertEquals(emptyList(), entries("""{}"""))
+        assertEquals(emptyList(), entries("""{"signature":{"x5u":"https://h/x","mode":"p384ecdsa","signature":"s"}}"""))
+        assertEquals(emptyList(), entries("""{"signatures":{"x5u":"https://h/x"}}"""))
+        assertEquals(emptyList(), entries("""{"signatures":[]}"""))
+        assertEquals(
+            listOf(listOf(null, null, null), listOf(null, null, null), listOf("s", null, null)),
+            entries("""{"signatures":[1,{"x5u":1,"mode":null},{"signature":"s","x5u":["https://h/x"]}]}"""),
+        )
+        val bare = client(ScriptedFetcher { ok("""{"timestamp":5,"changes":[]}""") }).fetchChangeset(1, null).assertOk()
+        assertEquals(emptyList(), bare.signatures)
     }
 
     @Test
