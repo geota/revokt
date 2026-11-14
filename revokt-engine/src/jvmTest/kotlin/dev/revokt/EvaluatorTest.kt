@@ -153,12 +153,46 @@ class EvaluatorTest {
         assertEquals(TerminalKind.ANCHOR, v.path.terminalKind)
         assertEquals(h.root.bytesHash, v.path.anchorSha256?.toByteString())
         assertEquals(listOf<Finding>(), v.findings.filterIsInstance<Finding.FallbackNotUsed>())
-        // A one-certificate path is the anchor: keyed by its own SPKI as step 2 does, though outside the keyability
-        // profile (the fixture root's key fails K's KEY clause).
+    }
+
+    @Test
+    fun `a one-certificate verified path skips the keyability check only when it is an anchor of the entry snapshot`() {
+        // Step 2's rule (the maintainer's decision on #195): the caller's path does not make its leaf an anchor.
         assertEquals(KeyabilityClause.KEY, WalkerCerts.cert(h.root.der).keyabilityClause)
-        val alone = rig.evaluate(request(verified = listOf(h.root)))
-        assertEquals(listOf(h.root.keyHash), keys(alone))
-        assertEquals(listOf(h.root.bytesHash), alone.path.reportedPathSha256s.map { it.toByteString() })
+        assertEquals(KeyabilityClause.KEY, WalkerCerts.cert(h.intermediate.der).keyabilityClause)
+        val engine = StubEngine.always(CrliteQueryResult.NOT_REVOKED)
+        val rig = EvaluatorRig(honest, engine = engine)
+        // An anchor by bytes: FOUND, keyed by its own SPKI, though outside the keyability profile.
+        val anchor = rig.evaluate(request(verified = listOf(h.root)))
+        assertEquals(PathStatus.FOUND, anchor.path.status)
+        assertEquals(listOf(h.root.keyHash), keys(anchor))
+        assertEquals(listOf(h.root.bytesHash), anchor.path.reportedPathSha256s.map { it.toByteString() })
+        assertEquals(WalkerHarness.SNAPSHOT_ID, anchor.path.anchorSnapshotId, "the snapshot step 2 consulted")
+        assertEquals(ChainSource.PLATFORM, anchor.path.source)
+        // Not an anchor, outside the profile: gated like any leaf, never queried.
+        val claimed = rig.evaluate(request(verified = listOf(h.intermediate)))
+        assertEquals(PathStatus.PARSE_FAILED, claimed.path.status)
+        assertEquals(ParseReason.PRODUCER_UNKEYABLE, claimed.path.parseReason)
+        assertEquals(KeyabilityClause.KEY, claimed.path.keyabilityClause)
+        assertEquals(WalkerHarness.SNAPSHOT_ID, claimed.path.anchorSnapshotId)
+        assertEquals(listOf(h.root.keyHash), engine.queries.map { it.issuerSpkiHash.toByteString() }, "one query")
+        // Not an anchor, inside the profile: keyed by its own SPKI, as the issue's one-certificate rule says.
+        val keyable = rig.evaluate(request(verified = listOf(h.leaf)))
+        assertEquals(PathStatus.FOUND, keyable.path.status)
+        assertEquals(listOf(h.leaf.keyHash), keys(keyable))
+        // An anchor leaf on a longer path is gated: step 2 decides a leaf alone.
+        val longer = rig.evaluate(request(verified = listOf(h.root, h.root)))
+        assertEquals(PathStatus.PARSE_FAILED, longer.path.status)
+        assertEquals(0, longer.path.anchorSnapshotId, "a longer path consults no snapshot")
+        // The snapshot read at entry decides: once the root is gone from it, the same path is gated.
+        rig.indexed = EvaluatorRig.indexed(emptyList(), WalkerHarness.SNAPSHOT_ID + 1)
+        val gone = rig.evaluate(request(verified = listOf(h.root)))
+        assertEquals(PathStatus.PARSE_FAILED, gone.path.status)
+        assertEquals(WalkerHarness.SNAPSHOT_ID + 1, gone.path.anchorSnapshotId)
+        // A one-certificate path that never reached decide reports the snapshot id too.
+        val noClock = EvaluatorRig(honest, clock = { error("clock") }).evaluate(request(verified = listOf(h.root)))
+        assertEquals(PathStatus.NOT_WALKED, noClock.path.status)
+        assertEquals(WalkerHarness.SNAPSHOT_ID, noClock.path.anchorSnapshotId)
     }
 
     @Test

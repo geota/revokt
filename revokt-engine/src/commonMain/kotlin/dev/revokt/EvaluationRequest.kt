@@ -44,6 +44,9 @@ public class EvaluationRequest private constructor(
         require(verifiedPath == null || verifiedPath.isNotEmpty()) {
             "verifiedPath is set but empty: it runs leaf to anchor"
         }
+        require(verifiedPath == null || verifiedPath.size <= RevoktLimits.MAX_DEPTH + 1) {
+            "verifiedPath holds more than MAX_DEPTH + 1 certificates, the longest path a walk builds"
+        }
         require(presented == null || verifiedPath == null || presented[0] == verifiedPath[0]) {
             "verifiedPath does not start with the presented leaf"
         }
@@ -78,8 +81,9 @@ public class EvaluationRequest private constructor(
 
     /**
      * Builds an [EvaluationRequest]. [build] throws `IllegalArgumentException` unless a chain or a path is set, for an
-     * empty chain or an empty path (the maintainer's decision on #182), and when both are set and the path's first
-     * certificate is not the presented leaf, byte for byte (the maintainer's decision on #195).
+     * empty chain or an empty path (the maintainer's decision on #182), for a path longer than `MAX_DEPTH + 1`
+     * certificates, and when both are set and the path's first certificate is not the presented leaf, byte for byte
+     * (the maintainer's decisions on #195).
      */
     public class Builder {
         internal var presented: List<ByteString>? = null

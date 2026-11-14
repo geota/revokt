@@ -75,6 +75,20 @@ class EvaluationRequestTest {
     }
 
     @Test
+    fun `build throws for a verified path longer than MAX_DEPTH + 1 certificates`() {
+        val longest = List(RevoktLimits.MAX_DEPTH + 1) { der(it) }
+        EvaluationRequest.Builder().verifiedPath(longest).build()
+        val e =
+            assertFailsWith<IllegalArgumentException> {
+                EvaluationRequest.Builder().verifiedPath(longest + der(99)).build()
+            }
+        assertEquals(
+            "verifiedPath holds more than MAX_DEPTH + 1 certificates, the longest path a walk builds",
+            e.message,
+        )
+    }
+
+    @Test
     fun `chainSource is derived, PLATFORM whenever a verified path is given`() {
         val presented = EvaluationRequest.Builder().presented(listOf(der(1))).build()
         val verified = EvaluationRequest.Builder().verifiedPath(listOf(der(1))).build()

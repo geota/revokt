@@ -15,6 +15,7 @@ import dev.revokt.engine.walker.IndexedSnapshot
 import dev.revokt.engine.walker.PathDecision
 import dev.revokt.engine.walker.decide
 import dev.revokt.engine.walker.decideVerified
+import dev.revokt.engine.walker.verifiedAnchorSnapshotId
 
 /**
  * The single [Evaluator] (spec §4 `revokt.evaluator`, §11's 0.2 row): decision steps 1 to 8 over one candidate index,
@@ -28,8 +29,9 @@ import dev.revokt.engine.walker.decideVerified
  *   through the whole evaluation.
  * - **`presented`** is decided over that index ([decide]: steps 2, 3, 5 and 6 with [walk]'s verifier, probe, shared
  *   cross-call memo and PKIX fallback, null under `pkixFallback(false)`), `anchorSnapshotId` being the snapshot's id.
- * - **`verifiedPath`** is trusted without re-verification ([decideVerified]): no walk, `source = PLATFORM`,
- *   `anchorSnapshotId = 0`, and the path is both the reported path and the exemptions' chain. When a request carries
+ * - **`verifiedPath`** is trusted without re-verification ([decideVerified]): no walk, `source = PLATFORM`, and the
+ *   path is both the reported path and the exemptions' chain. Only a one-certificate path consults the snapshot (step
+ *   2's anchor-by-bytes test), so `anchorSnapshotId` is its id there and 0 for a longer path. When a request carries
  *   both, the verified path wins and the walk is skipped, as on the trust-manager flow where a platform-verified chain
  *   (step 4) makes the walk unnecessary; `EvaluationRequest` has already checked that it starts with the presented
  *   leaf (the maintainer's decision on #195).
@@ -65,7 +67,8 @@ internal class RevoktEvaluator(
                 normalisedHost(request.host),
                 snapshot,
                 form,
-                anchorSnapshotId = if (verified != null) 0 else indexed.snapshot.id,
+                anchorSnapshotId =
+                    verified?.let { verifiedAnchorSnapshotId(it, indexed.snapshot) } ?: indexed.snapshot.id,
                 source = request.chainSource,
             )
         val now = request.nowMillis
@@ -75,7 +78,7 @@ internal class RevoktEvaluator(
             clock = if (now != null) ({ now }) else clock,
             decide = { nowMillis ->
                 if (verified != null) {
-                    decideVerified(chain)
+                    decideVerified(chain, indexed.index, indexed.snapshot)
                 } else {
                     decidePresented(chain, indexed.index, indexed.snapshot, walk.at(nowMillis, platformOnly = false))
                 }
