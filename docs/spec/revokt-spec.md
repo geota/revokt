@@ -1,10 +1,42 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 57** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-14
+Status: **draft spec / project proposal, revision 58** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-15
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 58 (the redirect and URL grammar of #192, 2026-11-15)
+The maintainer approved this revision on 2026-11-15. It writes in only the redirect and URL grammar decided on #192
+(the maintainer's Q2 and Q3, the lead's Q1, Q4 and Q5 and the readings the lead accepted) and built in #204's
+`StrictUrl`, `HopUrl` and `RedirectingFetcher`; where #204's drafted spec lines and the merged code differ, the code
+and the #192 decisions are written.
+- **§7.3 "Redirects", the hop grammar** (Q2, Q3): every URL of a mirror's chain, the request's own included, is read by
+  the one strict grammar the x5u URL is read by, with IP literals allowed: `https://` in lowercase, no userinfo, a DNS
+  host name, an IPv4 dotted quad with no leading zeros or a bracketed IPv6 address with no zone identifier (a dotted
+  quad only as its last 32 bits), a port of 1 to 65535, a path and query of RFC 3986 `pchar`s, `/` and `?` with valid
+  `%` escapes. Anything else is `FAILED`, never repaired. This replaces "`https` with no userinfo … no port rule".
+- **§7.3, the fetched URL:** each hop, the first included, is fetched as revokt re-serialises it (the host lowercased,
+  `:443` dropped, dot segments removed, an empty path `/`), never as the configured string or the `Location` value.
+- **§7.3, `Location`** (Q1, Q4): a 301, 302, 303, 307 or 308 with no `Location` is returned as the final response, as
+  reqwest and Necko return it, and the mirror client fails it with its `httpStatus` (#194); distinct `Location` values
+  on one response are `FAILED`, as Necko's are, and equal ones collapse.
+- **§7.3, the loop key** (Q5): the re-serialised URL without its fragment, the initial URL counted; it is RFC 3986's
+  simple string comparison, so `%2e` is not a dot segment (a loop spelled with it ends at the hop limit, `FAILED`
+  either way).
+- **§7.3, the accepted readings:** the five credential headers are stripped on a host or port change from the
+  previous hop and stay stripped for every later hop; `If-Modified-Since` is kept and no `Referer` is sent; the body
+  cap and the time left apply to each hop, not only to the final response.
+- **§4:** the `c2spMirror` URL is read by §7.3's hop grammar (IP literals allowed), and `build()` throws when it fails;
+  the "https with no userinfo" rule names the other source URLs only.
+- **§7.1:** the x5u URL is read by the same shared grammar, DNS host names only; its rules are unchanged.
+- **§9:** mirror fixtures for an IPv6 hop, `HTTPS://`, differing and equal duplicate `Location`s, a 302 with no
+  `Location` at the mirror client and the host `[1.2.3.4::]`.
+- **§10:** the TLS-only mirror item names the shared grammar, the re-serialised fetch and the headers that stay
+  stripped.
+- **Appendix A:** reqwest 0.13.0 with tower-http 0.6.11 (upki v1.0.1's pins) and Firefox's Necko at
+  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, for the statuses followed, a 3xx with no `Location`, duplicate `Location`
+  values, IP literal hosts and the redirect limit.
 
 ### Changes in revision 57 (the items queued on #160 after revision 56, 2026-11-14)
 The maintainer approved writing in every item queued on #160 since revision 56 as one revision (2026-11-14). Each is a
@@ -2022,7 +2054,7 @@ val revokt = Revokt {
     signatureVerifier = JcaSignatureVerifier()
     revocationEngine = KotlinRevocationEngine()           // default; §3.2 seam
     clock = Clock.System                                // Java: clock(java.time.Clock); timeSource(TimeSource) for the monotonic deadlines (testable)
-    sources { remoteSettings(MozillaRemoteSettings.DEFAULT); c2spMirror("https://upki.rustls.dev/revocation/") /* with a seed this trips MIRROR_WITH_SEED_NEVER_INSTALLED; shown for completeness */; c2spCache("/var/cache/upki/revocation"); seed(SeedSource.fromResource("/revokt/seed-compat.zip")) }   // seed default when none is configured: SeedSource.bundled(), resolved at build(): /revokt/seed-<channel>.zip from the revokt-seed-<channel> artifact (§6.5; the quickstarts declare it); absent from the classpath → no seed source, and validate() emits NO_DATA_REJECTS_WITHOUT_LOCAL_DATA; present but unreadable → SEED_UNREADABLE at start() (§4 S bullet); seed(SeedSource.none()) opts out explicitly. No fetching source is configured by default (a library never opens the network unasked); a required dataset with local data and no fetching source is V NO_FETCHING_SOURCE, a WARNING under both enforcements (the instance updates only through sync()'s seed re-check, below; air-gapped seed-by-deploy fleets are legitimate). R: every source URL (baseUrl, attachmentBaseUrl, a c2spMirror URL, x5uHosts) is https with no userinfo, else build() throws (NSC blocks cleartext on API 28+, the JVM does not). c2spCache takes the directory that holds index.bin, upki's <cache root>/revocation (revision 56); upki's built-in default (Config::try_default) is the user cache, ProjectDirs("dev", "rustls", "upki") (Linux $XDG_CACHE_HOME/upki or ~/.cache/upki, macOS ~/Library/Caches/dev.rustls.upki, Windows %LOCALAPPDATA%\rustls\upki\cache), when it exists; else the system cache (Linux /var/cache/upki, macOS /Library/Caches/dev.rustls.upki, Windows %ProgramData%\rustls\upki\cache) when that exists; else the user cache. A upki config file's cache directory overrides both. revokt has no helper for this (the maintainer's decision): the caller passes the directory.
+    sources { remoteSettings(MozillaRemoteSettings.DEFAULT); c2spMirror("https://upki.rustls.dev/revocation/") /* with a seed this trips MIRROR_WITH_SEED_NEVER_INSTALLED; shown for completeness */; c2spCache("/var/cache/upki/revocation"); seed(SeedSource.fromResource("/revokt/seed-compat.zip")) }   // seed default when none is configured: SeedSource.bundled(), resolved at build(): /revokt/seed-<channel>.zip from the revokt-seed-<channel> artifact (§6.5; the quickstarts declare it); absent from the classpath → no seed source, and validate() emits NO_DATA_REJECTS_WITHOUT_LOCAL_DATA; present but unreadable → SEED_UNREADABLE at start() (§4 S bullet); seed(SeedSource.none()) opts out explicitly. No fetching source is configured by default (a library never opens the network unasked); a required dataset with local data and no fetching source is V NO_FETCHING_SOURCE, a WARNING under both enforcements (the instance updates only through sync()'s seed re-check, below; air-gapped seed-by-deploy fleets are legitimate). R: every source URL (baseUrl, attachmentBaseUrl, x5uHosts) is https with no userinfo, and a c2spMirror URL is read by §7.3's hop grammar (https:// in lowercase, no userinfo, a DNS host name or an IP literal, a port of 1 to 65535; revision 58), else build() throws (NSC blocks cleartext on API 28+, the JVM does not). c2spCache takes the directory that holds index.bin, upki's <cache root>/revocation (revision 56); upki's built-in default (Config::try_default) is the user cache, ProjectDirs("dev", "rustls", "upki") (Linux $XDG_CACHE_HOME/upki or ~/.cache/upki, macOS ~/Library/Caches/dev.rustls.upki, Windows %LOCALAPPDATA%\rustls\upki\cache), when it exists; else the system cache (Linux /var/cache/upki, macOS /Library/Caches/dev.rustls.upki, Windows %ProgramData%\rustls\upki\cache) when that exists; else the user cache. A upki config file's cache directory overrides both. revokt has no helper for this (the maintainer's decision): the caller passes the directory.
     meteredNetwork { false }                             // BooleanSupplier; revokt-android: RevoktAndroid.meteredNetwork(context) over ConnectivityManager.isActiveNetworkMetered(); sampled once per sync before a full download; a throw reads as false (§7.2)
     logger = RevoktLoggers.jul()                        // RevoktLogger; default auto-detected (§3)
     policy = RevoktPolicy.DEFAULT                       // or STRICT; RevoktPolicy.DEFAULT.newBuilder().rule(Rule.NO_SCTS, REJECT).exempt(Rule.NO_SCTS, …).staleness(Dataset.CRLITE, Staleness.ofMillis(3.days.inWholeMilliseconds, null))
@@ -2327,7 +2359,7 @@ remaining a subsequence.
   header is read synchronously).
 - `NOT_STARTED` is not a warning: a trust manager or `sslContext()` obtained before `start()` runs step 1 only until `start()` and counts `unevaluated[NOT_STARTED]` (creating trust managers before `start()` is the recommended main-thread pattern, so it cannot be a stuck alert).
 - R `CHANNEL_UNSET`: no `channel` configured while a CRLite source (a seed included) is. R `PLATFORM_TRUST_MISMATCH`: Android runtime with a non-Android `platformTrust`. R `STORAGE_UNSET`: `AndroidPlatformTrust` with no explicit `storage` (§3).
-- R: a `c2spMirror` URL with a query or a fragment (§7.3: every mirror URL is the base followed by a name).
+- R: a `c2spMirror` URL that §7.3's hop grammar refuses (IP literals allowed; revision 58), or one with a query or a fragment (§7.3: every mirror URL is the base followed by a name).
 - Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2's over-cap built index, §6.5's index-name collision, and §7.3's manifest names), `SOURCE_EMPTY` (§7.3: a mirror with no filters or no coverage, with `FAILED` at stage `INDEX`; also an S code for a system cache at `start()`; revision 56), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
 
 ## 5. Trust manager [M1]
@@ -3291,7 +3323,7 @@ read as `rustls-pki-types` 1.15.1 reads it (upki v1.0.1's pin; the maintainer's 
 `PUBLIC KEY`, `RSA PRIVATE KEY`, `PRIVATE KEY`, `EC PRIVATE KEY`, `X509 CRL`, `CERTIFICATE REQUEST`, `ECHCONFIG`) is
 decoded, only `CERTIFICATE` blocks are kept and the others dropped, and a decode error in any of them fails the body;
 a block with an unknown label is skipped undecoded; the base64 decoder skips whitespace (HT, LF, VT, FF, CR, space)
-and needs no padding; a body that ends inside a block, or has no `CERTIFICATE` block, fails; HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; `_expected` is validated as an integer before it enters a query string), `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal (revision 54: Firefox's `AppTrustDomain` set): a signature is RSA PKCS#1 v1.5 or ECDSA with SHA-256, SHA-384 or SHA-512 (an ECDSA AlgorithmIdentifier with NULL or absent parameters, as mozilla::pkix reads it), or `id-RSASSA-PSS` whose parameters are byte for byte one of mozilla::pkix's three encodings (SHA-256, SHA-384 or SHA-512 with NULL hash parameters, MGF1 with the same hash, a salt length equal to the hash length, `trailerField` omitted for its default 1); a link's key is `rsaEncryption` of at least 2048 bits or `id-ecPublicKey` on P-256, P-384 or P-521, so an `id-RSASSA-PSS` key fails; anything else `FAILED` (`ALGORITHM`; the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply). This floor is the x5u chain's own: §3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged; validity at verification time for the leaf
+and needs no padding; a body that ends inside a block, or has no `CERTIFICATE` block, fails; HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; the URL is read by the strict grammar §7.3's redirect hops share, with DNS host names only and no IP literal, its rules unchanged by revision 58; `_expected` is validated as an integer before it enters a query string), `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal (revision 54: Firefox's `AppTrustDomain` set): a signature is RSA PKCS#1 v1.5 or ECDSA with SHA-256, SHA-384 or SHA-512 (an ECDSA AlgorithmIdentifier with NULL or absent parameters, as mozilla::pkix reads it), or `id-RSASSA-PSS` whose parameters are byte for byte one of mozilla::pkix's three encodings (SHA-256, SHA-384 or SHA-512 with NULL hash parameters, MGF1 with the same hash, a salt length equal to the hash length, `trailerField` omitted for its default 1); a link's key is `rsaEncryption` of at least 2048 bits or `id-ecPublicKey` on P-256, P-384 or P-521, so an `id-RSASSA-PSS` key fails; anything else `FAILED` (`ALGORITHM`; the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply). This floor is the x5u chain's own: §3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged; validity at verification time for the leaf
 and every non-terminal link; for every non-leaf link below the terminal: basicConstraints `cA = TRUE`,
 `pathLenConstraint` honoured, subject name equal to the child's issuer (raw or canonical), keyUsage
 `keyCertSign` when present (`KEY_USAGE`);
@@ -3414,19 +3446,42 @@ file. upki sends `If-Modified-Since` from its cached file's modification time an
 does the same (the maintainer's decision): on the manifest request only, as an IMF-fixdate (RFC 9110 §5.6.7), its
 `If-Modified-Since` is the time the live `MIRROR` generation's manifest was stored, taken from the local clock as upki's file time is and persisted in that generation's `meta.json`, none without a live `MIRROR` generation, and a 304 is
 `UNCHANGED`. Each file is fetched as `<base><filename>`. Every request has the `FETCH_TIMEOUT` (30 s, upki's too).
-**Redirects** (revision 56, the maintainer's decision; code #192): followed in the fetch layer by one shared internal
-`RedirectingFetcher` that wraps a C2SP mirror source's `HttpFetcher`; neither the loader nor any client follows one,
-and the underlying client never does (§3). Every hop is a new request through the wrapped fetcher, so it goes through
-the source's `FetcherTls` and the §8 host checks, and its URL must be `https` with no userinfo; it may carry a query,
-any fragment is dropped, and no port rule applies (the `c2spMirror` URL's own rule, §4; Remote Settings never follows
-a redirect, so no other source's rule arises). Only a 301, 302, 303, 307 or 308 answering a `GET` is followed (every
-mirror request is one); any other 3xx, a 300 or 305 for example, is `FAILED`. A relative `Location`
-resolves against the request's URL. At most 10 hops, and a URL seen before in the chain is a loop; an eleventh hop,
-a loop, or a hop that fails a rule is `FAILED`. `FETCH_TIMEOUT` (30 s) is one deadline for the whole chain, as upki's
-client timeout is. A hop to another host or port drops the headers that carry credentials (`Authorization`, `Cookie`, `Cookie2`,
-`Proxy-Authorization`, `WWW-Authenticate`), as reqwest 0.13.0's `remove_sensitive_headers` does (revokt sends none
-today). The body cap applies to
-the final response. Remote Settings fetches are not wrapped and never follow a redirect (§7.1). **Manifest names** (revision 52; a mirror's data is unsigned, so a name it serves is checked
+**Redirects** (revision 56, the maintainer's decision; the grammar and the rules below revision 58, the decisions on
+#192; code `RedirectingFetcher`, #204): followed in the fetch layer by one shared internal `RedirectingFetcher` that
+wraps a C2SP mirror source's `HttpFetcher`; neither the loader nor any client follows one, and the underlying client
+never does (§3). Every hop is a new request through the wrapped fetcher, so it goes through the source's `FetcherTls`
+and the §8 host checks. **The hop grammar** (revision 58, the maintainer's decisions Q2 and Q3): every URL of the
+chain, the request's own included, is read by the one strict grammar the x5u URL is read by too (§7.1), with IP
+literals allowed: `https://` in lowercase, so `HTTPS://` is refused; an authority with no userinfo; a host that is a
+DNS host name (labels of ASCII letters, digits and `-` of 1 to 63 characters, at most 253, no trailing dot, a last
+label that is not a number), an IPv4 dotted quad with no leading zeros, or a bracketed IPv6 address with no zone
+identifier and no `IPvFuture`, a dotted quad standing only for its last 32 bits (so `[1.2.3.4::]` is refused), never a
+percent-encoded or non-ASCII host; an optional port of 1 to 65535, and no other port rule; then a path and an optional
+query of RFC 3986 `pchar`s, `/` and `?`, every `%` followed by two hex digits; and any fragment, which must be one RFC
+3986 allows and is dropped. Anything else is `FAILED`, never repaired. A relative `Location` resolves against the URL
+of the request it answered (RFC 3986 §5.2, dot segments removed). **Each hop, the first included, is fetched as revokt
+re-serialises it**, never as the configured string or the `Location` value: `https://`, the host lowercased, the port
+only when it is not 443, the path (`/` when empty, dot segments removed) and the query as written. Only a 301, 302,
+303, 307 or 308 answering a `GET` is followed (every mirror request is one); any other status, another 3xx included,
+is returned as the final response, and so is one of the five with no `Location` (the lead's Q1), as reqwest and
+Firefox's Necko return it (Appendix A). The mirror client fails any 3xx it is handed but the manifest's 304 above (a
+300 or 305, or a 302 with no `Location`, for example) as `FAILED` with that `httpStatus` (#194). A `Location` value is
+trimmed of SP and HTAB; distinct values on one response are `FAILED`, as Necko refuses a differing duplicate
+`Location`, and equal ones collapse to one (Q4). At most 10 redirects are followed, as reqwest's `Policy::limited(10)`
+allows, so a chain makes at most 11 requests; an eleventh redirect is `FAILED`, and so is a hop to a URL already
+requested in the chain, the initial URL counted (a loop). **The loop key** (Q5) is the re-serialised URL above, which
+has no fragment: scheme and host lowercased and `:443` dropped, the path and the query compared exactly, IPv6
+addresses as written, not in a canonical form. It is RFC 3986's simple string comparison (§6.2.1) after that
+normalisation, not what every client sends: `%2e` is not a dot segment here, while WHATWG parsers and OkHttp's
+`HttpUrl` read `/a/%2e%2e/b` as `/b`, so a loop spelled with `%2e` ends at the hop limit instead; it is `FAILED`
+either way, and the host cannot change. `FETCH_TIMEOUT` (30 s) is one deadline for the whole chain, as upki's client
+timeout is: each hop is sent with the time left, and a response that arrives at or after the deadline is `FAILED`. A
+hop to another host or port than the previous hop's drops the headers that carry credentials (`Authorization`,
+`Cookie`, `Cookie2`, `Proxy-Authorization`, `WWW-Authenticate`, compared ignoring case), as reqwest 0.13.0's
+`remove_sensitive_headers` does, and they stay dropped on every later hop, whatever its host (revokt sends none
+today); every other header, `If-Modified-Since` included, is sent on every hop unchanged, and no `Referer` is added.
+The body cap (`maxBodyBytes`) and the time left apply to each hop, a 3xx body included, and the caller re-checks the
+final response's body (§3). Remote Settings fetches are not wrapped and never follow a redirect (§7.1). **Manifest names** (revision 52; a mirror's data is unsigned, so a name it serves is checked
 before it names anything): every `manifest.json` filename passes §6.3's filename rule (1 to 64 bytes of
 `[A-Za-z0-9._-]`, not `.` or `..`), does not end in `.` (Win32 strips a trailing `.`, so `meta.json.` would open
 `meta.json`), is none of §6.3's reserved names, compared ignoring ASCII case, and is unique in the manifest ignoring
@@ -3671,7 +3726,11 @@ tests; **live checks** are informational.
   manifest without `comment`, or with `filters` for `files` → `FAILED` and installs respectively; a manifest reached
   through 10 `https` redirects → fetched, through 11 → `FAILED`, a redirect to `http`, to a URL with userinfo, or back to a URL already in the
   chain → `FAILED`, a hop carrying a query → followed, a fragment → dropped, a 300 or a 305 → `FAILED`, a relative `Location` → resolved against the request URL, a 304 or 200 at
-  the end → the body cap applied to it, and a chain that outlasts 30 s in total → `FAILED`; the manifest request after a
+  the end → the body cap applied to it, and a chain that outlasts 30 s in total → `FAILED`; (revision 58) a hop to an
+  IPv6 literal (`https://[2001:db8::1]/revocation/manifest.json`) → followed, a `Location` of
+  `HTTPS://mirror.example/revocation/manifest.json` → `FAILED`, a redirect carrying two differing `Location` values →
+  `FAILED` and two equal ones → followed, a 302 with no `Location` → `FAILED` with `httpStatus` 302 at the mirror
+  client, and a `Location` whose host is `[1.2.3.4::]` → `FAILED`; the manifest request after a
   live `MIRROR` install carries `If-Modified-Since` as an IMF-fixdate of the time that generation's manifest was stored,
   and no filter request carries one; a system cache
   whose `index.bin` starts `upkiidx0` → not installed, `STORE_UNREADABLE`; a manifest name
@@ -4631,8 +4690,9 @@ justified in writing.
   maintainer's decision on #137, as in upki and Firefox); its names are checked and each request
   is the configured mirror URL followed by a checked name (§7.3), so an unsigned name never names a path outside its
   generation directory and adds nothing to a URL but that name; redirects are followed only by the shared
-  `RedirectingFetcher` under §7.3's per-hop rules (each hop `https` with no userinfo, `FetcherTls`
-  and the §8 host checks on every hop, at most 10 and no loops, one deadline, credentials dropped across origins; revision 56),
+  `RedirectingFetcher` under §7.3's per-hop rules (each hop read by the strict grammar shared with the x5u URL, IP
+  literals allowed, and fetched as revokt re-serialises it, `FetcherTls` and the §8 host checks on every hop, at most
+  10 and no loops, one deadline, credentials dropped across origins and kept dropped; revisions 56 and 58),
   and a manifest or generation with no filters or no coverage is refused, so an empty mirror cannot turn `NO_DATA`'s
   reject into an allow; residual: a mirror's `If-Modified-Since` comes from the local clock, so a clock running ahead
   can draw a false 304 and keep an older mirror generation, as with upki;
@@ -5227,6 +5287,30 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     `NSSCertDBTrustDomain` `FindIssuer` offers roots first, then the presented certificates, then the preloaded
     intermediates. upki takes one webpki `VerifiedPath` (rustls-upki `lib.rs`, lines 95 to 127), the model for
     `EvaluationRequest.verifiedPath` (§4).
+- **Revision 58 sources** (§7.3 "Redirects", read 2026-11-15):
+  - **reqwest 0.13.0 and tower-http 0.6.11**, the versions upki v1.0.1's `Cargo.lock` pins (read through the GitHub
+    contents API), from the local cargo registry. reqwest follows redirects through tower-http's `FollowRedirect`:
+    `follow_redirect/mod.rs` follows only 301, 302, 303, 307 and 308 and returns any other status as it came (lines
+    273 to 293); it takes the response's first `Location` (`HeaderMap::get`, which returns the first of several values,
+    http 1.5.0 `src/header/map.rs` lines 786 to 790) and returns the response unchanged when there is none or it does
+    not resolve against the request URI (lines 301 to 309). So reqwest returns a 3xx with no `Location`, as revokt does,
+    and follows the first of two differing `Location`s, where revokt fails, as Necko does. reqwest's
+    `TowerRedirectPolicy::redirect` (`src/redirect.rs`, lines 306 to 334) refuses a hop only for a scheme other than
+    `http` or `https` (and `http` under `https_only`), so a hop to an IP literal host is followed: url 2.5.8's `Host` is
+    `Domain`, `Ipv4` or `Ipv6` (`src/host.rs`, lines 46 to 62). `Policy::limited(10)` is the default (lines 160 to
+    164) and only counts: it errors once the URLs already requested, the initial one included, exceed 10 (lines 131
+    to 141), so it follows 10 redirects as revokt does, and has no loop check of its own; revokt's is its own rule.
+  - **Firefox's Necko** at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, `netwerk/protocol/http/`, read through the
+    GitHub contents API. `nsHttpChannel.cpp` processes 301, 302, 303, 307 and 308 as redirects, 305 being disabled
+    (lines 3371 to 3378). `AsyncProcessRedirection` returns `NS_ERROR_FAILURE` when there is no `Location` ("carry on as
+    though this were a normal response", lines 6929 to 6933), and `NS_ERROR_CORRUPTED_CONTENT` for a `Location` that
+    does not parse (lines 6953 to 6958); the caller then renders the 3xx as a normal response unless the error is one
+    of `DoNotRender3xxBody`'s (lines 3397 to 3409; `nsHttpChannel.h`, lines 533 to 537), which `NS_ERROR_FAILURE` is
+    not and `NS_ERROR_CORRUPTED_CONTENT` is. `nsHttpHeaderArray::SetHeaderFromNet` fails a response whose second value
+    of a header differs from the first with `NS_ERROR_CORRUPTED_CONTENT` when `IsSuspectDuplicateHeader` names the
+    header (`nsHttpHeaderArray.cpp`, lines 192 to 196), and it names `Content-Length`, `Content-Disposition` and
+    `Location` (`nsHttpHeaderArray.h`, lines 300 to 303); an equal second value is kept as one. That Necko follows a
+    hop to an IP literal host is not cited here.
 - Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
   2026-10-30: `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` reads the SCT extension's
   `extnValue` with `der::ExpectTagAndGetValueAtEnd(extnValue, der::OCTET_STRING, …)`, which requires the tag `0x04`
