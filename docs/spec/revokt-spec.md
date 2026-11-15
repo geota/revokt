@@ -1,10 +1,53 @@
 # Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec / project proposal, revision 56** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-12
+Status: **draft spec / project proposal, revision 57** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-14
 
 > **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
 > maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
 > handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
+
+### Changes in revision 57 (the items queued on #160 after revision 56, 2026-11-14)
+The maintainer approved writing in every item queued on #160 since revision 56 as one revision (2026-11-14). Each is a
+maintainer decision or matches merged code (#195, #197, #198, and #186's evaluator); none is open.
+- **§4 and §5.1, `EvaluationRequest.verifiedPath`** (the maintainer's decisions on #195, like upki's single webpki
+  `VerifiedPath`): `verifiedPaths(List<List<ByteArray>>)` becomes `verifiedPath(List<ByteArray>)`, capped at
+  `MAX_DEPTH + 1` certificates; `build()` throws when `presented` is set and `presented[0]` is not the verified leaf, and
+  with both set the verified path wins; a one-certificate path skips the keyability check only when its leaf is an anchor
+  by bytes in the snapshot read at entry, whose id it then reports; `ChainSource.PLATFORM` names both routes; a
+  `FOUND` decision with no leaf-issuer key is the boundary's `ENGINE_ERROR` (#186's code).
+- **§5.1 decision step 6, the walker and §8, issuer labels** (the maintainer's decisions on #196, revised after the
+  comparison with Firefox, and on #197):
+  - `ISSUER_UNVERIFIED` follows mozilla::pkix's order: an explored related non-anchor counts its own unsupported
+    signature OID whether or not it verifies, so does a node the unrelated loop reached, and the leaf's own OID counts
+    only once it has a related candidate. A candidate's key or curve OID still never counts.
+  - `NO_ISSUER` and `ISSUER_UNVERIFIED` share one outcome and one exemption: `rule`, `exempt` and `clearExemption` on
+    either apply to both, and a policy cannot hold a split pair. A relabel between them changes only the diagnostic.
+  - On a trust-manager binding and `Revokt.evaluate` every fallback-failed walk `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`,
+    whatever the label, so `platformOnly()` matches either way; `ISSUER_UNVERIFIED` appears only off the bindings.
+  - `outcomeDepended` is `status == ISSUER_UNVERIFIED` in §8 too; §10 item 14 is rewritten, with the note that a
+    consumer's own exemption can still tell the labels apart off the bindings.
+- **§5.1, candidate order** (the maintainer's decision on #196, Firefox's order): at every depth the store's anchors,
+  then the presented certificates by index, then (M2) the preload; `related()` loses `belowLeaf`; a byte-duplicate is
+  yielded at its store position; `anchorIn` matches the anchor of the first path found in that order. §10 item 4 notes
+  that 64 same-name store anchors can now fill the leaf's cap.
+- **§3, §5.1 and §5.5** (#196 F5 and F6, the #160 issue text): the verifier must not modify its arguments; a caught
+  `InterruptedException` restores the interrupt flag at every catch of consumer code and at the boundary; only
+  `VerifierError` rides on the `Walk`, and its `oid` is `""` when the TBS AlgorithmIdentifier does not decode; "Cost"
+  states the root-issued leaf with a presented cross-certificate.
+- **§4 and §7.1, `signatures[]`** (#198, and #191's verifier queued on #160): an empty `x5u` or `signature` is skipped
+  like a missing one; a `null` element the loop reaches is `FAILED` at `SIGNATURE`; a PEM, chain-structure or
+  content-signature failure is `FAILED` at stage `SIGNATURE`, a failed x5u fetch `FAILED` at `X5U`; any failed entry,
+  a failed fetch included, moves on to the next; the installed records are the verified ones. Appendix A records
+  Firefox's loop, including that it leaves the loop on a rejected fetch.
+- **§7.1, `Backoff` and `Retry-After`** (the 2026-11-13 decision audit): revokt's behaviour stays, but "as Firefox and
+  Kinto do" was false. Firefox keeps `Backoff` only from a `/changes` response that is not a server error and never
+  reads `Retry-After`, so revokt is stricter; Appendix A cites the lines.
+- **§9:** walker rows (ak) to (ap) for the labels, the leaf deferral, anchors that never count, the unrelated-loop node,
+  the candidate order and the 64 same-name anchors; row (j) on the bindings; API rows for `verifiedPath` and the shared
+  slot; content-signature rows for the `signatures[]` stages; P5 holds only as `endDepth == 1 ⇒ relatedExploredAtLeaf
+  == 64`.
+- **§10:** residual 9 adds the PKIX fallback's unbudgeted build; the rollback item says that after `resetState()` the
+  watermark floor holds the old live generation's timestamp until the start task swaps it (from the #190 review).
 
 ### Changes in revision 56 (the items queued on #160, 2026-11-12)
 The maintainer approved writing in every item queued on #160 as one revision (2026-11-08). Items marked decided there
@@ -1701,7 +1744,8 @@ interface PlatformTrust {
 ```
 
 **Verifier contract.** The engine never hands the verifier a non-X.509 encoding and always passes
-the signed TBS `signature` field. `JcaSignatureVerifier(provider: Provider? = null)` selects
+the signed TBS `signature` field. An implementation must not modify its arguments: the engine passes a certificate's
+own arrays, shared by every handshake on the anchor snapshot (revision 57). `JcaSignatureVerifier(provider: Provider? = null)` selects
 `KeyFactory` by the SPKI key OID, creates `Signature`/`KeyFactory` per call, honours RSASSA-PSS
 parameters, caches parsed `PublicKey`s by SPKI hash in an LRU of 1,024 entries holding only keys that
 produced `VERIFIED` (presented junk keys are server-chosen; entry count exposed), and classifies by the startup probe, never by a
@@ -2007,8 +2051,8 @@ fun RevoktTrustManager.refreshAnchors(): CompletableFuture<Void>   // rebuilds t
 fun OkHttpClient.withRevokt(revokt: Revokt): OkHttpClient; fun OkHttpClient.revoktTrustManager(): RevoktTrustManager?   // the client's x509TrustManager when it is revokt's, else null; for a startup assertion
 class EvaluationRequest private constructor(…) { class Builder {
     fun presented(chain: List<ByteArray>): Builder            // leaf first, as sent; walked (decision steps 2–6)
-    fun verifiedPaths(paths: List<List<ByteArray>>): Builder  // leaf → anchor each, trusted without re-verification; source = PLATFORM; the walk is skipped
-    fun host(host: String?): Builder; fun nowMillis(nowMillis: Long): Builder; fun build(): EvaluationRequest } }   // at least one of presented/verifiedPaths; build() also throws IllegalArgumentException when presented is set and empty, verifiedPaths is set and empty, or any path is empty (revision 56, the maintainer's decision); chainSource is derived. M5 adds credentialType(CredentialType) (growable, default X509), routed before decision step 3 with PathStatus.NOT_APPLICABLE; JSSE never delivers an MTC credential to an X509TrustManager, so M5 is Evaluator.evaluate-only
+    fun verifiedPath(path: List<ByteArray>): Builder  // one platform-verified path, leaf → anchor (upki's single webpki VerifiedPath), at most MAX_DEPTH + 1 certificates, trusted without re-verification; source = PLATFORM; the walk is skipped; it is both the reported path and the exemptions' chain; a one-certificate path is FOUND under its own key and skips step 3's keyability check only when its leaf is an anchor by bytes in the snapshot read at entry (step 2's rule), else its leaf is gated like any leaf (revision 57, the maintainer's decisions on #195)
+    fun host(host: String?): Builder; fun nowMillis(nowMillis: Long): Builder; fun build(): EvaluationRequest } }   // at least one of presented/verifiedPath; build() also throws IllegalArgumentException when presented is set and empty, verifiedPath is set and empty (revision 56, the maintainer's decision), verifiedPath holds more than MAX_DEPTH + 1 certificates, or both are set and verifiedPath's first certificate is not byte-equal to presented[0] (revision 57, the maintainer's decision on #195); with both set the verified path wins and the walk is skipped; chainSource is derived. M5 adds credentialType(CredentialType) (growable, default X509), routed before decision step 3 with PathStatus.NOT_APPLICABLE; JSSE never delivers an MTC credential to an X509TrustManager, so M5 is Evaluator.evaluate-only
 sealed interface Evaluator { fun evaluate(request: EvaluationRequest): Verdict }   // sealed, never consumer-implemented, so members can be added; formerly `Engine`, renamed so it cannot collide with RevocationEngine
 @Throws(CertificateException::class) @JvmOverloads fun Revokt.evaluate(chain: List<X509Certificate>, host: String? = null, delegate: X509TrustManager? = null): Verdict   // never waits; always runs step 1 (a null delegate resolves to platformTrust.defaultDelegate()) as `delegate.checkServerTrusted(chain.toTypedArray(), "UNKNOWN")`, the 2-arg call with SunJSSE's own TLS 1.3 authType (a signature-capable key-usage check, no endpoint identification since there is no peer; Conscrypt only requires a non-empty authType), host being used for host' only; a step-1 reject propagates the delegate's CertificateException unchanged, no Verdict (the annotation is what lets a Java caller catch it); with a delegate it uses (and if needed creates, counting toward MAX_TRUST_MANAGERS) the registry instance for that delegate and shares its caches; Evaluator.evaluate shares no trust-manager path or verdict cache
 // Raw DER in EvaluationRequest is presumed to come from a platform-accepted chain; PARSE_FAILED on caller-fabricated bytes is the caller's to police (§9.2). The JVM binding applies the §9.2 read fallback before it builds the request; raw bytes passed here get none
@@ -2051,9 +2095,9 @@ enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENT
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
 enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
 enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
-enum class ChainSource { PLATFORM, RECONSTRUCTED, PRESENTED /* reserved; produced by no M1 path */ }   // growable; M2: MIXED (paths from both a PLATFORM chain and the re-walk)
+enum class ChainSource { PLATFORM, RECONSTRUCTED, PRESENTED /* reserved; produced by no M1 path */ }   // growable; PLATFORM: a platform-verified chain, §5.1 decision step 4 or EvaluationRequest.verifiedPath; M2: MIXED (paths from both a PLATFORM chain and the re-walk)
 enum class SyncOutcome { INSTALLED, UNCHANGED, DEFERRED /* a metered-deferred full (§7.2); not UNCHANGED, which reads as healthy */, FAILED, CLOCK_SKEW, ROLLBACK_REFUSED, BACKOFF, STORE_FAILED, STORE_LOCKED, BLOCKED_BY_SELF }   // growable
-enum class SyncStage { FETCHER_TRUST, CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: FETCHER_TRUST = the §5.1 build retry failed (no fetch); CHANGESET = the changeset fetch or its last_modified CLOCK_SKEW; X5U = the x5u fetch or a validity CLOCK_SKEW; ATTACHMENT = a body fetch or the over-cap signed record; each producing bullet names its stage
+enum class SyncStage { FETCHER_TRUST, CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: FETCHER_TRUST = the §5.1 build retry failed (no fetch); CHANGESET = the changeset fetch or its last_modified CLOCK_SKEW; X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), an x5u body's PEM or chain structure, or the content signature (revision 57, §7.1); ATTACHMENT = a body fetch or the over-cap signed record; each producing bullet names its stage
 
 /** jvmMain. Time fields are stored as millis. Java: *Millis properties and java.time.Duration accessors/factories (API 26+). Kotlin: kotlin.time.Duration via @JvmSynthetic extensions. No inline value class on the surface. commonMain sees only an internal PolicyTable these compile to. */
 class Staleness private constructor(…) { val staleAfterMillis: Long; val rejectStaleAfterMillis: Long?   // staleAfter: loud threshold only (DataState.stale). rejectStaleAfter: the only threshold at which Rule.STALE fires; null = STALE never fires for this dataset
@@ -2064,8 +2108,8 @@ class RevoktPolicy private constructor(…) {           // newBuilder() on any p
     fun outcome(rule: Rule): Outcome; val requiredDatasets: Set<Dataset>; fun staleness(dataset: Dataset): Staleness?; fun minTrustClass(dataset: Dataset): TrustClass
     val rollbackWindowMillis: Long; val clockSkewMillis: Long; val signedSourceFailingAfterMillis: Long   // plus java.time accessors
     class Builder {                                      // every method returns Builder; build() returns RevoktPolicy and runs the build()-time checks below; every duration and millis argument is ≥ 0, else IllegalArgumentException, and so is a java.time.Duration whose milliseconds overflow Long (revision 56)
-        fun rule(rule: Rule, outcome: Outcome): Builder
-        fun exempt(rule: Rule, exemption: Exemption): Builder                 // a second call for the same rule replaces the first; clearExemption(rule)
+        fun rule(rule: Rule, outcome: Outcome): Builder                       // on NO_ISSUER or ISSUER_UNVERIFIED it sets both: the two share one outcome and one exemption (revision 57, the maintainer's decision on #196, as Firefox puts both errors in one override category); a policy cannot hold a split pair, so no V diagnostic exists for one
+        fun exempt(rule: Rule, exemption: Exemption): Builder                 // a second call for the same rule replaces the first; clearExemption(rule); exempt and clearExemption on NO_ISSUER or ISSUER_UNVERIFIED apply to both (revision 57)
         fun exemptAnchors(sha256s: Collection<ByteArray>): Builder             // = exempt(rule, anchorIn(sha256s)) for every exemptable rule that is not EVIDENCE, is not marked "empty path" in the §8 table, and whose outcome in the builder at this call is REJECT; applied at its call position over the rule set as it stands then (a later rule() or exempt() on the same builder wins, so a narrower explicit exempt() written after it is kept): EVIDENCE rules (M2 ONECRL, M4 DISTRUST) need an explicit exempt(), so an M1 call never widens to evidence on upgrade, while a non-EVIDENCE rule that flips to REJECT in a later minor (M3 CT_UNVERIFIED) is covered by a call made after the flip, as a private CA wants; the "empty path" rules (NO_ISSUER, ISSUER_UNVERIFIED; a column of the golden fixture, so a future rule must declare it) fire only on an empty reported path, where anchorIn can never match (use hostSuffixIn, platformOnly), whereas M2's ISSUER_UNKNOWN_TO_MOZILLA fires on a Found path and is covered; sha256s are of each anchor's DER as revokt reads it (§5.3), which is getEncoded() unless the §9.2 read fallback applies
         fun requiredDatasets(set: Set<Dataset>): Builder
         fun staleness(dataset: Dataset, s: Staleness): Builder; fun clearStaleness(dataset: Dataset): Builder   // clearing a required dataset's entry → validate() WARNING STALENESS_CLEARED_FOR_REQUIRED_DATASET
@@ -2094,7 +2138,7 @@ sealed class Finding {
         val rewalkEnd: WalkEnd?                          // null unless a re-walk ran; M2: the re-walk's WalkEnd (COMPLETE or its exhaustion), which never demotes the first walk's Found
         val endReason: WalkEnd?                          // COMPLETE on Found/NotFound (the step-6 fallback-skipped exit included), the Budget's end on Budget, EXPLORATION_BUDGET with endDepth = 0 for the step-3 no-walk cut, null only when no walk ran (NOT_WALKED, PLATFORM, the step-2 anchor leaf)
         val endDepth: Int?                               // path size at which the walk ended (1 = leaf level); null on a completed walk (Found, NotFound) and when no walk ran; set only on Budget, and 0 on the step-3 no-walk cut (revision 56)
-        val cacheHit: Boolean; val anchorSnapshotId: Long /* id of the snapshot read once at flow step 2 (Evaluator.evaluate: at its entry) and consumed at decision step 1; 0 when none was consulted (Evaluator.evaluate with verifiedPaths only); the walker harness assigns ids to its fixture snapshots */; val usedFallback: Boolean   // true whenever a fallback path was evaluated, Found or Budget
+        val cacheHit: Boolean; val anchorSnapshotId: Long /* id of the snapshot read once at flow step 2 (Evaluator.evaluate: at its entry) and consumed at decision step 1; 0 when none was consulted (Evaluator.evaluate with a verifiedPath of two or more certificates, presented also set or not; a one-certificate verifiedPath consults the snapshot read at entry for step 2's anchor test and reports its id, revision 57); the walker harness assigns ids to its fixture snapshots */; val usedFallback: Boolean   // true whenever a fallback path was evaluated, Found or Budget
         val pathsFound: Int                              // on Found: the paths found (M2: first walk plus completed re-walk paths); on Budget: the partial paths
         val reportedPathSha256s: List<ByteArray>         // DER hashes leaf → terminal of the reported path: the first found path, else the first partial path, else empty; on a Budget walk with a fallback path and no partial path, the fallback path, with terminalKind and anchorSha256 following it, so issuerSpkiSha256s[0] stays the reported path's key (revision 56)
         val issuerSpkiSha256s: List<ByteArray>           // every distinct leaf-issuer key evaluated: walker keys in candidate order, then the fallback key if new; first is the reported path's
@@ -2121,7 +2165,7 @@ sealed class Finding {
 class PresentedChain private constructor(…) { val size: Int; fun der(i: Int): ByteArray; fun parsed(i: Int): Boolean; fun subject(i: Int): ByteArray; fun issuer(i: Int): ByteArray; fun spkiSha256(i: Int): ByteArray /* SHA-256 of the SPKI TLV */; fun serial(i: Int): ByteArray /* rawSerial: INTEGER content bytes as encoded, sign byte and leading zeros preserved */; fun dnsNames(i: Int): List<String> }   // every presented certificate in presented order, so index i is AlgorithmIdMismatch.certIndex's (revision 56, the maintainer's decision); an entry revokt did not parse keeps its raw der(i), has parsed(i) false, and empty subject, issuer, spkiSha256 and serial and an empty dnsNames, so nothing matches it; equality is by each entry's bytes and parsed flag; ByteArray getters return copies; an index outside 0 until size throws IndexOutOfBoundsException
 fun interface Exemption { fun isExempt(context: ExemptionContext): Boolean   // pure; runs after policy mapping for fired REJECT rules on exemptable rules; cached with the verdict; a throw = not exempt + Finding.EngineError(EXEMPTION)
     companion object {                                                        // shipped helpers, commonMain, in the same file as Exemption (a companion cannot straddle source sets; they need only ByteArray, String and okio.ByteString); the enterprise-CA and §5.2-gap cases without hand-written lambdas
-        @JvmStatic fun anchorIn(sha256s: Collection<ByteArray>): Exemption   // copied into a Set<okio.ByteString> at construction; matches context.path.anchorSha256 by content
+        @JvmStatic fun anchorIn(sha256s: Collection<ByteArray>): Exemption   // copied into a Set<okio.ByteString> at construction; matches context.path.anchorSha256 by content, the anchor of the reported path: the first path found in §5.1's candidate order (revision 57, the maintainer's decision on #196, as Firefox applies its anchor-dependent rules to the one chain it built)
         @JvmStatic fun hostIn(hosts: Collection<String>): Exemption          // each entry normalised as host' (§5.1 flow step 2); matches context.host, which on an HTTP/2-coalesced connection is the host OkHttp handshook for (§5.1); an entry that is not ASCII (pass the A-label), is empty after normalisation, starts with '.' or holds a '*' throws IllegalArgumentException when the exemption is made (revision 56); an empty or null context.host never matches
         @JvmStatic fun hostSuffixIn(suffixes: Collection<String>): Exemption // host' equals a suffix or ends with "." + suffix; private CAs serve many subdomains; entries normalised and checked as for hostIn
         @JvmStatic fun platformOnly(): Exemption } }                         // context.path.noIssuerReason == PLATFORM_ONLY; a null host or anchorSha256 never matches hostIn/anchorIn
@@ -2187,7 +2231,7 @@ exhaustive re-walk, carries a hit (Chrome's builder discards a path that fails a
 a clean alternative path is an allow; **a `PRELOAD`-terminal path is never the clean alternative**: when any `ANCHOR`-terminal path exists, `PRELOAD` paths are excluded from this aggregation (they stay in `issuerSpkiSha256s` for L3), and only when no `ANCHOR` path exists is the rule evaluated over the `PRELOAD` paths (for `DISTRUST`, which is per anchor, a `PRELOAD`-only outcome is the §5.1 invariant's unevaluable finding, never an allow), so a retired-root certificate in Mozilla's preload cannot shadow a OneCRL hit on the live anchor); every hit is a `Finding.PathHit` (`onReportedPath` says whether it lies on `Verdict.path`), and a hit on a non-reported path fires no rule by itself;
 when the rule fires, `Verdict.path` is the first hit path, otherwise the first clean path. **The
 re-walk** runs only after a `Found` (a `PLATFORM` path included: a hit on it runs decision step 5
-as the re-walk and the verdict's `source` is `MIXED`; on `Evaluator.evaluate` with `verifiedPaths` only there is no chain to re-walk and the rule is evaluated over the verified paths alone) and only when a hit lies on a found path; it
+as the re-walk and the verdict's `source` is `MIXED`; on `Evaluator.evaluate` with a `verifiedPath` there is no re-walk and the rule is evaluated over that path alone) and only when a hit lies on a found path; it
 reuses the first walk's memo under its own fresh budgets; a `Budget` on the re-walk **never demotes**
 the first walk's `Found`: the rule is evaluated over the paths found so far (the hit path plus any
 clean path the re-walk completed), the re-walk's `WalkEnd` is recorded on `Finding.Path.rewalkEnd`,
@@ -2371,14 +2415,22 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
      no honest Web PKI chain is longer than 8 certificates and unreproducible by the walker, and the
      server controls chain length.
-   - walk `NotFound` and the fallback failed (`FallbackNotUsed(FAILED)`): `ISSUER_UNVERIFIED` when the child's own signature OID
-     (`child.tbsSigOid`, CA-chosen) was `UNSUPPORTED` against a **related** candidate; a candidate's key or
-     curve OID (server-chosen on a decoy) never counts, so a related unsupported decoy cannot relabel
-     `NO_ISSUER` into the separately exemptable `ISSUER_UNVERIFIED`; else `NO_ISSUER`. On a trust-manager
-     binding (and `Revokt.evaluate`, which always runs step 1), **any** such `NO_ISSUER` is `PLATFORM_ONLY` (the platform trusts a chain
-     neither revokt's walker nor its PKIX builder can reproduce: divergent canonicalisation,
-     constraints, verifier or anchors); the walker's own reason is kept in `Finding.Path.walkerReason`.
-     In the walker-only harness and `Evaluator.evaluate` the walker's reason is reported directly.
+   - walk `NotFound` and the fallback failed (`FallbackNotUsed(FAILED)`) (revision 57, the maintainer's decisions on
+     #196 and #197): on a trust-manager binding (and `Revokt.evaluate`, which always runs step 1), **any** such walk
+     `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`, whatever the walk recorded: the platform trusts a chain neither revokt's
+     walker nor its PKIX builder can reproduce (divergent canonicalisation, constraints, verifier or anchors). The
+     walker's own reason is kept in `Finding.Path.walkerReason`, and every recorded OID in an `UnsupportedAlgorithm`
+     finding. In the walker-only harness and `Evaluator.evaluate` it is `ISSUER_UNVERIFIED` when the walk recorded an
+     own signature OID (`tbsSigOid`) in `unsupportedOids()`, in mozilla::pkix's order (`CheckIssuerIndependentProperties`
+     runs before `VerifySignedData`):
+     - every related candidate that is not an anchor, when explored, whether or not it verifies its child;
+     - a node reached through the unrelated loop, when visited;
+     - the leaf only once a related candidate was found for it (pkix's end-entity deferral), so a leaf with no
+       candidate is `NO_ISSUER(NO_CANDIDATE)`.
+
+     A candidate's key or curve OID never counts. Otherwise it is `NO_ISSUER` with the walker's reason. A server can
+     relabel `NO_ISSUER` as `ISSUER_UNVERIFIED` there, so the two rules share one outcome and one exemption (§4, §8).
+     Unlike pkix, there is no collapse to one error when candidates fail differently.
    - walk `Budget`: the fallback path's issuer key (appended last) and the walk's partial leaf keys
      are evaluated in step 7 **only so that `REVOKED` is reported when reachable**; the path status
      is `PATH_BUDGET_EXCEEDED` regardless; `usedFallback = true` when a fallback path was evaluated.
@@ -2389,8 +2441,9 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      as with the fallback enabled, with only the walk's partial leaf keys evaluated and `usedFallback = false`; walk
      `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE`,
      whether or not step 1 ran; any other walk `NotFound` → `ISSUER_UNVERIFIED` or `NO_ISSUER` under the
-     fallback-failed branch's rule. On a trust-manager binding any such `NO_ISSUER` is `PLATFORM_ONLY`: the platform
-     trusts a chain the walker cannot reproduce, and no PKIX builder ran; `walkerReason` keeps the walker's reason.
+     fallback-failed branch's rule. On a trust-manager binding any such walk `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`,
+     whatever the label (revision 57): the platform trusts a chain the walker cannot reproduce, and no PKIX builder ran;
+     `walkerReason` keeps the walker's reason.
    - **The fallback finding** (revision 50): exactly one `Finding.FallbackNotUsed` when the walk ended `NotFound` or
      `Budget` and no fallback path was evaluated (`usedFallback = false`), on every branch above: `DISABLED` with the
      fallback disabled; else `SKIPPED` when `presented.size > FALLBACK_MAX_PRESENTED`; else `FAILED`. A fallback
@@ -2419,6 +2472,10 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    - **`engine.query` throwing** (a breach of its never-throws contract) is caught at the boundary: producer
      `BOUNDARY`, `engineName` null. Keys answered before it keep their findings and rules, and later keys are not
      queried.
+   - **No key** (revision 57, matching the merged evaluator): a decision whose status fires no rule of its own
+     (`FOUND`, `NOT_WALKED`) and that has no leaf-issuer key is the boundary's `ENGINE_ERROR`, so an empty key set is
+     never a clean answer. `Evaluator.evaluate` with a `verifiedPath` whose second certificate revokt cannot parse
+     reaches it: the path is `FOUND` with no key (#195).
 
 | Overload | Who calls it | Waits? | Before readiness |
 |---|---|---|---|
@@ -2573,8 +2630,8 @@ issuer keys are taken only from such paths. Platform-verified chains are trusted
 *Deferral rule.* No candidate may be excluded because of a property it shares with another
 candidate (no deduplication by key, name or key identifier; only exact byte duplicates, across
 presented and store, and certificates already on the current path are skipped; **an exact-byte
-duplicate is yielded once, at the earliest position in the node's order: the presented position at
-the leaf, the store position below the leaf**). A candidate may be deferred
+duplicate is yielded once, at the earliest position in the node's order, which is the store position: store
+candidates come first at every depth, revision 57**). A candidate may be deferred
 or capped only by its own relation to the child. A candidate is **related** when its subject equals
 the child's issuer (raw bytes, or under `canonicalSubject`, which on the JVM and Android is the
 platform's own `X500Principal` canonical form) or its SKI equals the child's AKI `keyIdentifier` (an
@@ -2621,7 +2678,7 @@ the fallback is `PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback wh
 // reference walker takes List<ByteArray> and returns the Set<String> of lowercase-hex leaf-issuer SPKI hashes (value equality), so it needs no internal type.
 internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray /* the TBS re-encoded by the §9.2 unsigned-header rule: the verified message and the input of every TBS field */, val sig: ByteArray /* signatureValue content after the unused-bits octet, padding bits cleared (§9.2) */, val tbsSigAlg: ByteArray, val tbsSigOid: String, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long? /* null when the time does not decode (§9.2; every JDK-accepted form decodes) */, val notAfter: Long?, val producerKeyable: Boolean, val keyabilityClause: KeyabilityClause? /* null ⇔ producerKeyable (§9.2 K1–K8); evaluated for the leaf at decision step 3 only */, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
 internal class WalkPath(val certs: List<Cert>, val terminal: TerminalKind)   // leaf → … → terminal; distinct from Finding.Path
-internal sealed interface Walk {                          // every variant carries unsupportedOids (related candidates only), findings and stats: WalkStats (verifications, candidatesExplored, relatedExploredAtLeaf, unrelatedExploredAtLeaf), built at the three return sites
+internal sealed interface Walk {                          // every variant carries unsupportedOids (the probe-listed own signature OIDs of explored related non-anchors, unrelated-loop nodes, and the leaf once it had a related candidate; revision 57), findings and stats: WalkStats (verifications, candidatesExplored, relatedExploredAtLeaf, unrelatedExploredAtLeaf), built at the three return sites
     class Found(val paths: List<WalkPath>, val leafKeys: Set<ByteString>, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
     class NotFound(val reason: NoIssuerReason, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
     class Budget(val end: WalkEnd, val endDepth: Int, val partialPaths: List<WalkPath>, val partialLeafKeys: Set<ByteString>, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
@@ -2630,10 +2687,10 @@ internal sealed interface Walk {                          // every variant carri
  *  bySubjectRaw, bySubjectCanonical, bySki over store certificates, with canonicalSubject, keyFamily and spkiHash precomputed and exact-byte duplicates removed.
  *  The presented chain (≤ ~10 certificates) is scanned linearly per call; no maps are built for it. */
 internal class CandidateIndex {
-    fun related(presented: List<Cert>, child: Cert, seen: Set<ByteString>, belowLeaf: Boolean): Sequence<Cert>   // belowLeaf: store (terminal-first) before presented; at the leaf: presented (by index) before store. Within store, in order: raw-name matches, canonical-name matches, SKI matches; within each group candidates whose keyFamily is compatible with child.tbsSigOid's family first, incompatible last; ties by bytesHash. Byte-duplicates yielded once at the earliest position. The index is per snapshot and shared across calls, so the presented chain is an argument.
+    fun related(presented: List<Cert>, child: Cert, seen: Set<ByteString>): Sequence<Cert>   // at every depth (revision 57, the maintainer's decision on #196, Firefox's order): the store's anchors, then the presented certificates by index, then (M2) the store's preload certificates (NSSCertDBTrustDomain FindIssuer: roots first, then intermediates). Within store, in order: raw-name matches, canonical-name matches, SKI matches; within each group candidates whose keyFamily is compatible with child.tbsSigOid's family first, incompatible last; ties by bytesHash. Byte-duplicates yielded once at the earliest position, which is the store's. The index is per snapshot and shared across calls, so the presented chain is an argument.
     fun unrelated(presented: List<Cert>, child: Cert, seen: Set<ByteString>): Sequence<Cert>   // the presented certificates NOT in related(child), by index
     fun isAnchorBytes(c: Cert): Boolean
-    fun isPreloadBytes(c: Cert): Boolean                                                   // M2: the store's second candidate set (Mozilla's bytes), yielded by related() after the anchors
+    fun isPreloadBytes(c: Cert): Boolean                                                   // M2: the store's second candidate set (Mozilla's bytes), yielded by related() after the anchors and the presented certificates
     val customCanonicaliser: Boolean                                                        // platformTrust is not one of the two shipped final classes, or the delegate is not platformTrust.defaultDelegate() (§3, a class check); §5.1 deferral rule
 }
 internal class LruMap<K, V>(capacity: Int) { /* synchronized, access-ordered; put/get */ }
@@ -2659,13 +2716,15 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
         if (path.size > MAX_DEPTH) return null                                // dead end
         val isLeaf = path.size == 1
         var foundHere = false; var related = 0
+        if (!isLeaf && child.tbsSigOid in probe) unsupported += child.tbsSigOid   // a node that verified its child: an unrelated-loop node (a related one was already counted as a candidate)
 
         fun explore(cand: Cert, isRelated: Boolean): WalkEnd? {
             if (explored >= MAX_EXPLORED) { endDepth = path.size; return EXPLORATION_BUDGET }
             explored++
+            if (isRelated) { if (isLeaf && child.tbsSigOid in probe) unsupported += child.tbsSigOid; if (!index.isAnchorBytes(cand) && cand.tbsSigOid in probe) unsupported += cand.tbsSigOid }   // pkix order: issuer-independent before the link; the leaf deferred until it has an issuer; a key or curve OID never counts (decision step 6)
             when (verifyOnce(child, cand) ?: run { endDepth = path.size; return VERIFICATION_BUDGET }) {
                 INVALID -> return null
-                UNSUPPORTED -> { if (isRelated && child.tbsSigOid in probe) unsupported += child.tbsSigOid; return null }   // only the child's own signature OID counts toward ISSUER_UNVERIFIED (decision step 6); a candidate's key or curve OID is server-chosen
+                UNSUPPORTED -> return null
                 VERIFIED -> { if (isLeaf) verifiedAtLeaf = true }
             }
             val before = found.size
@@ -2679,7 +2738,7 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
             return null
         }
 
-        for (cand in index.related(presented, child, seen, belowLeaf = !isLeaf)) {
+        for (cand in index.related(presented, child, seen)) {
             if (isLeaf) relatedAtLeaf = true
             if (!isLeaf && foundHere) break
             if (related >= MAX_RELATED_PER_LEVEL) { endDepth = path.size; return RELATED_BUDGET }   // the 65th related candidate is not explored
@@ -2706,10 +2765,12 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   **verifications** counts calls into the injected verifier. `related` counts related candidates
   for which exploration was requested at that node; exactly 64 completes, the 65th aborts.
 - **Cost.** An honest leaf → I → root chain: at the leaf, related = I (one verification, recurse);
-  at I, related terminal-first = the store anchor (one verification, terminal, stop). Two
+  at I, related store-first = the store anchor (one verification, terminal, stop). Two
   verifications. A presented cross-certificate of the root sorts after the store anchor and is never
-  reached once the anchor verifies, and even when reached it is a memo hit (same key); a root-issued
-  leaf is one verification; a chain whose snapshot holds the other root of a cross-sign costs
+  reached below the leaf once the anchor verifies, and even when reached it is a memo hit (same key); a root-issued
+  leaf is one verification, or two when a cross-certificate X of the root is presented and its issuer R′ is in the
+  snapshot: every related candidate is explored at the leaf, so the walk is L/R, then an L/X memo hit, then X/R′
+  (depth + 1 on the path found, revision 57); a chain whose snapshot holds the other root of a cross-sign costs
   depth + 1 (three). A verifying decoy costs one extra verification per presented certificate not on
   the path, since the unrelated loop runs at every node without a path. Honest bound: **≤ depth + 1**;
   fixture (v) asserts ≤ 4 against a 200-anchor snapshot. **Worst case is bounded by `MAX_VERIFICATIONS` and `MAX_EXPLORED`, not by the
@@ -2717,10 +2778,12 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   can reach the guard in two levels, about 250 ms of RSA-4096 verification on a mid-range ART device,
   and ends in `Budget`, never an allow. Per-candidate sub-budgets treated as dead ends must not be
   introduced: they would let a stuffed subtree starve the honest key out of a `Found`.
-- **Findings** produced during the walk (`AlgorithmIdMismatch` once per presented certificate that `decide`
-  parsed, which at the step-2, `PRODUCER_UNKEYABLE` and `MAX_PRESENTED` exits is the leaf only (revision 56),
-  computed at parse time after NULL/absent normalisation, none for a certificate read through the §9.2 platform canon
-  whose TBS AlgorithmIdentifier is minimal DER; `VerifierError`) ride on the `Walk`.
+- **Findings.** `AlgorithmIdMismatch` comes once per presented certificate that `decide` parsed, which at the
+  step-2, `PRODUCER_UNKEYABLE` and `MAX_PRESENTED` exits is the leaf only (revision 56); the parser computes its flag
+  after NULL/absent normalisation (none for a certificate read through the §9.2 platform canon whose TBS
+  AlgorithmIdentifier is minimal DER), and `decide` derives the finding from that flag. Only `VerifierError` rides on
+  the `Walk` (revision 57); its `oid` is the child's TBS signature OID, `""` when the TBS AlgorithmIdentifier does
+  not decode.
   `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` is emitted once per OID in `Walk.unsupportedOids`
   on **every** outcome, with `outcomeDepended = (status == ISSUER_UNVERIFIED)`; fixture (n) asserts the
   `false` case on a `Found`.
@@ -2940,7 +3003,10 @@ the exception preceded the walk; the data rules and `dataStates`, computed befor
 on the verdict regardless. `ENGINE_ERROR` has exactly three producers (`EngineErrorProducer`): the
 catch boundary, an engine result (`CrliteQueryResult.ENGINE_ERROR`, or `NO_DATA` while a generation
 is published; with `engineName`, the engine's `RevocationEngine.name`), and an exemption that throws;
-each attaches `Finding.EngineError`.
+each attaches `Finding.EngineError`. **Interrupts** (JVM; revision 57, #196): at every catch of consumer code (verifier,
+canonicaliser, fallback, exemption, logger, a throwable's `toString`, the install self-check's engine `query` and
+`coverageEndMillis`) and at the boundary, a caught `InterruptedException` sets the thread's interrupt flag again. The
+fetch timeout path keeps its own interrupt handling.
 
 Layers by milestone: **[M2] L1/L2** over every path the walker (or an exhaustive re-walk) returned;
 **[M1] L3 CRLite** (leaf only, per distinct issuer key); **[M3] L4 CT**; **[M4] L5 distrust**.
@@ -3189,9 +3255,9 @@ SPKI hash set and the three fields read from each `metadata.signatures[]` entry 
 targets are compared exactly, ASCII case included. **a private mirror that serves the changeset, attachment and x5u bytes unchanged (a byte-for-byte reverse proxy of the three Mozilla hosts) with the builder's `baseUrl`, `attachmentBaseUrl` and `x5uHostRewrite("content-signature-2.cdn.mozilla.net", mirrorHost)` pointing at it (`attachment.location` is relative, so `attachmentBaseUrl` suffices; the rewrite is applied to the parsed x5u URI host before the `x5uHosts` check, so no JSON is rewritten on the wire; x5u is outside the signed payload; the https-only, port-443 and no-userinfo rules apply to the mirror host too), verifies and installs as `SIGNED` under the default `sourceId`, so the `_since` cursor carries over (the watermark is per dataset and channel and carries over whatever the `sourceId`, §6.5); this is the supported offline-fleet path** (`c2spMirror` is bootstrap-only and never updates a seeded client, §7.3). Base `https://firefox.settings.services.mozilla.com/v1` (the Kinto API, Firefox's own `services.settings.server`; `/v2`, a distinct newer server that was hours old at verification, serves the same changeset shape and is the documented alternative value of `MozillaRemoteSettings.baseUrl`; both verified 2026-10-22, Appendix A);
 only `monitor/changes` and per-collection `changeset`; `_expected` mandatory; a delta poll sends `_since=<cursor>`
 bare in the changeset query, as Firefox does, beside the quoted `If-None-Match` (§3; revision 56); `User-Agent`; gzip;
-honour `Backoff` and `Retry-After` up to `MAX_BACKOFF` (24 h; transport headers are unsigned), on every response, 2xx included, as Firefox and Kinto do (revision 56): a response with such a header waits the header, a failure too even when that is shorter than its computed backoff; a success without one clears `backoffUntilMillis`; a failure without one waits the computed failure backoff, 15 min × 2^(n − 1) for the n-th consecutive feed failure, capped at the 6 h poll interval; poll at most every 6 h with jitter. **Feed failures** (revision 56, the maintainer's readings R1 and R2 on #131): `FAILED` (`FORMAT_UNSUPPORTED` and a `FETCHER_TRUST` failure included), `CLOCK_SKEW` and `STORE_FAILED` advance `consecutiveFailures` and take the failure backoff; `ROLLBACK_REFUSED` is not a feed failure; `BACKOFF` and `DEFERRED` leave the count unchanged; every successful poll resets it to 0: `INSTALLED`, a clock-behind install included, and `UNCHANGED`, by a 304 or by a timestamp match. **Verify** every collection
+honour `Backoff` and `Retry-After` up to `MAX_BACKOFF` (24 h; transport headers are unsigned), on every response, 2xx included (revision 56; revokt's own rule, stricter than Firefox, which keeps `Backoff` only from a `/changes` response that is not a server error and never reads `Retry-After`; revision 57 corrects the earlier "as Firefox and Kinto do", Appendix A): a response with such a header waits the header, a failure too even when that is shorter than its computed backoff; a success without one clears `backoffUntilMillis`; a failure without one waits the computed failure backoff, 15 min × 2^(n − 1) for the n-th consecutive feed failure, capped at the 6 h poll interval; poll at most every 6 h with jitter. **Feed failures** (revision 56, the maintainer's readings R1 and R2 on #131): `FAILED` (`FORMAT_UNSUPPORTED` and a `FETCHER_TRUST` failure included), `CLOCK_SKEW` and `STORE_FAILED` advance `consecutiveFailures` and take the failure backoff; `ROLLBACK_REFUSED` is not a feed failure; `BACKOFF` and `DEFERRED` leave the count unchanged; every successful poll resets it to 0: `INSTALLED`, a clock-behind install included, and `UNCHANGED`, by a 304 or by a timestamp match. **Verify** every collection
 state (`"Content-Signature:\0"` + canonical JSON of `{"data": records sorted by id (deleted removed),
-"last_modified": "<ts>"}`; merge `_since` tombstones first; reset-and-retry once; canonical JSON per `canonical_json` 0.7.0 number and escape rules, pinned by the §9 differential test; the `signature` field is unpadded base64url of the raw pair r‖s, two equal halves of any non-empty even length (a pair of the wrong size for the leaf's key fails verification), the leaf on any EC curve the floor admits (Firefox parity, the maintainer's decision on #163; P-384 today), converted to DER and verified as `SHA384withECDSA`). **`<ts>`** (revision 56) is the value the verified payload was built from: a live sync builds it from the changeset envelope's `timestamp`, as Firefox's `RemoteSettingsClient` does, so that value is signed exactly when verification succeeds; a seed's is the one inside `records.json`. The unsigned value is `monitor/changes`' `last_modified`, used only as `_expected`. **`metadata.signatures[]` is read, as Firefox reads it** (revision 56, the maintainer's decision; a code follow-up, #191, to #181's client, which today reads `metadata.signature`): the array must be non-empty; at most 4 entries are tried, in array order, and a changeset with more than 4, or with no entry tried (every entry skipped, for example for a missing `mode`), is `SyncOutcome.FAILED` at stage `SIGNATURE`, since it concerns signature metadata, not records; each tried entry's `x5u` is fetched and validated under the pinned chain (§7.1 "x5u chain"), an `x5u` URL already fetched and validated in the same sync being reused, not fetched again, and one whose fetch or validation failed not being retried by a later entry in the same sync; the first entry that verifies is accepted; an entry with no `signature` or `x5u`, or whose `mode` is not `p384ecdsa`, is skipped; when none verifies, the last tried entry's failure is the outcome (Firefox throws its first error); `metadata.signature` is no longer read (Appendix A). **The signed
+"last_modified": "<ts>"}`; merge `_since` tombstones first; reset-and-retry once; canonical JSON per `canonical_json` 0.7.0 number and escape rules, pinned by the §9 differential test; the `signature` field is unpadded base64url of the raw pair r‖s, two equal halves of any non-empty even length (a pair of the wrong size for the leaf's key fails verification), the leaf on any EC curve the floor admits (Firefox parity, the maintainer's decision on #163; P-384 today), converted to DER and verified as `SHA384withECDSA`). **`<ts>`** (revision 56) is the value the verified payload was built from: a live sync builds it from the changeset envelope's `timestamp`, as Firefox's `RemoteSettingsClient` does, so that value is signed exactly when verification succeeds; a seed's is the one inside `records.json`. The unsigned value is `monitor/changes`' `last_modified`, used only as `_expected`. **`metadata.signatures[]` is read, as Firefox reads it** (revision 56, the maintainer's decision; implemented in #198): the array must be non-empty; at most 4 entries are tried, in array order, and a changeset with more than 4, or with no entry tried (every entry skipped, for example for a missing `mode`), is `SyncOutcome.FAILED` at stage `SIGNATURE`, since it concerns signature metadata, not records; so is a JSON `null` element that the loop reaches, as Firefox's destructuring throws on it (an earlier entry that verifies is accepted first; revision 57); each tried entry's `x5u` is fetched and validated under the pinned chain (§7.1 "x5u chain"), an `x5u` URL already fetched and validated in the same sync being reused, not fetched again, and one whose fetch or validation failed not being retried by a later entry in the same sync; the first entry that verifies is accepted, and the records installed are exactly the records it verified, at the `<ts>` it verified; an entry with no `signature` or `x5u`, an empty string included (Firefox's `!x5u || !signature`; revision 57), or whose `mode` is not `p384ecdsa`, is skipped; any failure of a tried entry, a failed `x5u` fetch included, moves on to the next entry (Firefox leaves the loop when the fetch itself is rejected, Appendix A); when none verifies, the last tried entry's failure is the outcome (Firefox throws its first error): a failed `x5u` fetch is `FAILED` at stage `X5U`, a validity failure `CLOCK_SKEW` at stage `X5U`, and a PEM, chain-structure or content-signature failure `FAILED` at stage `SIGNATURE` (revision 57, from #191's verifier); `metadata.signature` is no longer read (Appendix A). **The signed
 payload does not bind the collection id**, and every security-state collection shares a signer, so
 before any state change every record is schema-validated for the requested collection (CRLite:
 `channel`, `incremental`, `attachment.{filename,hash,size,location}` (the filename under §6.3's rule), `effectiveTimestamp`, and `parent` on deltas only, since live full records carry none (revision 56); M2
@@ -3227,7 +3293,7 @@ on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stag
 
 **The chain follows mozilla::pkix** (revision 54, the maintainer's decision on #126: mozilla::pkix at Firefox
 `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki 0.103.15 consulted and its divergences listed in Appendix A). Every failure is
-`SyncOutcome.FAILED`, and the parenthesis names the chain's failure reason. For every link below the terminal:
+`SyncOutcome.FAILED` at stage `SIGNATURE` (revision 57), and the parenthesis names the chain's failure reason. For every link below the terminal:
 - **DER as mozilla::pkix reads it** (`PARSE` for the certificate's outer structure, `EXTENSION` inside an
   extension value; revision 55): in the outer structure, minimal tag and length headers; no indefinite length, the
   TBS and the outer `signatureAlgorithm` included; no element the certificate grammar does not place (a TLV after the
@@ -3402,8 +3468,8 @@ runs the configured policy, emits events, and never throws.**
 | `NO_DATA` | unevaluable | **reject** (exemptable) | reject (exemptable) | upki `missing_data = Error` | decision step 7, per required dataset |
 | `ENGINE_ERROR` | unevaluable | allow | reject | upki hard-errors; its caller decides | boundary, engine result, exemption throw |
 | `PARSE_FAILED` | unevaluable | allow | reject | n/a; goal 3 | decision step 3 |
-| `ISSUER_UNVERIFIED` | unevaluable | allow | reject (exemptable; **empty path**) | n/a | decision step 6 |
-| `NO_ISSUER` | unevaluable | allow | reject (exemptable; **empty path**: `anchorIn` never matches; reason on `Finding.Path`, including `PLATFORM_ONLY`) | n/a; goal 3 | decision step 6 |
+| `ISSUER_UNVERIFIED` | unevaluable | allow | reject (exemptable; **empty path**; shares its outcome and exemption with `NO_ISSUER`, revision 57) | n/a | decision step 6 |
+| `NO_ISSUER` | unevaluable | allow | reject (exemptable; **empty path**: `anchorIn` never matches; reason on `Finding.Path`, including `PLATFORM_ONLY`; shares its outcome and exemption with `ISSUER_UNVERIFIED`, revision 57) | n/a; goal 3 | decision step 6 |
 | `NOT_ENROLLED` | non-answer | allow | reject (exemptable) | collapsed into not covered | CRLite |
 | `NO_SCTS` | non-answer | allow | reject (exemptable) | allow | CRLite |
 | `NOT_COVERED` | non-answer | allow | allow | Firefox → OCSP; upki allow | CRLite (the coverage gap: a certificate issued after the live filter's coverage `high` is unchecked by every preset; §10) |
@@ -3441,9 +3507,10 @@ runs the configured policy, emits events, and never throws.**
   future bound), `signedSourceFailingAfter` (24 h). `wouldRejects` advances only under `OBSERVE` and
   `rejects` only under `ENFORCE`, so the two columns compare cleanly after a flip.
 - **`ENGINE_ERROR` allows in `DEFAULT`** and rejects in `STRICT`.
-- **Exemptions** register per exemptable rule and run after policy mapping for fired `REJECT` rules only. **Enterprise-CA recipe under `STRICT`**: exempt `NO_SCTS`, `NOT_ENROLLED` **and the data rules** (`NO_DATA`, `STALE`, `UNSIGNED_DATA`) with the same `anchorIn(privateCa)` (`RevoktPolicy.Builder.exemptAnchors(sha256s)` does exactly that, §4), and `NO_ISSUER`/`ISSUER_UNVERIFIED` with `hostSuffixIn(corpDomains) and platformOnly()` (they fire only on an empty reported path, where `anchorIn` never matches; `platformOnly()` alone would exempt every chain the §5.2 intermediate-omission residual produces on Android, for every host, turning `STRICT` into `DEFAULT` for a revoked public leaf presented without its intermediate), so a feed outage never takes down traffic CRLite cannot evaluate anyway ( on the JVM the supported private-CA delegate is a `TrustManagerFactory` over a merged `KeyStore`, never a hand-written `X509ExtendedTrustManager` composite, which passes `requiresExtendedDelegate()` but drops SunJSSE's constraints; call `refreshAnchors()` on rotation).
-- **`outcomeDepended`** (M1): "no path was found and at least one `UNSUPPORTED` link was encountered
-  among related candidates"; `Budget` yields `outcomeDepended = false`.
+- **Exemptions** register per exemptable rule and run after policy mapping for fired `REJECT` rules only. **Enterprise-CA recipe under `STRICT`**: exempt `NO_SCTS`, `NOT_ENROLLED` **and the data rules** (`NO_DATA`, `STALE`, `UNSIGNED_DATA`) with the same `anchorIn(privateCa)` (`RevoktPolicy.Builder.exemptAnchors(sha256s)` does exactly that, §4), and `NO_ISSUER` with `hostSuffixIn(corpDomains) and platformOnly()`, one `exempt` that covers `ISSUER_UNVERIFIED` too, since the two share one exemption (revision 57) (they fire only on an empty reported path, where `anchorIn` never matches; `platformOnly()` alone would exempt every chain the §5.2 intermediate-omission residual produces on Android, for every host, turning `STRICT` into `DEFAULT` for a revoked public leaf presented without its intermediate), so a feed outage never takes down traffic CRLite cannot evaluate anyway ( on the JVM the supported private-CA delegate is a `TrustManagerFactory` over a merged `KeyStore`, never a hand-written `X509ExtendedTrustManager` composite, which passes `requiresExtendedDelegate()` but drops SunJSSE's constraints; call `refreshAnchors()` on rotation).
+- **`outcomeDepended`** (M1; revision 57): `outcomeDepended = (status == ISSUER_UNVERIFIED)` (§5.1 "Findings"): the
+  walk recorded an own signature OID and the result is `ISSUER_UNVERIFIED`; false on `Found`, `Budget` and, on the
+  bindings, `NO_ISSUER(PLATFORM_ONLY)`.
 - **Fetcher policy**, fixed, **ignores `Enforcement`** (under `OBSERVE` or `OFF` a hit chain on a TLS-only mirror would otherwise be accepted and the signed-source hold could never be set), applies only to the fetcher trust managers, **per source authenticity class, attributed structurally**: each configured source has its own internal trust-manager instance (§5.1 "Anchor snapshot"), created at `build()` and handed to that source's `HttpFetcher` through `FetcherTls`, so a handshake on it is that source's by construction, whatever the peer host and whichever fetcher dropped the host (Ktor CIO needs no exception); **and, as a second condition, an internal instance writes `feedHostBlock`, `updateBlockedBySelf` and `blockedSource` only while a fetch of its source is in flight on it** (the engine knows when it called `fetch`; a handshake outside that window, from a factory that leaked the instance or from a timed-out fetch handshaking late, is rejected on a hit but records nothing); the public `fetcherTrustManager` is a distinct instance over the same snapshot that is always "no fetch in flight": a handshake on it (a consumer that wired the property into another client) is evaluated under this policy but **never writes `feedHostBlock`, `updateBlockedBySelf` or `blockedSource` and never receives the `feedHostRevoked` allowance** (a rejected hit there is just a reject), so unrelated traffic can neither start a hold on the signed source nor inherit its post-hold acceptance; no global pointer exists:
   evidence rules (`REVOKED`; M2: `DENYLIST`, `ONECRL`, `CRLSET`; M4: `DISTRUST`) are evaluated against
   `SIGNED`/`BUNDLED` generations only, so attacker-fed mirror data can never block the signed source;
@@ -3484,7 +3551,13 @@ tests; **live checks** are informational.
   disagreement fails the job.
 - **Content-signature fixtures** (0.2 gates, except the three items tagged [0.3], which need the §6.5 store or a `SYSTEM` source; revision 49, the source revision 53) with mutations; incremental fixtures; a seed with an expired signer
   leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); [0.3] at `start()`, a system cache whose `index.bin` names a log window absent from the filter's coverage → not installed, `STORE_UNREADABLE`; [0.3] at `start()`, a system-cache `index.bin` of 1 MiB + 1 byte → not installed, `STORE_UNREADABLE`, before it is parsed (revision 48; a system cache since revision 53, which leaves a mirror no `index.bin` to fetch); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; (revision 56) a channel with two full filters, or none → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, the previous generation still live, and `SEED_UNREADABLE` for a seed; a delta whose `parent` names no record → placed by its time and installed; a full record without `parent` → loads, and a delta without one → `SYNC_SCHEMA_REJECTED`; a changeset signed by a P-256 leaf (a 64-byte raw pair) → verifies; a changeset whose first `signatures` entry fails and whose second verifies → installs; one with 5 entries, or
-  whose every entry lacks `mode` → `FAILED`, stage `SIGNATURE`; two entries sharing one `x5u` URL → that URL fetched once; one whose `metadata` holds only `signature`, or an empty `signatures` → `FAILED`, stage `SIGNATURE`; an entry with no `mode` is skipped; a v3 filter with `approx_m` of 2^32, or a rank of 256 → `FAILED`; signature
+  whose every entry lacks `mode` → `FAILED`, stage `SIGNATURE`; two entries sharing one `x5u` URL → that URL fetched once; one whose `metadata` holds only `signature`, or an empty `signatures` → `FAILED`, stage `SIGNATURE`; an entry with no `mode` is skipped; (revision 57, #198) an entry whose `x5u` or `signature` is `""` is skipped like a missing one;
+  `signatures` of `[null, a valid entry]` → `FAILED`, stage `SIGNATURE`, and `[a valid entry, null]` → installs; a first entry whose
+  `x5u` fetch fails (404) and a second that verifies → installs; a lone entry whose `x5u` fetch fails → `FAILED`, stage
+  `X5U`; a lone entry whose `x5u` body has no `CERTIFICATE` block, or whose chain fails, or whose signature verifier
+  answers `UNSUPPORTED`, or whose records share an `id` → `FAILED`, stage `SIGNATURE`; a `_since` delta signed over the
+  merged records → verifies over the merge, which is what installs, and fails over the delta's `changes` alone; a
+  v3 filter with `approx_m` of 2^32, or a rank of 256 → `FAILED`; signature
   over records with a tombstone merged vs not merged.
 - **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (c), (e), (f), (h) need the store, mirror, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
   `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
@@ -3512,7 +3585,8 @@ tests; **live checks** are informational.
   `ageMillis = 0`, `clockBehind = false`; (d) x5u mutations: wrong leaf SAN, missing codeSigning EKU, root not pinned, non-CA
   certificate as intermediate, name-chaining break, `pathLenConstraint` violation, keyUsage without
   `keyCertSign`, an x5u URL on a non-allowlisted host, an x5u over 64 KiB, expired intermediate or
-  leaf at live fetch → `CLOCK_SKEW`, expired leaf in seed → loads; a pinned SPKI as a non-terminal
+  leaf at live fetch → `CLOCK_SKEW` (stage `X5U`), expired leaf in seed → loads (revision 57: each `FAILED` x5u mutation in this row is at stage
+  `SIGNATURE`, except the non-allowlisted host and the over-cap body, which are fetch failures at stage `X5U`); a pinned SPKI as a non-terminal
   link → loads with the path truncated there; the pinned terminal expired, or wrapped in a
   self-signed certificate with another subject → loads; (revision 54, each in the leaf and in the intermediate where both apply) a
   non-minimal length in the outer structure, a TLV after the SPKI, a second SEQUENCE inside `[3]`, bytes after an
@@ -3657,7 +3731,8 @@ tests; **live checks** are informational.
   (g) chain omitting the intermediate → walker-harness `NO_ISSUER(NO_CANDIDATE)`; on trust-manager bindings `PLATFORM_ONLY` with `walkerReason = NO_CANDIDATE`; on Android with a warm intermediate index and a host, `Found(PLATFORM)` via step 4; (h) self-signed non-anchor and an
   A↔B loop; (i) 65 related junk at the leaf → `Budget(RELATED_BUDGET)`, `candidatesExplored = 64`,
   fallback skipped (chain too long), `PATH_BUDGET_EXCEEDED`; (j) ML-DSA anchor on a JDK without ML-DSA →
-  `ISSUER_UNVERIFIED`; (j2) brainpool anchor on SunEC (walker harness) → `NO_ISSUER(ALL_CANDIDATES_INVALID)`, no `UnsupportedAlgorithm` (the curve OID is the candidate's); (k) same-key decoy with a garbage
+  `ISSUER_UNVERIFIED` in the walker-only harness and `Evaluator.evaluate`; on a trust-manager binding a chain the
+  platform accepted is `NO_ISSUER(PLATFORM_ONLY)` with the same `UnsupportedAlgorithm` finding (revision 57); (j2) brainpool anchor on SunEC (walker harness) → `NO_ISSUER(ALL_CANDIDATES_INVALID)`, no `UnsupportedAlgorithm` (the curve OID is the candidate's); (k) same-key decoy with a garbage
   signature first, decoy issuer name equal to the root's → `Found`, `verifications = 4`,
   `candidatesExplored = 5` (the store anchor and the real intermediate are both tried under the
   decoy's garbage signature before the leaf loop reaches the real intermediate by memo hit; re-derived
@@ -3708,7 +3783,28 @@ tests; **live checks** are informational.
   leaf's issuer neither presented nor in the snapshot); two unrelated presented certificates U1 and U2 whose keys both
   verify the leaf, each certified by a snapshot anchor, in both orders, with and without a related candidate ahead that
   verifies the leaf but is unanchored → `Found`, `leafKeys = {U1, U2}` and `unrelatedExploredAtLeaf = 2` in every
-  case; with the CRLite stub revoking U2 only, `rule = REVOKED` in both orders. Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
+  case; with the CRLite stub revoking U2 only, `rule = REVOKED` in both orders. **Revision 57** (#196 and #197, the
+  maintainer's decisions; in the first four rows the fallback finds no path, and the label is the same with it failed,
+  `FallbackNotUsed(FAILED)`, or disabled, `FallbackNotUsed(DISABLED)`): (ak) the relabel: `[L]` →
+  `NO_ISSUER(NO_CANDIDATE)`; `[L, D]`, where D is named like the leaf's issuer, verifies the leaf under a recovered key and signs itself with a probe-listed OID under an issuer no
+  candidate matches → `ISSUER_UNVERIFIED`, `walkerReason = UNANCHORED`; `[L, J]`, where J is the same but verifies
+  nothing → `ISSUER_UNVERIFIED`, `walkerReason = ALL_CANDIDATES_INVALID`; under `STRICT` all three are `Rejected`, and
+  an exemption registered on either rule exempts all three alike; on trust-manager bindings and `Revokt.evaluate` all
+  three are `NO_ISSUER(PLATFORM_ONLY)`, each with the walker's reason in `walkerReason` and D's or J's OID in an
+  `UnsupportedAlgorithm(outcomeDepended = false)` finding, and `STRICT` plus `exempt(NO_ISSUER, hostSuffixIn(…) and
+  platformOnly())` accepts each; (al) the leaf deferral: a leaf L2 whose own signature OID is probe-listed, presented
+  alone → `NO_ISSUER(NO_CANDIDATE)`, no `UnsupportedAlgorithm`; `[L2, I]` → `ISSUER_UNVERIFIED`, `walkerReason =
+  ALL_CANDIDATES_INVALID`; on the bindings both `NO_ISSUER(PLATFORM_ONLY)`; (am) a related store anchor that signs
+  itself with a probe-listed OID and does not verify the leaf → `NO_ISSUER(ALL_CANDIDATES_INVALID)`, its OID not
+  recorded; (an) a presented certificate unrelated to the leaf that verifies it and signs itself with a probe-listed
+  OID → its OID recorded, `NO_ISSUER(NO_CANDIDATE)` from the walk and `ISSUER_UNVERIFIED` from `decide`; (ao) the
+  candidate order: an issuer that is itself a self-signed snapshot anchor P, presented beside its cross-certificate
+  under another anchor in both orders → reported path `[L, P]` and `anchorIn([P])` exempts in both; two cross-signed
+  intermediates under two different anchors → the reported path follows the presented order, as Firefox's does;
+  (ap) 64 snapshot anchors named like the leaf's issuer ahead of the presented issuer → `Budget(RELATED_BUDGET)` at
+  `endDepth = 1` with no partial path, `PATH_BUDGET_EXCEEDED`, `usedFallback = true` and only the fallback's key
+  evaluated; with the fallback disabled, `usedFallback = false`, `FallbackNotUsed(DISABLED)` and no key evaluated.
+  Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
   (z) has a related candidate that verifies but is unanchored; stuffing fixtures present their junk.
 - **Trust-manager invariants**: never accept what the platform rejected (the 3-arg overload's null-host retry only after a socket or engine overload accepted the chain and host); under `DEFAULT` never
   reject on a step-2 failure alone except `PATH_BUDGET_EXCEEDED`; at most one event per (connection, verdict-cache TTL window) on Android
@@ -3723,7 +3819,13 @@ tests; **live checks** are informational.
   error from either side propagates; `hostIn(["Foo.Example."])` matches the host `foo.example` and not
   `foo.example.com`; `hostIn` or `hostSuffixIn` with `""`, `"."`, `".x"`, `"*.x"` or `"bücher.de"` →
   `IllegalArgumentException`; a request host of `"."` → no host, matching nothing; `EvaluationRequest.Builder.build()`
-  with an empty `presented`, an empty `verifiedPaths` or an empty path → `IllegalArgumentException`;
+  with an empty `presented` or an empty `verifiedPath`, a `verifiedPath` of more than `MAX_DEPTH + 1` certificates, or a
+  `verifiedPath` whose first certificate is not byte-equal to `presented[0]` → `IllegalArgumentException` (revision
+  57); a one-certificate `verifiedPath` whose leaf is a snapshot anchor outside the keyability profile → `FOUND` under
+  its own key, `anchorSnapshotId` the entry snapshot's; the same leaf when it is not an anchor →
+  `PARSE_FAILED(PRODUCER_UNKEYABLE)`, never queried; a longer `verifiedPath` → `anchorSnapshotId = 0`, an anchor at its
+  head gated like any leaf; `rule(NO_ISSUER, ALLOW)` on a `STRICT` builder → `outcome(ISSUER_UNVERIFIED) == ALLOW`, and
+  `exempt` or `clearExemption` on either rule → the same exemption, or none, on both (revision 57);
   `STRICT.newBuilder().build().newBuilder()` keeps `STRICT`'s preset; `rollbackWindowMillis(-1)` and
   `clockSkew(Duration.ofSeconds(Long.MAX_VALUE))` → `IllegalArgumentException`; a policy that is an `ERROR` under
   `validate(ENFORCE)` has only `WARNING`s under `validate(OFF)`; a `PresentedChain` whose second certificate does not
@@ -3814,7 +3916,8 @@ presented certificates only when no related path exists, at the leaf collecting 
 - **P4 order-independence**: `PathStatus` and `leafKeys` invariant under `Permute` when neither
   order produced `Budget`; `Budget` in one order ⇒ `Budget` or `Found` with `leafKeys == refKeys` in the other.
 - **P5 budgets**: counters ≤ limits; `Budget ⇒` a limit at its value at `endDepth` (for
-  `RELATED_BUDGET`, `relatedExploredAtLeaf == 64 ⇔ endDepth == 1`) and the fallback invoked at most
+  `RELATED_BUDGET`, `endDepth == 1 ⇒ relatedExploredAtLeaf == 64`; revision 57: not the converse, since a leaf can
+  explore exactly 64 related candidates and the cut come at a deeper node) and the fallback invoked at most
   once; `verifications` never exceeds `MAX_VERIFICATIONS`.
 - **P6 honest cost**: unmutated world, whose generator never emits two anchors with the same
   subject name, ⇒ `verifications ≤ depth + 1`.
@@ -4387,7 +4490,9 @@ justified in writing.
      a Conscrypt `TrustManagerImpl` over `AndroidCAStore` on every wiring. A consumer that wants no
      main-thread disk read creates its trust managers before `start()`.
   4. `MAX_RELATED_PER_LEVEL = 64` rejects honest nodes with more than 64 same-name certificates;
-     unknown in the Web PKI, possible in bridge PKIs, which are out of scope for TLS clients.
+     unknown in the Web PKI, possible in bridge PKIs, which are out of scope for TLS clients. Since store anchors come
+     first at every depth (revision 57), 64 snapshot anchors named like the leaf's issuer push a presented issuer past
+     the cap at the leaf; the trust store controls that, not the server, as in Firefox, where roots come first.
   5. CRLite's (issuer key, serial) model: a certificate revoked under one issuer key and re-presented
      under a cross-issuing key with a different serial is a data-model limit, not a walker defect.
   6. The named M1 Android residual (§5.2), including any app whose NSC carries a `<domain-config>`, where `RootTrustManager` rejects a null host: the plain-delegate binding and any path where the
@@ -4434,7 +4539,12 @@ justified in writing.
      also reject. This reopens if a gap entry under a private anchor is reported.
   9. Walker CPU per uncached connection is bounded by `MAX_VERIFICATIONS`, about 250 ms of RSA-4096
      on a mid-range ART device, and both caches are defeated by one varying junk byte per connection;
-     `MAX_PRESENTED` bounds parsing (counted over the raw chain, before dropping).
+     `MAX_PRESENTED` bounds parsing (counted over the raw chain, before dropping). The PKIX fallback's build is outside
+     these budgets (revision 57): `CertPathBuilder` has no candidate budget and backtracks through every name-matching
+     candidate (§5.1 "PKIX fallback contract", Appendix A). It runs at most once per uncached decision, only after a
+     walk `NotFound` or `Budget`, and only on a chain of at most `FALLBACK_MAX_PRESENTED` (8) presented certificates,
+     which bounds what a server can stuff in front of it; its result is cached under the path key, which the same
+     varying byte defeats. `pkixFallback(false)` removes it where the policy allows (item 1).
   10. **Coverage gap, every preset**: a certificate issued after the live filter's coverage `high`
      is `NOT_COVERED` and allowed; Firefox goes to OCSP there, revokt does not; with no ceiling in
      `DEFAULT` an update blackout leaves every newer certificate unchecked. The only closures are
@@ -4450,9 +4560,15 @@ justified in writing.
      `CertPathBuilder` (and the delegate itself) fetches AIA issuers over the network inside the
      handshake; the fallback may then find a path the walker called `NO_CANDIDATE`; revokt neither sets
      nor clears the property (unverified beyond `sun.security.provider.certpath.Builder.USE_AIA`).
-  14. **`ISSUER_UNVERIFIED` relabelling, closed (revision 29)**: only the child's own signature OID
-     counts, so a related decoy carrying an unsupported key OID cannot turn a `NO_ISSUER` into the
-     separately exemptable `ISSUER_UNVERIFIED`; consumers scoping that exemption use `hostIn`/`hostSuffixIn` or `platformOnly()` (`anchorIn` never matches on an empty reported path, §4).
+  14. **`ISSUER_UNVERIFIED` relabelling (revision 57)**: a server can turn `NO_ISSUER` into `ISSUER_UNVERIFIED` off
+     the bindings, by presenting a related certificate whose own signature algorithm is unsupported, even one that
+     verifies nothing. The relabel is verdict-neutral under the presets and the built-in exemptions: the two rules
+     share one outcome and one exemption; `hostIn`, `hostSuffixIn` and `anchorIn` cannot tell the labels apart; and
+     on a trust-manager binding (and `Revokt.evaluate`) every fallback-failed `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`,
+     so `hostSuffixIn(…) and platformOnly()` matches either way. Off the bindings (`Evaluator.evaluate`, the
+     walker-only harness) the label still differs, so a consumer's own exemption that reads `rule` or `path.status`
+     there can still tell the two apart; that is consumer code, not a revokt verdict. A candidate's key or curve OID
+     never counts. `anchorIn` never matches on an empty reported path (§4).
   15. **Keyability is a prediction.** The producer keys the logged precertificate (about half of CT entries). It also
      needs the logged `chain[0]` to parse, and `chain[1]` behind a precertificate signing certificate. revokt sees
      only the final certificate, so `producerKeyable` predicts the producer's result through RFC 6962's identical-TBS
@@ -4481,7 +4597,9 @@ justified in writing.
   future-dated signed record cannot pin the watermark in either case; a future-dated seed installs with the watermark at its signed timestamp, which only a newer signed changeset can pass, as for any seed. The effective watermark is never below the live `SIGNED`
   generation's timestamp unless that generation is `clockBehind` (§6.3, revision 56), so losing `updater.json` reopens
   no rollback. After `resetState()` the rollback bound is the
-  seed's timestamp (residual: `updater.json` is deleted with the store).
+  seed's timestamp once the start task has swapped the live generation; until then the watermark floor still holds it
+  at the old live generation's timestamp, which is stricter (revision 57, from the #190 review; residual:
+  `updater.json` is deleted with the store).
 - Self-lockout bounded: a signed revocation of the signed source's own certificate holds fetches 24 h and is
   then reported as `feedHostRevoked` while fetches proceed (the payload is authenticated end to end, so
   TLS authenticity to that host protects nothing an attacker could exploit); a TLS-only mirror's host is
@@ -5061,6 +5179,30 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     system one does) and `platform::system_cache_dir` (`/var/cache/upki` on Unix, `/Library/Caches/dev.rustls.upki`
     on Apple, `%ProgramData%\rustls\upki\cache` on Windows), with `revocation` appended
     (`revocation_cache_dir`).
+- **Revision 57 sources** (Firefox at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`):
+  - **`Backoff` and `Retry-After`** (§7.1), read 2026-11-14 through the GitHub contents API: `Utils.sys.mjs`
+    `fetchLatestChanges` throws on a status of 500 or more (line 529) and on a non-JSON `Content-Type` (lines 537 to
+    540) before it reads `Backoff` (lines 570 to 576), and `remote-settings.sys.mjs` persists that value as the
+    `server.backoff` pref (lines 507 to 516). Neither file reads `Retry-After`. kinto-http reads both headers on every
+    response, but `RemoteSettingsClient.sys.mjs` builds its kinto-http client with only a `fetchFunc` (lines 391 to
+    395), so no listener takes kinto-http's backoff and no retry follows a `Retry-After` (the 2026-11-13 decision
+    audit read kinto-http's side). revokt honours both on every response, so it is stricter than Firefox, not equal
+    to it.
+  - **The `signatures[]` loop** (§7.1), `RemoteSettingsClient.sys.mjs` lines 1100 to 1132, read 2026-11-14 through the
+    GitHub contents API: `const { x5u, signature, mode } = sig` (line 1102) throws on a `null` element; `!x5u ||
+    !signature` (line 1103) skips an empty string as a missing one; `(await Utils.fetch(x5u)).text()` (line 1109) reads
+    the body without checking the status, so a 404 or 5xx body goes to verification, which fails, and the loop moves
+    on (the #198 review), while a rejected fetch (a network error, timeout or abort) leaves the loop at once. revokt
+    moves on after any failed fetch, a fifth difference beside the four listed under revision 56.
+  - **Issuer labels and candidate order** (§5.1 decision step 6, `related()`, §8), as the maintainer's decisions of
+    2026-11-13 and 2026-11-14 on #196 record them (not re-read for this revision): mozilla::pkix runs
+    `CheckIssuerIndependentProperties` (`pkixcheck.cpp`, line 993; `pkixbuild.cpp`, lines 106 to 117) before it
+    verifies the link's signature, and defers an end-entity error until an issuer is found (`pkixbuild.cpp`, lines
+    281 to 292 and 354 to 357); `SSLServerCertVerification.cpp` (lines 247 to 252) puts both errors in one override category;
+    `CertVerifier.cpp` (lines 312 to 315) applies the anchor-dependent CT rules to the one chain it built; and
+    `NSSCertDBTrustDomain` `FindIssuer` offers roots first, then the presented certificates, then the preloaded
+    intermediates. upki takes one webpki `VerifiedPath` (rustls-upki `lib.rs`, lines 95 to 127), the model for
+    `EvaluationRequest.verifiedPath` (§4).
 - Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
   2026-10-30: `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` reads the SCT extension's
   `extnValue` with `der::ExpectTagAndGetValueAtEnd(extnValue, der::OCTET_STRING, …)`, which requires the tag `0x04`
