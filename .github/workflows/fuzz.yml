@@ -66,9 +66,23 @@ jobs:
         run: |
           set -euo pipefail
           case $TARGET in ''|*[!A-Za-z0-9_.]*) echo "::error::target must be all or Class.method"; exit 1 ;; esac
-          ./gradlew fuzzTargets --no-daemon
+          # The build's lines (fuzzTargets prints each target) are not workflow commands: the runner ignores commands
+          # until the random end token.
+          stop=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          echo "::stop-commands::$stop"
+          status=0
+          ./gradlew fuzzTargets --no-daemon || status=$?
+          echo "::$stop::"
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
           targets=$(jq -c --arg t "$TARGET" '[.[] | select($t == "all" or .name == $t)]' build/fuzz/targets.json)
           if [ "$targets" = "[]" ]; then echo "::error::no target named $TARGET (see the fuzzTargets output above)"; exit 1; fi
+          # The fuzz job echoes each target's name and source into workflow commands (::warning, ::error), so both may
+          # hold only [A-Za-z0-9._/-]; \A and \z anchor the whole string, so no line break gets through. The values
+          # themselves are not printed.
+          if ! jq -e 'all(.[]; all(.name, .source; type == "string" and test("\\A[A-Za-z0-9._/-]+\\z")))' <<< "$targets" > /dev/null; then
+            echo "::error::a target's name or source has a character outside [A-Za-z0-9._/-]; nothing is fuzzed"
+            exit 1
+          fi
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
   fuzz:
@@ -206,6 +220,10 @@ jobs:
           runner_path=$PATH
           export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
+          # As the targets job checks: only [A-Za-z0-9._/-] in the name and source, before either is echoed.
+          for value in "$NAME" "$SOURCE"; do
+            case $value in ''|*[!A-Za-z0-9._/-]*) echo "::error::the target's name or source has a character outside [A-Za-z0-9._/-]"; exit 1 ;; esac
+          done
           # Empty only without a dispatch (the commented-out schedule); a dispatched 0 is rejected below.
           FUZZ_SECONDS=${FUZZ_SECONDS:-300}
           case $FUZZ_SECONDS in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1 ;; esac

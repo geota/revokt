@@ -188,6 +188,12 @@ jobs:
           curl -sSfL -o download-actionlint.bash https://raw.githubusercontent.com/rhysd/actionlint/03d0035246f3e81f36aed592ffb4bebf33a03106/scripts/download-actionlint.bash
           bash download-actionlint.bash 1.7.7
           ./actionlint -color
+      # fuzz.yml's fuzz job runs under a custom shell (/usr/bin/bash …), which actionlint does not shellcheck (#115).
+      # shellcheck is the runner image's, as actionlint's own is.
+      - name: shellcheck fuzz.yml's fuzz job
+        run: |
+          shellcheck --version
+          python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml fuzz
 
   labeler:
     name: labeler
