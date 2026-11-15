@@ -310,10 +310,13 @@ jobs:
   # the fuzz job could have changed except the artifacts. It downloads the fuzz-finding-* artifacts, fetches only
   # fuzz_advisory.py at github.sha, and runs it under a clean environment with python3 -I. The script treats the
   # artifacts as hostile data and files at most 8 private draft advisories, one per new DEDUP_TOKEN (CONTRIBUTING §6).
+  # The token lives in the fuzz-advisory environment, whose deployment branches are limited to main, and the job runs
+  # only for a dispatch of main: a workflow or script changed on another branch never gets it.
   advisory:
     name: advisory (private drafts for new findings)
     needs: fuzz
-    if: failure() && needs.fuzz.result == 'failure'
+    if: failure() && needs.fuzz.result == 'failure' && github.ref == 'refs/heads/main'
+    environment: fuzz-advisory
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -336,6 +339,7 @@ jobs:
           path: advisory-script
       - name: file draft advisories
         env:
+          # The fuzz-advisory environment's secret (CONTRIBUTING §6).
           GH_TOKEN: ${{ secrets.FUZZ_ADVISORY_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -345,7 +349,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::the FUZZ_ADVISORY_TOKEN secret is not set (CONTRIBUTING §6); decrypt the finding from the artifact"
+            echo "::error::the fuzz-advisory environment has no FUZZ_ADVISORY_TOKEN (CONTRIBUTING §6); decrypt the finding from the artifact"
             exit 1
           fi
           /usr/bin/env -i PATH=/usr/bin:/bin GH_TOKEN="$GH_TOKEN" REPO="$REPO" RUN_URL="$RUN_URL" RUN_ID="$RUN_ID" \
