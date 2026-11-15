@@ -125,14 +125,15 @@ resolve() {
       continue
     fi
     cur=$next
-    if [ -z "${checked[$cur]:-}" ]; then
-      if [ -d "$cur" ] && writable "$cur"; then fail "can write $cur, reached from $from"; fi
-      checked[$cur]=1
+    # A path is remembered only once the check for its type has run: d: for a directory here, f: for a final file.
+    if [ -d "$cur" ] && [ -z "${checked["d:$cur"]:-}" ]; then
+      if writable "$cur"; then fail "can write $cur, reached from $from"; fi
+      checked["d:$cur"]=1
     fi
   done
-  if [ -z "${checked[$cur]:-}" ]; then
-    if [ -f "$cur" ] && writable "$cur"; then fail "can write $cur, reached from $from"; fi
-    checked[$cur]=1
+  if [ -f "$cur" ] && [ -z "${checked["f:$cur"]:-}" ]; then
+    if writable "$cur"; then fail "can write $cur, reached from $from"; fi
+    checked["f:$cur"]=1
   fi
   resolved=$cur
 }
