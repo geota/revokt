@@ -247,7 +247,11 @@ internal class CrliteSync(
             stage = SyncStage.SCHEMA
             val crlite = ok(client.checkRecords(verified.records, channel)) { return it }
             val count = crlite.size.toLong()
-            gates.nearCap(count, RevoktLimits.MAX_CHANGESET_RECORDS.toLong()) { "$channel holds $count records" }
+            gates.nearCap(
+                count,
+                RevoktLimits.MAX_CHANGESET_RECORDS.toLong(),
+                "records",
+            ) { "$channel holds $count records" }
             return generation(verified, crlite)
         }
 
@@ -274,6 +278,14 @@ internal class CrliteSync(
                     "${source.sourceId} ${store.root}: the changeset since $since did not verify (${first.failure}); " +
                         "fetching the whole collection",
                 )
+                if (first.failure.stage == SyncStage.X5U) {
+                    // §7.1: an x5u URL is fetched and validated once per sync, so the retry reuses this failure.
+                    logger.safeLog(
+                        LogLevel.WARN,
+                        "${source.sourceId} ${store.root}: the retry reuses this sync's failed x5u result; it fails " +
+                            "the same way when the whole collection names the same x5u",
+                    )
+                }
                 return changeset(signatures, expected, null, emptyList())
             }
 
@@ -301,7 +313,7 @@ internal class CrliteSync(
                     is ChangesetVerification.Verified -> {
                         backoff(verification.backoffMillis)
                         val x5u = verification.x5uBody.size.toLong()
-                        gates.nearCap(x5u, RevoktLimits.MAX_X5U_BYTES) { "the x5u is $x5u bytes" }
+                        gates.nearCap(x5u, RevoktLimits.MAX_X5U_BYTES, "x5u") { "the x5u is $x5u bytes" }
                         Fetched.Verified(verification)
                     }
 
@@ -494,6 +506,9 @@ internal class CrliteSync(
             /** The `CAP_NEAR_LIMIT` warnings of this sync (§4), on whatever result it ends with. */
             val nearCaps = ArrayList<PolicyDiagnostic>()
 
+            /** The items [nearCaps] warns about. */
+            private val warned = HashSet<String>()
+
             /**
              * Spec §5.1's cap over [attachments], every placed record's, before any body is fetched: a signed record
              * declaring more than `MAX_FILTER_BYTES` is `FAILED` with `CAP_NEAR_LIMIT` at `ATTACHMENT`, or null. Otherwise
@@ -507,7 +522,11 @@ internal class CrliteSync(
                     return end(Ended(SyncOutcome.FAILED, SyncStage.ATTACHMENT, DiagnosticCode.CAP_NEAR_LIMIT, detail))
                 }
                 for (r in attachments) {
-                    nearCap(r.attachment.size, RevoktLimits.MAX_FILTER_BYTES) { "${r.id}: ${r.attachment.size} bytes" }
+                    nearCap(
+                        r.attachment.size,
+                        RevoktLimits.MAX_FILTER_BYTES,
+                        r.id,
+                    ) { "${r.id}: ${r.attachment.size} bytes" }
                 }
                 return null
             }
@@ -544,16 +563,22 @@ internal class CrliteSync(
                 cap: Long,
             ) {
                 val size = (result as? ClientResult.Ok)?.bodyBytes ?: return
-                nearCap(size, cap) { "$what is $size bytes" }
+                nearCap(size, cap, what) { "$what is $size bytes" }
             }
 
-            /** A `CAP_NEAR_LIMIT` warning when [value] is above half of [cap], the `RevoktLimits` constant (§4). */
+            /**
+             * A `CAP_NEAR_LIMIT` warning when [value] is above half of [cap], the `RevoktLimits` constant (§4), once per
+             * [item] per sync: a reset that fetches the changeset twice warns about it once.
+             */
             fun nearCap(
                 value: Long,
                 cap: Long,
+                item: String,
                 what: () -> String,
             ) {
-                if (value > cap / 2) nearCaps += warning(DiagnosticCode.CAP_NEAR_LIMIT, "${what()}, above half of $cap")
+                if (value > cap / 2 && warned.add(item)) {
+                    nearCaps += warning(DiagnosticCode.CAP_NEAR_LIMIT, "${what()}, above half of $cap")
+                }
             }
         }
 
@@ -568,36 +593,41 @@ internal class CrliteSync(
             val deltas = LinkedHashMap<String, ByteString>()
             private val encodings = HashMap<String, Encoding?>()
 
-            /** Whether [directory] is already a complete generation, whose files are read as they stand. */
-            private var complete = false
+            /** Whether [directory] is a complete generation the engine holds live or the pointer names, read as it stands. */
+            private var held = false
 
             /** The live and pointed generations' directories, which a delta of the same name and hash is copied from. */
             private var pointed: List<String> = emptyList()
 
             /**
-             * Readies [directory]: a complete one is read as it stands, since a complete directory is immutable
-             * ([install] then compares it, and stages nothing); one the engine holds live or the pointer names that is
-             * not complete fails the sync as [install] would, `STORE_FAILED`; any other is deleted whole, so no file of
-             * an earlier attempt stays, and the deltas are staged in it. The failure that ends the sync, or null.
+             * Readies [directory]. One the engine holds live or the pointer names is never written: a complete one is read
+             * as it stands ([install] then compares it with this generation), and one that is not complete fails the sync
+             * as [install] would, `STORE_FAILED`. Any other is referenced by nothing, so it is completed afresh: its
+             * `meta.json` is deleted ([StoreLayout.reopen]), each of its files is reused only when it re-hashes to a
+             * placed delta, and [install] deletes the rest, so neither a corrupted delta nor another generation's
+             * `meta.json` or `index.bin` there fails every sync of this `<ts>` (the #205 review). The failure that ends
+             * the sync, or null.
              */
             fun open(): SyncResult? {
                 val pointer = stored { (store.pointer() as? StoreRead.Found)?.value }
                 val live = reads.liveDirectory()
-                pointed = listOfNotNull(live, pointer?.live, pointer?.previous).distinct().filter { it != directory }
-                complete = stored { store.readMeta(directory) } is StoreRead.Found
-                if (complete) return null
-                if (directory == live || directory == pointer?.live || directory == pointer?.previous) {
+                val holders = listOfNotNull(live, pointer?.live, pointer?.previous).distinct()
+                pointed = holders.filter { it != directory }
+                if (directory in holders) {
+                    held = stored { store.readMeta(directory) } is StoreRead.Found
+                    if (held) return null
                     return storeFailed("$directory is live or pointed to, and its meta.json is not readable")
                 }
                 staged = directory
-                stored { store.deleteGeneration(directory) }
+                stored { store.reopen(directory) }
                 return null
             }
 
             /**
              * Fetches [r]'s body and writes it, or for a [reuse]d full only names its stored blob; the failure that ends
-             * the sync, or null. A delta is read from a complete [directory], else copied from a pointed generation's
-             * file of its name that re-hashes to its signed hash, else fetched, and is staged in [directory].
+             * the sync, or null. A delta is read from a held [directory]; otherwise it is kept when [directory] already
+             * holds it re-hashing, else copied from a pointed generation's file of its name that re-hashes to its signed
+             * hash, else fetched, and staged in [directory].
              */
             fun fetch(
                 r: CrliteRecord,
@@ -614,11 +644,9 @@ internal class CrliteSync(
                     return null
                 }
                 deltas[name] = sha256
-                if (complete) {
-                    // #201: a stored delta is re-hashed against its signed record before the directory is reused.
-                    if (stored { store.file(directory, name, sha256) } != null) return null
-                    return storeFailed("$directory holds another generation: $name does not re-hash")
-                }
+                // #201: a stored delta is re-hashed against its signed record before it is reused.
+                if (stored { store.file(directory, name, sha256) } != null) return null
+                if (held) return storeFailed("$directory holds another generation: $name does not re-hash")
                 val bytes =
                     stored { pointed.firstNotNullOfOrNull { store.file(it, name, sha256) } }
                         ?: ok(client.fetchAttachment(r)) { return it }.toByteArray()
@@ -680,8 +708,12 @@ internal class CrliteSync(
             /**
              * The pointed generation's verified records, which a `_since` changeset is merged with (spec §6.5: "so a `_since`
              * changeset can be verified against it (tombstones merged) without a full re-fetch"), or null when there is none
-             * to merge with: no pointer, no complete `SIGNED` generation, or a `records.json` that does not read, which is a
-             * store failure.
+             * to merge with: no pointer, no complete `SIGNED` generation, or a `records.json` that does not read.
+             *
+             * Only the last counts a store failure here: it is the one store fault no other step of the sync reads. A
+             * malformed pointer, or a pointed `meta.json` that is malformed, is counted by the install when it reads the
+             * pointer for its new `previous` (`Install.previous`), so counting it here too would count it twice; and a
+             * pointed generation that is not `SIGNED` is not a fault (a mirror's has no `records.json`).
              */
             fun deltaBase(): List<JsonObject>? {
                 val live = (store.pointer() as? StoreRead.Found)?.value?.live ?: return null

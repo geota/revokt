@@ -225,44 +225,45 @@ private class Install(
 
     /**
      * Whether [directory] is held (the engine's live generation or one the pointer names) and its `meta.json` as it
-     * reads. An incomplete directory nothing holds is this install's to complete over its staged deltas, or to delete
-     * on a failure before activation.
+     * reads. A directory nothing holds is this install's: it is completed over its staged deltas, or deleted on a
+     * failure before activation.
      */
     private fun claim(directory: String): Pair<Boolean, StoreRead<GenerationMeta>> {
         val held = directory == liveDirectory() || directory in pointed()
         val existing = store.readMeta(directory)
-        if (existing !is StoreRead.Found && !held) written = directory
+        if (!held) written = directory
         return held to existing
     }
 
     /**
-     * Completes the generation directory, `meta.json` last, or returns the failure. A complete directory is never
-     * replaced: when it holds this generation ([sameGeneration]: left by an install that failed after the publish, or
-     * one the pointer names) it is prepared as it stands, its stored `meta.json` kept, so a retry can succeed, and a
-     * failure keeps it when it is live or pointed to and deletes it otherwise; when it holds another generation, a stored delta that does not re-hash included (#201), it stays
-     * and fails the install. A directory the engine holds live or the pointer names whose `meta.json` is malformed (a
-     * newer binary's `metaVersion`, say, #178) or missing also stays and fails the install. Any other directory is
-     * completed over its staged delta files ([StoreLayout.completeGeneration], which deletes every other file of an
-     * earlier attempt and re-hashes each staged delta); a failure before activation deletes it. [held] and [existing]
-     * were read at the start of the install.
+     * Completes the generation directory, `meta.json` last, or returns the failure. [held] and [existing] were read at
+     * the start of the install.
+     * - A directory the engine holds live or the pointer names is never replaced. When it holds this generation
+     *   ([sameGeneration]: left by an install that failed after the publish, or the pointer's `previous` on a rollback
+     *   inside the window) it is prepared as it stands, its stored `meta.json` kept, so a retry can succeed; when it
+     *   holds another generation, a stored delta that does not re-hash included (#201), or its `meta.json` is malformed
+     *   (a newer binary's `metaVersion`, say, #178) or missing, it stays and fails the install, `STORE_FAILED`.
+     * - Any other directory, complete or not, is referenced by nothing and is completed again over its staged delta
+     *   files ([StoreLayout.reopen], then [StoreLayout.completeGeneration], which deletes every other file of an earlier
+     *   attempt, re-hashes each staged delta and writes this install's own `meta.json` with the signature it verified).
+     *   A staged delta that is missing or does not re-hash fails the install, and the directory is deleted, so the next
+     *   sync stages it afresh rather than failing on it at every sync (the #205 review).
      */
     private fun directory(
         directory: String,
         held: Boolean,
         existing: StoreRead<GenerationMeta>,
     ): InstallResult? {
-        if (existing is StoreRead.Found) {
-            if (sameGeneration(existing.value, directory)) {
-                // An orphan holding this generation is the directory this install was given: a failure deletes it.
-                if (!held) written = directory
-                return null
-            }
-            return fail(SyncOutcome.STORE_FAILED, null, IllegalStateException("$directory holds another generation"))
-        }
         if (held) {
+            if (existing is StoreRead.Found) {
+                if (sameGeneration(existing.value, directory)) return null
+                val cause = IllegalStateException("$directory holds another generation")
+                return fail(SyncOutcome.STORE_FAILED, null, cause)
+            }
             val cause = IllegalStateException("$directory is live or pointed to, and its meta.json is not readable")
             return fail(SyncOutcome.STORE_FAILED, null, cause)
         }
+        store.reopen(directory)
         store.completeGeneration(meta, generation.index, generation.deltas, generation.records)
         return null
     }

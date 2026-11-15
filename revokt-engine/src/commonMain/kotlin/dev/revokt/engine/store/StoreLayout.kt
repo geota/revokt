@@ -118,6 +118,15 @@ internal class StoreLayout(
     }
 
     /**
+     * Makes [directory] incomplete again by deleting its `meta.json` alone, so its files stay to be re-hashed and reused
+     * by [completeGeneration]: for a directory referenced by nothing that an install completes afresh. Never for one the
+     * engine holds live or the pointer names.
+     */
+    fun reopen(directory: String) {
+        storage.delete(fileKey(directory, META))
+    }
+
+    /**
      * Writes [bytes] as the file [name] of [directory], a generation not yet complete: a delta body written as it is
      * fetched, so the loader holds one body at a time (spec §6.5: "write …, drop the body"), and the directory is
      * completed later by [completeGeneration]. A complete directory is immutable.

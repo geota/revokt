@@ -372,6 +372,127 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
     }
 
     @Test
+    fun `#205 - an orphan with a corrupted delta is completed afresh by the next sync, never a STORE_FAILED loop`() {
+        // The first sync completes the directory, prepare throws and the delete fails: a complete orphan is left.
+        val server = Server()
+        val throwing =
+            UpdateFixtures.TestEngine().apply {
+                onPrepare = {
+                    storage.failDelete = { if ("/$directory1/" in it) IllegalStateException("delete") else null }
+                    throw IllegalArgumentException("corrupt")
+                }
+            }
+        sync(server, engine = throwing).assert(SyncOutcome.FAILED, SyncStage.PREPARE, *failed())
+        storage.failDelete = { null }
+        assertNotNull(store.meta(directory1))
+        assertNull(liveDirectory())
+        val key = "crlite/compat/$directory1/${delta.filename}"
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).also { it[0] = (it[0] + 1).toByte() })
+        server.fetcher.requests.clear()
+        val now = ts + 8 * hour
+        val run = sync(server, now = now).assert(SyncOutcome.INSTALLED)
+        assertEquals(0, run.storeFailures)
+        assertEquals(listOf(attachments + delta.location), server.attachmentRequests())
+        assertEquals(directory1, liveDirectory())
+        assertContentEquals(delta.body, store.file(directory1, delta.filename, delta.body.toByteString().sha256()))
+        // This sync's verified signature, not the orphan's stored one.
+        assertEquals(served[0].toByteString().sha256(), store.meta(directory1)?.signed?.signerLeafSha256)
+    }
+
+    @Test
+    fun `a cursor older than the pointed generation replays a superset of changes and installs`() {
+        val server = installedFirst()
+        // The second generation flips, then its updater json write fails: the pointer names it, the cursor stays ts.
+        next(server, listOf(full, delta, delta2))
+        storage.failWrite = { if (it.endsWith("updater.json")) IllegalStateException("updater") else null }
+        sync(server, now = ts2 + hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        storage.failWrite = { null }
+        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
+        assertEquals(directory2, liveDirectory())
+        assertEquals(ts, sourceRecord(ts2 + hour).lastVerifiedLastModified)
+        // A third: _since the old cursor, merged over the second generation's records.
+        val delta3 =
+            Rec(
+                "f1e2d3c4-0000-4000-8000-000000000004",
+                true,
+                ts + 800,
+                "20261023-1-compat.filter.delta",
+                UpdateFixtures.v4(listOf(log(4) to (1_000L to 2_000L))),
+                parent = full.id,
+            )
+        server.ts = ts2 + 1_000
+        server.records = listOf(full, delta, delta2, delta3).map { it.json() }
+        server.bodies = server.bodies + (delta3.location to delta3.body)
+        server.fetcher.requests.clear()
+        val now = server.ts + 8 * hour
+        sync(server, now = now).assert(SyncOutcome.INSTALLED)
+        assertEquals(server.sinceUrl(ts), server.fetcher.requests[1].url)
+        assertFalse(server.fetcher.requests.any { it.url == server.changesetUrl }, "no reset")
+        assertEquals(listOf(attachments + delta3.location), server.attachmentRequests())
+        assertEquals(server.ts, sourceRecord(now).lastVerifiedLastModified)
+    }
+
+    @Test
+    fun `a _since change with no id does not merge, fails verification and resets once`() {
+        val server = installedFirst()
+        next(server, listOf(full, delta, delta2))
+        server.since = { listOf(delta2.json(), """{"last_modified":${ts + 900},"deleted":true}""") }
+        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(
+            listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl, attachments + delta2.location),
+            server.fetcher.requests.map { it.url },
+        )
+    }
+
+    @Test
+    fun `a _since changeset whose x5u fetch fails resets once, reusing the failed x5u, and logs it`() {
+        val server = installedFirst()
+        next(server, listOf(full, delta, delta2))
+        server.overrides[x5u] = { response(500) }
+        sync(server, now = ts2 + hour).assert(SyncOutcome.FAILED, SyncStage.X5U, *failed())
+        assertEquals(
+            listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl),
+            server.fetcher.requests.map { it.url },
+        )
+        assertTrue(recording.messages.any { "reuses this sync's failed x5u" in it.second })
+    }
+
+    @Test
+    fun `a monitor changes body above half of MAX_JSON_BYTES warns, and the sync installs`() {
+        val server = Server()
+        val padding = "x".repeat((RevoktLimits.MAX_JSON_BYTES / 2).toInt())
+        server.overrides[monitor] = {
+            ok(
+                """{"changes":[{"id":"x","bucket":"security-state","collection":"cert-revocations",""" +
+                    """"last_modified":$ts}],"timestamp":$ts,"padding":"$padding"}""",
+            )
+        }
+        val run = sync(server).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
+        assertTrue(
+            "monitor/changes is" in
+                run.result.warnings
+                    .single()
+                    .message,
+        )
+    }
+
+    @Test
+    fun `a changeset above half of MAX_JSON_BYTES warns once, even when a reset fetches it twice`() {
+        val server = installedFirst()
+        next(server, listOf(full, delta2), listOf(tombstone))
+        server.since = { listOf(delta2.json()) }
+        server.padding = (RevoktLimits.MAX_JSON_BYTES / 2).toInt()
+        val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
+        assertTrue(server.fetcher.requests.any { it.url == server.changesetUrl }, "reset")
+        assertTrue(
+            "the changeset is" in
+                run.result.warnings
+                    .single()
+                    .message,
+        )
+    }
+
+    @Test
     fun `a changeset body above half of MAX_JSON_BYTES is CAP_NEAR_LIMIT on warnings, and the sync installs`() {
         val server = Server()
         server.padding = (RevoktLimits.MAX_JSON_BYTES / 2).toInt()

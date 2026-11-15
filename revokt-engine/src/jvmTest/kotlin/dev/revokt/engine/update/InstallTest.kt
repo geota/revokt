@@ -17,6 +17,7 @@ import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.Window
 import dev.revokt.engine.store.GenerationMeta
 import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.MetaJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
@@ -386,20 +387,29 @@ class InstallTest {
     }
 
     @Test
-    fun `a complete directory holding another meta json or index bin fails and stays`() {
+    fun `an orphan holding another meta json or index bin is completed afresh, and a held one fails and stays`() {
+        // Referenced by nothing: completed again with this generation's files, as main replaced it whole (#205 review).
         val p = pending()
         val other = p.meta.copy(collection = "security-state/other")
         store.completeGeneration(other, p.index, p.deltas, p.records)
-        val f = failed(install(p))
-        assertEquals(SyncOutcome.STORE_FAILED, f.outcome)
-        assertEquals(SyncStage.STORE, f.stage)
-        assertEquals(other, store.meta(p.meta.directory))
+        assertIs<InstallResult.Installed>(
+            install(pending(), engine, store, SnapshotRef(empty), publication, null, logger),
+        )
+        assertEquals(p.meta, store.meta(p.meta.directory))
+        storage.inner.delete("crlite/compat/current")
         store.deleteGeneration(p.meta.directory)
         val padded = p.index + ByteArray(4)
         store.writeGeneration(p.meta, padded, bytesOf(p), p.records)
-        assertEquals(SyncOutcome.STORE_FAILED, failed(install(p)).outcome)
-        assertTrue(padded.contentEquals(store.file(p.meta.directory, StoreLayout.INDEX)))
-        assertEquals(emptyList(), engine.prepared)
+        assertIs<InstallResult.Installed>(
+            install(pending(), engine, store, SnapshotRef(empty), publication, null, logger),
+        )
+        assertTrue(p.index.contentEquals(store.file(p.meta.directory, StoreLayout.INDEX)))
+        // Pointed to: another meta json fails and stays.
+        storage.inner.write("crlite/compat/${p.meta.directory}/meta.json", MetaJson.write(other))
+        val f = failed(install(pending(), engine, store, SnapshotRef(empty), publication, null, logger))
+        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage)
+        assertTrue("holds another generation" in f.cause?.message.orEmpty())
+        assertEquals(other, store.meta(p.meta.directory))
     }
 
     @Test
@@ -491,13 +501,20 @@ class InstallTest {
     }
 
     @Test
-    fun `a complete directory holding this generation is reused as it stands, pointed to or not`() {
+    fun `an orphan holding this generation is completed afresh with its meta json, a pointed one reused as is`() {
         val p = pending()
-        store.completeGeneration(p.meta, p.index, p.deltas, p.records)
+        val signed = checkNotNull(p.meta.signed)
+        val stale = p.meta.copy(signed = signed.copy(signature = ByteArray(96) { 3 }.toByteString()))
+        store.completeGeneration(stale, p.index, p.deltas, p.records)
         storage.writes.clear()
-        // An orphan (neither live nor pointed): its stored files re-hash, so it is this generation and is not rewritten.
+        // An orphan (neither live nor pointed): its files re-hash and stay, and it carries this install's signature.
         assertIs<InstallResult.Installed>(install(pending()))
-        assertEquals(listOf("current", "updater.json"), storage.writes)
+        val dir = p.meta.directory
+        assertEquals(
+            listOf("$dir/index.bin", "$dir/records.json", "$dir/meta.json", "current", "updater.json"),
+            storage.writes,
+        )
+        assertEquals(p.meta, store.meta(dir))
         // Pointed to (not live in a fresh snapshot): reused as it stands.
         storage.writes.clear()
         val r = install(pending(), engine, store, SnapshotRef(empty), publication, null, logger)
@@ -506,17 +523,22 @@ class InstallTest {
     }
 
     @Test
-    fun `#201 - a complete directory whose stored delta does not re-hash holds another generation, held or not`() {
-        // An orphan holding this generation's meta json, index bin and records json, with a corrupted delta.
+    fun `#201 - a stored delta that does not re-hash fails a held directory, and an orphan is deleted for a restage`() {
+        // An orphan holding this generation's meta json, index bin and records json, with a corrupted delta: the
+        // install fails and deletes it, so the next one stages afresh and installs, never a STORE_FAILED loop.
         val p = pending()
         val dir = p.meta.directory
         val delta = p.deltas.keys.single()
         store.writeGeneration(p.meta, p.index, mapOf(delta to byteArrayOf(4, 0)), p.records)
         val orphan = failed(install(pending()))
         assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, orphan.outcome to orphan.stage)
-        assertTrue("holds another generation" in orphan.cause?.message.orEmpty())
-        assertTrue(byteArrayOf(4, 0).contentEquals(storage.inner.read("crlite/compat/$dir/$delta")))
+        assertEquals(emptyList(), keysOf(dir))
         assertEquals(emptyList(), engine.prepared)
+        val fresh = TestEngine()
+        assertIs<InstallResult.Installed>(
+            install(pending(), fresh, store, SnapshotRef(empty), publication, null, logger),
+        )
+        storage.inner.delete("crlite/compat/current")
         // The live directory a failed flip left unpointed, its delta then corrupted: the retried flip fails and keeps it.
         store.deleteGeneration(dir)
         storage.fail = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
