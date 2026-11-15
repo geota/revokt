@@ -209,7 +209,7 @@ class CertTest {
             val child = index.cert(WalkerCerts.parse(der))
             assertEquals(
                 1,
-                index.related(listOf(child), child, setOf(child.bytesHash), belowLeaf = false).count(),
+                index.related(listOf(child), child, setOf(child.bytesHash)).count(),
                 name,
             )
         }

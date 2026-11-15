@@ -6,3 +6,7 @@ package dev.revokt.engine.walker
 // The linuxX64 purity gate only compiles (spec §3); Kotlin/Native has no VirtualMachineError to rethrow.
 @Suppress("UNUSED_PARAMETER") // the expect's signature; the stub reads nothing
 internal actual fun isFatal(t: Throwable): Boolean = false
+
+// Kotlin/Native has no thread interrupt flag to restore.
+@Suppress("UNUSED_PARAMETER") // the expect's signature; the stub reads nothing
+internal actual fun restoreInterrupt(t: Throwable) = Unit

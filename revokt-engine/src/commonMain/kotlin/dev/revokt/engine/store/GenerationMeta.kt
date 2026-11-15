@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
@@ -12,7 +13,11 @@ import dev.revokt.engine.json.JsonString
 import okio.ByteString
 import okio.ByteString.Companion.decodeHex
 
-/** The `SIGNED` members of a `meta.json` (spec §6.5): the changeset's timestamp, the signer leaf's SHA-256, the signature. */
+/**
+ * The `SIGNED` members of a `meta.json` (spec §6.5): the changeset's timestamp, the signer leaf's SHA-256, the
+ * signature as the raw `r ‖ s` pair, two equal halves of any non-empty even length (§7.1: the leaf may be on any EC
+ * curve the floor admits, Firefox parity, the maintainer's decision on #163; 96 bytes for today's P-384 leaf).
+ */
 internal data class SignedMeta(
     val changesetTimestampMillis: Long,
     val signerLeafSha256: ByteString,
@@ -20,19 +25,21 @@ internal data class SignedMeta(
 ) {
     init {
         require(signerLeafSha256.size == SHA256_BYTES) { "the signer leaf SHA-256 is ${signerLeafSha256.size} bytes" }
-        require(signature.size == P384_SIGNATURE_BYTES) { "the signature is ${signature.size} bytes, not raw r || s" }
+        require(signature.size > 0 && signature.size % 2 == 0) {
+            "the signature is ${signature.size} bytes, not a raw r || s pair"
+        }
     }
 }
 
 /**
- * A generation's `meta.json` (spec §6.5), the completeness marker written last in its directory. [channel] is the
- * channel enum's name; [blobs] maps each full filter's name in the generation (its derived name, never the attachment
+ * A generation's `meta.json` (spec §6.5), the completeness marker written last in its directory, which persists [channel]
+ * by its enum name; [blobs] maps each full filter's name in the generation (its derived name, never the attachment
  * filename) to the SHA-256 of its blob; [signed] is present exactly when [trustClass] is `SIGNED`. [collection] is the
  * Remote Settings collection, absent for a source that has none.
  */
 internal data class GenerationMeta(
     val dataset: Dataset,
-    val channel: String,
+    val channel: CrliteChannel,
     val trustClass: TrustClass,
     val generationId: String,
     val format: FilterFormat,
@@ -46,7 +53,6 @@ internal data class GenerationMeta(
     val directory: String = GenerationNames.directory(sourceTimestampMillis, generationId)
 
     init {
-        require(StoreLayout.isChannelName(channel)) { "'$channel' is not a channel name" }
         require((signed != null) == (trustClass == TrustClass.SIGNED)) { "signed members iff SIGNED, got $trustClass" }
         for ((name, sha256) in blobs) {
             require(C2spIndex.isFilename(name)) { "'$name' is not a generation file name" }
@@ -57,9 +63,6 @@ internal data class GenerationMeta(
 
 internal const val SHA256_BYTES: Int = 32
 
-/** A `p384ecdsa` content signature as stored: the raw `r || s`, 48 bytes each (spec §6.5 seed archive, §7.1). */
-internal const val P384_SIGNATURE_BYTES: Int = 96
-
 /** `meta.json`'s encoding: canonical JSON over the engine's JSON tree, enums by name, bytes as lowercase hex. */
 internal object MetaJson {
     const val VERSION: Long = 1
@@ -68,7 +71,7 @@ internal object MetaJson {
         StoreFields.encode(
             "metaVersion" to StoreFields.long(VERSION),
             "dataset" to StoreFields.string(meta.dataset.name),
-            "channel" to StoreFields.string(meta.channel),
+            "channel" to StoreFields.string(meta.channel.name),
             "trustClass" to StoreFields.string(meta.trustClass.name),
             "generationId" to StoreFields.string(meta.generationId),
             "format" to StoreFields.string(meta.format.name),
@@ -89,7 +92,7 @@ internal object MetaJson {
             val trustClass = f.enum<TrustClass>("trustClass")
             GenerationMeta(
                 dataset = f.enum("dataset"),
-                channel = f.string("channel"),
+                channel = f.enum("channel"),
                 trustClass = trustClass,
                 generationId = f.string("generationId"),
                 format = f.enum("format"),

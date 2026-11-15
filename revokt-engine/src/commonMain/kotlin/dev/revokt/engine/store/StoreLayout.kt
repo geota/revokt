@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.GenerationFiles
 import dev.revokt.RevoktStorage
@@ -42,8 +43,8 @@ internal enum class BlobState { ABSENT, MATCH, MISMATCH }
 internal enum class BlobWrite { WRITTEN, REUSED, REWRITTEN }
 
 /**
- * Spec §6.5's layout over a [RevoktStorage] for one [dataset] and [channel] (the channel enum's name; a channel-less
- * dataset uses `ALL`), under the key prefix `<dataset>/<channel>/` in lowercase:
+ * Spec §6.5's layout over a [RevoktStorage] for one [dataset] and [channel], under the key prefix
+ * `<dataset>/<channel>/`, both lowercase enum names:
  * - `current`: the [Pointer];
  * - `gen-<timestamp>-<hash16>/`: `index.bin`, the delta files and, for `SIGNED`, `records.json`, each under the file's
  *   name in the generation, then `meta.json` last as the completeness marker;
@@ -56,14 +57,10 @@ internal enum class BlobWrite { WRITTEN, REUSED, REWRITTEN }
 internal class StoreLayout(
     private val storage: RevoktStorage,
     val dataset: Dataset,
-    val channel: String,
+    val channel: CrliteChannel,
 ) {
-    init {
-        require(isChannelName(channel)) { "'$channel' is not a channel name" }
-    }
-
     /** The key prefix of this dataset and channel, `<dataset>/<channel>`, both lowercase enum names. */
-    val root: String = dataset.name.lowercase() + "/" + channel.lowercase()
+    val root: String = dataset.name.lowercase() + "/" + channel.name.lowercase()
 
     private val currentKey = "$root/current"
     private val updaterKey = "$root/updater.json"
@@ -87,6 +84,10 @@ internal class StoreLayout(
         val stored = storage.read(blobKey(sha256)) ?: return BlobState.ABSENT
         return if (stored.toByteString().sha256() == sha256) BlobState.MATCH else BlobState.MISMATCH
     }
+
+    /** The blob of [sha256], re-hashed against its key: its bytes on a match, null when it is absent or mismatches. */
+    fun readBlob(sha256: ByteString): ByteArray? =
+        storage.read(blobKey(sha256))?.takeIf { it.toByteString().sha256() == sha256 }
 
     /**
      * Stores [bytes] under the key of their SHA-256, unless that key already holds them: an existing blob is re-hashed
@@ -184,6 +185,9 @@ internal class StoreLayout(
         return StoredGeneration(directory, meta, image)
     }
 
+    /** The `index.bin` in [directory], or null. */
+    fun index(directory: String): ByteArray? = storage.read(fileKey(directory, INDEX))
+
     /** The `records.json` of the `SIGNED` generation in [directory], or null. */
     fun records(directory: String): ByteArray? = storage.read(fileKey(directory, RECORDS))
 
@@ -228,9 +232,10 @@ internal class StoreLayout(
     /**
      * Keeps exactly the directories the pointer names and the blobs their `meta.json` reference: deletes every other
      * directory under this dataset and channel, complete or not, and every other blob. Files directly under the prefix
-     * (`current`, `updater.json`) stay. With no pointer nothing is kept. When it cannot tell what is referenced, it
-     * keeps more: a malformed `current` deletes nothing, and a pointed directory whose `meta.json` is present but
-     * malformed keeps every blob. Returns the number of keys deleted.
+     * (`current`, `updater.json`) stay. When it cannot tell what is referenced, it keeps more: an absent or malformed
+     * `current` deletes nothing (a data-loss guard, the #200 review: a storage that lost `current` must not lose its
+     * generations too), and a pointed directory whose `meta.json` is present but malformed keeps every blob. Returns the
+     * number of keys deleted.
      *
      * Runs on the loader thread only, never between [putBlob] or [writeGeneration] and [point]: a blob or directory of
      * an install not yet pointed to is unreferenced, so prune would delete it.
@@ -238,11 +243,10 @@ internal class StoreLayout(
     fun prune(): Int {
         val pointer =
             when (val read = pointer()) {
-                StoreRead.Absent -> null
-                StoreRead.Malformed -> return 0
+                StoreRead.Absent, StoreRead.Malformed -> return 0
                 is StoreRead.Found -> read.value
             }
-        val kept = listOfNotNull(pointer?.live, pointer?.previous).toSet()
+        val kept = listOfNotNull(pointer.live, pointer.previous).toSet()
         val metas = kept.map(::readMeta)
         val blobs =
             if (StoreRead.Malformed in metas) {
@@ -294,9 +298,5 @@ internal class StoreLayout(
         const val META: String = "meta.json"
         const val RECORDS: String = "records.json"
         private const val BLOBS_DIR = "blobs"
-
-        /** Whether [name] is shaped like an enum constant's name, `[A-Z][A-Z0-9_]*`, the form a channel is persisted in. */
-        fun isChannelName(name: String): Boolean =
-            name.isNotEmpty() && name[0] in 'A'..'Z' && name.all { it in 'A'..'Z' || it in '0'..'9' || it == '_' }
     }
 }

@@ -23,6 +23,7 @@ import dev.revokt.VerifyResult
 import dev.revokt.WalkEnd
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
+import dev.revokt.engine.parse.ParsedCertificate
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
@@ -30,7 +31,9 @@ import okio.ByteString.Companion.toByteString
  * What decision steps 1 to 6 hand to `evaluate`, steps 7 and 8 (spec §5.1 decision list): [path] is the
  * `Finding.Path`; [issuerKeys] are its `issuerSpkiSha256s`, the distinct leaf-issuer keys step 7 queries (walker keys
  * in candidate order, then the fallback key if new); [serial] and [scts] are the leaf's, null and empty when the leaf
- * is `PARSE_FAILED`, which is never queried; [findings] are the parse, walk and step-6 findings.
+ * is `PARSE_FAILED`, which is never queried; [findings] are the parse, walk and step-6 findings. [parses] holds the
+ * parse of each presented certificate, in presented order, null where the parser rejected it or decide never read it,
+ * so an exemption's `PresentedChain` (#133) parses nothing twice.
  *
  * [buildThrew] is true when step 6's `PathBuilderFallback.build` threw: the result is then cached nowhere, neither in
  * the path cache nor, through its verdict, in the verdict cache (§5.1 flow steps 2 and 3a, revision 50).
@@ -42,6 +45,7 @@ internal class PathDecision(
     val scts: List<CrliteSct>,
     val findings: List<Finding>,
     val buildThrew: Boolean,
+    val parses: List<ParsedCertificate?>,
 )
 
 /**
@@ -51,9 +55,9 @@ internal class PathDecision(
  *   `unsupportedOids()`.
  * - [fallback] is step 6's PKIX builder, called at [nowMillis]; null when the fallback is disabled
  *   (`pkixFallback(false)`, and the walker-only harness's disabled path).
- * - [platformOnly] is step 6's `PLATFORM_ONLY` promotion of a `NO_ISSUER`: on for the trust-manager bindings and
- *   `Revokt.evaluate`, which run step 1; off for the walker-only harness and `Evaluator.evaluate`, where the walker's
- *   reason is reported directly.
+ * - [platformOnly] is step 6's `PLATFORM_ONLY` promotion of a walk `NotFound` whose fallback failed, an
+ *   `ISSUER_UNVERIFIED` one included: on for the trust-manager bindings and `Revokt.evaluate`, which run step 1; off
+ *   for the walker-only harness and `Evaluator.evaluate`, where the walker's label and reason are reported directly.
  */
 internal class DecideContext(
     val verifier: SignatureVerifier,
@@ -79,8 +83,8 @@ internal class DecideContext(
  * - **Step 5:** [reconstruct]; a `Found` is final.
  * - **Step 6:** on a walk `NotFound` or `Budget`, the PKIX fallback runs when it is enabled and the chain has at most
  *   `FALLBACK_MAX_PRESENTED` certificates. A `build` that returns null or throws is a failed fallback; a throw is
- *   caught, except a fatal error ([isFatal], §5.5), and sets [PathDecision.buildThrew]. Exactly one
- *   `FallbackNotUsed` is reported when no fallback path was evaluated.
+ *   caught, except a fatal error ([isFatal], §5.5), keeps an interrupt ([absorb]) and sets [PathDecision.buildThrew].
+ *   Exactly one `FallbackNotUsed` is reported when no fallback path was evaluated.
  *
  * Every exit carries `AlgorithmIdMismatch` once per certificate parsed here whose outer and TBS signature algorithms
  * differ, and every walk `UnsupportedAlgorithm(oid, PATH, outcomeDepended = status == ISSUER_UNVERIFIED)` once per
@@ -132,6 +136,7 @@ private class Decider(
     private val findings = ArrayList<Finding>()
     private var dropped = 0
     private var buildThrew = false
+    private val parses = arrayOfNulls<ParsedCertificate>(chain.size)
 
     fun run(presentedCut: Boolean): PathDecision {
         require(chain.isNotEmpty()) { "decide needs the leaf: the presented chain is empty" }
@@ -141,7 +146,7 @@ private class Decider(
         val leaf =
             when (val r = CertificateParser.parse(chain[0])) {
                 is CertificateParse.Failed -> return parseFailed(r.reason, clause = null)
-                is CertificateParse.Parsed -> index.cert(r.certificate)
+                is CertificateParse.Parsed -> index.cert(r.certificate).also { parses[0] = r.certificate }
             }
         mismatch(leaf, 0)
         if (index.isAnchorBytes(leaf)) return anchorLeaf(leaf)
@@ -167,8 +172,14 @@ private class Decider(
         certs += leaf
         for (i in 1 until chain.size) {
             when (val r = CertificateParser.parse(chain[i])) {
-                is CertificateParse.Failed -> dropped++
-                is CertificateParse.Parsed -> certs += index.cert(r.certificate).also { mismatch(it, i) }
+                is CertificateParse.Failed -> {
+                    dropped++
+                }
+
+                is CertificateParse.Parsed -> {
+                    parses[i] = r.certificate
+                    certs += index.cert(r.certificate).also { mismatch(it, i) }
+                }
             }
         }
         return certs
@@ -238,9 +249,11 @@ private class Decider(
 
     /**
      * Step 6 on a walk `NotFound`: a fallback path is `FOUND`; otherwise a chain over `FALLBACK_MAX_PRESENTED` is
-     * `PATH_BUDGET_EXCEEDED` (the fallback skipped or disabled, whether or not step 1 ran), and any other is
-     * `ISSUER_UNVERIFIED` when the walk met an unsupported own signature OID against a related candidate, else
-     * `NO_ISSUER`, promoted to `PLATFORM_ONLY` under [DecideContext.platformOnly].
+     * `PATH_BUDGET_EXCEEDED` (the fallback skipped or disabled, whether or not step 1 ran). Under
+     * [DecideContext.platformOnly] any other is `NO_ISSUER(PLATFORM_ONLY)`: the platform accepted the chain whatever
+     * the walk's label, so a server's relabel cannot change what `platformOnly()` matches; `walkerReason` and the
+     * `UnsupportedAlgorithm` findings keep the detail. Without it, any other is `ISSUER_UNVERIFIED` when the walk
+     * recorded an unsupported own signature OID ([reconstruct]), else `NO_ISSUER` with the walker's reason.
      */
     private fun notFound(
         walk: Walk.NotFound,
@@ -263,7 +276,7 @@ private class Decider(
                 builder.status(PathStatus.PATH_BUDGET_EXCEEDED)
             }
 
-            walk.unsupportedOids.isNotEmpty() -> {
+            !context.platformOnly && walk.unsupportedOids.isNotEmpty() -> {
                 builder.status(PathStatus.ISSUER_UNVERIFIED)
             }
 
@@ -320,7 +333,7 @@ private class Decider(
         return try {
             builder.build(chain.map { it.copyOf() }, snapshot, context.nowMillis)?.let { path(it, leaf) }
         } catch (t: Throwable) {
-            if (isFatal(t)) throw t
+            absorb(t)
             buildThrew = true
             null
         } ?: Fallback.NotUsed(FallbackReason.FAILED)
@@ -400,7 +413,15 @@ private class Decider(
                 .terminalKind(if (reported.isEmpty()) null else TerminalKind.ANCHOR)
                 .anchorSha256(reported.lastOrNull()?.toByteArray())
                 .build()
-        return PathDecision(path, keys, leaf?.serial, leaf?.scts.orEmpty(), findings.toList(), buildThrew)
+        return PathDecision(
+            path,
+            keys,
+            leaf?.serial,
+            leaf?.scts.orEmpty(),
+            findings.toList(),
+            buildThrew,
+            parses.toList(),
+        )
     }
 
     private fun WalkPath.hashes(): List<ByteString> = certs.map { it.bytesHash }

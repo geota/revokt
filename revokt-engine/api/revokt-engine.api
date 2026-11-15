@@ -87,6 +87,7 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field FORMAT_UNSUPPORTED Ldev/revokt/DiagnosticCode;
 	public static final field INDEX_INCONSISTENT Ldev/revokt/DiagnosticCode;
 	public static final field IN_MEMORY_STORE_WITH_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
+	public static final field IO_DISPATCHER_UNCONFINED Ldev/revokt/DiagnosticCode;
 	public static final field LOWER_CLASS_SOURCE_NEVER_INSTALLED Ldev/revokt/DiagnosticCode;
 	public static final field METERED_DEFERRED Ldev/revokt/DiagnosticCode;
 	public static final field MIRROR_WITH_SEED_NEVER_INSTALLED Ldev/revokt/DiagnosticCode;
@@ -99,6 +100,7 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field SEED_CHANNEL_MISMATCH Ldev/revokt/DiagnosticCode;
 	public static final field SEED_PAST_REJECT_THRESHOLD Ldev/revokt/DiagnosticCode;
 	public static final field SEED_UNREADABLE Ldev/revokt/DiagnosticCode;
+	public static final field SOURCE_EMPTY Ldev/revokt/DiagnosticCode;
 	public static final field STALENESS_CLEARED_FOR_REQUIRED_DATASET Ldev/revokt/DiagnosticCode;
 	public static final field STALE_REJECTS_WITHOUT_THRESHOLD Ldev/revokt/DiagnosticCode;
 	public static final field STORAGE_UNSET Ldev/revokt/DiagnosticCode;
@@ -147,7 +149,7 @@ public final class dev/revokt/EvaluationRequest$Builder {
 	public final fun host (Ljava/lang/String;)Ldev/revokt/EvaluationRequest$Builder;
 	public final fun nowMillis (J)Ldev/revokt/EvaluationRequest$Builder;
 	public final fun presented (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
-	public final fun verifiedPaths (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
+	public final fun verifiedPath (Ljava/util/List;)Ldev/revokt/EvaluationRequest$Builder;
 }
 
 public abstract interface class dev/revokt/Evaluator {
@@ -423,6 +425,7 @@ public final class dev/revokt/KotlinRevocationEngine : dev/revokt/RevocationEngi
 	public fun close ()V
 	public fun getCoverageEndMillis ()Ljava/lang/Long;
 	public fun getFormats ()Ljava/util/Set;
+	public fun getName ()Ljava/lang/String;
 	public fun install (Ldev/revokt/GenerationFiles;)Ljava/lang/String;
 	public fun prepare (Ldev/revokt/GenerationFiles;)Ldev/revokt/PreparedGeneration;
 	public fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
@@ -563,6 +566,7 @@ public abstract interface class dev/revokt/RevocationEngine : java/lang/AutoClos
 	public fun clear ()V
 	public abstract fun getCoverageEndMillis ()Ljava/lang/Long;
 	public abstract fun getFormats ()Ljava/util/Set;
+	public fun getName ()Ljava/lang/String;
 	public fun install (Ldev/revokt/GenerationFiles;)Ljava/lang/String;
 	public abstract fun prepare (Ldev/revokt/GenerationFiles;)Ldev/revokt/PreparedGeneration;
 	public abstract fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
@@ -570,6 +574,7 @@ public abstract interface class dev/revokt/RevocationEngine : java/lang/AutoClos
 
 public final class dev/revokt/RevocationEngine$DefaultImpls {
 	public static fun clear (Ldev/revokt/RevocationEngine;)V
+	public static fun getName (Ldev/revokt/RevocationEngine;)Ljava/lang/String;
 	public static fun install (Ldev/revokt/RevocationEngine;Ldev/revokt/GenerationFiles;)Ljava/lang/String;
 }
 
@@ -607,7 +612,6 @@ public final class dev/revokt/RevoktLimits {
 	public static final field MAX_PRESENTED I
 	public static final field MAX_PRESENTED_BYTES J
 	public static final field MAX_RELATED_PER_LEVEL I
-	public static final field MAX_SYNC_BYTES J
 	public static final field MAX_TRUST_MANAGERS I
 	public static final field MAX_VERIFICATIONS I
 	public static final field MAX_X5U_BYTES J

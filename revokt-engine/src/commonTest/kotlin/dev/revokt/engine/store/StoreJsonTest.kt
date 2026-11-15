@@ -49,6 +49,22 @@ class StoreJsonTest {
     }
 
     @Test
+    fun `a signature of any even non-empty length round-trips, as the leaf may be on any EC curve`() {
+        // Spec §7.1 (the maintainer's decision on #163): a P-256 leaf signs a 64-byte pair, a P-521 one 132 bytes.
+        for (size in listOf(64, 96, 132)) {
+            val base = StoreFixtures.meta(blobs = blobs)
+            val signed = checkNotNull(base.signed).copy(signature = ByteArray(size) { 9 }.toByteString())
+            val meta = base.copy(signed = signed)
+            assertEquals(meta, MetaJson.read(MetaJson.write(meta)))
+        }
+        for (size in listOf(0, 95, 97)) {
+            assertFailsWith<IllegalArgumentException> {
+                SignedMeta(1, ByteArray(32).toByteString(), ByteArray(size).toByteString())
+            }
+        }
+    }
+
+    @Test
     fun `meta json carries the derived name, never the attachment filename`() {
         val bytes = text(MetaJson.write(StoreFixtures.meta(blobs = blobs)))
         assertTrue("compat-2026-11--decf10cbc971a35f" in bytes)
@@ -133,7 +149,6 @@ class StoreJsonTest {
 
     @Test
     fun `a meta value that breaks the layout's rules is refused`() {
-        assertFailsWith<IllegalArgumentException> { StoreFixtures.meta(channel = "compat") }
         assertFailsWith<IllegalArgumentException> { StoreFixtures.meta(blobs = mapOf(full to blobs.values.single())) }
         assertFailsWith<IllegalArgumentException> {
             StoreFixtures.meta(
@@ -295,13 +310,15 @@ class StoreJsonTest {
             UpdaterJson.read(bothBad, now),
         )
         assertEquals(UpdaterRead(UpdaterRecord()), UpdaterJson.read("{}".encodeToByteArray(), now))
+        // A sources member that is not an object reads as no sources and is reported (#131); null is absent.
         for (sources in listOf("[]", "7", "null", "\"x\"")) {
-            assertEquals(
-                UpdaterRead(UpdaterRecord(watermarkMillis = 5)),
-                UpdaterJson.read("{\"watermarkMillis\":5,\"sources\":$sources}".encodeToByteArray(), now),
-                sources,
-            )
+            val read = UpdaterJson.read("{\"watermarkMillis\":5,\"sources\":$sources}".encodeToByteArray(), now)
+            val malformed = sources != "null"
+            assertEquals(UpdaterRead(UpdaterRecord(watermarkMillis = 5), sourcesMalformed = malformed), read, sources)
+            assertEquals(if (malformed) 1 else 0, read?.storeFailures, sources)
         }
+        assertEquals(2, UpdaterJson.read(bothBad, now)?.storeFailures)
+        assertEquals(0, UpdaterJson.read("{}".encodeToByteArray(), now)?.storeFailures)
     }
 
     @Test

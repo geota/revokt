@@ -247,10 +247,19 @@ internal object C2spIndex {
         )
     }
 
+    /**
+     * The length of [index]'s bytes as [write] lays them out: the header, 32 bytes per filename, 42 per log and 18 per
+     * entry. A Long, so a caller can compare an index too large to write with [MAX_BYTES].
+     */
+    fun byteSize(index: IndexFile): Long =
+        HEADER.toLong() + NAME.toLong() * index.filenames.size + LOG_ENTRY.toLong() * index.logs.size +
+            ENTRY.toLong() * index.logs.values.sumOf { it.size.toLong() }
+
     /** The bytes of [index], its tables and sections in the order [index] holds them. */
     fun write(index: IndexFile): ByteArray {
         val tablesEnd = HEADER + NAME * index.filenames.size + LOG_ENTRY * index.logs.size
-        val out = ByteArray(tablesEnd + ENTRY * index.logs.values.sumOf { it.size })
+        // An index past Int.MAX_VALUE bytes throws here or on the first write past the array, never writes short.
+        val out = ByteArray(byteSize(index).toInt())
         MAGIC.copyInto(out, 0)
         putU16(out, 8, index.filenames.size)
         putU32(out, 10, index.logs.size.toLong())

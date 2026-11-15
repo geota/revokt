@@ -8,7 +8,10 @@ package dev.revokt
  * is configured: the consumer chooses. Growable. Store paths and the bundled seed's resource name use the lowercase enum
  * name (`/revokt/seed-compat.zip`, spec §6.5).
  */
-public enum class CrliteChannel {
-    COMPAT,
-    DEFAULT,
+public enum class CrliteChannel(
+    /** The channel's name in a Remote Settings record's `channel` field (spec §7.1, §7.2). */
+    internal val wireName: String,
+) {
+    COMPAT("compat"),
+    DEFAULT("default"),
 }
