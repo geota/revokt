@@ -10,16 +10,21 @@
 #   temporary directory), nothing under the runner user's home, and not the Docker socket;
 # - the PATH checks below.
 #
-# As root ("root" mode), only the PATH checks, judging "writable by the user" from owner, group and mode bits:
-# other-writable, or the user's uid with owner write, or its gid with group write. The user mode has checked that the user
-# is in no other group. Root sees into the directories the user cannot search, such as a runner home of mode 750, and
-# follows the links there, which the runner user follows too.
+# As root ("root" mode), only the PATH checks. Root walks the paths and links, so it sees into the directories the user
+# cannot search (such as a runner home of mode 750) and follows the links there, which the runner user follows too; but
+# every judgement is still the kernel's, asked as the user (setpriv with its uid and gid and no other group), so ACLs
+# count.
+#
+# In both modes, "writable by the user" means: the kernel grants the user write access (mode bits and ACLs), or the
+# user's uid owns it (the owner can chmod it), or it cannot be stat'ed (fail closed).
 #
 # The PATH checks, for the runner user's PATH as the actions' post steps see it:
 # - each entry is resolved the way the kernel resolves it, one component and one link at a time; no directory that
 #   passes through, and no regular file or directory it ends at, may be writable (a device such as /dev/null may be);
 # - then the whole tree each entry belongs to (the entry without a trailing /bin) is checked, and so is the tree of
-#   every link target in it, until no link leads anywhere new: no regular file or directory in a tree may be writable;
+#   every link target in it, until no link leads anywhere new. In a tree, as the user: nothing may be writable, nothing
+#   may be owned by the user, and no directory may be one the user can enter but not list (it could hide a writable
+#   path); a directory the user can neither list nor enter hides nothing it can reach;
 # - a link that cannot be read, more than 40 links in one resolution, and a relative PATH entry fail the check.
 #
 # It exits 0 only when every check holds; otherwise it prints an ::error:: for the first that fails and exits 1.
@@ -42,11 +47,16 @@ case $mode in
   root)
     runner_path=${3:?the runner user PATH}
     shift 3
-    uid=$(id -u -- "$user")
-    gid=$(id -g -- "$user")
     ;;
   *) echo "::error::fuzz_isolation_check.sh: unknown mode $mode" >&2; exit 1 ;;
 esac
+uid=$(id -u -- "$user")
+gid=$(id -g -- "$user")
+# The prefix that asks the kernel as the user: nothing in user mode; setpriv as root.
+as_user=()
+if [ "$mode" = root ]; then
+  as_user=(setpriv "--reuid=$uid" "--regid=$gid" --clear-groups --)
+fi
 
 # Errors go to fd 3, the script's stdout, so one raised inside $(...) is still printed; the subshell's exit 1 then
 # fails the assignment, and set -e the script.
@@ -56,17 +66,18 @@ fail() {
   exit 1
 }
 
-# Whether the user can write $1 (not a link).
+if [ "$mode" = root ]; then
+  # A setpriv that does not switch would make every answer root's; fail unless it does.
+  [ "$("${as_user[@]}" id -u 2> /dev/null || true)" = "$uid" ] || fail "cannot be checked: setpriv does not run as uid $uid"
+fi
+
+# Whether the user can write $1 (not a link): its uid owns it, the kernel grants it write access, or it cannot be
+# stat'ed.
 writable() {
-  if [ "$mode" = user ]; then
-    [ -w "$1" ]
-    return
-  fi
-  local owner group bits
-  read -r owner group bits < <(stat -c '%u %g %a' -- "$1" 2> /dev/null) || return 1
-  bits=$((8#$bits))
-  (((bits & 2) != 0)) || { [ "$owner" = "$uid" ] && (((bits & 0200) != 0)); } \
-    || { [ "$group" = "$gid" ] && (((bits & 020) != 0)); }
+  local owner
+  owner=$(stat -c %u -- "$1" 2> /dev/null) || return 0
+  [ "$owner" != "$uid" ] || return 0
+  "${as_user[@]}" test -w "$1"
 }
 
 if [ "$mode" = user ]; then
@@ -76,12 +87,13 @@ if [ "$mode" = user ]; then
   # -n: fail at once instead of asking for a password. A missing sudo counts as no sudo.
   if sudo -n true > /dev/null 2>&1; then fail "can use sudo"; fi
 
+  # A path that does not exist (the Docker socket may not) is covered by its directory, which is in the list.
   for path in "$@" /var/run/docker.sock; do
-    if [ -w "$path" ]; then fail "can write $path"; fi
+    if [ -e "$path" ] && writable "$path"; then fail "can write or owns $path"; fi
   done
   # Whatever the user cannot reach, it cannot write either, so find's permission errors are not failures.
-  hit=$(find "$runner_home" -writable -print -quit 2> /dev/null || true)
-  [ -z "$hit" ] || fail "can write $hit"
+  hit=$(find "$runner_home" \( -writable -o -uid "$uid" \) -print -quit 2> /dev/null || true)
+  [ -z "$hit" ] || fail "can write or owns $hit"
 fi
 
 # Resolves $1 as the kernel does: one component at a time, following each link one hop at a time (at most 40). Fails
@@ -142,15 +154,12 @@ add_tree_of() {
   if [ "$tree" != /bin ] && [ -n "${tree%/bin}" ]; then tree=${tree%/bin}; fi
   if ! inside_trees "$tree"; then trees+=("$tree"); fi
 }
-# The first regular file or directory in the tree $1 that the user can write; links are left to the caller.
+# The first path in the tree $1, found by find as the user, that the user can write (links are left to the caller), that
+# its uid owns, or that is a directory it can enter but not list. find's errors are the directories it can neither list
+# nor enter, which hide nothing the user can reach.
 first_writable() {
-  if [ "$mode" = user ]; then
-    # What the user cannot reach, it cannot write; root mode looks there.
-    find "$1" ! -type l -writable -print -quit 2> /dev/null || true
-  else
-    find "$1" ! -type l \( -perm -0002 -o \( -uid "$uid" -perm -0200 \) -o \( -gid "$gid" -perm -0020 \) \) -print -quit \
-      || fail "cannot be checked: find failed in $1"
-  fi
+  "${as_user[@]}" find "$1" \( \( ! -type l -writable \) -o -uid "$uid" -o \( -type d ! -readable -executable \) \) \
+    -print -quit 2> /dev/null || true
 }
 
 IFS=: read -r -a entries <<< "$runner_path"
@@ -169,7 +178,7 @@ while [ "$i" -lt "${#trees[@]}" ]; do
   i=$((i + 1))
   resolve "$tree" "the tree $tree"
   hit=$(first_writable "$tree")
-  [ -z "$hit" ] || fail "can write $hit, in the tree $tree of the runner's PATH ($mode check)"
+  [ -z "$hit" ] || fail "can write, owns, or can enter without listing $hit, in the tree $tree of the runner's PATH ($mode check)"
   # Every link is resolved hop by hop from its own path, never judged by its target string (a target such as
   # ../lnk/../x reads as inside a tree when lnk leads elsewhere); the tree it ends in joins the list unless the resolved
   # path is already inside one.
@@ -182,5 +191,5 @@ done
 if [ "$mode" = user ]; then
   echo "the fuzzing user $user (uid $(id -u)) has no sudo and cannot write the runner user's files or PATH (${#trees[@]} trees)"
 else
-  echo "by owner, group and mode, the fuzzing user $user cannot write the runner's PATH (${#trees[@]} trees, as root)"
+  echo "the fuzzing user $user cannot write the runner's PATH, walked as root and asked as the user (${#trees[@]} trees)"
 fi
