@@ -390,9 +390,11 @@ every required check in Appendix B passes**.
   are warmed by a separate job whose outputs the test job restores). harden-runner is audit-only on macOS
   and Windows, so those two jobs run Gradle `--offline` after cache restore and rely on `NoHttpClientInTests`;
   the table marks them advisory.
-- Coverage: Kover branch floor of 90 % per parser package over the committed replay (§9.1), as a hard rule;
-  overall line coverage compared against the `main` artifact (`coverage-main`, the Kover XML uploaded from
-  `main`) by a script in `build-logic`: not below the `main` value, with the 90 % target reached by 0.2.
+- Coverage: Kover branch floor of 90 % per parser package over the committed replay (§9.1), as a hard rule.
+  The path walker and the store have floors a little under their measured branch coverage (#161: walker
+  98.96 %, store 94.26 % at f2c54fc). The floors may only be raised. Overall line coverage is compared
+  against the `main` artifact (`coverage-main`, the Kover XML uploaded from `main`) by a script in
+  `build-logic`: not below the `main` value, with the 90 % target reached by 0.2.
 
 **Nightly and on release branches (blocking for a release, informational on `main`):**
 - The native job: builds `native/` (Rust cdylib, Go CLI) and `revokt-engine-upki`, runs the §9 oracles, the
