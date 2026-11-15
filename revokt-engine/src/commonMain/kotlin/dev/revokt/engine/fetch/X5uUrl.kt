@@ -46,8 +46,8 @@ internal class X5uUrlCheck private constructor(
  * x5u URI host before the `x5uHosts` check … the https-only, port-443 and no-userinfo rules apply to the mirror host
  * too"), with the #177 review's contract for the rewrite.
  *
- * The URL is read by a deliberately narrow grammar, so no URL parser downstream can see another host than the one
- * checked: `https://` (lowercase), an authority that is a DNS host name (labels of ASCII letters, digits and `-`,
+ * The URL is read by [StrictUrl], the narrow grammar shared with the redirect hops, DNS host names only, so no URL parser
+ * downstream can see another host than the one checked: `https://` (lowercase), an authority that is a DNS host name (labels of ASCII letters, digits and `-`,
  * separated by single dots, no trailing dot) and an optional port, then a path starting with `/` whose characters are
  * RFC 3986 `pchar`s, `/` and `?`, with every `%` followed by two hex digits. No fragment, no IP literal (nor a host whose last label is a number), no
  * percent-encoded or non-ASCII host (`java.net.URI.getHost()` would be null for the latter). What is fetched is
@@ -60,13 +60,6 @@ internal class X5uUrlCheck private constructor(
  */
 internal object X5uUrl {
     private const val SCHEME = "https://"
-    private const val MAX_HOST = 253
-    private const val MAX_LABEL = 63
-
-    /** `pchar` (RFC 3986 §3.3) without `%`, plus `/` and `?`: unreserved, sub-delims, `:` and `@`. */
-    private val AUTHORITY_ENDS = charArrayOf('/', '?', '#')
-
-    private const val PATH_CHARS = "-._~!$&'()*+,;=:@/?"
 
     fun check(
         url: String,
@@ -124,59 +117,28 @@ internal object X5uUrl {
     }
 
     private fun parse(url: String): Read {
-        val schemeEnd = url.indexOf("://")
-        if (schemeEnd < 0) return Read.Refused(X5uUrlFailure.SYNTAX, "no scheme")
-        if (url.substring(0, schemeEnd + 3) != SCHEME) return Read.Refused(X5uUrlFailure.SCHEME, "not https")
-        val start = schemeEnd + 3
-        val end = url.indexOfAny(AUTHORITY_ENDS, start).let { if (it < 0) url.length else it }
-        val authority = url.substring(start, end)
-        if ('@' in authority) return Read.Refused(X5uUrlFailure.USERINFO, "userinfo")
-        val colon = authority.lastIndexOf(':')
-        val host = if (colon < 0) authority else authority.substring(0, colon)
-        val port = if (colon < 0) "" else authority.substring(colon)
-        if (!isHostName(host)) return Read.Refused(X5uUrlFailure.SYNTAX, "not a DNS host name")
+        val read =
+            when (val strict = StrictUrl.parse(url, ipLiterals = false)) {
+                is StrictUrlRead.Parsed -> strict
+                is StrictUrlRead.Refused -> return Read.Refused(failure(strict.failure), strict.detail)
+            }
+        val port = read.port?.let { ":$it" } ?: ""
         if (port.isNotEmpty() && port != ":443") return Read.Refused(X5uUrlFailure.PORT, "port \"${port.drop(1)}\"")
-        val path = url.substring(end)
-        if (!isPath(path)) return Read.Refused(X5uUrlFailure.SYNTAX, "not a plain path")
-        return Read.Parsed(host, port, path)
-    }
-
-    /**
-     * A DNS host name as this grammar reads one: LDH labels of 1 to 63 characters, ASCII case kept, separated by single
-     * dots, at most 253 characters, no trailing dot, and a last label that is not a number. `MozillaRemoteSettings`
-     * holds its x5u hosts and rewrites to the same rule at build (spec §4), so both accept exactly the same names.
-     */
-    internal fun isHostName(host: String): Boolean {
-        if (host.isEmpty() || host.length > MAX_HOST) return false
-        val labels = host.split('.')
-        val names =
-            labels.all { label ->
-                label.length in 1..MAX_LABEL &&
-                    label.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' }
-            }
-        // A last label that reads as a number makes the host an IPv4 address to WHATWG URL parsers (`1.2.3.4`,
-        // `0x7f.1`), so it is no DNS name here and "no IP literal" holds.
-        return names && !isNumeric(labels.last())
-    }
-
-    private fun isNumeric(label: String): Boolean {
-        val hex = label.length > 1 && label[0] == '0' && (label[1] == 'x' || label[1] == 'X')
-        return if (hex) label.drop(2).all(::isHex) else label.all { it in '0'..'9' }
-    }
-
-    private fun isPath(path: String): Boolean {
-        if (!path.startsWith('/')) return false
-        var i = 0
-        while (i < path.length) {
-            val c = path[i]
-            when {
-                c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c in PATH_CHARS -> i++
-                c == '%' && i + 2 < path.length && isHex(path[i + 1]) && isHex(path[i + 2]) -> i += 3
-                else -> return false
-            }
+        val path = read.rest
+        if (!path.startsWith('/') || !StrictUrl.isPathAndQuery(path)) {
+            return Read.Refused(X5uUrlFailure.SYNTAX, "not a plain path")
         }
-        return true
+        return Read.Parsed(read.host, port, path)
     }
 
-    private fun isHex(c: Char): Boolean = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
+    /** The x5u failure for a [StrictUrl] refusal: a host that is not a DNS name is a syntax failure here. */
+    private fun failure(strict: StrictUrlFailure): X5uUrlFailure =
+        when (strict) {
+            StrictUrlFailure.SYNTAX, StrictUrlFailure.HOST -> X5uUrlFailure.SYNTAX
+            StrictUrlFailure.SCHEME -> X5uUrlFailure.SCHEME
+            StrictUrlFailure.USERINFO -> X5uUrlFailure.USERINFO
+        }
+
+    /** [StrictUrl.isHostName]: the x5u hosts and rewrites are DNS host names (spec §4). */
+    internal fun isHostName(host: String): Boolean = StrictUrl.isHostName(host)
 }
