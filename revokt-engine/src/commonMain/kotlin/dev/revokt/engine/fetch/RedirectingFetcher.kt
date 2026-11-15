@@ -72,7 +72,8 @@ internal class RedirectingFetcher(
         val deadline = request.timeoutMillis.milliseconds
         var url = hopUrl(request.url) { HopUrl.parse(request.url) }
         val seen = mutableSetOf(url)
-        var hop = request
+        // The first request too is sent as HopUrl re-serialised it, so every request in the chain is what was checked.
+        var hop = request.newBuilder().url(url.toString()).build()
         var hops = 0
         while (true) {
             val response = fetcher.fetch(hop)

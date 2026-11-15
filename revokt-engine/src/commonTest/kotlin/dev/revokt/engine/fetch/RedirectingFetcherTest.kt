@@ -85,6 +85,13 @@ class RedirectingFetcherTest {
     }
 
     @Test
+    fun `the first request is sent as HopUrl re-serialised it`() {
+        val fetcher = ScriptedFetcher { ok("final") }
+        RedirectingFetcher(fetcher).fetch(request("https://Mirror.Example:443/a/../revocation/manifest.json#f"))
+        assertEquals(listOf(manifest), fetcher.requests.map { it.url })
+    }
+
+    @Test
     fun `301 302 303 307 and 308 are followed`() {
         for (status in listOf(301, 302, 303, 307, 308)) {
             val fetcher = routed(manifest to redirect("https://cdn.example/m.json", status))

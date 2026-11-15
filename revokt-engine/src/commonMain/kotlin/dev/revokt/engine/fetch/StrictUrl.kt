@@ -167,8 +167,9 @@ internal object StrictUrl {
         val tail = if (compressed < 0) "" else address.substring(compressed + 2)
         // A second `::` (or a third colon) leaves an empty group, which no hex group matches.
         val groups = groups(head) + groups(tail)
-        // A trailing dotted quad stands for the last two groups.
-        val last = groups.lastOrNull().orEmpty()
+        // A trailing dotted quad stands for the last two groups of the address: the tail's last group when there is a
+        // `::` (none when the address ends in `::`), never a head group before it.
+        val last = (if (compressed < 0) groups else groups(tail)).lastOrNull().orEmpty()
         val ipv4 = '.' in last
         if (ipv4 && !isIpv4(last)) return false
         val hex = if (ipv4) groups.dropLast(1) else groups

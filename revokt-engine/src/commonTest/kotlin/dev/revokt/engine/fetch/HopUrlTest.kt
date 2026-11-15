@@ -109,7 +109,9 @@ class HopUrlTest {
         assertEquals(StrictUrlFailure.SCHEME, (HopUrl.parse("HttpS://cdn.example/a") as HopUrlRead.Refused).failure)
         assertEquals(StrictUrlFailure.SCHEME, (HopUrl.parse("1https://cdn.example/a") as HopUrlRead.Refused).failure)
         assertEquals(StrictUrlFailure.HOST, refused("https://cdn.example/", "//"))
-        // A first segment holding ':' after a character no scheme allows is a relative path.
+        // A first segment holding ':' after a character no scheme allows is a relative path. RFC 3986 §4.2 forbids a ':'
+        // in a relative-path reference's first segment (segment-nz-nc); this is the WHATWG reading, which keeps the
+        // base's host, so it cannot point a hop anywhere else.
         assertEquals("https://cdn.example/a_b:c", resolved("https://cdn.example/", "a_b:c"))
     }
 }

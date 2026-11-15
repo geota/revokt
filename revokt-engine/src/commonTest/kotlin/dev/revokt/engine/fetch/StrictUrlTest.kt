@@ -92,6 +92,9 @@ class StrictUrlTest {
             "[1:2:3:4:5:6:7:192.0.2.1]",
             "[::ffff:192.0.2.256]",
             "[::1.2.3]",
+            "[1.2.3.4::]",
+            "[1:1.2.3.4::]",
+            "[a:b:c:d:e:1.2.3.4::]",
         )) {
             assertFalse(StrictUrl.isIpv6Literal(bad), bad)
         }

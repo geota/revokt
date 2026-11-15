@@ -12,7 +12,10 @@ package dev.revokt.engine.fetch
  * [toString] is the URL that is fetched, re-serialised from the parts, never the string as given: `https://`, [host]
  * lowercased, the port only when it is not 443, the path (`/` when empty, dot segments removed) and the query as
  * written. Two URLs are the same hop when their [toString]s are equal, which is what the loop check compares; IPv6
- * addresses are compared as written, lowercased, not in a canonical form.
+ * addresses are compared as written, lowercased, not in a canonical form. That key is RFC 3986's simple string
+ * comparison (§6.2.1) after the normalisation above, not what every client sends: `%2e` is not a dot segment here,
+ * while WHATWG parsers and OkHttp's `HttpUrl` resolve `/a/%2e%2e/b` to `/b`, so a loop spelled with `%2e` ends at the
+ * hop limit rather than as a loop. Either way it is `FAILED`, and the host cannot change.
  */
 internal class HopUrl private constructor(
     /** The host, lowercased: DNS names and IPv6 hex digits compare ignoring ASCII case. */
