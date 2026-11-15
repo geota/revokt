@@ -91,6 +91,34 @@ class StoreJsonTest {
     }
 
     @Test
+    fun `a MIRROR meta json carries the time its manifest was stored, which only MIRROR reads`() {
+        val meta =
+            StoreFixtures
+                .meta(
+                    trustClass = TrustClass.MIRROR,
+                    blobs = blobs,
+                ).copy(manifestStoredAtMillis = 1_763_164_800_000)
+        val bytes = MetaJson.write(meta)
+        assertTrue("\"manifestStoredAtMillis\":1763164800000" in text(bytes))
+        assertEquals(meta, MetaJson.read(bytes))
+        // A MIRROR meta json without it reloads, and sends no If-Modified-Since.
+        assertNull(MetaJson.read(MetaJson.write(meta.copy(manifestStoredAtMillis = null)))?.manifestStoredAtMillis)
+        // Another class's meta json that carries it reloads without it, as a MIRROR one ignores the signed members.
+        val signed = MetaJson.write(StoreFixtures.meta(blobs = blobs))
+        val carried = edited(signed, "{\"blobs\"", "{\"manifestStoredAtMillis\":5,\"blobs\"")
+        assertNull(assertNotNull(MetaJson.read(carried)).manifestStoredAtMillis)
+        // A value of the wrong type in a MIRROR meta json is malformed.
+        assertNull(MetaJson.read(edited(bytes, "1763164800000", "\"x\"")))
+        assertFailsWith<IllegalArgumentException> { StoreFixtures.meta().copy(manifestStoredAtMillis = 1) }
+        assertFailsWith<IllegalArgumentException> {
+            StoreFixtures
+                .meta(
+                    TrustClass.BUNDLED,
+                ).copy(manifestStoredAtMillis = 1)
+        }
+    }
+
+    @Test
     fun `unknown meta json members are ignored`() {
         val meta = StoreFixtures.meta(blobs = blobs)
         val bytes = edited(MetaJson.write(meta), "{\"blobs\"", "{\"aFutureMember\":[1,{\"x\":null}],\"blobs\"")

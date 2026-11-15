@@ -35,7 +35,9 @@ internal data class SignedMeta(
  * A generation's `meta.json` (spec §6.5), the completeness marker written last in its directory, which persists [channel]
  * by its enum name; [blobs] maps each full filter's name in the generation (its derived name, never the attachment
  * filename) to the SHA-256 of its blob; [signed] is present exactly when [trustClass] is `SIGNED`. [collection] is the
- * Remote Settings collection, absent for a source that has none.
+ * Remote Settings collection, absent for a source that has none. [manifestStoredAtMillis] is, for a `MIRROR`
+ * generation, the local time its manifest was stored, the next manifest request's `If-Modified-Since` (§6.5, §7.3,
+ * revision 56); only a `MIRROR` generation carries it, and one without it sends no `If-Modified-Since`.
  */
 internal data class GenerationMeta(
     val dataset: Dataset,
@@ -48,12 +50,16 @@ internal data class GenerationMeta(
     val collection: String?,
     val blobs: Map<String, ByteString>,
     val signed: SignedMeta?,
+    val manifestStoredAtMillis: Long? = null,
 ) {
     /** The generation's directory name, `gen-<timestamp>-<hash16>`. */
     val directory: String = GenerationNames.directory(sourceTimestampMillis, generationId)
 
     init {
         require((signed != null) == (trustClass == TrustClass.SIGNED)) { "signed members iff SIGNED, got $trustClass" }
+        require(manifestStoredAtMillis == null || trustClass == TrustClass.MIRROR) {
+            "a manifest time on a $trustClass generation"
+        }
         for ((name, sha256) in blobs) {
             require(C2spIndex.isFilename(name)) { "'$name' is not a generation file name" }
             require(sha256.size == SHA256_BYTES) { "the blob of '$name' is not a SHA-256" }
@@ -83,6 +89,7 @@ internal object MetaJson {
             "changesetTimestampMillis" to StoreFields.long(meta.signed?.changesetTimestampMillis),
             "signerLeafSha256" to StoreFields.string(meta.signed?.signerLeafSha256?.hex()),
             "signature" to StoreFields.string(meta.signed?.signature?.hex()),
+            "manifestStoredAtMillis" to StoreFields.long(meta.manifestStoredAtMillis),
         )
 
     /** The `meta.json` in [bytes], or null when it is malformed or of another `metaVersion`. */
@@ -110,6 +117,9 @@ internal object MetaJson {
                     } else {
                         null
                     },
+                // Read for MIRROR only, as the signed members are for SIGNED only: another class ignores it.
+                manifestStoredAtMillis =
+                    if (trustClass == TrustClass.MIRROR) f.optLong("manifestStoredAtMillis") else null,
             )
         }
 

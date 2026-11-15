@@ -104,6 +104,18 @@ internal object UpdaterTransitions {
         )
     }
 
+    /**
+     * [record] after an `INSTALLED` sync of an unsigned source ([sourceId], a C2SP mirror) at [nowMillis]: the attempt
+     * fields and the end of a run of failures, as for any install, and the backoff cleared (a mirror's `Backoff` and
+     * `Retry-After` are not read); never the cursor, `lastVerified*` or the watermark, since a `MIRROR` generation
+     * "never reads or writes the watermark" and nothing of it is verified (spec §6.3, §7.3).
+     */
+    fun afterUnsignedInstall(
+        record: UpdaterRecord,
+        sourceId: String,
+        nowMillis: Long,
+    ): UpdaterRecord = after(record, sourceId, SyncOutcome.UNCHANGED, nowMillis)
+
     /** [attempted] after [outcome]: its failure count and backoff; an install's `lastVerified*` are [after]'s. */
     private fun source(
         attempted: SourceRecord,
