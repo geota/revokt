@@ -136,9 +136,22 @@ class InstallTest {
                 pending = false,
                 staleGateOpen = false,
                 clockBehind = false,
+                // The maximum coverage the loader decoded from index.bin, not the engine's getter (#137, #190).
+                maxCoverageMillis = maxCoverageMillis(C2spIndex.read(p.index)),
             ),
             s.datasets.getValue(Dataset.CRLITE),
         )
+        assertNotNull(s.datasets.getValue(Dataset.CRLITE).maxCoverageMillis)
+    }
+
+    @Test
+    fun `the published maximum coverage is the loader's own, whatever the engine's getter says`() {
+        val engine = TestEngine().apply { coverageEnd = { null } }
+        install(pending(), engine = engine)
+        val published = snapshot.snapshot.datasets.getValue(Dataset.CRLITE)
+        assertNull(snapshot.snapshot.coverageEndMillis)
+        assertEquals(maxCoverageMillis(C2spIndex.read(pending().index)), published.maxCoverageMillis)
+        assertNotNull(published.maxCoverageMillis)
     }
 
     @Test

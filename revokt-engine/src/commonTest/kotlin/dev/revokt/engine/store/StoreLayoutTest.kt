@@ -272,6 +272,16 @@ class StoreLayoutTest {
     }
 
     @Test
+    fun `readBlob returns a blob's bytes only when they re-hash to its key`() {
+        val sha = StoreFixtures.sha256(fullBytes)
+        assertNull(layout.readBlob(sha))
+        layout.putBlob(fullBytes)
+        assertContentEquals(fullBytes, layout.readBlob(sha))
+        storage.write(layout.blobKey(sha), byteArrayOf(3, 0, 1, 2, 4))
+        assertNull(layout.readBlob(sha))
+    }
+
+    @Test
     fun `the pointer round-trips through current, and an absent pointer is not a malformed one`() {
         assertEquals(StoreRead.Absent, layout.pointer())
         val older = install(generationId = "g0", sourceTimestampMillis = 1)

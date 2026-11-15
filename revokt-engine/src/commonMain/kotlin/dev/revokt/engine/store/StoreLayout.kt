@@ -85,6 +85,10 @@ internal class StoreLayout(
         return if (stored.toByteString().sha256() == sha256) BlobState.MATCH else BlobState.MISMATCH
     }
 
+    /** The blob of [sha256], re-hashed against its key: its bytes on a match, null when it is absent or mismatches. */
+    fun readBlob(sha256: ByteString): ByteArray? =
+        storage.read(blobKey(sha256))?.takeIf { it.toByteString().sha256() == sha256 }
+
     /**
      * Stores [bytes] under the key of their SHA-256, unless that key already holds them: an existing blob is re-hashed
      * and reused on a match and rewritten on a mismatch, which the caller counts (`storeFailures++`).

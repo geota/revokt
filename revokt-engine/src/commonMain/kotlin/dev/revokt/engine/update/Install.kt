@@ -208,7 +208,7 @@ private class Install(
         stage = SyncStage.ACTIVATE
         engine.activate(p)
         activated = true
-        val epoch = publish()
+        val epoch = publish(maxCoverageMillis(index))
         stage = SyncStage.STORE
         store.point(Pointer(directory, previous(directory)))
         updater?.let { store.writeUpdater(it, publication.nowMillis) }
@@ -281,11 +281,12 @@ private class Install(
         }
 
     /**
-     * Publishes the snapshot with this generation for its dataset, `clockBehind` recomputed for every dataset, the
-     * engine's coverage end (null when the engine cannot tell, or throws), and the next epoch, which it returns.
+     * Publishes the snapshot with this generation for its dataset, carrying [maxCoverage], the maximum coverage the
+     * loader decoded from its `index.bin`; `clockBehind` recomputed for every dataset, the engine's coverage end (null
+     * when the engine cannot tell, or throws), and the next epoch, which it returns.
      */
     @Suppress("TooGenericExceptionCaught") // An injected engine's getter that throws means it cannot tell (§3.2).
-    private fun publish(): Long {
+    private fun publish(maxCoverage: Long?): Long {
         val current = snapshot.snapshot
         val installed =
             DatasetGeneration(
@@ -298,6 +299,7 @@ private class Install(
                 pending = false,
                 staleGateOpen = publication.staleGateOpen,
                 clockBehind = false,
+                maxCoverageMillis = maxCoverage,
             )
         val datasets =
             (current.datasets + (meta.dataset to installed)).mapValues { (_, d) ->

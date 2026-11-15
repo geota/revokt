@@ -49,6 +49,22 @@ class StoreJsonTest {
     }
 
     @Test
+    fun `a signature of any even non-empty length round-trips, as the leaf may be on any EC curve`() {
+        // Spec §7.1 (the maintainer's decision on #163): a P-256 leaf signs a 64-byte pair, a P-521 one 132 bytes.
+        for (size in listOf(64, 96, 132)) {
+            val base = StoreFixtures.meta(blobs = blobs)
+            val signed = checkNotNull(base.signed).copy(signature = ByteArray(size) { 9 }.toByteString())
+            val meta = base.copy(signed = signed)
+            assertEquals(meta, MetaJson.read(MetaJson.write(meta)))
+        }
+        for (size in listOf(0, 95, 97)) {
+            assertFailsWith<IllegalArgumentException> {
+                SignedMeta(1, ByteArray(32).toByteString(), ByteArray(size).toByteString())
+            }
+        }
+    }
+
+    @Test
     fun `meta json carries the derived name, never the attachment filename`() {
         val bytes = text(MetaJson.write(StoreFixtures.meta(blobs = blobs)))
         assertTrue("compat-2026-11--decf10cbc971a35f" in bytes)

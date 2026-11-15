@@ -46,6 +46,10 @@ internal class GenerationSnapshot(
  *   `updater.json` (`datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`, or no fetching source), so the handshake
  *   never reads the store. Read only when [fromSeed].
  * - [clockBehind]: `sourceTimestampMillis > now + clockSkew` at this publish; recomputed at every publish.
+ * - [maxCoverageMillis]: the generation's maximum coverage `high` as the loader decoded it from its `index.bin` at
+ *   install ([maxCoverageMillis] of the index), null when it covers no log: the §6.3 coverage-monotonic bound the next
+ *   sync compares against ([LiveGeneration]), never the engine's `coverageEndMillis`, which an injected engine may leave
+ *   null (#137's review note on #190).
  */
 internal data class DatasetGeneration(
     val generationId: String?,
@@ -57,6 +61,7 @@ internal data class DatasetGeneration(
     val pending: Boolean,
     val staleGateOpen: Boolean,
     val clockBehind: Boolean,
+    val maxCoverageMillis: Long? = null,
 ) {
     init {
         require((trustClass == null) == (generationId == null)) {
