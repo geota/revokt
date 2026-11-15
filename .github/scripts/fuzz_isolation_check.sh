@@ -86,8 +86,12 @@ fi
 
 # Resolves $1 as the kernel does: one component at a time, following each link one hop at a time (at most 40). Fails
 # if the user can write a directory the resolution passes through, or the regular file or directory it ends at, or if
-# a link cannot be read. Prints where it ends, which may not exist. In user mode, a component the user cannot inspect
-# reads as a plain missing name; root mode resolves it.
+# a link cannot be read. Sets resolved to where it ends, which may not exist (a variable, not output, so that a
+# failure exits the script itself). In user mode, a component the user cannot inspect reads as a plain missing name;
+# root mode resolves it.
+resolved=""
+# Directories and files already found not writable; most resolutions share their first components.
+declare -A checked=()
 resolve() {
   local rest=$1 from=$2 cur=/ comp next target links=0
   if writable /; then fail "can write /"; fi
@@ -109,27 +113,16 @@ resolve() {
       continue
     fi
     cur=$next
-    if [ -d "$cur" ] && writable "$cur"; then fail "can write $cur, reached from $from"; fi
+    if [ -z "${checked[$cur]:-}" ]; then
+      if [ -d "$cur" ] && writable "$cur"; then fail "can write $cur, reached from $from"; fi
+      checked[$cur]=1
+    fi
   done
-  if [ -f "$cur" ] && writable "$cur"; then fail "can write $cur, reached from $from"; fi
-  printf '%s\n' "$cur"
-}
-
-# $1 made absolute against the directory $2, with . and .. removed lexically.
-lexical() {
-  local path=$1 part
-  local -a parts out=()
-  case $path in /*) ;; *) path=$2/$path ;; esac
-  IFS=/ read -r -a parts <<< "$path"
-  for part in "${parts[@]}"; do
-    case $part in
-      '' | .) ;;
-      ..) if [ "${#out[@]}" -gt 0 ]; then unset 'out[-1]'; fi ;;
-      *) out+=("$part") ;;
-    esac
-  done
-  local IFS=/
-  printf '/%s\n' "${out[*]}"
+  if [ -z "${checked[$cur]:-}" ]; then
+    if [ -f "$cur" ] && writable "$cur"; then fail "can write $cur, reached from $from"; fi
+    checked[$cur]=1
+  fi
+  resolved=$cur
 }
 
 trees=()
@@ -166,27 +159,24 @@ for entry in "${entries[@]}"; do
     /*) ;;
     *) echo "::error::the runner's PATH has a relative or empty entry ('$entry'); nothing of the fuzzed tree runs" >&3; exit 1 ;;
   esac
-  real=$(resolve "$entry" "the runner's PATH entry $entry")
-  add_tree_of "$real"
+  resolve "$entry" "the runner's PATH entry $entry"
+  add_tree_of "$resolved"
 done
 # A worklist: checking a tree can add the trees its links lead to.
 i=0
 while [ "$i" -lt "${#trees[@]}" ]; do
   tree=${trees[$i]}
   i=$((i + 1))
-  resolve "$tree" "the tree $tree" > /dev/null
+  resolve "$tree" "the tree $tree"
   hit=$(first_writable "$tree")
   [ -z "$hit" ] || fail "can write $hit, in the tree $tree of the runner's PATH ($mode check)"
-  while IFS= read -r -d '' link && IFS= read -r -d '' target; do
-    # A target inside a tree already listed is covered by that tree's check, its own links included; any other is
-    # resolved hop by hop from the link, and its tree joins the list.
-    case $target in
-      *$'\n'*) ;;
-      *) if inside_trees "$(lexical "$target" "${link%/*}")"; then continue; fi ;;
-    esac
-    final=$(resolve "$link" "the link $link in the tree $tree")
-    add_tree_of "$final"
-  done < <(find "$tree" -type l -printf '%p\0%l\0' 2> /dev/null || true)
+  # Every link is resolved hop by hop from its own path, never judged by its target string (a target such as
+  # ../lnk/../x reads as inside a tree when lnk leads elsewhere); the tree it ends in joins the list unless the resolved
+  # path is already inside one.
+  while IFS= read -r -d '' link; do
+    resolve "$link" "the link $link in the tree $tree"
+    add_tree_of "$resolved"
+  done < <(find "$tree" -type l -print0 2> /dev/null || true)
 done
 
 if [ "$mode" = user ]; then
