@@ -181,19 +181,24 @@ jobs:
           /usr/bin/sudo chown -hR "$FUZZ_USER:$FUZZ_USER" "$FUZZ_HOME"
           # The runner user's own: the fuzz step's copy of the log, and the findings the advisory step reads.
           /usr/bin/install -d -m 700 "$RUNNER_TEMP/fuzz-scan" "$RUNNER_TEMP/fuzz-findings"
-      # As FUZZ_USER, before any code of the fuzzed tree runs (fuzz_isolation_check.sh): the job fails if the user is
-      # root, is in another group, can use sudo, or can write any of these paths, anything under the runner's home, a
-      # directory on the runner's PATH (as the actions' post steps see it), one above it, or a file in one.
+      # Before any code of the fuzzed tree runs (fuzz_isolation_check.sh), as FUZZ_USER and then as root: the job fails
+      # if the user is root, is in another group, can use sudo, or can write any of these paths or anything under the
+      # runner's home; or if, on the runner's PATH (as the actions' post steps see it), the user can write a directory a
+      # resolution passes through, link by link, or anything in the tree of an entry or of a link target in one. As root
+      # the check sees into directories the user cannot search, judging by owner, group and mode.
       - name: the fuzzing user cannot write the runner's files
         run: |
           runner_path=$PATH
           export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
           # shellcheck disable=SC2024 # the runner user reads the script; the fuzzing user gets it on stdin
-          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- "$FUZZ_USER" "$HOME" "$runner_path" \
-            "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" "${GITHUB_ENV%/*}" \
+          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- user "$FUZZ_USER" "$HOME" \
+            "$runner_path" "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" "${GITHUB_ENV%/*}" \
             "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" "$GITHUB_WORKSPACE/.git/HEAD" "$GITHUB_WORKSPACE/.git/config" \
             "$GITHUB_WORKSPACE/.github/scripts/fuzz_advisory.py" "$RUNNER_TEMP" "$RUNNER_TEMP/fuzz-findings" \
+            < .github/scripts/fuzz_isolation_check.sh
+          # shellcheck disable=SC2024 # as above
+          /usr/bin/sudo -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- root "$FUZZ_USER" "$runner_path" \
             < .github/scripts/fuzz_isolation_check.sh
       # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set), -rss_limit_mb=1024, the
       # target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
@@ -240,8 +245,9 @@ jobs:
           echo "flags=${args[*]:1}" >> "$GITHUB_OUTPUT"
           # This step's own file commands, checked as the user before Gradle starts.
           # shellcheck disable=SC2024 # the runner user reads the script; the fuzzing user gets it on stdin
-          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- "$FUZZ_USER" "$HOME" "$runner_path" \
-            "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" < .github/scripts/fuzz_isolation_check.sh
+          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- user "$FUZZ_USER" "$HOME" \
+            "$runner_path" "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" \
+            < .github/scripts/fuzz_isolation_check.sh
           status=0
           # shellcheck disable=SC2016 # the inner bash expands its own variables
           /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i HOME="$FUZZ_HOME" USER="$FUZZ_USER" LOGNAME="$FUZZ_USER" LANG=C.UTF-8 \
