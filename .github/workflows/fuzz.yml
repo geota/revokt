@@ -3,10 +3,11 @@
 #
 # Ad-hoc fuzzing (spec §9.1, CONTRIBUTING §6; decision CI1, #115): one matrix entry per Jazzer @FuzzTest method, as
 # `./gradlew fuzzTargets` discovers them, for the chosen time each, on GitHub-hosted runners. Runs only when a
-# maintainer dispatches it; never on pull_request or pull_request_target. The workflow holds no secret. A finding is
-# minimised, then each input and the stack traces are encrypted with age to the FUZZ_AGE_RECIPIENT repository variable
-# and uploaded as a 7-day artifact of .age files only; the maintainer decrypts it and files the advisory by hand
-# (CONTRIBUTING §6). No reproducer, stack trace or fuzzer log reaches a job log or an artifact in the clear. No
+# maintainer dispatches it; never on pull_request or pull_request_target. The fuzz job holds no secret: a finding is
+# minimised, sealed with age (ASCII armour) to the FUZZ_AGE_RECIPIENT repository variable, and uploaded with a manifest
+# as a 7-day artifact. The advisory job, on a fresh runner with FUZZ_ADVISORY_TOKEN and none of the fuzzed tree, checks
+# that artifact as hostile data and files one private draft security advisory per new finding, the ciphertext inline
+# (CONTRIBUTING §6). No reproducer, stack trace or fuzzer log reaches a job log, artifact or advisory in the clear. No
 # ClusterFuzzLite; the nightly tier and release gate are #119's.
 name: fuzz
 
@@ -230,15 +231,19 @@ jobs:
             if [ -s "$out/min-$base" ]; then minimised=$((minimised + 1)); fi
           done
           echo "minimised $minimised of $inputs finding inputs"
-      # Each finding input (and its minimised form) is encrypted to FUZZ_AGE_RECIPIENT on its own, and the stack traces
-      # and logs (which can quote the input) as one tar. The files are named by number and kind, not by libFuzzer's
-      # crash-<sha1>, as a hash of a short input gives the input away. The log shows the target, Jazzer's DEDUP_TOKEN (a
-      # hash of the finding's stack frames, not of the input) and the count.
+      # One sealed file per finding, so the advisory job can file it as text: a gzipped tar of the input, its minimised
+      # form and minimiser log, the JUnit XML (its first 64 KiB) and the fuzzer log (its last 64 KiB), encrypted with
+      # `age -a` (ASCII armour) to FUZZ_AGE_RECIPIENT. A stack trace can quote the input, so the traces are sealed too,
+      # and a finding without an input file is sealed with the traces alone. The files are numbered, not named by
+      # libFuzzer's crash-<sha1>, as a hash of a short input gives the input away; at most 8 per target.
+      # manifest.json holds the target, its module, Jazzer's DEDUP_TOKEN (a hash of the finding's stack frames, empty
+      # without one) and the file names. The log shows the target, the token and the count.
       - name: seal the finding
         id: seal
         if: failure() && steps.fuzz.outputs.finding == 'true'
         env:
           NAME: ${{ matrix.target.name }}
+          MODULE: ${{ matrix.target.module }}
           RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
         run: |
           set -euo pipefail
@@ -247,31 +252,47 @@ jobs:
           mkdir -m 700 "$sealed"
           # Jazzer's re-launched JVMs can outlive the minimiser's timeout and keep rewriting its output.
           pkill -KILL -u "$(id -un)" java || true
-          n=0
-          for f in "$out"/crash-* "$out"/timeout-* "$out"/oom-* "$out"/leak-* "$out"/slow-unit-*; do
-            [ -f "$f" ] || continue
-            base=${f##*/}
-            case $base in slow-unit-*) kind=slow-unit ;; *) kind=${base%%-*} ;; esac
-            n=$((n + 1))
-            age -r "$RECIPIENT" -o "$sealed/finding-$n-$kind.age" "$f"
-            if [ -s "$out/min-$base" ]; then age -r "$RECIPIENT" -o "$sealed/finding-$n-$kind-minimised.age" "$out/min-$base"; fi
-          done
-          traces=()
-          for f in "$out"/TEST-*.xml "$out"/gradle.log "$out"/minimise-*.log; do
-            if [ -f "$f" ]; then traces+=("${f##*/}"); fi
-          done
-          if [ "${#traces[@]}" -gt 0 ]; then tar -C "$out" -cf - -- "${traces[@]}" | age -r "$RECIPIENT" -o "$sealed/traces.tar.age"; fi
           token=$(cat "$out/gradle.log" "$out"/minimise-*.log 2> /dev/null | grep -oE 'DEDUP_TOKEN: [0-9a-f]{8,64}' | head -n 1 || true)
-          if [ -n "$token" ]; then key="${token#DEDUP_TOKEN: } (Jazzer DEDUP_TOKEN)"; else key="without a DEDUP_TOKEN"; fi
-          echo "$NAME: finding $key; $n input(s) sealed"
+          token=${token#DEDUP_TOKEN: }
+          inputs=()
+          for f in "$out"/crash-* "$out"/timeout-* "$out"/oom-* "$out"/leak-* "$out"/slow-unit-*; do
+            if [ -f "$f" ]; then inputs+=("$f"); fi
+          done
+          if [ "${#inputs[@]}" -eq 0 ]; then inputs=(""); fi
+          files=()
+          n=0
+          for f in "${inputs[@]:0:8}"; do
+            n=$((n + 1))
+            stage=$(mktemp -d "$RUNNER_TEMP/stage.XXXXXX")
+            if [ -n "$f" ]; then
+              base=${f##*/}
+              cp "$f" "$stage/input"
+              if [ -s "$out/min-$base" ]; then cp "$out/min-$base" "$stage/minimised"; fi
+              if [ -f "$out/minimise-$base.log" ]; then tail -c 65536 "$out/minimise-$base.log" > "$stage/minimise.log"; fi
+            fi
+            k=0
+            for x in "$out"/TEST-*.xml; do
+              if [ -f "$x" ]; then k=$((k + 1)); head -c 65536 "$x" > "$stage/junit-$k.xml"; fi
+            done
+            if [ -f "$out/gradle.log" ]; then tail -c 65536 "$out/gradle.log" > "$stage/fuzz.log"; fi
+            tar -C "$stage" -czf - . | age -a -r "$RECIPIENT" -o "$sealed/finding-$n.tar.age"
+            rm -rf -- "${stage:?}"
+            files+=("finding-$n.tar.age")
+          done
+          # module is a jq keyword, so the key is quoted and the variable named mod.
+          jq -n --arg target "$NAME" --arg mod "$MODULE" --arg hash "$token" \
+            '{"target": $target, "module": $mod, "hash": $hash, "files": $ARGS.positional}' --args "${files[@]}" \
+            > "$sealed/manifest.json"
+          echo "$NAME: finding ${token:-without a DEDUP_TOKEN}; $n sealed"
           echo "dir=$sealed" >> "$GITHUB_OUTPUT"
-      # Only the .age files, kept 7 days. The run has already failed (the fuzz step's exit status).
+      # The armoured files and the manifest, kept 7 days: the advisory job's input, and the maintainer's fallback
+      # (CONTRIBUTING §6). The run has already failed (the fuzz step's exit status).
       - name: upload the sealed finding
         if: failure() && steps.seal.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-finding-${{ matrix.target.name }}
-          path: ${{ steps.seal.outputs.dir }}/*.age
+          path: ${{ steps.seal.outputs.dir }}/
           if-no-files-found: error
           retention-days: 7
       # Jazzer's generated corpus, on request and only from a run without a finding; merging it into the committed
@@ -284,3 +305,48 @@ jobs:
           path: ${{ matrix.target.module }}/.cifuzz-corpus/${{ matrix.target.class }}/${{ matrix.target.method }}/
           if-no-files-found: ignore
           retention-days: 7
+
+  # A fresh runner that holds the advisory token and nothing of the fuzzed tree: no checkout of it, no Gradle, nothing
+  # the fuzz job could have changed except the artifacts. It downloads the fuzz-finding-* artifacts, fetches only
+  # fuzz_advisory.py at github.sha, and runs it under a clean environment with python3 -I. The script treats the
+  # artifacts as hostile data and files at most 8 private draft advisories, one per new DEDUP_TOKEN (CONTRIBUTING §6).
+  advisory:
+    name: advisory (private drafts for new findings)
+    needs: fuzz
+    if: failure() && needs.fuzz.result == 'failure'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      # No match (a fuzz job that failed without a finding) downloads nothing; the script then has nothing to file.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fuzz-finding-*
+          path: ${{ runner.temp }}/findings
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts/fuzz_advisory.py
+          sparse-checkout-cone-mode: false
+          path: advisory-script
+      - name: file draft advisories
+        env:
+          GH_TOKEN: ${{ secrets.FUZZ_ADVISORY_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+          FINDINGS: ${{ runner.temp }}/findings
+          SCRIPT: ${{ github.workspace }}/advisory-script/.github/scripts/fuzz_advisory.py
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the FUZZ_ADVISORY_TOKEN secret is not set (CONTRIBUTING §6); decrypt the finding from the artifact"
+            exit 1
+          fi
+          /usr/bin/env -i PATH=/usr/bin:/bin GH_TOKEN="$GH_TOKEN" REPO="$REPO" RUN_URL="$RUN_URL" RUN_ID="$RUN_ID" \
+            /usr/bin/python3 -I "$SCRIPT" "$FINDINGS"

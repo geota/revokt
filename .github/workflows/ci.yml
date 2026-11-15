@@ -188,12 +188,15 @@ jobs:
           curl -sSfL -o download-actionlint.bash https://raw.githubusercontent.com/rhysd/actionlint/03d0035246f3e81f36aed592ffb4bebf33a03106/scripts/download-actionlint.bash
           bash download-actionlint.bash 1.7.7
           ./actionlint -color
-      # Plain shellcheck over fuzz.yml's fuzz job (#115): actionlint's built-in run does not report every check (it let
-      # an unassigned variable, SC2154, through). shellcheck is the runner image's, as actionlint's own is.
-      - name: shellcheck fuzz.yml's fuzz job
+      # fuzz.yml's own checks (#115): plain shellcheck over its jobs' run blocks, as actionlint's built-in run does not
+      # report every check (it let an unassigned variable, SC2154, through), and the unit tests of fuzz_advisory.py's
+      # handling of hostile artifacts. shellcheck is the runner image's, as actionlint's own is.
+      - name: fuzz.yml's shellcheck and fuzz_advisory.py's tests
         run: |
           shellcheck --version
           python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml fuzz
+          python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml advisory
+          python3 -I -m unittest discover -s .github/scripts -p 'test_*.py'
 
   labeler:
     name: labeler

@@ -414,24 +414,33 @@ every required check in Appendix B passes**.
   coverage cron and the corpus storage token configured, corpus merged back weekly; a crash is uploaded as a
   SARIF artifact and a workflow step files the `security` issue (ClusterFuzzLite does not file issues itself).
 - Ad-hoc fuzzing (`fuzz.yml`, #115): dispatch only, on GitHub-hosted runners, one job per target that
-  `./gradlew fuzzTargets` lists. The workflow holds no secret. On a finding, the job minimises each input
-  (libFuzzer's `-minimize_crash=1`). It then encrypts each input, its minimised form, and the stack traces and logs
-  (which can quote the input) with `age` to the `FUZZ_AGE_RECIPIENT` repository variable (an `age1…` public key; the
-  job fails without one). It uploads only the `.age` files as the 7-day artifact `fuzz-finding-<target>`, and fails.
-  The log shows the target and Jazzer's `DEDUP_TOKEN` (a hash of the finding's stack frames), never the input.
-  To triage a finding (the maintainer, who holds the matching key):
-  1. Download the artifact from the failed run (`gh run download <run-id> -n fuzz-finding-<target>`).
-  2. Decrypt each file: `rage -d -i <key> finding-1-crash-minimised.age > input`, and
-     `rage -d -i <key> traces.tar.age | tar -xf -` for the JUnit XML and the fuzzer and minimiser logs.
-  3. Reproduce it: save the input under the target's `src/jvmTest/resources/<package>/<Class>Inputs/`, or pass it to the
-     target.
-  4. File a private draft advisory by hand (Security → Advisories → New draft security advisory), with the target, the
-     `DEDUP_TOKEN`, the run link, the stack trace and the input. A `DEDUP_TOKEN` already in a draft is the same finding.
-     Triage follows SECURITY.md, and the fix CONTRIBUTING §8.
-  5. Delete the decrypted files once the advisory holds them.
+  `./gradlew fuzzTargets` lists. The fuzz job holds no secret.
+  - On a finding, it minimises each input (libFuzzer's `-minimize_crash=1`). It then seals one file per finding: a
+    gzipped tar of the input, the minimised input, the JUnit XML and the fuzzer and minimiser logs (which can quote the
+    input), encrypted with `age -a` to the `FUZZ_AGE_RECIPIENT` repository variable (an `age1…` public key; the job
+    fails without one).
+  - It uploads the sealed files and a manifest (target, module, Jazzer's `DEDUP_TOKEN`) as the 7-day artifact
+    `fuzz-finding-<target>`, and fails. Its log shows the target and the `DEDUP_TOKEN` (a hash of the finding's stack
+    frames), never the input.
+  - The advisory job then runs on a fresh runner with the `FUZZ_ADVISORY_TOKEN` secret (a fine-grained personal access
+    token of an administrator, for this repository only, with "Repository security advisories: Read and write"; renew
+    it before it expires). It never checks out the tree or runs Gradle: it fetches only
+    `.github/scripts/fuzz_advisory.py` at the run's commit. The script checks the artifact as hostile data, and files
+    one private **draft security advisory** per new `DEDUP_TOKEN` (`fuzz: <target> <token>`), at most 8 per run, with
+    each sealed file inline.
 
-  The artifact expires after 7 days, so a finding not triaged by then is lost with it (re-run the target). Rotating
-  the key means setting the variable to the new public key; old artifacts need the old key.
+  To triage a finding:
+  1. Open the draft advisory (Security → Advisories). Copy the armoured block from the draft advisory into
+     `finding.age`, then run `rage -d -i <identity-file> finding.age > finding.bin` (`age -d -i` works too), and
+     `tar -xzf finding.bin` for the input, the minimised input and the logs.
+  2. If the advisory job failed or a file was too large to inline, use the run's `fuzz-finding-<target>` artifact
+     instead (within its 7 days): `gh run download <run-id> -n fuzz-finding-<target>`, then decrypt each
+     `finding-<n>.tar.age` the same way.
+  3. Reproduce it: save the input under the target's `src/jvmTest/resources/<package>/<Class>Inputs/`, or pass it to the
+     target. Triage follows SECURITY.md, and the fix CONTRIBUTING §8.
+  4. Delete the decrypted files once the advisory holds what triage needs.
+
+  Rotating the key means setting the variable to the new public key; older advisories and artifacts need the old key.
 - Android emulator matrix (API 26, 31, 34, 36) on hosted Linux runners with KVM, from the mirrored system
   images (§11), including the null-host probe, the StrictMode main-thread probe and the API-26 futures
   fixture; triggered by schedule, `workflow_dispatch`, and the `run/android` label on a PR. Robolectric on the
