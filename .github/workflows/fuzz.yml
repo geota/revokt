@@ -1,0 +1,369 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Ad-hoc fuzzing (spec §9.1, CONTRIBUTING §6; decision CI1, #115): one matrix entry per Jazzer @FuzzTest method, as
+# `./gradlew fuzzTargets` discovers them, for the chosen time each, on GitHub-hosted runners. Runs only when a
+# maintainer dispatches it; never on pull_request or pull_request_target. The fuzz job holds no secret: a finding is
+# minimised, sealed with age (ASCII armour) to the FUZZ_AGE_RECIPIENT repository variable, and uploaded with a manifest
+# as a 7-day artifact. The advisory job, on a fresh runner with FUZZ_ADVISORY_TOKEN and none of the fuzzed tree, checks
+# that artifact as hostile data and files one private draft security advisory per new finding, the ciphertext inline
+# (CONTRIBUTING §6). No reproducer, stack trace or fuzzer log reaches a job log, artifact or advisory in the clear. No
+# ClusterFuzzLite; the nightly tier and release gate are #119's.
+name: fuzz
+
+on:
+  # Off: this workflow is for dispatched runs (#119 is the nightly). Uncommenting it adds a nightly run of every target.
+  # schedule:
+  #   - cron: "47 3 * * *"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "all, or one target as Class.method (the targets job lists them)"
+        type: string
+        default: all
+      seconds:
+        description: "Fuzzing time per target, in seconds (1 to 3600)"
+        type: number
+        default: 300
+      upload_corpus:
+        description: "Upload each target's generated corpus (7 days; the account is near its storage budget)"
+        type: boolean
+        default: false
+
+permissions: read-all
+
+# One run at a time, so two runs never race to record the same finding. A concurrency group holds one running and one
+# pending run: a second dispatch waits for the first, and a third replaces the pending second.
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+jobs:
+  targets:
+    name: targets (the @FuzzTest methods)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      # build-logic's FuzzTargets: each method with the -max_len (the cap + 1) and -timeout its source names.
+      - name: list
+        id: list
+        env:
+          TARGET: ${{ inputs.target || 'all' }}
+        run: |
+          set -euo pipefail
+          case $TARGET in ''|*[!A-Za-z0-9_.]*) echo "::error::target must be all or Class.method"; exit 1 ;; esac
+          # The build's lines (fuzzTargets prints each target) are not workflow commands: the runner ignores commands
+          # until the random end token.
+          stop=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          echo "::stop-commands::$stop"
+          status=0
+          ./gradlew fuzzTargets --no-daemon || status=$?
+          echo "::$stop::"
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          targets=$(jq -c --arg t "$TARGET" '[.[] | select($t == "all" or .name == $t)]' build/fuzz/targets.json)
+          if [ "$targets" = "[]" ]; then echo "::error::no target named $TARGET (see the fuzzTargets output above)"; exit 1; fi
+          # The fuzz job echoes each target's name and source into workflow commands (::warning, ::error), so both may
+          # hold only [A-Za-z0-9._/-]; \A and \z anchor the whole string, so no line break gets through. The values
+          # themselves are not printed.
+          if ! jq -e 'all(.[]; all(.name, .source; type == "string" and test("\\A[A-Za-z0-9._/-]+\\z")))' <<< "$targets" > /dev/null; then
+            echo "::error::a target's name or source has a character outside [A-Za-z0-9._/-]; nothing is fuzzed"
+            exit 1
+          fi
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    name: fuzz (${{ matrix.target.name }})
+    needs: targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.targets) }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Spec §9.1 "Tiers and matrix": fuzzing runs on one pinned JDK >= 22 (Panama), 25 here; Gradle runs on 21.
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: |
+            25
+            21
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      # Every finding is encrypted to the maintainer's age key (CONTRIBUTING §6), so the run checks the recipient before
+      # it fuzzes: a run that could not record a finding does not start. age comes from the Ubuntu archive (signed by its
+      # keys; 1.1.x on 24.04).
+      - name: age and the recipient
+        env:
+          RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          # An X25519 recipient: age1 and 58 bech32 characters.
+          if ! [[ $RECIPIENT =~ ^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$ ]]; then
+            echo "::error::the FUZZ_AGE_RECIPIENT repository variable is unset or not an age1… recipient (CONTRIBUTING §6)"
+            exit 1
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends age
+          age --version
+      # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set), -rss_limit_mb=1024, the
+      # target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
+      # configuration parameters, which reach the test JVM as system properties; they come after Jazzer's own
+      # (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last.
+      # Job logs are public and libFuzzer prints a crashing input, so the Gradle output stays in $RUNNER_TEMP/fuzz-out and
+      # the public log fails closed: only the lines before `> Task <project>:jvmTest` are printed, with workflow commands
+      # stopped, nothing once the test-results XML exists or if those lines hold a fuzzer line, and the run counts.
+      - name: fuzz
+        id: fuzz
+        env:
+          FUZZ_SECONDS: ${{ inputs.seconds }}
+          NAME: ${{ matrix.target.name }}
+          PROJECT: ${{ matrix.target.project }}
+          MODULE: ${{ matrix.target.module }}
+          CLASS: ${{ matrix.target.class }}
+          METHOD: ${{ matrix.target.method }}
+          SOURCE: ${{ matrix.target.source }}
+          MAX_LEN: ${{ matrix.target.maxLen }}
+          TIMEOUT: ${{ matrix.target.timeout }}
+        run: |
+          set -euo pipefail
+          # As the targets job checks: only [A-Za-z0-9._/-] in the name and source, before either is echoed.
+          for value in "$NAME" "$SOURCE"; do
+            case $value in ''|*[!A-Za-z0-9._/-]*) echo "::error::the target's name or source has a character outside [A-Za-z0-9._/-]"; exit 1 ;; esac
+          done
+          # Empty only without a dispatch (the commented-out schedule); a dispatched 0 is rejected below.
+          FUZZ_SECONDS=${FUZZ_SECONDS:-300}
+          case $FUZZ_SECONDS in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1 ;; esac
+          if [ "$FUZZ_SECONDS" -lt 1 ] || [ "$FUZZ_SECONDS" -gt 3600 ]; then echo "::error::seconds must be 1 to 3600"; exit 1; fi
+          args=(fake_argv0 "-max_total_time=$FUZZ_SECONDS" -rss_limit_mb=1024 "-timeout=$TIMEOUT")
+          if [ -n "$MAX_LEN" ]; then
+            args+=("-max_len=$MAX_LEN")
+          else
+            echo "::warning file=$SOURCE::$NAME: its source names no -max_len (spec §9.1: the cap + 1); libFuzzer's default applies"
+          fi
+          opts=""
+          for i in "${!args[@]}"; do opts+=" -Djazzer.internal.arg.$i=${args[$i]}"; done
+          echo "$NAME: ${args[*]:1}"
+          out=$RUNNER_TEMP/fuzz-out
+          mkdir -m 700 "$out"
+          # Stale results would read as a test run that never happened.
+          rm -rf "$MODULE/build/test-results/jvmTest"
+          status=0
+          JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" ./gradlew "$PROJECT:jvmTest" --tests "$CLASS.$METHOD" --rerun \
+            -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 --no-daemon \
+            < /dev/null > "$out/gradle.log" 2>&1 || status=$?
+          # Jazzer writes a finding (crash-, timeout-, oom-, leak-, slow-unit-) into the module directory, as these
+          # targets keep their inputs under src/jvmTest/resources and not src/test/resources. libFuzzer names it by the
+          # input's SHA-1, which gives a short input away, and harden-runner records process arguments. So each one is
+          # copied to a numbered name, input-<n>-<kind>, through a redirection (no command sees the old name), and the
+          # originals are removed by find, whose arguments hold only the patterns. From here on, no argument, log or
+          # file name holds the hash.
+          n=0
+          for f in "$MODULE"/crash-* "$MODULE"/timeout-* "$MODULE"/oom-* "$MODULE"/leak-* "$MODULE"/slow-unit-*; do
+            [ -f "$f" ] || continue
+            base=${f##*/}
+            case $base in slow-unit-*) kind=slow-unit ;; *) kind=${base%%-*} ;; esac
+            n=$((n + 1))
+            cat < "$f" > "$out/input-$n-$kind"
+          done
+          find "$MODULE" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' \
+            -o -name 'slow-unit-*' \) -delete
+          cp "$MODULE/build/test-results/jvmTest/"*.xml "$out/" 2> /dev/null || true
+          # The test task may have started (and with it the fuzzer) once its header is printed or its XML exists.
+          started=0
+          awk -v t="> Task $PROJECT:jvmTest" '$0 == t || index($0, t " ") == 1 { exit } { print }' "$out/gradle.log" > "$out/before-test.log"
+          if [ "$(wc -l < "$out/before-test.log")" -lt "$(wc -l < "$out/gradle.log")" ] || ls "$out"/*.xml > /dev/null 2>&1; then started=1; fi
+          if ls "$out"/*.xml > /dev/null 2>&1 || grep -qE 'Base64:|INFO: Seed:|^#[0-9]+[[:space:]]|==[0-9]+==' "$out/before-test.log"; then
+            echo "(the Gradle log is withheld: the test task ran, and its output may hold a fuzz input)"
+          else
+            # The build's lines are not workflow commands: the runner ignores commands until the random end token.
+            stop=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+            echo "::stop-commands::$stop"
+            cat "$out/before-test.log"
+            echo "::$stop::"
+          fi
+          rm -f "$out/before-test.log"
+          grep -E '^Done [0-9]+ runs in [0-9]+ second' "$out/gradle.log" || true
+          if [ "$status" -eq 0 ]; then exit 0; fi
+          # A failure once the test task may have started is a finding, with or without a reproducer file.
+          if [ "$started" -eq 1 ]; then
+            echo "finding=true" >> "$GITHUB_OUTPUT"
+            echo "::error file=$SOURCE::$NAME: a finding; it is uploaded encrypted to the maintainer's age key (CONTRIBUTING §6)"
+          else
+            echo "::error file=$SOURCE::$NAME: the build failed before fuzzing started"
+          fi
+          exit "$status"
+      # libFuzzer's -minimize_crash=1 on each crash, timeout and oom input (the module's fuzzMinimize, at most 300 s each),
+      # so it is small enough to triage; its output stays in $RUNNER_TEMP/fuzz-out, and the log shows only the counts.
+      - name: minimise
+        if: failure() && steps.fuzz.outputs.finding == 'true'
+        env:
+          PROJECT: ${{ matrix.target.project }}
+          CLASS: ${{ matrix.target.class }}
+          TIMEOUT: ${{ matrix.target.timeout }}
+        run: |
+          # No -e: a minimisation that fails or times out leaves the original input, and the next one still runs.
+          set +e -uo pipefail
+          out=$RUNNER_TEMP/fuzz-out
+          inputs=0
+          minimised=0
+          for f in "$out"/input-*-crash "$out"/input-*-timeout "$out"/input-*-oom; do
+            [ -f "$f" ] || continue
+            base=${f##*/}
+            inputs=$((inputs + 1))
+            ./gradlew "$PROJECT:fuzzMinimize" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
+              "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzInput=$f" "-Prevokt.fuzzOutput=$out/min-$base" \
+              "-Prevokt.fuzzTimeout=$TIMEOUT" --no-daemon < /dev/null > "$out/minimise-$base.log" 2>&1
+            if [ -s "$out/min-$base" ]; then minimised=$((minimised + 1)); fi
+          done
+          echo "minimised $minimised of $inputs finding inputs"
+      # One sealed file per finding, so the advisory job can file it as text: a gzipped tar of the input, its minimised
+      # form and minimiser log, the JUnit XML (its first 64 KiB) and the fuzzer log (its last 64 KiB), encrypted with
+      # `age -a` (ASCII armour) to FUZZ_AGE_RECIPIENT. A stack trace can quote the input, so the traces are sealed too,
+      # and a finding without an input file is sealed with the traces alone. The files are numbered, not named by
+      # libFuzzer's crash-<sha1> (the fuzz step has already renamed them), as a hash of a short input gives the input
+      # away; at most 8 per target.
+      # manifest.json holds the target, its module, Jazzer's DEDUP_TOKEN (a hash of the finding's stack frames, empty
+      # without one) and the file names. The log shows the target, the token and the count.
+      - name: seal the finding
+        id: seal
+        if: failure() && steps.fuzz.outputs.finding == 'true'
+        env:
+          NAME: ${{ matrix.target.name }}
+          MODULE: ${{ matrix.target.module }}
+          RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          out=$RUNNER_TEMP/fuzz-out
+          sealed=$RUNNER_TEMP/fuzz-sealed
+          mkdir -m 700 "$sealed"
+          # Jazzer's re-launched JVMs can outlive the minimiser's timeout and keep rewriting its output.
+          pkill -KILL -u "$(id -un)" java || true
+          token=$(cat "$out/gradle.log" "$out"/minimise-*.log 2> /dev/null | grep -oE 'DEDUP_TOKEN: [0-9a-f]{8,64}' | head -n 1 || true)
+          token=${token#DEDUP_TOKEN: }
+          inputs=()
+          for f in "$out"/input-*; do
+            if [ -f "$f" ]; then inputs+=("$f"); fi
+          done
+          if [ "${#inputs[@]}" -eq 0 ]; then inputs=(""); fi
+          files=()
+          n=0
+          for f in "${inputs[@]:0:8}"; do
+            n=$((n + 1))
+            stage=$(mktemp -d "$RUNNER_TEMP/stage.XXXXXX")
+            if [ -n "$f" ]; then
+              base=${f##*/}
+              cp "$f" "$stage/input"
+              if [ -s "$out/min-$base" ]; then cp "$out/min-$base" "$stage/minimised"; fi
+              if [ -f "$out/minimise-$base.log" ]; then tail -c 65536 "$out/minimise-$base.log" > "$stage/minimise.log"; fi
+            fi
+            k=0
+            for x in "$out"/TEST-*.xml; do
+              if [ -f "$x" ]; then k=$((k + 1)); head -c 65536 "$x" > "$stage/junit-$k.xml"; fi
+            done
+            if [ -f "$out/gradle.log" ]; then tail -c 65536 "$out/gradle.log" > "$stage/fuzz.log"; fi
+            tar -C "$stage" -czf - . | age -a -r "$RECIPIENT" -o "$sealed/finding-$n.tar.age"
+            rm -rf -- "${stage:?}"
+            files+=("finding-$n.tar.age")
+          done
+          # module is a jq keyword, so the key is quoted and the variable named mod.
+          jq -n --arg target "$NAME" --arg mod "$MODULE" --arg hash "$token" \
+            '{"target": $target, "module": $mod, "hash": $hash, "files": $ARGS.positional}' --args "${files[@]}" \
+            > "$sealed/manifest.json"
+          echo "$NAME: finding ${token:-without a DEDUP_TOKEN}; $n sealed"
+          echo "dir=$sealed" >> "$GITHUB_OUTPUT"
+      # The armoured files and the manifest, kept 7 days: the advisory job's input, and the maintainer's fallback
+      # (CONTRIBUTING §6). The run has already failed (the fuzz step's exit status).
+      - name: upload the sealed finding
+        if: failure() && steps.seal.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-finding-${{ matrix.target.name }}
+          path: ${{ steps.seal.outputs.dir }}/
+          if-no-files-found: error
+          retention-days: 7
+      # Jazzer's generated corpus, on request and only from a run without a finding; merging it into the committed
+      # inputs stays a manual PR.
+      - name: corpus
+        if: inputs.upload_corpus && steps.fuzz.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-corpus-${{ matrix.target.name }}
+          path: ${{ matrix.target.module }}/.cifuzz-corpus/${{ matrix.target.class }}/${{ matrix.target.method }}/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # A fresh runner that holds the advisory token and nothing of the fuzzed tree: no checkout of it, no Gradle, nothing
+  # the fuzz job could have changed except the artifacts. It downloads the fuzz-finding-* artifacts, fetches only
+  # fuzz_advisory.py at github.sha, and runs it under a clean environment with python3 -I. The script treats the
+  # artifacts as hostile data and files at most 8 private draft advisories, one per new DEDUP_TOKEN (CONTRIBUTING §6).
+  # The token lives in the fuzz-advisory environment, whose deployment branches are limited to main, and the job runs
+  # only for a dispatch of main: a workflow or script changed on another branch never gets it.
+  advisory:
+    name: advisory (private drafts for new findings)
+    needs: fuzz
+    if: failure() && needs.fuzz.result == 'failure' && github.ref == 'refs/heads/main'
+    environment: fuzz-advisory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      # No match (a fuzz job that failed without a finding) downloads nothing; the script then has nothing to file.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fuzz-finding-*
+          path: ${{ runner.temp }}/findings
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts/fuzz_advisory.py
+          sparse-checkout-cone-mode: false
+          path: advisory-script
+      - name: file draft advisories
+        env:
+          # The fuzz-advisory environment's secret (CONTRIBUTING §6).
+          GH_TOKEN: ${{ secrets.FUZZ_ADVISORY_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+          FINDINGS: ${{ runner.temp }}/findings
+          SCRIPT: ${{ github.workspace }}/advisory-script/.github/scripts/fuzz_advisory.py
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the fuzz-advisory environment has no FUZZ_ADVISORY_TOKEN (CONTRIBUTING §6); decrypt the finding from the artifact"
+            exit 1
+          fi
+          /usr/bin/env -i PATH=/usr/bin:/bin GH_TOKEN="$GH_TOKEN" REPO="$REPO" RUN_URL="$RUN_URL" RUN_ID="$RUN_ID" \
+            /usr/bin/python3 -I "$SCRIPT" "$FINDINGS"
