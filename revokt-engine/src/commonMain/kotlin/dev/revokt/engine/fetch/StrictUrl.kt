@@ -163,9 +163,9 @@ internal object StrictUrl {
         if (host.length < 4 || host[0] != '[' || host.last() != ']') return false
         val address = host.substring(1, host.length - 1)
         val compressed = address.indexOf("::")
-        if (compressed >= 0 && address.indexOf("::", compressed + 1) >= 0) return false
         val head = if (compressed < 0) address else address.substring(0, compressed)
         val tail = if (compressed < 0) "" else address.substring(compressed + 2)
+        // A second `::` (or a third colon) leaves an empty group, which no hex group matches.
         val groups = groups(head) + groups(tail)
         // A trailing dotted quad stands for the last two groups.
         val last = groups.lastOrNull().orEmpty()
