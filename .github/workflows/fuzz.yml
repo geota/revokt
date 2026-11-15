@@ -82,6 +82,11 @@ jobs:
     env:
       FUZZ_USER: fuzzer
       FUZZ_HOME: /home/fuzzer
+    # Bash by absolute path; every run step sets PATH to root-owned directories before anything else (see "lock the tools
+    # on the runner's PATH"), and the steps from the fuzz step on call each tool by absolute path.
+    defaults:
+      run:
+        shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
     strategy:
       fail-fast: false
       matrix:
@@ -103,6 +108,39 @@ jobs:
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-read-only: true
+      # The hosted image's tool cache is world-writable (mode 777, no sticky bit), and setup-java put $JAVA_HOME/bin from it
+      # first on the runner's PATH, which the actions' post steps still use. Before FUZZ_USER exists, every tool-cache tree
+      # in use (both JDKs, and the tree of any other PATH entry in the cache) becomes root's and not group- or
+      # world-writable, and so does each directory above it up to the cache itself, so nothing in it can be replaced or
+      # renamed away. The isolation check below fails the job if the user can still write a directory on the PATH, one
+      # above it, or a file in it.
+      - name: lock the tools on the runner's PATH
+        run: |
+          runner_path=$PATH
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
+          set -euo pipefail
+          cache=$(/usr/bin/readlink -f -- "$RUNNER_TOOL_CACHE")
+          trees=("${JAVA_HOME:-}" "${JAVA_HOME_25_X64:-}")
+          IFS=: read -r -a entries <<< "$runner_path"
+          for entry in "${entries[@]}"; do trees+=("${entry%/bin}"); done
+          declare -A locked=()
+          for tree in "${trees[@]}"; do
+            if [ -z "$tree" ] || [ ! -e "$tree" ]; then continue; fi
+            real=$(/usr/bin/readlink -f -- "$tree")
+            case $real in "$cache"/*) ;; *) continue ;; esac
+            if [ -n "${locked[$real]:-}" ]; then continue; fi
+            locked[$real]=1
+            # -h and chmod's -R: a link is changed itself, never followed.
+            /usr/bin/sudo /usr/bin/chown -hR root:root "$real"
+            /usr/bin/sudo /usr/bin/chmod -R go-w "$real"
+            d=$real
+            while [ "$d" != "$cache" ]; do
+              d=${d%/*}
+              /usr/bin/sudo /usr/bin/chown -h root:root "$d"
+              /usr/bin/sudo /usr/bin/chmod go-w "$d"
+            done
+            echo "locked ${real#"$cache"/}"
+          done
       # The uid boundary: the fuzzed tree's code (its build logic, dependencies, test JVM and the minimiser) runs only as
       # FUZZ_USER, a second user with no sudo and no group but its own, in a copy of the checkout, a Gradle home and an
       # output directory it owns. It cannot write the runner user's files: the file commands ($GITHUB_ENV, $GITHUB_PATH,
@@ -110,33 +148,35 @@ jobs:
       # user reads the user's files only as that user (sudo -u), so a link there reaches nothing the user cannot read.
       - name: the fuzzing user
         run: |
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
-          sudo useradd --create-home --user-group --shell /bin/bash "$FUZZ_USER"
-          sudo chmod 700 "$FUZZ_HOME"
-          sudo install -d -o "$FUZZ_USER" -g "$FUZZ_USER" -m 700 "$FUZZ_HOME/work" "$FUZZ_HOME/out" "$FUZZ_HOME/.gradle"
+          /usr/bin/sudo useradd --create-home --user-group --shell /bin/bash "$FUZZ_USER"
+          /usr/bin/sudo chmod 700 "$FUZZ_HOME"
+          /usr/bin/sudo install -d -o "$FUZZ_USER" -g "$FUZZ_USER" -m 700 "$FUZZ_HOME/work" "$FUZZ_HOME/out" "$FUZZ_HOME/.gradle"
           # -a keeps the checkout's links as links; nothing of the fuzzed tree has run yet.
-          sudo cp -a "$GITHUB_WORKSPACE/." "$FUZZ_HOME/work/"
+          /usr/bin/sudo cp -a "$GITHUB_WORKSPACE/." "$FUZZ_HOME/work/"
           # The dependencies and the Gradle distribution setup-gradle restored, so the user need not download them again.
           gradle_home=${GRADLE_USER_HOME:-$HOME/.gradle}
           for d in caches/modules-2 wrapper/dists; do
             if [ -d "$gradle_home/$d" ]; then
-              sudo mkdir -p "$FUZZ_HOME/.gradle/${d%/*}"
-              sudo cp -a "$gradle_home/$d" "$FUZZ_HOME/.gradle/${d%/*}/"
+              /usr/bin/sudo mkdir -p "$FUZZ_HOME/.gradle/${d%/*}"
+              /usr/bin/sudo cp -a "$gradle_home/$d" "$FUZZ_HOME/.gradle/${d%/*}/"
             fi
           done
           # -h: change a link itself, never what it points to.
-          sudo chown -hR "$FUZZ_USER:$FUZZ_USER" "$FUZZ_HOME"
+          /usr/bin/sudo chown -hR "$FUZZ_USER:$FUZZ_USER" "$FUZZ_HOME"
           # The runner user's own: the fuzz step's copy of the log, and the findings the advisory step reads.
-          install -d -m 700 "$RUNNER_TEMP/fuzz-scan" "$RUNNER_TEMP/fuzz-findings"
+          /usr/bin/install -d -m 700 "$RUNNER_TEMP/fuzz-scan" "$RUNNER_TEMP/fuzz-findings"
       # As FUZZ_USER, before any code of the fuzzed tree runs (fuzz_isolation_check.sh): the job fails if the user is
-      # root, is in another group, can use sudo, or can write any of these paths or anything under the runner's home.
-      # The tool cache is not among them: the hosted image makes it world-writable, so no step of the runner user after
-      # the fuzz step runs a tool from it (git, python3 and bash are /usr/bin's; the actions run on the runner's node).
+      # root, is in another group, can use sudo, or can write any of these paths, anything under the runner's home, a
+      # directory on the runner's PATH (as the actions' post steps see it), one above it, or a file in one.
       - name: the fuzzing user cannot write the runner's files
         run: |
+          runner_path=$PATH
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
           # shellcheck disable=SC2024 # the runner user reads the script; the fuzzing user gets it on stdin
-          sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- "$FUZZ_USER" "$HOME" \
+          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- "$FUZZ_USER" "$HOME" "$runner_path" \
             "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" "${GITHUB_ENV%/*}" \
             "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" "$GITHUB_WORKSPACE/.git/HEAD" "$GITHUB_WORKSPACE/.git/config" \
             "$GITHUB_WORKSPACE/.github/scripts/fuzz_advisory.py" "$RUNNER_TEMP" "$RUNNER_TEMP/fuzz-findings" \
@@ -163,6 +203,8 @@ jobs:
           MAX_LEN: ${{ matrix.target.maxLen }}
           TIMEOUT: ${{ matrix.target.timeout }}
         run: |
+          runner_path=$PATH
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
           # Empty only without a dispatch (the commented-out schedule); a dispatched 0 is rejected below.
           FUZZ_SECONDS=${FUZZ_SECONDS:-300}
@@ -180,11 +222,11 @@ jobs:
           echo "flags=${args[*]:1}" >> "$GITHUB_OUTPUT"
           # This step's own file commands, checked as the user before Gradle starts.
           # shellcheck disable=SC2024 # the runner user reads the script; the fuzzing user gets it on stdin
-          sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- "$FUZZ_USER" "$HOME" \
+          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- "$FUZZ_USER" "$HOME" "$runner_path" \
             "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" < .github/scripts/fuzz_isolation_check.sh
           status=0
           # shellcheck disable=SC2016 # the inner bash expands its own variables
-          sudo -u "$FUZZ_USER" -- /usr/bin/env -i HOME="$FUZZ_HOME" USER="$FUZZ_USER" LOGNAME="$FUZZ_USER" LANG=C.UTF-8 \
+          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i HOME="$FUZZ_HOME" USER="$FUZZ_USER" LOGNAME="$FUZZ_USER" LANG=C.UTF-8 \
             PATH="$JAVA_HOME/bin:/usr/bin:/bin" JAVA_HOME="$JAVA_HOME" JAVA_HOME_25_X64="$JAVA_HOME_25_X64" \
             GRADLE_USER_HOME="$FUZZ_HOME/.gradle" JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" \
             PROJECT="$PROJECT" MODULE="$MODULE" CLASS="$CLASS" METHOD="$METHOD" /bin/bash -c '
@@ -203,22 +245,22 @@ jobs:
               exit "$status"' < /dev/null || status=$?
           # The log, read as the user into a directory only the runner user can write (at most 64 MiB; none if missing).
           scan=$RUNNER_TEMP/fuzz-scan
-          sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/head -c 67108864 -- "$FUZZ_HOME/out/gradle.log" >| "$scan/gradle.log" 2> /dev/null || true
-          xml=$(sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$FUZZ_HOME/out" -maxdepth 1 -type f -name '*.xml' -print -quit)
+          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/head -c 67108864 -- "$FUZZ_HOME/out/gradle.log" >| "$scan/gradle.log" 2> /dev/null || true
+          xml=$(/usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$FUZZ_HOME/out" -maxdepth 1 -type f -name '*.xml' -print -quit)
           # The test task may have started (and with it the fuzzer) once its header is printed or its XML exists.
           started=0
-          awk -v t="> Task $PROJECT:jvmTest" '$0 == t || index($0, t " ") == 1 { exit } { print }' "$scan/gradle.log" >| "$scan/before-test.log"
-          if [ "$(wc -l < "$scan/before-test.log")" -lt "$(wc -l < "$scan/gradle.log")" ] || [ -n "$xml" ]; then started=1; fi
-          if [ -n "$xml" ] || grep -qE 'Base64:|INFO: Seed:|^#[0-9]+[[:space:]]|==[0-9]+==' "$scan/before-test.log"; then
+          /usr/bin/awk -v t="> Task $PROJECT:jvmTest" '$0 == t || index($0, t " ") == 1 { exit } { print }' "$scan/gradle.log" >| "$scan/before-test.log"
+          if [ "$(/usr/bin/wc -l < "$scan/before-test.log")" -lt "$(/usr/bin/wc -l < "$scan/gradle.log")" ] || [ -n "$xml" ]; then started=1; fi
+          if [ -n "$xml" ] || /usr/bin/grep -qE 'Base64:|INFO: Seed:|^#[0-9]+[[:space:]]|==[0-9]+==' "$scan/before-test.log"; then
             echo "(the Gradle log is withheld: the test task ran, and its output may hold a fuzz input)"
           else
             # The build's lines are not workflow commands: the runner ignores commands until the random end token.
-            stop=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+            stop=$(/usr/bin/od -An -N16 -tx1 /dev/urandom | /usr/bin/tr -d ' \n')
             echo "::stop-commands::$stop"
-            cat "$scan/before-test.log"
+            /usr/bin/cat "$scan/before-test.log"
             echo "::$stop::"
           fi
-          grep -E '^Done [0-9]+ runs in [0-9]+ second' "$scan/gradle.log" || true
+          /usr/bin/grep -E '^Done [0-9]+ runs in [0-9]+ second' "$scan/gradle.log" || true
           if [ "$status" -eq 0 ]; then exit 0; fi
           # A failure once the test task may have started is a finding, with or without a reproducer file.
           if [ "$started" -eq 1 ]; then
@@ -237,10 +279,11 @@ jobs:
           CLASS: ${{ matrix.target.class }}
           TIMEOUT: ${{ matrix.target.timeout }}
         run: |
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           # No -e: a minimisation that fails or times out leaves the original input, and the next one still runs.
-          set -uo pipefail
+          set +e -uo pipefail
           # shellcheck disable=SC2016 # the inner bash expands its own variables
-          sudo -u "$FUZZ_USER" -- /usr/bin/env -i HOME="$FUZZ_HOME" USER="$FUZZ_USER" LOGNAME="$FUZZ_USER" LANG=C.UTF-8 \
+          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i HOME="$FUZZ_HOME" USER="$FUZZ_USER" LOGNAME="$FUZZ_USER" LANG=C.UTF-8 \
             PATH="$JAVA_HOME/bin:/usr/bin:/bin" JAVA_HOME="$JAVA_HOME" JAVA_HOME_25_X64="$JAVA_HOME_25_X64" \
             GRADLE_USER_HOME="$FUZZ_HOME/.gradle" PROJECT="$PROJECT" CLASS="$CLASS" TIMEOUT="$TIMEOUT" /bin/bash -c '
               cd "$HOME/work" || exit 1
@@ -254,7 +297,7 @@ jobs:
                   "-Prevokt.fuzzTimeout=$TIMEOUT" --no-daemon < /dev/null > "$out/minimise-$name.log" 2>&1 || true
               done' < /dev/null
           # Counts only: the names come from the fuzzed tree's side.
-          count() { sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$FUZZ_HOME/out" -maxdepth 1 -type f "$@" | wc -l; }
+          count() { /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$FUZZ_HOME/out" -maxdepth 1 -type f "$@" | /usr/bin/wc -l; }
           echo "minimised $(count -name 'min-*' -size +0) of $(count \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' \)) finding inputs"
       # Before the token is in reach, no process of FUZZ_USER may run: its account is expired first (so cron or at cannot
       # start one later), then every process whose real or effective uid is the user's is killed until none but zombies
@@ -263,24 +306,25 @@ jobs:
         id: stop
         if: failure() && steps.fuzz.outputs.finding == 'true'
         run: |
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           # No -e: pkill and ps exit 1 when nothing matches; the step's result is decided at the end.
-          set -uo pipefail
-          if ! sudo usermod --expiredate 1 "$FUZZ_USER"; then echo "::error::could not expire the fuzzing user"; exit 1; fi
+          set +e -uo pipefail
+          if ! /usr/bin/sudo /usr/sbin/usermod --expiredate 1 "$FUZZ_USER"; then echo "::error::could not expire the fuzzing user"; exit 1; fi
           # The states of the processes whose effective (-u) or real (-U) uid is the user's; ps exits 1 when there are none.
           # A zombie runs nothing (it only waits to be reaped), so only the others count; an error counts as left.
           left() {
             local states rc
-            states=$(sudo ps -o stat= -u "$FUZZ_USER" -U "$FUZZ_USER")
+            states=$(/usr/bin/sudo /usr/bin/ps -o stat= -u "$FUZZ_USER" -U "$FUZZ_USER")
             rc=$?
             if [ "$rc" -eq 1 ] && [ -z "$states" ]; then return 1; fi
             if [ "$rc" -ne 0 ]; then return 0; fi
-            grep -qv '^Z' <<< "$states"
+            /usr/bin/grep -qv '^Z' <<< "$states"
           }
           for _ in 1 2 3 4 5 6 7 8 9 10; do
-            sudo pkill -KILL -u "$FUZZ_USER"
-            sudo pkill -KILL -U "$FUZZ_USER"
+            /usr/bin/sudo /usr/bin/pkill -KILL -u "$FUZZ_USER"
+            /usr/bin/sudo /usr/bin/pkill -KILL -U "$FUZZ_USER"
             left || break
-            sleep 1
+            /usr/bin/sleep 1
           done
           if left; then echo "::error::processes of the fuzzing user are still running; the advisory step does not run"; exit 1; fi
           echo "no process of the fuzzing user is left"
@@ -291,10 +335,11 @@ jobs:
         id: collect
         if: failure() && steps.fuzz.outputs.finding == 'true' && steps.stop.outcome == 'success'
         run: |
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
           umask 077
           dest=$RUNNER_TEMP/fuzz-findings
-          names=$(sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$FUZZ_HOME/out" -mindepth 1 -maxdepth 1 -type f -printf '%f\n')
+          names=$(/usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$FUZZ_HOME/out" -mindepth 1 -maxdepth 1 -type f -printf '%f\n')
           copied=0
           while IFS= read -r name; do
             case $name in ''|.*|*[!A-Za-z0-9._-]*) continue ;; esac
@@ -303,12 +348,12 @@ jobs:
               gradle.log|minimise-*.log) cap=67108864 log=1 ;;
               *) continue ;;
             esac
-            sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/head -c "$((cap + 1))" -- "$FUZZ_HOME/out/$name" >| "$dest/$name"
-            if [ "$(stat -c %s "$dest/$name")" -gt "$cap" ]; then
+            /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/head -c "$((cap + 1))" -- "$FUZZ_HOME/out/$name" >| "$dest/$name"
+            if [ "$(/usr/bin/stat -c %s "$dest/$name")" -gt "$cap" ]; then
               if [ "$log" -eq 1 ]; then
-                truncate -s "$cap" "$dest/$name"
+                /usr/bin/truncate -s "$cap" "$dest/$name"
               else
-                rm -f -- "${dest:?}/$name"
+                /usr/bin/rm -f -- "${dest:?}/$name"
                 echo "::warning::a findings file is above 16 MiB and is not recorded; re-run the target to regenerate it"
                 continue
               fi
@@ -335,6 +380,7 @@ jobs:
           CHECKOUT: ${{ github.workspace }}
           FINDINGS: ${{ runner.temp }}/fuzz-findings
         run: |
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
             echo "::error::the FUZZ_ADVISORY_TOKEN secret is not set (CONTRIBUTING §6); the finding is not recorded"
@@ -354,15 +400,16 @@ jobs:
           CLASS: ${{ matrix.target.class }}
           METHOD: ${{ matrix.target.method }}
         run: |
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
           src=$FUZZ_HOME/work/$MODULE/.cifuzz-corpus/$CLASS/$METHOD
           dest=$RUNNER_TEMP/fuzz-corpus
-          install -d -m 700 "$dest"
-          names=$(sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$src" -mindepth 1 -maxdepth 1 -type f -size -1048577c \
+          /usr/bin/install -d -m 700 "$dest"
+          names=$(/usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$src" -mindepth 1 -maxdepth 1 -type f -size -1048577c \
             -printf '%f\n' 2> /dev/null || true)
           while IFS= read -r name; do
             case $name in ''|.*|*[!A-Za-z0-9._-]*) continue ;; esac
-            sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/head -c 1048576 -- "$src/$name" >| "$dest/$name"
+            /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/head -c 1048576 -- "$src/$name" >| "$dest/$name"
           done <<< "$names"
           echo "dir=$dest" >> "$GITHUB_OUTPUT"
       - name: corpus
