@@ -10,6 +10,7 @@ import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.api.ClubcardFormatException
 import dev.revokt.engine.c2sp.C2spIndex
+import dev.revokt.engine.c2sp.IndexFile
 import dev.revokt.engine.c2sp.Window
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.StoreLayout
@@ -62,12 +63,25 @@ internal enum class IndexRefusal {
     FILTER_UNREADABLE,
 }
 
+/** What [placeFilters] decided: the records a generation places, or why it places none. */
+internal sealed interface Placement {
+    /** [filters] are the placed records in `index.bin` filename order, each with its name in the generation. */
+    class Placed(
+        val filters: List<PlacedFilter>,
+    ) : Placement
+}
+
 /** What [buildIndex] produced. */
 internal sealed interface IndexBuild {
-    /** [index] is the generation's `index.bin`; [filters] are the placed records in its filename order. */
+    /**
+     * [index] is the generation's `index.bin`; [filters] are the placed records in its filename order; [coverageHighs]
+     * is the latest coverage `high` of each placed filter that covers a log ([coverageHighs] of the index), the input
+     * of the §6.3 coverage rules ([SyncRules.decide]).
+     */
     class Built(
         val index: ByteArray,
         val filters: List<PlacedFilter>,
+        val coverageHighs: List<ULong>,
     ) : IndexBuild
 
     /**
@@ -78,7 +92,8 @@ internal sealed interface IndexBuild {
         val reason: IndexRefusal,
         val detail: String,
         val cause: Throwable? = null,
-    ) : IndexBuild {
+    ) : IndexBuild,
+        Placement {
         /** [SyncStage.INDEX], except for an undecodable filter: a corrupt generation, the `prepare` stage's failure. */
         val stage: SyncStage get() =
             if (reason ==
@@ -98,23 +113,17 @@ internal sealed interface IndexBuild {
 }
 
 /**
- * Builds a Remote Settings generation's `index.bin` (spec §3.2, §6.5 seed archive): the one function a sync and the seed
- * loader share, so its output bytes are frozen per `seedFormat` (1 today) and a seed's shipped index is rebuilt and
- * byte-compared with it.
- *
- * The generation is [channel]'s records of [records], which must hold exactly one full filter (as Firefox requires),
- * ordered by `(effectiveTimestamp, record id)` with the full before the deltas. Each record's file is named by
- * [GenerationNames.derive]; two that map to one name, or one that maps to `index.bin`, `meta.json` or `records.json`,
- * refuse the set before any [body] is read. Then each placed filter's [body] is read once, in order, and its coverage
- * decoded with the clubcard decoders; the index is laid out by [C2spIndex.index] and refused when over
- * [C2spIndex.MAX_BYTES], before a generation directory could be written.
+ * The records of [channel] a Remote Settings generation places, each under its name in the generation (spec §6.5), or
+ * why it places none, read from the records alone, so a sync refuses a record set before any body is fetched: the
+ * channel must hold exactly one full filter, as Firefox requires (`RemoteSecuritySettings.sys.mjs` 646-659 at
+ * `cac25a6`; DECISIONS 2026-11-08), and every placed delta, ordered by `(effectiveTimestamp, record id)` after the full;
+ * each record's file is named by [GenerationNames.derive], and two that map to one name, or one that maps to
+ * `index.bin`, `meta.json` or `records.json`, refuse the set.
  */
-@OptIn(RevoktInternalApi::class)
-internal fun buildIndex(
+internal fun placeFilters(
     records: List<FilterRecord>,
     channel: CrliteChannel,
-    body: (FilterRecord) -> ByteArray,
-): IndexBuild {
+): Placement {
     val wire = channel.wireName
     val placed =
         records
@@ -124,6 +133,30 @@ internal fun buildIndex(
     val fulls = placed.count { it.full }
     if (fulls != 1) return IndexBuild.Refused(IndexRefusal.FULL_COUNT, "$wire has $fulls full filters, not 1")
     collision(placed)?.let { return IndexBuild.Refused(IndexRefusal.NAME_COLLISION, it) }
+    return Placement.Placed(placed)
+}
+
+/**
+ * Builds a Remote Settings generation's `index.bin` (spec §3.2, §6.5 seed archive): the one function a sync and the seed
+ * loader share, so its output bytes are frozen per `seedFormat` (1 today) and a seed's shipped index is rebuilt and
+ * byte-compared with it.
+ *
+ * The generation is [placeFilters]' records of [records] for [channel], refused as there before any [body] is read.
+ * Then each placed filter's [body] is read once, in order, and its coverage decoded with the clubcard decoders; the
+ * index is laid out by [C2spIndex.index] and refused when over [C2spIndex.MAX_BYTES], before a generation directory
+ * could be written.
+ */
+@OptIn(RevoktInternalApi::class)
+internal fun buildIndex(
+    records: List<FilterRecord>,
+    channel: CrliteChannel,
+    body: (FilterRecord) -> ByteArray,
+): IndexBuild {
+    val placed =
+        when (val placement = placeFilters(records, channel)) {
+            is Placement.Placed -> placement.filters
+            is IndexBuild.Refused -> return placement
+        }
     val coverage = ArrayList<Pair<String, Map<ByteString, Window>>>(placed.size)
     for (p in placed) {
         val decoded =
@@ -142,8 +175,29 @@ internal fun buildIndex(
     if (size > C2spIndex.MAX_BYTES) {
         return IndexBuild.Refused(IndexRefusal.OVER_CAP, "index.bin would be $size bytes, over ${C2spIndex.MAX_BYTES}")
     }
-    return IndexBuild.Built(C2spIndex.write(index), placed)
+    return IndexBuild.Built(C2spIndex.write(index), placed, coverageHighs(index))
 }
+
+/**
+ * The latest coverage `high` of each filter of [index] that covers a log, in filter order, unsigned as decoded (spec
+ * §6.3's coverage rules); a filter with no entry contributes none.
+ */
+internal fun coverageHighs(index: IndexFile): List<ULong> {
+    val highs = arrayOfNulls<ULong>(index.filenames.size)
+    for (entry in index.logs.values.flatten()) {
+        val high = highs[entry.filterIndex]
+        if (high == null || entry.window.high > high) highs[entry.filterIndex] = entry.window.high
+    }
+    return highs.filterNotNull()
+}
+
+/**
+ * The maximum coverage `high` of [index], clamped to [Long.MAX_VALUE], or null when it covers no log: what the loader
+ * publishes as a generation's maximum coverage ([DatasetGeneration.maxCoverageMillis]), decoded by the loader itself
+ * rather than read from the engine (spec §3.2, §6.5; #137's review note on #190).
+ */
+internal fun maxCoverageMillis(index: IndexFile): Long? =
+    coverageHighs(index).maxOrNull()?.let { minOf(it, Long.MAX_VALUE.toULong()).toLong() }
 
 /** The names a generation directory holds beside its filters. */
 private val DIRECTORY_FILES = setOf(StoreLayout.INDEX, StoreLayout.META, StoreLayout.RECORDS)

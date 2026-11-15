@@ -25,6 +25,7 @@ import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import dev.revokt.engine.update.UpdateFixtures.deltaRecord
 import dev.revokt.engine.update.UpdateFixtures.fullRecord
 import dev.revokt.engine.update.UpdateFixtures.log
+import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -136,9 +137,22 @@ class InstallTest {
                 pending = false,
                 staleGateOpen = false,
                 clockBehind = false,
+                // The maximum coverage the loader decoded from index.bin, not the engine's getter (#137, #190).
+                maxCoverageMillis = maxCoverageMillis(C2spIndex.read(p.index)),
             ),
             s.datasets.getValue(Dataset.CRLITE),
         )
+        assertNotNull(s.datasets.getValue(Dataset.CRLITE).maxCoverageMillis)
+    }
+
+    @Test
+    fun `the published maximum coverage is the loader's own, whatever the engine's getter says`() {
+        val engine = TestEngine().apply { coverageEnd = { null } }
+        install(pending(), engine = engine)
+        val published = snapshot.snapshot.datasets.getValue(Dataset.CRLITE)
+        assertNull(snapshot.snapshot.coverageEndMillis)
+        assertEquals(maxCoverageMillis(C2spIndex.read(pending().index)), published.maxCoverageMillis)
+        assertNotNull(published.maxCoverageMillis)
     }
 
     @Test
@@ -227,6 +241,27 @@ class InstallTest {
             assertEquals(1, f.storeFailures)
             assertUntouched(p.meta.directory, live = "g1", published = published)
             if (stage == SyncStage.ACTIVATE) assertEquals(listOf("g2"), e.closed)
+        }
+    }
+
+    @Test
+    fun `an InterruptedException from prepare or activate fails the install and keeps the interrupt`() {
+        assertIs<InstallResult.Installed>(install(pending("g1")))
+        val published = snapshot.snapshot
+        for (stage in listOf(SyncStage.PREPARE, SyncStage.ACTIVATE)) {
+            val e = TestEngine(inner = engine.inner)
+            val interrupt = { throw InterruptedException(stage.name) }
+            if (stage == SyncStage.PREPARE) e.onPrepare = { interrupt() } else e.onActivate = interrupt
+            val p = pending("g2", timestamp = 1_792_587_631_205)
+            try {
+                val f = failed(install(p, e))
+                assertEquals(SyncOutcome.FAILED to stage, f.outcome to f.stage)
+                assertIs<InterruptedException>(f.cause)
+                assertTrue(Thread.currentThread().isInterrupted, "the interrupt flag is restored at $stage")
+            } finally {
+                Thread.interrupted()
+            }
+            assertUntouched(p.meta.directory, live = "g1", published = published)
         }
     }
 
@@ -352,6 +387,63 @@ class InstallTest {
         assertEquals(SyncOutcome.STORE_FAILED, failed(install(p)).outcome)
         assertTrue(padded.contentEquals(store.index(p.meta.directory)))
         assertEquals(emptyList(), engine.prepared)
+    }
+
+    @Test
+    fun `a retry over its own directory re-signed under the same ts installs, keeping the stored meta json`() {
+        val p = pending()
+        storage.fail = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        assertEquals(true, failed(install(p)).activated)
+        storage.fail = { null }
+        // The maintainer's decision on #200: the same <ts> and signed records under another signature or leaf.
+        val signed = checkNotNull(p.meta.signed)
+        val resigned =
+            signed.copy(
+                signerLeafSha256 = ByteArray(32) { 1 }.toByteString(),
+                signature = ByteArray(64) { 2 }.toByteString(),
+            )
+        val retry = PendingGeneration(p.meta.copy(signed = resigned), p.index, p.deltas, p.records)
+        storage.writes.clear()
+        val r = assertIs<InstallResult.Installed>(install(retry))
+        assertEquals(listOf("current", "updater.json"), storage.writes)
+        assertEquals(StoreRead.Found(Pointer(p.meta.directory, null)), store.pointer())
+        assertEquals(p.meta, store.meta(r.directory))
+    }
+
+    @Test
+    fun `a directory that differs in anything but the signed members still holds another generation`() {
+        val p = pending()
+        storage.fail = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        assertEquals(true, failed(install(p)).activated)
+        storage.fail = { null }
+        val resigned = checkNotNull(p.meta.signed).copy(signature = ByteArray(96) { 3 }.toByteString())
+        val others =
+            listOf(
+                "collection" to
+                    PendingGeneration(p.meta.copy(collection = "x/y", signed = resigned), p.index, p.deltas, p.records),
+                "freshness" to
+                    PendingGeneration(
+                        p.meta.copy(freshness = Freshness.LAST_VERIFIED_POLL, signed = resigned),
+                        p.index,
+                        p.deltas,
+                        p.records,
+                    ),
+                "index.bin" to
+                    PendingGeneration(p.meta.copy(signed = resigned), p.index + ByteArray(4), p.deltas, p.records),
+                "records.json" to
+                    PendingGeneration(
+                        p.meta.copy(signed = resigned),
+                        p.index,
+                        p.deltas,
+                        "{\"data\":[1]}".encodeToByteArray(),
+                    ),
+            )
+        for ((what, other) in others) {
+            val f = failed(install(other))
+            assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage, what)
+            assertTrue("holds another generation" in f.cause?.message.orEmpty(), what)
+            assertEquals(p.meta, store.meta(p.meta.directory), what)
+        }
     }
 
     @Test

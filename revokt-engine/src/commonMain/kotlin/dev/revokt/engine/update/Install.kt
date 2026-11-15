@@ -28,6 +28,7 @@ import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
 import dev.revokt.engine.walker.absorb
 import dev.revokt.engine.walker.isFatal
+import dev.revokt.engine.walker.restoreInterrupt
 import dev.revokt.safeLog
 import okio.ByteString
 
@@ -159,6 +160,9 @@ private class Install(
         try {
             steps()
         } catch (t: Throwable) {
+            // An injected engine's prepare or activate may have cleared the interrupt flag; a fatal error is FAILED
+            // here, never rethrown, since nothing escapes the loader (§6.5).
+            restoreInterrupt(t)
             val storeWrite = stage == SyncStage.STORE && !isFatal(t)
             fail(if (storeWrite) SyncOutcome.STORE_FAILED else SyncOutcome.FAILED, null, t)
         }
@@ -208,7 +212,7 @@ private class Install(
         stage = SyncStage.ACTIVATE
         engine.activate(p)
         activated = true
-        val epoch = publish()
+        val epoch = publish(maxCoverageMillis(index))
         stage = SyncStage.STORE
         store.point(Pointer(directory, previous(directory)))
         updater?.let { store.writeUpdater(it, publication.nowMillis) }
@@ -217,18 +221,16 @@ private class Install(
 
     /**
      * Writes the generation directory, `meta.json` last, or returns the failure. A directory the engine holds live or
-     * the pointer names is never replaced: when it already holds this generation (the same `meta.json` and
-     * `index.bin`, left by an install that failed after the publish) it is prepared as it stands, so a retry can
-     * succeed, and a failure keeps it; when its `meta.json` is malformed (a newer binary's `metaVersion`, say, #178) or
-     * missing it stays and fails the install. Any other directory is replaced whole, since its delta files are not
-     * re-hashed, unless it holds another generation, which stays and fails the install.
+     * the pointer names is never replaced: when it already holds this generation ([sameGeneration], left by an install
+     * that failed after the publish) it is prepared as it stands, its stored `meta.json` kept, so a retry can succeed,
+     * and a failure keeps it; when its `meta.json` is malformed (a newer binary's `metaVersion`, say, #178) or missing
+     * it stays and fails the install. Any other directory is replaced whole, since its delta files are not re-hashed,
+     * unless it holds another generation, which stays and fails the install.
      */
     private fun directory(directory: String): InstallResult? {
         val held = directory == liveDirectory() || directory in pointed()
         val existing = store.readMeta(directory)
-        if (existing is StoreRead.Found &&
-            (existing.value != meta || !store.index(directory).contentEquals(generation.index))
-        ) {
+        if (existing is StoreRead.Found && !sameGeneration(existing.value, directory)) {
             return fail(SyncOutcome.STORE_FAILED, null, IllegalStateException("$directory holds another generation"))
         }
         if (held) {
@@ -242,6 +244,23 @@ private class Install(
         store.writeGeneration(meta, generation.index, generation.deltas, generation.records)
         return null
     }
+
+    /**
+     * Whether [directory], whose `meta.json` is [stored], holds this generation: the same `meta.json` but for its
+     * `SIGNED` members (the signature that verified, and its leaf), and byte-equal `index.bin` and `records.json`. A
+     * collection re-signed under the same `<ts>` is the same signed records, so a retried flip over it installs rather
+     * than failing every sync until the next `<ts>` (the maintainer's decision on #200; Firefox treats an equal
+     * timestamp as up to date, `RemoteSettingsClient.sys.mjs:778` at `cac25a6`).
+     */
+    private fun sameGeneration(
+        stored: GenerationMeta,
+        directory: String,
+    ): Boolean =
+        // Same trust class first, so the copy keeps "signed members iff SIGNED".
+        stored.trustClass == meta.trustClass &&
+            stored.copy(signed = meta.signed) == meta &&
+            store.index(directory).contentEquals(generation.index) &&
+            store.records(directory).contentEquals(generation.records)
 
     /** The directory of the generation the engine holds live for this dataset, as the snapshot published it. */
     private fun liveDirectory(): String? {
@@ -281,11 +300,12 @@ private class Install(
         }
 
     /**
-     * Publishes the snapshot with this generation for its dataset, `clockBehind` recomputed for every dataset, the
-     * engine's coverage end (null when the engine cannot tell, or throws), and the next epoch, which it returns.
+     * Publishes the snapshot with this generation for its dataset, carrying [maxCoverage], the maximum coverage the
+     * loader decoded from its `index.bin`; `clockBehind` recomputed for every dataset, the engine's coverage end (null
+     * when the engine cannot tell, or throws), and the next epoch, which it returns.
      */
     @Suppress("TooGenericExceptionCaught") // An injected engine's getter that throws means it cannot tell (§3.2).
-    private fun publish(): Long {
+    private fun publish(maxCoverage: Long?): Long {
         val current = snapshot.snapshot
         val installed =
             DatasetGeneration(
@@ -298,6 +318,7 @@ private class Install(
                 pending = false,
                 staleGateOpen = publication.staleGateOpen,
                 clockBehind = false,
+                maxCoverageMillis = maxCoverage,
             )
         val datasets =
             (current.datasets + (meta.dataset to installed)).mapValues { (_, d) ->

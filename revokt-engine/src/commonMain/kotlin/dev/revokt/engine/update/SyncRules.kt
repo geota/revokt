@@ -37,8 +37,9 @@ internal enum class SyncDecision(
 
 /**
  * The dataset's live generation as the published snapshot holds it, for [SyncRules]: its [trustClass], its
- * `sourceTimestampMillis`, and its maximum coverage `high` (`GenerationSnapshot.coverageEndMillis`, clamped as there),
- * null when the engine cannot tell. Never read from `updater.json` (§6.5).
+ * `sourceTimestampMillis`, and its maximum coverage `high` (`DatasetGeneration.maxCoverageMillis`, decoded by the
+ * loader from the generation's `index.bin` and clamped to [Long.MAX_VALUE]), null when it covers no log. Never read from
+ * `updater.json` (§6.5), nor from the engine's `coverageEndMillis`.
  */
 internal class LiveGeneration(
     val trustClass: TrustClass,

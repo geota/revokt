@@ -612,7 +612,6 @@ public final class dev/revokt/RevoktLimits {
 	public static final field MAX_PRESENTED I
 	public static final field MAX_PRESENTED_BYTES J
 	public static final field MAX_RELATED_PER_LEVEL I
-	public static final field MAX_SYNC_BYTES J
 	public static final field MAX_TRUST_MANAGERS I
 	public static final field MAX_VERIFICATIONS I
 	public static final field MAX_X5U_BYTES J

@@ -81,8 +81,6 @@ public object RevoktLimits {
 
     @JvmField public val MAX_CHANGESET_RECORDS: Int = 256
 
-    @JvmField public val MAX_SYNC_BYTES: Long = 128L shl 20
-
     @JvmField public val READONLY_POLL_INTERVAL: Long = 60_000
 
     @JvmField public val MAX_BACKOFF: Long = 24L * 60 * 60 * 1_000
