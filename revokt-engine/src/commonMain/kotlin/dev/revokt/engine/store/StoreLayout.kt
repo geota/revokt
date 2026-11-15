@@ -232,9 +232,10 @@ internal class StoreLayout(
     /**
      * Keeps exactly the directories the pointer names and the blobs their `meta.json` reference: deletes every other
      * directory under this dataset and channel, complete or not, and every other blob. Files directly under the prefix
-     * (`current`, `updater.json`) stay. With no pointer nothing is kept. When it cannot tell what is referenced, it
-     * keeps more: a malformed `current` deletes nothing, and a pointed directory whose `meta.json` is present but
-     * malformed keeps every blob. Returns the number of keys deleted.
+     * (`current`, `updater.json`) stay. When it cannot tell what is referenced, it keeps more: an absent or malformed
+     * `current` deletes nothing (a data-loss guard, the #200 review: a storage that lost `current` must not lose its
+     * generations too), and a pointed directory whose `meta.json` is present but malformed keeps every blob. Returns the
+     * number of keys deleted.
      *
      * Runs on the loader thread only, never between [putBlob] or [writeGeneration] and [point]: a blob or directory of
      * an install not yet pointed to is unreferenced, so prune would delete it.
@@ -242,11 +243,10 @@ internal class StoreLayout(
     fun prune(): Int {
         val pointer =
             when (val read = pointer()) {
-                StoreRead.Absent -> null
-                StoreRead.Malformed -> return 0
+                StoreRead.Absent, StoreRead.Malformed -> return 0
                 is StoreRead.Found -> read.value
             }
-        val kept = listOfNotNull(pointer?.live, pointer?.previous).toSet()
+        val kept = listOfNotNull(pointer.live, pointer.previous).toSet()
         val metas = kept.map(::readMeta)
         val blobs =
             if (StoreRead.Malformed in metas) {

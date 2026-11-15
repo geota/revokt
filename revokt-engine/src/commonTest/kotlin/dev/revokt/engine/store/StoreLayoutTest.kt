@@ -371,11 +371,12 @@ class StoreLayoutTest {
     }
 
     @Test
-    fun `prune with no pointer keeps no directory and no blob`() {
+    fun `prune with no pointer deletes nothing`() {
         install()
         storage.write("crlite/compat/updater.json", byteArrayOf())
-        layout.prune()
-        assertEquals(setOf("crlite/compat/updater.json"), storage.names())
+        val before = storage.names()
+        assertEquals(0, layout.prune())
+        assertEquals(before, storage.names())
     }
 
     @Test

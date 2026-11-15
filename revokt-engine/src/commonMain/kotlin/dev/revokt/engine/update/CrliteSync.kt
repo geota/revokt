@@ -123,6 +123,12 @@ internal class CrliteSync(
         private var backoff: Long? = null
         private var lastStatus: Int? = null
 
+        /** Set once the first body fetch starts: from there on the sync is an *install* (§6.5's order). */
+        private var installing = false
+
+        /** The result once [install] activated, flipped and wrote `updater.json`: nothing after may undo it. */
+        private var done: SyncResult? = null
+
         @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable, an OutOfMemoryError too.
         fun run(): SyncRun {
             val result =
@@ -130,13 +136,39 @@ internal class CrliteSync(
                     steps()
                 } catch (t: Throwable) {
                     restoreInterrupt(t)
-                    // As in install: a store read or write that throws is STORE_FAILED; anything else, FAILED.
-                    val storeFailure = stage == SyncStage.STORE && !isFatal(t)
-                    if (storeFailure) storeFailures++
-                    val outcome = if (storeFailure) SyncOutcome.STORE_FAILED else SyncOutcome.FAILED
-                    end(Ended(outcome, stage, null, "the sync threw at $stage", cause = t))
+                    thrown(t)
                 }
             return SyncRun(result, storeFailures)
+        }
+
+        /**
+         * The sync after [t] escaped a step. Once the install has flipped ([done]) it stays `INSTALLED` and its
+         * `updater.json` stands: the throw is a store failure. Otherwise, as in [install]: a non-fatal throw at `STORE`
+         * is `STORE_FAILED`, anything else `FAILED`; either counts a store failure from the first body fetch on (§6.5:
+         * "an `OutOfMemoryError` during an install is `SyncOutcome.FAILED` for that sync, `storeFailures++`").
+         */
+        private fun thrown(t: Throwable): SyncResult {
+            done?.let {
+                storeFailures++
+                logger.safeLog(LogLevel.WARN, "${source.sourceId} ${store.root}: threw after the install", t)
+                return it
+            }
+            val storeFailure = stage == SyncStage.STORE && !isFatal(t)
+            if (storeFailure || installing) storeFailures++
+            val outcome = if (storeFailure) SyncOutcome.STORE_FAILED else SyncOutcome.FAILED
+            return end(Ended(outcome, stage, null, "the sync threw at $stage", cause = t))
+        }
+
+        /**
+         * [read] at stage `STORE`, so a store that throws is `STORE_FAILED` ([thrown]); the stage before is restored
+         * after it returns, never on a throw.
+         */
+        private inline fun <T> stored(read: () -> T): T {
+            val before = stage
+            stage = SyncStage.STORE
+            val value = read()
+            stage = before
+            return value
         }
 
         private fun steps(): SyncResult {
@@ -210,8 +242,10 @@ internal class CrliteSync(
             stage = SyncStage.ATTACHMENT
             val byId = crlite.associateBy { it.id }
             val attachments = placed.map { byId.getValue(it.record.id) }
-            val reused = attachments.filter { !it.incremental && store.blob(it.attachment.sha256) == BlobState.MATCH }
+            val reused =
+                attachments.filter { !it.incremental && stored { store.blob(it.attachment.sha256) } == BlobState.MATCH }
             cap(attachments)?.let { return it }
+            installing = true
             val bodies = Bodies()
             for (r in attachments) bodies.fetch(r, r in reused)?.let { return it }
             stage = SyncStage.INDEX
@@ -222,7 +256,6 @@ internal class CrliteSync(
                 }
             val decision = SyncRules.decide(ts, record.watermarkMillis, ruled, built.coverageHighs, clock)
             decided(decision, ts)?.let { return it }
-            stage = SyncStage.PREPARE
             stage = SyncStage.PREPARE
             bodies.unlisted(placed)?.let { filter ->
                 val detail = "${filter.record.id} is in an encoding the engine does not list (${engine.formats})"
@@ -281,14 +314,17 @@ internal class CrliteSync(
             return when (val result = install(pending, engine, store, snapshot, publication, updated, logger)) {
                 is InstallResult.Installed -> {
                     storeFailures += result.storeFailures
-                    prune()
                     val warnings =
                         if (clockBehind) {
                             listOf(warning(DiagnosticCode.CLOCK_BEHIND, "installed $ts, beyond now $now + clockSkew"))
                         } else {
                             emptyList()
                         }
-                    result(SyncOutcome.INSTALLED, null, warnings, mapOf(Dataset.CRLITE to result.generationId))
+                    val installed =
+                        result(SyncOutcome.INSTALLED, null, warnings, mapOf(Dataset.CRLITE to result.generationId))
+                    done = installed
+                    prune(result.directory)
+                    installed
                 }
 
                 is InstallResult.Failed -> {
@@ -362,9 +398,7 @@ internal class CrliteSync(
                     deltas[name] = bytes
                     deltaBytes[r.id] = bytes
                 } else {
-                    stage = SyncStage.STORE
-                    if (store.putBlob(bytes) == BlobWrite.REWRITTEN) storeFailures++
-                    stage = SyncStage.ATTACHMENT
+                    if (stored { store.putBlob(bytes) } == BlobWrite.REWRITTEN) storeFailures++
                     blobs[name] = sha256
                 }
                 return null
@@ -377,7 +411,9 @@ internal class CrliteSync(
             fun bytes(r: CrliteRecord): ByteArray {
                 val bytes =
                     deltaBytes[r.id]
-                        ?: checkNotNull(store.readBlob(r.attachment.sha256)) { "the blob of ${r.id} is gone" }
+                        ?: stored {
+                            checkNotNull(store.readBlob(r.attachment.sha256)) { "the blob of ${r.id} is gone" }
+                        }
                 encodings[r.id] = encoding(bytes)
                 return bytes
             }
@@ -412,19 +448,6 @@ internal class CrliteSync(
                 }
         }
 
-        /** `meta.json`'s `SIGNED` members: `<ts>`, the x5u leaf's SHA-256 and the verified entry's raw signature. */
-        private fun signedMeta(verified: ChangesetVerification.Verified): SignedMeta {
-            val raw = checkNotNull(verified.entry.signature?.let(RawSignature::decode)) { "a verified signature" }
-            return SignedMeta(
-                verified.timestamp,
-                verified.path.links[0]
-                    .der
-                    .toByteString()
-                    .sha256(),
-                raw.toByteString(),
-            )
-        }
-
         /** The dataset's live generation as the snapshot publishes it, for [SyncRules]; null when it has none. */
         private fun liveGeneration(): LiveGeneration? {
             val live = snapshot.snapshot.datasets[Dataset.CRLITE] ?: return null
@@ -437,13 +460,25 @@ internal class CrliteSync(
         private fun pointed(live: LiveGeneration): Boolean {
             val id = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId ?: return false
             val directory = GenerationNames.directory(live.sourceTimestampMillis, id)
-            return (store.pointer() as? StoreRead.Found)?.value?.live == directory
+            return (stored { store.pointer() } as? StoreRead.Found)?.value?.live == directory
         }
 
-        /** Prunes the store to the directories the pointer names; a failure is a store failure, never the sync's. */
+        /**
+         * Prunes the store to the directories the pointer names, after the install of [installed]; a failure is a store
+         * failure, never the sync's. When the pointer does not read back as [installed] (a storage that breaks
+         * read-after-write), nothing is deleted: a store failure and a warning, never "delete everything".
+         */
         @Suppress("TooGenericExceptionCaught") // §6.5: the loader catches every throwable.
-        private fun prune() {
+        private fun prune(installed: String) {
             try {
+                if ((store.pointer() as? StoreRead.Found)?.value?.live != installed) {
+                    storeFailures++
+                    logger.safeLog(
+                        LogLevel.WARN,
+                        "${store.root}: the pointer does not read back as $installed; not pruned",
+                    )
+                    return
+                }
                 store.prune()
             } catch (t: Throwable) {
                 restoreInterrupt(t)
@@ -465,6 +500,8 @@ internal class CrliteSync(
                 }
 
                 is ClientResult.Failed -> {
+                    // A fetcher's fatal error during the body phase is an OutOfMemoryError during an install (§6.5).
+                    if (installing && result.cause?.let(::isFatal) == true) storeFailures++
                     failed(
                         end(Ended(SyncOutcome.FAILED, result.stage, result.code, result.detail, cause = result.cause)),
                     )
@@ -553,19 +590,33 @@ internal class CrliteSync(
                 .cause(cause)
                 .warnings(warnings)
                 .build()
-
-        private fun warning(
-            code: DiagnosticCode,
-            message: String,
-        ): PolicyDiagnostic =
-            PolicyDiagnostic
-                .Builder()
-                .code(code)
-                .severity(Severity.WARNING)
-                .dataset(Dataset.CRLITE)
-                .message("${source.sourceId}: $message")
-                .build()
     }
+
+    /** `meta.json`'s `SIGNED` members: `<ts>`, the x5u leaf's SHA-256 and the verified entry's raw signature. */
+    private fun signedMeta(verified: ChangesetVerification.Verified): SignedMeta {
+        val raw = checkNotNull(verified.entry.signature?.let(RawSignature::decode)) { "a verified signature" }
+        return SignedMeta(
+            verified.timestamp,
+            verified.path.links[0]
+                .der
+                .toByteString()
+                .sha256(),
+            raw.toByteString(),
+        )
+    }
+
+    @OptIn(RevoktTestingApi::class)
+    private fun warning(
+        code: DiagnosticCode,
+        message: String,
+    ): PolicyDiagnostic =
+        PolicyDiagnostic
+            .Builder()
+            .code(code)
+            .severity(Severity.WARNING)
+            .dataset(Dataset.CRLITE)
+            .message("${client.source.sourceId}: $message")
+            .build()
 
     /** How a sync that installs nothing ended: [outcome] at [stage], with the diagnostic [code] beyond `SYNC_FAILED`. */
     private class Ended(
