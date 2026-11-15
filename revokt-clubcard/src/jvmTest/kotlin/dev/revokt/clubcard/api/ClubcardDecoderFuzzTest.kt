@@ -18,8 +18,8 @@ import okio.ByteString.Companion.toByteString
  * lying length) is a finding. A decoded filter is then queried once per issuer in its index so the query path runs
  * over whatever structure the decoder accepted. With `JAZZER_FUZZ` unset JUnit replays the committed inputs in
  * `ClubcardDecoderFuzzTestInputs/`; the differential run against `clubcard-crlite` is the nightly job. Fuzzing runs it
- * with `-max_len=16777217`, `RevoktLimits.MAX_FILTER_BYTES` + 1: the engine caps a filter body at 16 MiB before the
- * decoder sees it, so that is the largest input the decoder can be given.
+ * with `-max_len=16777217`, `RevoktLimits.MAX_FILTER_BYTES` + 1 (§9.1: the default filter cap + 1; the decoder has no
+ * cap of its own).
  */
 @OptIn(RevoktInternalApi::class)
 class ClubcardDecoderFuzzTest {
