@@ -116,6 +116,7 @@ class KmpLibraryPlugin : Plugin<Project> {
         tasks.named("check") { dependsOn(verifyPomLicenses, verifyDependencyScopes) }
 
         configurePublishingPom()
+        registerFuzzMinimize()
 
         tasks.withType<Test>().configureEach {
             systemProperty("junit.jupiter.execution.parallel.enabled", "false")
