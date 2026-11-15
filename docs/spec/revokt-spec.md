@@ -31,7 +31,9 @@ and the #192 decisions are written.
   the "https with no userinfo" rule names the other source URLs only.
 - **§7.1:** the x5u URL is read by the same shared grammar, DNS host names only; its rules are unchanged.
 - **§9:** mirror fixtures for an IPv6 hop, `HTTPS://`, differing and equal duplicate `Location`s, a 302 with no
-  `Location` at the mirror client and the host `[1.2.3.4::]`.
+  `Location` at the mirror client and the host `[1.2.3.4::]`. Row (e)'s "the built `index.bin` 1 MiB + 1 byte"
+  becomes "over 1 MiB", since a built index is 14 bytes plus multiples of 32, 42 and 18, always an even size (#207,
+  #194's reading 10); the system-cache row keeps 1 MiB + 1 byte, since that file is read, not built.
 - **§10:** the TLS-only mirror item names the shared grammar, the re-serialised fetch and the headers that stay
   stripped.
 - **Appendix A:** reqwest 0.13.0 with tower-http 0.6.11 (upki v1.0.1's pins) and Firefox's Necko at
@@ -3736,8 +3738,8 @@ tests; **live checks** are informational.
   whose `index.bin` starts `upkiidx0` → not installed, `STORE_UNREADABLE`; a manifest name
   of 33 bytes → installs under its derived name, its body fetched from the base followed by the manifest name, no
   `index.bin` fetched, and the locally built `index.bin` naming the derived name (revision 53); a mirror whose
-  coverage would make the built `index.bin` 1 MiB + 1 byte → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no
-  generation directory written (revision 53); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
+  coverage would make the built `index.bin` over 1 MiB → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no
+  generation directory written (revision 53; revision 58: a built index is always an even size, so not 1 MiB + 1 byte); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
   `start()` throws on both platforms; stored `MIRROR` with coverage newer than the seed → seed
   installed, `trustClass = SIGNED`, the `MIRROR` directory pruned; stored `SIGNED` newer than the seed
   → seed skipped; corrupt `live` with an evicted `MIRROR` still on disk → recovery goes to seed, never
