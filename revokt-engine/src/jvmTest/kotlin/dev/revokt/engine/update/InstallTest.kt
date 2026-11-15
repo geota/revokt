@@ -244,6 +244,27 @@ class InstallTest {
     }
 
     @Test
+    fun `an InterruptedException from prepare or activate fails the install and keeps the interrupt`() {
+        assertIs<InstallResult.Installed>(install(pending("g1")))
+        val published = snapshot.snapshot
+        for (stage in listOf(SyncStage.PREPARE, SyncStage.ACTIVATE)) {
+            val e = TestEngine(inner = engine.inner)
+            val interrupt = { throw InterruptedException(stage.name) }
+            if (stage == SyncStage.PREPARE) e.onPrepare = { interrupt() } else e.onActivate = interrupt
+            val p = pending("g2", timestamp = 1_792_587_631_205)
+            try {
+                val f = failed(install(p, e))
+                assertEquals(SyncOutcome.FAILED to stage, f.outcome to f.stage)
+                assertIs<InterruptedException>(f.cause)
+                assertTrue(Thread.currentThread().isInterrupted, "the interrupt flag is restored at $stage")
+            } finally {
+                Thread.interrupted()
+            }
+            assertUntouched(p.meta.directory, live = "g1", published = published)
+        }
+    }
+
+    @Test
     fun `a format the engine does not list is FORMAT_UNSUPPORTED at PREPARE and never offered to prepare`() {
         val v4only = TestEngine(formats = setOf(FilterFormat.V4))
         val p = pending()

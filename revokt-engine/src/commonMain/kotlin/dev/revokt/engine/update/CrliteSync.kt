@@ -223,7 +223,12 @@ internal class CrliteSync(
             val decision = SyncRules.decide(ts, record.watermarkMillis, ruled, built.coverageHighs, clock)
             decided(decision, ts)?.let { return it }
             stage = SyncStage.PREPARE
-            val pending = pending(verified, placed, built, bodies, bodies.format())
+            stage = SyncStage.PREPARE
+            bodies.unlisted(placed)?.let { filter ->
+                val detail = "${filter.record.id} is in an encoding the engine does not list (${engine.formats})"
+                return end(Ended(SyncOutcome.FAILED, SyncStage.PREPARE, DiagnosticCode.FORMAT_UNSUPPORTED, detail))
+            }
+            val pending = pending(verified, placed, built, bodies, bodies.format(placed))
             return installed(pending, decision == SyncDecision.INSTALL_CLOCK_BEHIND)
         }
 
@@ -336,7 +341,7 @@ internal class CrliteSync(
             val blobs = LinkedHashMap<String, ByteString>()
             val deltas = LinkedHashMap<String, ByteArray>()
             private val deltaBytes = HashMap<String, ByteArray>()
-            private var fullEncoding: Encoding? = null
+            private val encodings = HashMap<String, Encoding?>()
 
             /**
              * Fetches [r]'s body and writes it, or for a [reuse]d full only names its stored blob; the failure that ends
@@ -373,17 +378,28 @@ internal class CrliteSync(
                 val bytes =
                     deltaBytes[r.id]
                         ?: checkNotNull(store.readBlob(r.attachment.sha256)) { "the blob of ${r.id} is gone" }
-                if (!r.incremental) fullEncoding = encoding(bytes)
+                encodings[r.id] = encoding(bytes)
                 return bytes
             }
 
             /**
-             * The generation's `meta.format`: the full's encoding. A delta may be in another one, which every engine
-             * reads as served (the maintainer's decision on #137, as Firefox's `cert_storage` and upki read each filter).
-             * Called after [buildIndex] decoded every placed filter, so the full's encoding is known.
+             * The first of [placed] whose encoding [engine] does not list (spec §3.2 `FORMAT_UNSUPPORTED`; the lead's
+             * decision on #137: the check covers every placed filter, a full or a delta), or null. Called after
+             * [buildIndex] decoded every placed filter, so each encoding is known.
              */
-            fun format(): FilterFormat =
-                when (checkNotNull(fullEncoding) { "buildIndex decoded the full" }) {
+            fun unlisted(placed: List<PlacedFilter>): PlacedFilter? =
+                placed.firstOrNull { format(checkNotNull(encodings[it.record.id]) { "decoded" }) !in engine.formats }
+
+            /**
+             * The generation's `meta.format`: the full's encoding. A delta may be in another one the engine lists, and
+             * each is read as served (the maintainer's decision on #137, as Firefox's `cert_storage` and upki read each
+             * filter). Called after [buildIndex] decoded every placed filter.
+             */
+            fun format(placed: List<PlacedFilter>): FilterFormat =
+                format(checkNotNull(encodings[placed.first { it.full }.record.id]) { "decoded" })
+
+            private fun format(encoding: Encoding): FilterFormat =
+                when (encoding) {
                     Encoding.V3 -> FilterFormat.V3
                     Encoding.V4 -> FilterFormat.V4
                 }

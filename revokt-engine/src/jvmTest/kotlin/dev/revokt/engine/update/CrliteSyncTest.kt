@@ -656,6 +656,28 @@ internal class CrliteSyncTest : X5uChainFixture() {
     }
 
     @Test
+    fun `a delta in an encoding the engine does not list is FORMAT_UNSUPPORTED, and the previous generation stays`() {
+        // The lead's decision on #137: the format check covers every placed filter, not only the full.
+        val engine = TestEngine(formats = setOf(FilterFormat.V3))
+        val server = Server()
+        sync(server, engine = engine).assert(SyncOutcome.INSTALLED)
+        val previous = "$ts/${delta.id}"
+        val v4 = UpdateFixtures.v4(listOf(log(1) to (1_000L to 2_000L)))
+        val d = Rec("d-v4", true, delta.effectiveTimestamp + 1, "20261022-1-compat.filter.delta", v4, parent = full.id)
+        server.ts = ts + 1_000
+        server.records = listOf(full.json(), delta.json(), d.json())
+        server.bodies = server.bodies + (d.location to v4)
+        val now = ts + 2 * hour
+        sync(server, now = now, engine = engine)
+            .assert(SyncOutcome.FAILED, SyncStage.PREPARE, *failed(DiagnosticCode.FORMAT_UNSUPPORTED))
+        assertEquals(listOf(previous), engine.prepared)
+        assertEquals(previous, live().generationId)
+        assertEquals(GenerationNames.directory(ts, previous), liveDirectory())
+        assertEquals(ts, updater(now).watermarkMillis)
+        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
+    }
+
+    @Test
     fun `an engine that does not read the format is FAILED with FORMAT_UNSUPPORTED at PREPARE`() {
         val engine = TestEngine(formats = setOf(FilterFormat.V4))
         sync(

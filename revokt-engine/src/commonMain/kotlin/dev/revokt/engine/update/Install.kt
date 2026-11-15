@@ -159,6 +159,9 @@ private class Install(
         try {
             steps()
         } catch (t: Throwable) {
+            // absorb restores an InterruptedException's flag, which an injected engine's prepare or activate may have
+            // cleared; a fatal error is not rethrown here but is FAILED, since nothing escapes the loader (§6.5).
+            if (!isFatal(t)) absorb(t)
             val storeWrite = stage == SyncStage.STORE && !isFatal(t)
             fail(if (storeWrite) SyncOutcome.STORE_FAILED else SyncOutcome.FAILED, null, t)
         }
