@@ -47,6 +47,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -237,6 +238,25 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         assertEquals(GenerationNames.directory(ts, "$ts/${delta.id}"), liveDirectory())
         assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
         assertEquals(ts, updater(now).watermarkMillis)
+    }
+
+    @Test
+    fun `a retried flip over the same ts re-signed installs, then is UNCHANGED, with no STORE_FAILED loop`() {
+        val server = Server()
+        storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        sync(server).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        storage.failWrite = { null }
+        val stored = assertNotNull(store.meta(GenerationNames.directory(ts, "$ts/${delta.id}")))
+        // Remote Settings re-signs the same collection at the same <ts>: a fresh ECDSA signature.
+        val resigned = Server().sign()
+        assertNotEquals(server.sign(), resigned)
+        server.signature = resigned
+        val now = ts + 2 * hour
+        sync(server, now = now).assert(SyncOutcome.INSTALLED)
+        assertEquals(GenerationNames.directory(ts, "$ts/${delta.id}"), liveDirectory())
+        assertEquals(stored, store.meta(assertNotNull(liveDirectory())))
+        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
+        sync(server, now = now + hour).assert(SyncOutcome.UNCHANGED)
     }
 
     @Test
