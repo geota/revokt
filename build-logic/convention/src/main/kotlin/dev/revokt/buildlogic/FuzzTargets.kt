@@ -9,14 +9,14 @@ import org.gradle.api.Project
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
-import org.gradle.api.tasks.Internal
+import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
-import org.gradle.api.provider.Provider
-import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaLauncher
@@ -175,13 +175,14 @@ internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
 
 /**
  * `fuzzMinimize` (fuzz.yml, #115): libFuzzer's `-minimize_crash=1` over one crash, timeout or oom input (it treats any
- * non-zero exit as the crash), so a finding fits a draft advisory. It runs Jazzer's standalone driver, which re-launches the JVM for each minimisation step, on the target's
- * static `fuzzerTestOneInput` with the jvmTest classpath, in the §9.1 harness JVM (`-Xmx256m`, `-rss_limit_mb=1024`) on
- * the tests' JDK. Properties: `revokt.fuzzClass`, `revokt.fuzzInput`, `revokt.fuzzOutput` (libFuzzer rewrites it with
- * each smaller crashing input), `revokt.fuzzTimeout` (the target's `-timeout`, default 10), `revokt.fuzzSeconds` (each
- * step's search, default 10) and `revokt.fuzzBudget` (the whole task, default 300 s: libFuzzer's loop has no bound of its
- * own, so the task times out and the output holds the smallest input found so far). Jazzer's re-launched JVMs outlive a
- * timeout; fuzz.yml stops them before it reads the output.
+ * non-zero exit as the crash), so a finding fits a draft advisory. It runs Jazzer's standalone driver, which
+ * re-launches the JVM for each minimisation step, on the target's static `fuzzerTestOneInput` with the jvmTest
+ * classpath, in the §9.1 harness JVM (`-Xmx256m`, `-rss_limit_mb=1024`) on the tests' JDK. Properties:
+ * `revokt.fuzzClass`, `revokt.fuzzInput`, `revokt.fuzzOutput` (libFuzzer rewrites it with each smaller crashing input),
+ * `revokt.fuzzTimeout` (the target's `-timeout`, default 10), `revokt.fuzzSeconds` (each step's search, default 10) and
+ * `revokt.fuzzBudget` (the whole task, default 300 s: libFuzzer's loop has no bound of its own, so the task times out
+ * and the output holds the smallest input found so far). Jazzer's re-launched JVMs outlive a timeout; fuzz.yml stops
+ * every process of its fuzzing user before it reads the output.
  */
 internal fun Project.registerFuzzMinimize() {
     val property = { name: String -> providers.gradleProperty("revokt.$name") }

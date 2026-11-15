@@ -417,8 +417,11 @@ every required check in Appendix B passes**.
   `./gradlew fuzzTargets` lists. A finding lands as a private **draft security advisory** (private vulnerability
   reporting is enabled), visible only to administrators and security managers, with the stack trace and the
   reproducer (minimised by libFuzzer's `-minimize_crash=1` first); nothing about it beyond the failed job is public
-  (no issue, artifact or fuzzer log). It needs the `FUZZ_ADVISORY_TOKEN` repository secret: a fine-grained personal
-  access token of an administrator, for this repository only, with "Repository security advisories: Read and write".
+  (no issue, artifact or fuzzer log). The fuzzed tree's code (the build, its dependencies, the fuzzer and the
+  minimiser) runs as a second user with no sudo that cannot write the runner's files; the token step runs only once
+  every process of that user is stopped, and reads only the findings the runner user copied out and checked. It
+  needs the `FUZZ_ADVISORY_TOKEN` repository secret: a fine-grained personal access token of an administrator, for
+  this repository only, with "Repository security advisories: Read and write".
   The token expires: renew it before then, because a finding after expiry fails the job loudly and is lost with the
   runner.
 - Android emulator matrix (API 26, 31, 34, 36) on hosted Linux runners with KVM, from the mirrored system
