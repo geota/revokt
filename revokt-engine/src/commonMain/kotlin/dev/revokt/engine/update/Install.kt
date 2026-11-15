@@ -33,19 +33,20 @@ import dev.revokt.safeLog
 import okio.ByteString
 
 /**
- * A generation ready to install (spec §6.5): its [meta], its `index.bin` ([index]), its delta files by name and, for
- * `SIGNED`, its `records.json`. Its full filters are already stored as blobs (fetched, verified and written one body at
- * a time before the install). [index] was built by the loader ([buildIndex]) for every trust class but `SYSTEM`, whose
- * index the loader reads from the system cache.
+ * A generation ready to install (spec §6.5): its [meta], its `index.bin` ([index]), its delta files' names, each with the
+ * SHA-256 of its signed record ([deltas]), and, for `SIGNED`, its `records.json`. Its bodies are already written, one at
+ * a time before the install: its full filters as blobs, and its delta files staged in its directory
+ * ([StoreLayout.stageFile]) unless the directory is already complete, so no delta body is held until the install. [index]
+ * was built by the loader ([buildIndex]) for every trust class but `SYSTEM`, whose index the loader reads from the system
+ * cache.
  */
 internal class PendingGeneration(
     val meta: GenerationMeta,
     index: ByteArray,
-    deltas: Map<String, ByteArray>,
+    val deltas: Map<String, ByteString>,
     records: ByteArray?,
 ) {
     val index: ByteArray = index.copyOf()
-    val deltas: Map<String, ByteArray> = deltas.mapValues { it.value.copyOf() }
     val records: ByteArray? = records?.copyOf()
 
     /** Whether the loader built [index], rather than read it. */
@@ -168,6 +169,10 @@ private class Install(
         }
 
     private fun steps(): InstallResult {
+        stage = SyncStage.STORE
+        val directory = meta.directory
+        val (held, existing) = claim(directory)
+        stage = SyncStage.INDEX
         if (generation.index.size > C2spIndex.MAX_BYTES) {
             // §3.2: a built index over the cap fails before the directory is written; a read one is unreadable.
             val code = if (generation.indexBuilt) DiagnosticCode.INDEX_INCONSISTENT else DiagnosticCode.STORE_UNREADABLE
@@ -178,8 +183,7 @@ private class Install(
             return fail(SyncOutcome.FAILED, DiagnosticCode.FORMAT_UNSUPPORTED, null, counted = false)
         }
         stage = SyncStage.STORE
-        val directory = meta.directory
-        directory(directory)?.let { return it }
+        directory(directory, held, existing)?.let { return it }
         val files =
             store.readGeneration(directory)?.files
                 ?: return fail(SyncOutcome.STORE_FAILED, null, IllegalStateException("$directory does not read back"))
@@ -220,37 +224,57 @@ private class Install(
     }
 
     /**
-     * Writes the generation directory, `meta.json` last, or returns the failure. A directory the engine holds live or
-     * the pointer names is never replaced: when it already holds this generation ([sameGeneration], left by an install
-     * that failed after the publish) it is prepared as it stands, its stored `meta.json` kept, so a retry can succeed,
-     * and a failure keeps it; when its `meta.json` is malformed (a newer binary's `metaVersion`, say, #178) or missing
-     * it stays and fails the install. Any other directory is replaced whole, since its delta files are not re-hashed,
-     * unless it holds another generation, which stays and fails the install.
+     * Whether [directory] is held (the engine's live generation or one the pointer names) and its `meta.json` as it
+     * reads. An incomplete directory nothing holds is this install's to complete over its staged deltas, or to delete
+     * on a failure before activation.
      */
-    private fun directory(directory: String): InstallResult? {
+    private fun claim(directory: String): Pair<Boolean, StoreRead<GenerationMeta>> {
         val held = directory == liveDirectory() || directory in pointed()
         val existing = store.readMeta(directory)
-        if (existing is StoreRead.Found && !sameGeneration(existing.value, directory)) {
+        if (existing !is StoreRead.Found && !held) written = directory
+        return held to existing
+    }
+
+    /**
+     * Completes the generation directory, `meta.json` last, or returns the failure. A complete directory is never
+     * replaced: when it holds this generation ([sameGeneration]: left by an install that failed after the publish, or
+     * one the pointer names) it is prepared as it stands, its stored `meta.json` kept, so a retry can succeed, and a
+     * failure keeps it when it is live or pointed to and deletes it otherwise; when it holds another generation, a stored delta that does not re-hash included (#201), it stays
+     * and fails the install. A directory the engine holds live or the pointer names whose `meta.json` is malformed (a
+     * newer binary's `metaVersion`, say, #178) or missing also stays and fails the install. Any other directory is
+     * completed over its staged delta files ([StoreLayout.completeGeneration], which deletes every other file of an
+     * earlier attempt and re-hashes each staged delta); a failure before activation deletes it. [held] and [existing]
+     * were read at the start of the install.
+     */
+    private fun directory(
+        directory: String,
+        held: Boolean,
+        existing: StoreRead<GenerationMeta>,
+    ): InstallResult? {
+        if (existing is StoreRead.Found) {
+            if (sameGeneration(existing.value, directory)) {
+                // An orphan holding this generation is the directory this install was given: a failure deletes it.
+                if (!held) written = directory
+                return null
+            }
             return fail(SyncOutcome.STORE_FAILED, null, IllegalStateException("$directory holds another generation"))
         }
         if (held) {
-            if (existing is StoreRead.Found) return null
             val cause = IllegalStateException("$directory is live or pointed to, and its meta.json is not readable")
             return fail(SyncOutcome.STORE_FAILED, null, cause)
         }
-        // A malformed, incomplete or unreferenced directory is replaced whole, so no file of an earlier attempt stays.
-        written = directory
-        store.deleteGeneration(directory)
-        store.writeGeneration(meta, generation.index, generation.deltas, generation.records)
+        store.completeGeneration(meta, generation.index, generation.deltas, generation.records)
         return null
     }
 
     /**
      * Whether [directory], whose `meta.json` is [stored], holds this generation: the same `meta.json` but for its
-     * `SIGNED` members (the signature that verified, and its leaf), and byte-equal `index.bin` and `records.json`. A
-     * collection re-signed under the same `<ts>` is the same signed records, so a retried flip over it installs rather
-     * than failing every sync until the next `<ts>` (the maintainer's decision on #200; Firefox treats an equal
-     * timestamp as up to date, `RemoteSettingsClient.sys.mjs:778` at `cac25a6`).
+     * `SIGNED` members (the signature that verified, and its leaf), byte-equal `index.bin` and `records.json`, and each
+     * delta file re-hashing against its signed record (#201: a stored filter is re-hashed before it is reused, as Firefox's
+     * `isFilterOnDisk` and upki's `Plan::construct` re-hash theirs; the full filters' blobs are re-hashed when the
+     * directory is read). A collection re-signed under the same `<ts>` is the same signed records, so a retried flip over
+     * it installs rather than failing every sync until the next `<ts>` (the maintainer's decision on #200; Firefox treats
+     * an equal timestamp as up to date, `RemoteSettingsClient.sys.mjs:778` at `cac25a6`).
      */
     private fun sameGeneration(
         stored: GenerationMeta,
@@ -259,8 +283,9 @@ private class Install(
         // Same trust class first, so the copy keeps "signed members iff SIGNED".
         stored.trustClass == meta.trustClass &&
             stored.copy(signed = meta.signed) == meta &&
-            store.index(directory).contentEquals(generation.index) &&
-            store.records(directory).contentEquals(generation.records)
+            store.file(directory, StoreLayout.INDEX).contentEquals(generation.index) &&
+            store.file(directory, StoreLayout.RECORDS).contentEquals(generation.records) &&
+            generation.deltas.all { (name, sha256) -> store.file(directory, name, sha256) != null }
 
     /** The directory of the generation the engine holds live for this dataset, as the snapshot published it. */
     private fun liveDirectory(): String? {

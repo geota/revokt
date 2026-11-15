@@ -89,11 +89,12 @@ class StoreLayoutTest {
         val directory = install()
         assertEquals(GenerationNames.directory(1_762_430_400_000, "g1"), directory)
         val prefix = "crlite/compat/$directory/"
+        // A delta is staged first, as the sync writes each body when it arrives (#141), and meta.json comes last.
         assertEquals(
             listOf(
                 "crlite/compat/blobs/${StoreFixtures.sha256(fullBytes).hex()}",
-                prefix + "index.bin",
                 prefix + deltaName,
+                prefix + "index.bin",
                 prefix + "records.json",
                 prefix + "meta.json",
             ),
@@ -126,7 +127,7 @@ class StoreLayoutTest {
         assertEquals("g1", stored.files.generationId)
         assertEquals(TrustClass.SIGNED, stored.files.trustClass)
         assertEquals(1_762_430_400_000, stored.files.sourceTimestampMillis)
-        assertContentEquals("{\"data\":[]}".encodeToByteArray(), layout.records(directory))
+        assertContentEquals("{\"data\":[]}".encodeToByteArray(), layout.file(directory, StoreLayout.RECORDS))
     }
 
     @Test
@@ -135,7 +136,7 @@ class StoreLayoutTest {
         val stored = assertNotNull(layout.readGeneration(directory))
         assertEquals(TrustClass.MIRROR, stored.meta.trustClass)
         assertEquals(TrustClass.MIRROR, stored.files.trustClass)
-        assertNull(layout.records(directory))
+        assertNull(layout.file(directory, StoreLayout.RECORDS))
     }
 
     @Test

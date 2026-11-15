@@ -78,7 +78,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         val directory = GenerationNames.directory(ts, id)
         assertEquals(directory, liveDirectory())
         val payload = checkNotNull(ContentSignature.recordsJson(server.records.map(::json), ts))
-        assertContentEquals(payload, store.records(directory))
+        assertContentEquals(payload, store.file(directory, StoreLayout.RECORDS))
         val meta = assertNotNull(store.meta(directory))
         assertEquals(
             listOf(TrustClass.SIGNED, FilterFormat.V3, ts, "security-state/cert-revocations"),
@@ -107,19 +107,39 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                 published.clockBehind,
             ),
         )
-        val index = C2spIndex.read(assertNotNull(store.index(directory)))
+        val index = C2spIndex.read(assertNotNull(store.file(directory, StoreLayout.INDEX)))
         assertEquals(maxCoverageMillis(index), published.maxCoverageMillis)
         assertNotNull(published.maxCoverageMillis)
     }
 
     @Test
-    fun `the same changeset again is UNCHANGED by timestamp, fetching no body`() {
+    fun `#141 - a delta poll sends _since bare and If-None-Match, and a 304 is UNCHANGED`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
         server.fetcher.requests.clear()
         val later = ts + 2 * hour
+        val run = sync(server, now = later).assert(SyncOutcome.UNCHANGED)
+        assertEquals(304, run.result.httpStatus)
+        assertEquals(listOf(monitor, server.sinceUrl(ts)), server.fetcher.requests.map { it.url })
+        assertTrue(server.sinceUrl(ts).endsWith("?_expected=$ts&_since=$ts"))
+        assertEquals("\"$ts\"", server.fetcher.requests[1].headers["If-None-Match"])
+        val s = sourceRecord(later)
+        assertEquals(
+            listOf<Any?>(ts, ts + hour, later, 0),
+            listOf(s.lastVerifiedLastModified, s.lastVerifiedAtMillis, s.lastAttemptAtMillis, s.consecutiveFailures),
+        )
+    }
+
+    @Test
+    fun `the same changeset again without a 304 is UNCHANGED by timestamp, fetching no body`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        // A server that ignores If-None-Match: the empty change list, merged over the stored records, verifies.
+        server.overrides[server.sinceUrl(ts)] = { server.sinceResponse(ts) }
+        server.fetcher.requests.clear()
+        val later = ts + 2 * hour
         sync(server, now = later).assert(SyncOutcome.UNCHANGED)
-        assertEquals(listOf(monitor, server.changesetUrl, x5u), server.fetcher.requests.map { it.url })
+        assertEquals(listOf(monitor, server.sinceUrl(ts), x5u), server.fetcher.requests.map { it.url })
         val s = sourceRecord(later)
         assertEquals(
             listOf(ts, ts + hour, later),
@@ -147,7 +167,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         val directory = assertNotNull(liveDirectory())
         val names = listOf(GenerationNames.derive(long33), GenerationNames.derive(long64))
         assertEquals(listOf(32, 32), names.map { it.length })
-        assertEquals(names, C2spIndex.read(assertNotNull(store.index(directory))).filenames)
+        assertEquals(names, C2spIndex.read(assertNotNull(store.file(directory, StoreLayout.INDEX))).filenames)
         assertEquals(setOf(names[0]), store.meta(directory)?.blobs?.keys)
         assertEquals(
             setOf(StoreLayout.INDEX) + names,
@@ -158,7 +178,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                 ?.toSet(),
         )
         // The attachment filenames stay in the signed records only.
-        val records = assertNotNull(store.records(directory)).decodeToString()
+        val records = assertNotNull(store.file(directory, StoreLayout.RECORDS)).decodeToString()
         assertTrue(long33 in records && long64 in records)
     }
 
@@ -218,7 +238,8 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         sync(server, now = behind + hour).assert(SyncOutcome.UNCHANGED)
         assertEquals(emptyList(), server.attachmentRequests())
         assertTrue(live().clockBehind)
-        // The clock corrected: the next changeset installs normally and advances everything. The full is reused.
+        // The clock corrected: the next changeset installs normally and advances everything. With no cursor it is the
+        // whole collection; the full's blob and the delta's file are reused, so no body is fetched.
         server.ts = ts + 1_000
         server.fetcher.requests.clear()
         val now = server.ts + hour
@@ -226,7 +247,8 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         assertFalse(live().clockBehind)
         assertEquals(server.ts, updater(now).watermarkMillis)
         assertEquals(server.ts, sourceRecord(now).lastVerifiedLastModified)
-        assertEquals(listOf(attachments + delta.location), server.attachmentRequests())
+        assertEquals(server.changesetUrl, server.fetcher.requests[1].url)
+        assertEquals(emptyList(), server.attachmentRequests())
     }
 
     @Test
@@ -275,8 +297,9 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                 parent = full.id,
             )
         val server = Server(records = listOf(full.json(), atCap.json()))
-        // Fetched under its signed size, and FAILED because the scripted body is shorter: no CAP_NEAR_LIMIT.
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed())
+        // Fetched under its signed size, and FAILED because the scripted body is shorter. Not over the cap, but above
+        // half of it: the CAP_NEAR_LIMIT warning beside SYNC_FAILED (§4, #141).
+        sync(server).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed(DiagnosticCode.CAP_NEAR_LIMIT))
         assertEquals(listOf(attachments + full.location, attachments + delta.location), server.attachmentRequests())
     }
 
@@ -502,7 +525,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         val server = Server(records = listOf(full.json(), tombstone, delta.json()))
         sync(server).assert(SyncOutcome.INSTALLED)
         val payload = checkNotNull(ContentSignature.recordsJson(listOf(full.json(), delta.json()).map(::json), ts))
-        assertContentEquals(payload, store.records(assertNotNull(liveDirectory())))
+        assertContentEquals(payload, store.file(assertNotNull(liveDirectory()), StoreLayout.RECORDS))
     }
 
     @Test
