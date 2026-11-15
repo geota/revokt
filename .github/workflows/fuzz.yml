@@ -179,9 +179,21 @@ jobs:
             -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 --no-daemon \
             < /dev/null > "$out/gradle.log" 2>&1 || status=$?
           # Jazzer writes a finding (crash-, timeout-, oom-, leak-, slow-unit-) into the module directory, as these
-          # targets keep their inputs under src/jvmTest/resources and not src/test/resources.
+          # targets keep their inputs under src/jvmTest/resources and not src/test/resources. libFuzzer names it by the
+          # input's SHA-1, which gives a short input away, and harden-runner records process arguments. So each one is
+          # copied to a numbered name, input-<n>-<kind>, through a redirection (no command sees the old name), and the
+          # originals are removed by find, whose arguments hold only the patterns. From here on, no argument, log or
+          # file name holds the hash.
+          n=0
+          for f in "$MODULE"/crash-* "$MODULE"/timeout-* "$MODULE"/oom-* "$MODULE"/leak-* "$MODULE"/slow-unit-*; do
+            [ -f "$f" ] || continue
+            base=${f##*/}
+            case $base in slow-unit-*) kind=slow-unit ;; *) kind=${base%%-*} ;; esac
+            n=$((n + 1))
+            cat < "$f" > "$out/input-$n-$kind"
+          done
           find "$MODULE" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' \
-            -o -name 'slow-unit-*' \) -exec mv {} "$out/" \;
+            -o -name 'slow-unit-*' \) -delete
           cp "$MODULE/build/test-results/jvmTest/"*.xml "$out/" 2> /dev/null || true
           # The test task may have started (and with it the fuzzer) once its header is printed or its XML exists.
           started=0
@@ -221,7 +233,7 @@ jobs:
           out=$RUNNER_TEMP/fuzz-out
           inputs=0
           minimised=0
-          for f in "$out"/crash-* "$out"/timeout-* "$out"/oom-*; do
+          for f in "$out"/input-*-crash "$out"/input-*-timeout "$out"/input-*-oom; do
             [ -f "$f" ] || continue
             base=${f##*/}
             inputs=$((inputs + 1))
@@ -235,7 +247,8 @@ jobs:
       # form and minimiser log, the JUnit XML (its first 64 KiB) and the fuzzer log (its last 64 KiB), encrypted with
       # `age -a` (ASCII armour) to FUZZ_AGE_RECIPIENT. A stack trace can quote the input, so the traces are sealed too,
       # and a finding without an input file is sealed with the traces alone. The files are numbered, not named by
-      # libFuzzer's crash-<sha1>, as a hash of a short input gives the input away; at most 8 per target.
+      # libFuzzer's crash-<sha1> (the fuzz step has already renamed them), as a hash of a short input gives the input
+      # away; at most 8 per target.
       # manifest.json holds the target, its module, Jazzer's DEDUP_TOKEN (a hash of the finding's stack frames, empty
       # without one) and the file names. The log shows the target, the token and the count.
       - name: seal the finding
@@ -255,7 +268,7 @@ jobs:
           token=$(cat "$out/gradle.log" "$out"/minimise-*.log 2> /dev/null | grep -oE 'DEDUP_TOKEN: [0-9a-f]{8,64}' | head -n 1 || true)
           token=${token#DEDUP_TOKEN: }
           inputs=()
-          for f in "$out"/crash-* "$out"/timeout-* "$out"/oom-* "$out"/leak-* "$out"/slow-unit-*; do
+          for f in "$out"/input-*; do
             if [ -f "$f" ]; then inputs+=("$f"); fi
           done
           if [ "${#inputs[@]}" -eq 0 ]; then inputs=(""); fi
