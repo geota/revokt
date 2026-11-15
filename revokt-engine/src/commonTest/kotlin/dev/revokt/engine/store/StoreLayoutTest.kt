@@ -272,6 +272,16 @@ class StoreLayoutTest {
     }
 
     @Test
+    fun `readBlob returns a blob's bytes only when they re-hash to its key`() {
+        val sha = StoreFixtures.sha256(fullBytes)
+        assertNull(layout.readBlob(sha))
+        layout.putBlob(fullBytes)
+        assertContentEquals(fullBytes, layout.readBlob(sha))
+        storage.write(layout.blobKey(sha), byteArrayOf(3, 0, 1, 2, 4))
+        assertNull(layout.readBlob(sha))
+    }
+
+    @Test
     fun `the pointer round-trips through current, and an absent pointer is not a malformed one`() {
         assertEquals(StoreRead.Absent, layout.pointer())
         val older = install(generationId = "g0", sourceTimestampMillis = 1)
@@ -361,11 +371,12 @@ class StoreLayoutTest {
     }
 
     @Test
-    fun `prune with no pointer keeps no directory and no blob`() {
+    fun `prune with no pointer deletes nothing`() {
         install()
         storage.write("crlite/compat/updater.json", byteArrayOf())
-        layout.prune()
-        assertEquals(setOf("crlite/compat/updater.json"), storage.names())
+        val before = storage.names()
+        assertEquals(0, layout.prune())
+        assertEquals(before, storage.names())
     }
 
     @Test
