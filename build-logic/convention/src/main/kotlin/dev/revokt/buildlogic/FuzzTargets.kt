@@ -181,8 +181,8 @@ internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
  * `revokt.fuzzClass`, `revokt.fuzzInput`, `revokt.fuzzOutput` (libFuzzer rewrites it with each smaller crashing input),
  * `revokt.fuzzTimeout` (the target's `-timeout`, default 10), `revokt.fuzzSeconds` (each step's search, default 10) and
  * `revokt.fuzzBudget` (the whole task, default 300 s: libFuzzer's loop has no bound of its own, so the task times out
- * and the output holds the smallest input found so far). Jazzer's re-launched JVMs outlive a timeout; fuzz.yml stops
- * every process of its fuzzing user before it reads the output.
+ * and the output holds the smallest input found so far). Jazzer's re-launched JVMs outlive a timeout; fuzz.yml kills
+ * them before it encrypts the output.
  */
 internal fun Project.registerFuzzMinimize() {
     val property = { name: String -> providers.gradleProperty("revokt.$name") }

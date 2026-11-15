@@ -414,16 +414,24 @@ every required check in Appendix B passes**.
   coverage cron and the corpus storage token configured, corpus merged back weekly; a crash is uploaded as a
   SARIF artifact and a workflow step files the `security` issue (ClusterFuzzLite does not file issues itself).
 - Ad-hoc fuzzing (`fuzz.yml`, #115): dispatch only, on GitHub-hosted runners, one job per target that
-  `./gradlew fuzzTargets` lists. A finding lands as a private **draft security advisory** (private vulnerability
-  reporting is enabled), visible only to administrators and security managers, with the stack trace and the
-  reproducer (minimised by libFuzzer's `-minimize_crash=1` first); nothing about it beyond the failed job is public
-  (no issue, artifact or fuzzer log). The fuzzed tree's code (the build, its dependencies, the fuzzer and the
-  minimiser) runs as a second user with no sudo that cannot write the runner's files; the token step runs only once
-  every process of that user is stopped, and reads only the findings the runner user copied out and checked. It
-  needs the `FUZZ_ADVISORY_TOKEN` repository secret: a fine-grained personal access token of an administrator, for
-  this repository only, with "Repository security advisories: Read and write".
-  The token expires: renew it before then, because a finding after expiry fails the job loudly and is lost with the
-  runner.
+  `./gradlew fuzzTargets` lists. The workflow holds no secret. On a finding, the job minimises each input
+  (libFuzzer's `-minimize_crash=1`). It then encrypts each input, its minimised form, and the stack traces and logs
+  (which can quote the input) with `age` to the `FUZZ_AGE_RECIPIENT` repository variable (an `age1…` public key; the
+  job fails without one). It uploads only the `.age` files as the 7-day artifact `fuzz-finding-<target>`, and fails.
+  The log shows the target and Jazzer's `DEDUP_TOKEN` (a hash of the finding's stack frames), never the input.
+  To triage a finding (the maintainer, who holds the matching key):
+  1. Download the artifact from the failed run (`gh run download <run-id> -n fuzz-finding-<target>`).
+  2. Decrypt each file: `rage -d -i <key> finding-1-crash-minimised.age > input`, and
+     `rage -d -i <key> traces.tar.age | tar -xf -` for the JUnit XML and the fuzzer and minimiser logs.
+  3. Reproduce it: save the input under the target's `src/jvmTest/resources/<package>/<Class>Inputs/`, or pass it to the
+     target.
+  4. File a private draft advisory by hand (Security → Advisories → New draft security advisory), with the target, the
+     `DEDUP_TOKEN`, the run link, the stack trace and the input. A `DEDUP_TOKEN` already in a draft is the same finding.
+     Triage follows SECURITY.md, and the fix CONTRIBUTING §8.
+  5. Delete the decrypted files once the advisory holds them.
+
+  The artifact expires after 7 days, so a finding not triaged by then is lost with it (re-run the target). Rotating
+  the key means setting the variable to the new public key; old artifacts need the old key.
 - Android emulator matrix (API 26, 31, 34, 36) on hosted Linux runners with KVM, from the mirrored system
   images (§11), including the null-host probe, the StrictMode main-thread probe and the API-26 futures
   fixture; triggered by schedule, `workflow_dispatch`, and the `run/android` label on a PR. Robolectric on the

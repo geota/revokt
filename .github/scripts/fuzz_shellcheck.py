@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 revokt contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Shellcheck one job's `run:` blocks (ci.yml ci-extras, #115).
+"""Shellcheck one job's `run:` blocks in full (ci.yml static, #115).
 
-fuzz.yml's fuzz job runs every step under a custom shell (`/usr/bin/bash --noprofile --norc …`), and actionlint
-shellchecks only the named shells, so it skips them. This writes each `run: |` block of the job to its own file, with
-each `${{ … }}` replaced by a placeholder as actionlint does, and runs shellcheck as bash over all of them. A `run:`
+actionlint shellchecks `run:` blocks but does not report every check (it let an unassigned variable, SC2154, through
+in fuzz.yml's fuzz job). This writes each `run: |` block of the job to its own file, with each `${{ … }}` replaced by
+a placeholder as actionlint does, and runs plain shellcheck as bash over all of them. A `run:`
 that is not a literal block (`|`, `|-`) fails, so no step goes unchecked.
 
 Python 3.10 or later, standard library only, and shellcheck on the PATH.

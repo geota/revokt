@@ -3,9 +3,11 @@
 #
 # Ad-hoc fuzzing (spec §9.1, CONTRIBUTING §6; decision CI1, #115): one matrix entry per Jazzer @FuzzTest method, as
 # `./gradlew fuzzTargets` discovers them, for the chosen time each, on GitHub-hosted runners. Runs only when a
-# maintainer dispatches it; never on pull_request or pull_request_target. A finding becomes a private draft security
-# advisory: no reproducer, stack trace or fuzzer log reaches a public artifact, issue or job log. No ClusterFuzzLite;
-# the nightly tier and release gate are #119's.
+# maintainer dispatches it; never on pull_request or pull_request_target. The workflow holds no secret. A finding is
+# minimised, then each input and the stack traces are encrypted with age to the FUZZ_AGE_RECIPIENT repository variable
+# and uploaded as a 7-day artifact of .age files only; the maintainer decrypts it and files the advisory by hand
+# (CONTRIBUTING §6). No reproducer, stack trace or fuzzer log reaches a job log or an artifact in the clear. No
+# ClusterFuzzLite; the nightly tier and release gate are #119's.
 name: fuzz
 
 on:
@@ -92,15 +94,6 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-    # The second, unprivileged user that runs the fuzzed tree's code (see "the fuzzing user" below).
-    env:
-      FUZZ_USER: fuzzer
-      FUZZ_HOME: /home/fuzzer
-    # Bash by absolute path; every run step sets PATH to root-owned directories before anything else (see "lock the tools
-    # on the runner's PATH"), and the steps from the fuzz step on call each tool by absolute path.
-    defaults:
-      run:
-        shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
     strategy:
       fail-fast: false
       matrix:
@@ -122,93 +115,29 @@ jobs:
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-read-only: true
-      # The hosted image's tool cache is world-writable (mode 777, no sticky bit), and setup-java put $JAVA_HOME/bin from it
-      # first on the runner's PATH, which the actions' post steps still use. Before FUZZ_USER exists, every tool-cache tree
-      # in use (both JDKs, and the tree of any other PATH entry in the cache) becomes root's and not group- or
-      # world-writable, and so does each directory above it up to the cache itself, so nothing in it can be replaced or
-      # renamed away. The isolation check below fails the job if the user can still write a directory on the PATH, one
-      # above it, or a file in it.
-      - name: lock the tools on the runner's PATH
+      # Every finding is encrypted to the maintainer's age key (CONTRIBUTING §6), so the run checks the recipient before
+      # it fuzzes: a run that could not record a finding does not start. age comes from the Ubuntu archive (signed by its
+      # keys; 1.1.x on 24.04).
+      - name: age and the recipient
+        env:
+          RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
         run: |
-          runner_path=$PATH
-          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
-          cache=$(/usr/bin/readlink -f -- "$RUNNER_TOOL_CACHE")
-          trees=("${JAVA_HOME:-}" "${JAVA_HOME_25_X64:-}")
-          IFS=: read -r -a entries <<< "$runner_path"
-          for entry in "${entries[@]}"; do trees+=("${entry%/bin}"); done
-          declare -A locked=()
-          for tree in "${trees[@]}"; do
-            if [ -z "$tree" ] || [ ! -e "$tree" ]; then continue; fi
-            real=$(/usr/bin/readlink -f -- "$tree")
-            case $real in "$cache"/*) ;; *) continue ;; esac
-            if [ -n "${locked[$real]:-}" ]; then continue; fi
-            locked[$real]=1
-            # -h and chmod's -R: a link is changed itself, never followed.
-            /usr/bin/sudo /usr/bin/chown -hR root:root "$real"
-            /usr/bin/sudo /usr/bin/chmod -R go-w "$real"
-            d=$real
-            while [ "$d" != "$cache" ]; do
-              d=${d%/*}
-              /usr/bin/sudo /usr/bin/chown -h root:root "$d"
-              /usr/bin/sudo /usr/bin/chmod go-w "$d"
-            done
-            echo "locked ${real#"$cache"/}"
-          done
-      # The uid boundary: the fuzzed tree's code (its build logic, dependencies, test JVM and the minimiser) runs only as
-      # FUZZ_USER, a second user with no sudo and no group but its own, in a copy of the checkout, a Gradle home and an
-      # output directory it owns. It cannot write the runner user's files: the file commands ($GITHUB_ENV, $GITHUB_PATH,
-      # $GITHUB_OUTPUT, $GITHUB_STEP_SUMMARY), the checkout, or the directory the findings are copied into. The runner
-      # user reads the user's files only as that user (sudo -u), so a link there reaches nothing the user cannot read.
-      - name: the fuzzing user
-        run: |
-          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
-          set -euo pipefail
-          /usr/bin/sudo useradd --create-home --user-group --shell /bin/bash "$FUZZ_USER"
-          /usr/bin/sudo chmod 700 "$FUZZ_HOME"
-          /usr/bin/sudo install -d -o "$FUZZ_USER" -g "$FUZZ_USER" -m 700 "$FUZZ_HOME/work" "$FUZZ_HOME/out" "$FUZZ_HOME/.gradle"
-          # -a keeps the checkout's links as links; nothing of the fuzzed tree has run yet.
-          /usr/bin/sudo cp -a "$GITHUB_WORKSPACE/." "$FUZZ_HOME/work/"
-          # The dependencies and the Gradle distribution setup-gradle restored, so the user need not download them again.
-          gradle_home=${GRADLE_USER_HOME:-$HOME/.gradle}
-          for d in caches/modules-2 wrapper/dists; do
-            if [ -d "$gradle_home/$d" ]; then
-              /usr/bin/sudo mkdir -p "$FUZZ_HOME/.gradle/${d%/*}"
-              /usr/bin/sudo cp -a "$gradle_home/$d" "$FUZZ_HOME/.gradle/${d%/*}/"
-            fi
-          done
-          # -h: change a link itself, never what it points to.
-          /usr/bin/sudo chown -hR "$FUZZ_USER:$FUZZ_USER" "$FUZZ_HOME"
-          # The runner user's own: the fuzz step's copy of the log, and the findings the advisory step reads.
-          /usr/bin/install -d -m 700 "$RUNNER_TEMP/fuzz-scan" "$RUNNER_TEMP/fuzz-findings"
-      # Before any code of the fuzzed tree runs (fuzz_isolation_check.sh), as FUZZ_USER and then as root: the job fails
-      # if the user is root, is in another group, can use sudo, or can write any of these paths or anything under the
-      # runner's home; or if, on the runner's PATH (as the actions' post steps see it), the user can write a directory a
-      # resolution passes through, link by link, or anything in the tree of an entry or of a link target in one. As root
-      # the check sees into directories the user cannot search, judging by owner, group and mode.
-      - name: the fuzzing user cannot write the runner's files
-        run: |
-          runner_path=$PATH
-          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
-          set -euo pipefail
-          # shellcheck disable=SC2024 # the runner user reads the script; the fuzzing user gets it on stdin
-          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- user "$FUZZ_USER" "$HOME" \
-            "$runner_path" "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" "${GITHUB_ENV%/*}" \
-            "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.git" "$GITHUB_WORKSPACE/.git/HEAD" "$GITHUB_WORKSPACE/.git/config" \
-            "$GITHUB_WORKSPACE/.github/scripts/fuzz_advisory.py" "$RUNNER_TEMP" "$RUNNER_TEMP/fuzz-findings" \
-            < .github/scripts/fuzz_isolation_check.sh
-          # shellcheck disable=SC2024 # as above
-          /usr/bin/sudo -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- root "$FUZZ_USER" "$runner_path" \
-            < .github/scripts/fuzz_isolation_check.sh
+          # An X25519 recipient: age1 and 58 bech32 characters.
+          if ! [[ $RECIPIENT =~ ^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$ ]]; then
+            echo "::error::the FUZZ_AGE_RECIPIENT repository variable is unset or not an age1… recipient (CONTRIBUTING §6)"
+            exit 1
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends age
+          age --version
       # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set), -rss_limit_mb=1024, the
       # target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
       # configuration parameters, which reach the test JVM as system properties; they come after Jazzer's own
       # (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last.
-      # Gradle runs as FUZZ_USER under env -i, with only the variables it needs, and its output goes to a file of that
-      # user's: nothing it starts holds this step's stdout, where the runner reads workflow commands.
-      # Job logs are public and libFuzzer prints a crashing input, so the public log fails closed: only the lines before
-      # `> Task <project>:jvmTest` are printed, with workflow commands stopped, nothing once the test-results XML exists
-      # or if those lines hold a fuzzer line, and the run counts.
+      # Job logs are public and libFuzzer prints a crashing input, so the Gradle output stays in $RUNNER_TEMP/fuzz-out and
+      # the public log fails closed: only the lines before `> Task <project>:jvmTest` are printed, with workflow commands
+      # stopped, nothing once the test-results XML exists or if those lines hold a fuzzer line, and the run counts.
       - name: fuzz
         id: fuzz
         env:
@@ -222,8 +151,6 @@ jobs:
           MAX_LEN: ${{ matrix.target.maxLen }}
           TIMEOUT: ${{ matrix.target.timeout }}
         run: |
-          runner_path=$PATH
-          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
           # As the targets job checks: only [A-Za-z0-9._/-] in the name and source, before either is echoed.
           for value in "$NAME" "$SOURCE"; do
@@ -242,60 +169,45 @@ jobs:
           opts=""
           for i in "${!args[@]}"; do opts+=" -Djazzer.internal.arg.$i=${args[$i]}"; done
           echo "$NAME: ${args[*]:1}"
-          echo "flags=${args[*]:1}" >> "$GITHUB_OUTPUT"
-          # This step's own file commands, checked as the user before Gradle starts.
-          # shellcheck disable=SC2024 # the runner user reads the script; the fuzzing user gets it on stdin
-          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -s -- user "$FUZZ_USER" "$HOME" \
-            "$runner_path" "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" \
-            < .github/scripts/fuzz_isolation_check.sh
+          out=$RUNNER_TEMP/fuzz-out
+          mkdir -m 700 "$out"
+          # Stale results would read as a test run that never happened.
+          rm -rf "$MODULE/build/test-results/jvmTest"
           status=0
-          # shellcheck disable=SC2016 # the inner bash expands its own variables
-          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i HOME="$FUZZ_HOME" USER="$FUZZ_USER" LOGNAME="$FUZZ_USER" LANG=C.UTF-8 \
-            PATH="$JAVA_HOME/bin:/usr/bin:/bin" JAVA_HOME="$JAVA_HOME" JAVA_HOME_25_X64="$JAVA_HOME_25_X64" \
-            GRADLE_USER_HOME="$FUZZ_HOME/.gradle" JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" \
-            PROJECT="$PROJECT" MODULE="$MODULE" CLASS="$CLASS" METHOD="$METHOD" /bin/bash -c '
-              cd "$HOME/work" || exit 1
-              exec > "$HOME/out/gradle.log" 2>&1
-              # Stale results would read as a test run that never happened.
-              rm -rf "$MODULE/build/test-results/jvmTest"
-              status=0
-              ./gradlew "$PROJECT:jvmTest" --tests "$CLASS.$METHOD" --rerun -Prevokt.testJdk=25 \
-                -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 --no-daemon || status=$?
-              # Jazzer writes a finding (crash-, timeout-, oom-, leak-, slow-unit-) into the module directory, as these
-              # targets keep their inputs under src/jvmTest/resources and not src/test/resources.
-              find "$MODULE" -maxdepth 1 -type f \( -name "crash-*" -o -name "timeout-*" -o -name "oom-*" -o -name "leak-*" \
-                -o -name "slow-unit-*" \) -exec mv {} "$HOME/out/" \;
-              cp "$MODULE/build/test-results/jvmTest/"*.xml "$HOME/out/" 2> /dev/null || true
-              exit "$status"' < /dev/null || status=$?
-          # The log, read as the user into a directory only the runner user can write (at most 64 MiB; none if missing).
-          scan=$RUNNER_TEMP/fuzz-scan
-          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/head -c 67108864 -- "$FUZZ_HOME/out/gradle.log" >| "$scan/gradle.log" 2> /dev/null || true
-          xml=$(/usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$FUZZ_HOME/out" -maxdepth 1 -type f -name '*.xml' -print -quit)
+          JAZZER_FUZZ=1 JAVA_TOOL_OPTIONS="${opts# }" ./gradlew "$PROJECT:jvmTest" --tests "$CLASS.$METHOD" --rerun \
+            -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 --no-daemon \
+            < /dev/null > "$out/gradle.log" 2>&1 || status=$?
+          # Jazzer writes a finding (crash-, timeout-, oom-, leak-, slow-unit-) into the module directory, as these
+          # targets keep their inputs under src/jvmTest/resources and not src/test/resources.
+          find "$MODULE" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' \
+            -o -name 'slow-unit-*' \) -exec mv {} "$out/" \;
+          cp "$MODULE/build/test-results/jvmTest/"*.xml "$out/" 2> /dev/null || true
           # The test task may have started (and with it the fuzzer) once its header is printed or its XML exists.
           started=0
-          /usr/bin/awk -v t="> Task $PROJECT:jvmTest" '$0 == t || index($0, t " ") == 1 { exit } { print }' "$scan/gradle.log" >| "$scan/before-test.log"
-          if [ "$(/usr/bin/wc -l < "$scan/before-test.log")" -lt "$(/usr/bin/wc -l < "$scan/gradle.log")" ] || [ -n "$xml" ]; then started=1; fi
-          if [ -n "$xml" ] || /usr/bin/grep -qE 'Base64:|INFO: Seed:|^#[0-9]+[[:space:]]|==[0-9]+==' "$scan/before-test.log"; then
+          awk -v t="> Task $PROJECT:jvmTest" '$0 == t || index($0, t " ") == 1 { exit } { print }' "$out/gradle.log" > "$out/before-test.log"
+          if [ "$(wc -l < "$out/before-test.log")" -lt "$(wc -l < "$out/gradle.log")" ] || ls "$out"/*.xml > /dev/null 2>&1; then started=1; fi
+          if ls "$out"/*.xml > /dev/null 2>&1 || grep -qE 'Base64:|INFO: Seed:|^#[0-9]+[[:space:]]|==[0-9]+==' "$out/before-test.log"; then
             echo "(the Gradle log is withheld: the test task ran, and its output may hold a fuzz input)"
           else
             # The build's lines are not workflow commands: the runner ignores commands until the random end token.
-            stop=$(/usr/bin/od -An -N16 -tx1 /dev/urandom | /usr/bin/tr -d ' \n')
+            stop=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
             echo "::stop-commands::$stop"
-            /usr/bin/cat "$scan/before-test.log"
+            cat "$out/before-test.log"
             echo "::$stop::"
           fi
-          /usr/bin/grep -E '^Done [0-9]+ runs in [0-9]+ second' "$scan/gradle.log" || true
+          rm -f "$out/before-test.log"
+          grep -E '^Done [0-9]+ runs in [0-9]+ second' "$out/gradle.log" || true
           if [ "$status" -eq 0 ]; then exit 0; fi
           # A failure once the test task may have started is a finding, with or without a reproducer file.
           if [ "$started" -eq 1 ]; then
             echo "finding=true" >> "$GITHUB_OUTPUT"
-            echo "::error file=$SOURCE::$NAME: a finding; it is recorded as a private draft security advisory (CONTRIBUTING §6)"
+            echo "::error file=$SOURCE::$NAME: a finding; it is uploaded encrypted to the maintainer's age key (CONTRIBUTING §6)"
           else
             echo "::error file=$SOURCE::$NAME: the build failed before fuzzing started"
           fi
           exit "$status"
       # libFuzzer's -minimize_crash=1 on each crash, timeout and oom input (the module's fuzzMinimize, at most 300 s each),
-      # so it fits the advisory; as FUZZ_USER, like the fuzz step, with its output in the user's directory.
+      # so it is small enough to triage; its output stays in $RUNNER_TEMP/fuzz-out, and the log shows only the counts.
       - name: minimise
         if: failure() && steps.fuzz.outputs.finding == 'true'
         env:
@@ -303,144 +215,72 @@ jobs:
           CLASS: ${{ matrix.target.class }}
           TIMEOUT: ${{ matrix.target.timeout }}
         run: |
-          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           # No -e: a minimisation that fails or times out leaves the original input, and the next one still runs.
           set +e -uo pipefail
-          # shellcheck disable=SC2016 # the inner bash expands its own variables
-          /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i HOME="$FUZZ_HOME" USER="$FUZZ_USER" LOGNAME="$FUZZ_USER" LANG=C.UTF-8 \
-            PATH="$JAVA_HOME/bin:/usr/bin:/bin" JAVA_HOME="$JAVA_HOME" JAVA_HOME_25_X64="$JAVA_HOME_25_X64" \
-            GRADLE_USER_HOME="$FUZZ_HOME/.gradle" PROJECT="$PROJECT" CLASS="$CLASS" TIMEOUT="$TIMEOUT" /bin/bash -c '
-              cd "$HOME/work" || exit 1
-              exec > /dev/null 2>&1
-              out=$HOME/out
-              for f in "$out"/crash-* "$out"/timeout-* "$out"/oom-*; do
-                [ -f "$f" ] || continue
-                name=${f##*/}
-                ./gradlew "$PROJECT:fuzzMinimize" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
-                  "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzInput=$f" "-Prevokt.fuzzOutput=$out/min-$name" \
-                  "-Prevokt.fuzzTimeout=$TIMEOUT" --no-daemon < /dev/null > "$out/minimise-$name.log" 2>&1 || true
-              done' < /dev/null
-          # Counts only: the names come from the fuzzed tree's side.
-          count() { /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$FUZZ_HOME/out" -maxdepth 1 -type f "$@" | /usr/bin/wc -l; }
-          echo "minimised $(count -name 'min-*' -size +0) of $(count \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' \)) finding inputs"
-      # Before the token is in reach, no process of FUZZ_USER may run: its account is expired first (so cron or at cannot
-      # start one later), then every process whose real or effective uid is the user's is killed until none but zombies
-      # is left, as root, which sees every process. The advisory step runs only if this step succeeds.
-      - name: stop the fuzzing user's processes
-        id: stop
-        if: failure() && steps.fuzz.outputs.finding == 'true'
-        run: |
-          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
-          # No -e: pkill and ps exit 1 when nothing matches; the step's result is decided at the end.
-          set +e -uo pipefail
-          if ! /usr/bin/sudo /usr/sbin/usermod --expiredate 1 "$FUZZ_USER"; then echo "::error::could not expire the fuzzing user"; exit 1; fi
-          # The states of the processes whose effective (-u) or real (-U) uid is the user's; ps exits 1 when there are none.
-          # A zombie runs nothing (it only waits to be reaped), so only the others count; an error counts as left.
-          left() {
-            local states rc
-            states=$(/usr/bin/sudo /usr/bin/ps -o stat= -u "$FUZZ_USER" -U "$FUZZ_USER")
-            rc=$?
-            if [ "$rc" -eq 1 ] && [ -z "$states" ]; then return 1; fi
-            if [ "$rc" -ne 0 ]; then return 0; fi
-            /usr/bin/grep -qv '^Z' <<< "$states"
-          }
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
-            /usr/bin/sudo /usr/bin/pkill -KILL -u "$FUZZ_USER"
-            /usr/bin/sudo /usr/bin/pkill -KILL -U "$FUZZ_USER"
-            left || break
-            /usr/bin/sleep 1
+          out=$RUNNER_TEMP/fuzz-out
+          inputs=0
+          minimised=0
+          for f in "$out"/crash-* "$out"/timeout-* "$out"/oom-*; do
+            [ -f "$f" ] || continue
+            base=${f##*/}
+            inputs=$((inputs + 1))
+            ./gradlew "$PROJECT:fuzzMinimize" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
+              "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzInput=$f" "-Prevokt.fuzzOutput=$out/min-$base" \
+              "-Prevokt.fuzzTimeout=$TIMEOUT" --no-daemon < /dev/null > "$out/minimise-$base.log" 2>&1
+            if [ -s "$out/min-$base" ]; then minimised=$((minimised + 1)); fi
           done
-          if left; then echo "::error::processes of the fuzzing user are still running; the advisory step does not run"; exit 1; fi
-          echo "no process of the fuzzing user is left"
-      # The findings, copied out by the runner user into its own directory and checked: only regular files with the names
-      # the advisory script reads (no path, no leading dot), read as FUZZ_USER, each within its bound (an input or JUnit
-      # XML at most 16 MiB, else left out with a warning; a log cut to 64 MiB). The advisory step reads only this copy.
-      - name: collect the findings
-        id: collect
-        if: failure() && steps.fuzz.outputs.finding == 'true' && steps.stop.outcome == 'success'
-        run: |
-          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
-          set -euo pipefail
-          umask 077
-          dest=$RUNNER_TEMP/fuzz-findings
-          names=$(/usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$FUZZ_HOME/out" -mindepth 1 -maxdepth 1 -type f -printf '%f\n')
-          copied=0
-          while IFS= read -r name; do
-            case $name in ''|.*|*[!A-Za-z0-9._-]*) continue ;; esac
-            case $name in
-              crash-*|timeout-*|oom-*|leak-*|slow-unit-*|min-crash-*|min-timeout-*|min-oom-*|TEST-*.xml) cap=16777216 log=0 ;;
-              gradle.log|minimise-*.log) cap=67108864 log=1 ;;
-              *) continue ;;
-            esac
-            /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/head -c "$((cap + 1))" -- "$FUZZ_HOME/out/$name" >| "$dest/$name"
-            if [ "$(/usr/bin/stat -c %s "$dest/$name")" -gt "$cap" ]; then
-              if [ "$log" -eq 1 ]; then
-                /usr/bin/truncate -s "$cap" "$dest/$name"
-              else
-                /usr/bin/rm -f -- "${dest:?}/$name"
-                echo "::warning::a findings file is above 16 MiB and is not recorded; re-run the target to regenerate it"
-                continue
-              fi
-            fi
-            copied=$((copied + 1))
-          done <<< "$names"
-          echo "copied $copied findings files"
-      # The only step with the advisory token. It runs fuzz_advisory.py as committed at the dispatched commit, read with
-      # git (under env -i, so only python3 sees the token) from the runner-owned checkout, which FUZZ_USER cannot write,
-      # and python3 under a clean environment on the collected copy, so nothing leaves the job in public.
-      - name: draft security advisory
-        if: >-
-          failure() && steps.fuzz.outputs.finding == 'true' && steps.stop.outcome == 'success'
-          && steps.collect.outcome == 'success'
+          echo "minimised $minimised of $inputs finding inputs"
+      # Each finding input (and its minimised form) is encrypted to FUZZ_AGE_RECIPIENT on its own, and the stack traces
+      # and logs (which can quote the input) as one tar. The files are named by number and kind, not by libFuzzer's
+      # crash-<sha1>, as a hash of a short input gives the input away. The log shows the target, Jazzer's DEDUP_TOKEN (a
+      # hash of the finding's stack frames, not of the input) and the count.
+      - name: seal the finding
+        id: seal
+        if: failure() && steps.fuzz.outputs.finding == 'true'
         env:
-          GH_TOKEN: ${{ secrets.FUZZ_ADVISORY_TOKEN }}
-          REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TARGET: ${{ matrix.target.name }}
-          PROJECT: ${{ matrix.target.project }}
-          SOURCE: ${{ matrix.target.source }}
-          FLAGS: ${{ steps.fuzz.outputs.flags }}
-          SHA: ${{ github.sha }}
-          CHECKOUT: ${{ github.workspace }}
-          FINDINGS: ${{ runner.temp }}/fuzz-findings
+          NAME: ${{ matrix.target.name }}
+          RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
         run: |
-          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
           set -euo pipefail
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::the FUZZ_ADVISORY_TOKEN secret is not set (CONTRIBUTING §6); the finding is not recorded"
-            exit 1
-          fi
-          /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/git -C "$CHECKOUT" show "$SHA:.github/scripts/fuzz_advisory.py" \
-            | /usr/bin/env -i PATH=/usr/bin:/bin GH_TOKEN="$GH_TOKEN" REPO="$REPO" RUN_URL="$RUN_URL" TARGET="$TARGET" \
-              PROJECT="$PROJECT" SOURCE="$SOURCE" FLAGS="$FLAGS" /usr/bin/python3 -I - "$FINDINGS"
+          out=$RUNNER_TEMP/fuzz-out
+          sealed=$RUNNER_TEMP/fuzz-sealed
+          mkdir -m 700 "$sealed"
+          # Jazzer's re-launched JVMs can outlive the minimiser's timeout and keep rewriting its output.
+          pkill -KILL -u "$(id -un)" java || true
+          n=0
+          for f in "$out"/crash-* "$out"/timeout-* "$out"/oom-* "$out"/leak-* "$out"/slow-unit-*; do
+            [ -f "$f" ] || continue
+            base=${f##*/}
+            case $base in slow-unit-*) kind=slow-unit ;; *) kind=${base%%-*} ;; esac
+            n=$((n + 1))
+            age -r "$RECIPIENT" -o "$sealed/finding-$n-$kind.age" "$f"
+            if [ -s "$out/min-$base" ]; then age -r "$RECIPIENT" -o "$sealed/finding-$n-$kind-minimised.age" "$out/min-$base"; fi
+          done
+          traces=()
+          for f in "$out"/TEST-*.xml "$out"/gradle.log "$out"/minimise-*.log; do
+            if [ -f "$f" ]; then traces+=("${f##*/}"); fi
+          done
+          if [ "${#traces[@]}" -gt 0 ]; then tar -C "$out" -cf - -- "${traces[@]}" | age -r "$RECIPIENT" -o "$sealed/traces.tar.age"; fi
+          token=$(cat "$out/gradle.log" "$out"/minimise-*.log 2> /dev/null | grep -oE 'DEDUP_TOKEN: [0-9a-f]{8,64}' | head -n 1 || true)
+          if [ -n "$token" ]; then key="${token#DEDUP_TOKEN: } (Jazzer DEDUP_TOKEN)"; else key="without a DEDUP_TOKEN"; fi
+          echo "$NAME: finding $key; $n input(s) sealed"
+          echo "dir=$sealed" >> "$GITHUB_OUTPUT"
+      # Only the .age files, kept 7 days. The run has already failed (the fuzz step's exit status).
+      - name: upload the sealed finding
+        if: failure() && steps.seal.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-finding-${{ matrix.target.name }}
+          path: ${{ steps.seal.outputs.dir }}/*.age
+          if-no-files-found: error
+          retention-days: 7
       # Jazzer's generated corpus, on request and only from a run without a finding; merging it into the committed
-      # inputs stays a manual PR. It is copied out like the findings (regular files with plain names, at most 1 MiB each,
-      # read as FUZZ_USER) into a directory of the runner user's, and uploaded from there.
-      - name: copy the corpus
-        id: corpus
-        if: inputs.upload_corpus && steps.fuzz.outcome == 'success'
-        env:
-          MODULE: ${{ matrix.target.module }}
-          CLASS: ${{ matrix.target.class }}
-          METHOD: ${{ matrix.target.method }}
-        run: |
-          export PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=$RUNNER_TEMP
-          set -euo pipefail
-          src=$FUZZ_HOME/work/$MODULE/.cifuzz-corpus/$CLASS/$METHOD
-          dest=$RUNNER_TEMP/fuzz-corpus
-          /usr/bin/install -d -m 700 "$dest"
-          names=$(/usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/find "$src" -mindepth 1 -maxdepth 1 -type f -size -1048577c \
-            -printf '%f\n' 2> /dev/null || true)
-          while IFS= read -r name; do
-            case $name in ''|.*|*[!A-Za-z0-9._-]*) continue ;; esac
-            /usr/bin/sudo -u "$FUZZ_USER" -- /usr/bin/env -i /usr/bin/head -c 1048576 -- "$src/$name" >| "$dest/$name"
-          done <<< "$names"
-          echo "dir=$dest" >> "$GITHUB_OUTPUT"
+      # inputs stays a manual PR.
       - name: corpus
-        if: inputs.upload_corpus && steps.corpus.outcome == 'success'
+        if: inputs.upload_corpus && steps.fuzz.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-corpus-${{ matrix.target.name }}
-          path: ${{ steps.corpus.outputs.dir }}
+          path: ${{ matrix.target.module }}/.cifuzz-corpus/${{ matrix.target.class }}/${{ matrix.target.method }}/
           if-no-files-found: ignore
           retention-days: 7
