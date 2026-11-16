@@ -390,9 +390,11 @@ every required check in Appendix B passes**.
   are warmed by a separate job whose outputs the test job restores). harden-runner is audit-only on macOS
   and Windows, so those two jobs run Gradle `--offline` after cache restore and rely on `NoHttpClientInTests`;
   the table marks them advisory.
-- Coverage: Kover branch floor of 90 % per parser package over the committed replay (§9.1), as a hard rule;
-  overall line coverage compared against the `main` artifact (`coverage-main`, the Kover XML uploaded from
-  `main`) by a script in `build-logic`: not below the `main` value, with the 90 % target reached by 0.2.
+- Coverage: Kover branch floor of 90 % per parser package over the committed replay (§9.1), as a hard rule.
+  The path walker and the store have floors a little under their measured branch coverage (#161: walker
+  98.96 %, store 94.26 % at f2c54fc). The floors may only be raised. Overall line coverage is compared
+  against the `main` artifact (`coverage-main`, the Kover XML uploaded from `main`) by a script in
+  `build-logic`: not below the `main` value, with the 90 % target reached by 0.2.
 
 **Nightly and on release branches (blocking for a release, informational on `main`):**
 - The native job: builds `native/` (Rust cdylib, Go CLI) and `revokt-engine-upki`, runs the §9 oracles, the
@@ -413,6 +415,35 @@ every required check in Appendix B passes**.
 - Fuzzing: ClusterFuzzLite batch matrix, one job per §9.1 target, `base-builder-jvm` pinned by digest, the
   coverage cron and the corpus storage token configured, corpus merged back weekly; a crash is uploaded as a
   SARIF artifact and a workflow step files the `security` issue (ClusterFuzzLite does not file issues itself).
+- Ad-hoc fuzzing (`fuzz.yml`, #115): dispatch only, on GitHub-hosted runners, one job per target that
+  `./gradlew fuzzTargets` lists. The fuzz job holds no secret.
+  - On a finding, it minimises each input (libFuzzer's `-minimize_crash=1`). It then seals one file per finding: a
+    gzipped tar of the input, the minimised input, the JUnit XML and the fuzzer and minimiser logs (which can quote the
+    input), encrypted with `age -a` to the `FUZZ_AGE_RECIPIENT` repository variable (an `age1…` public key; the job
+    fails without one).
+  - It uploads the sealed files and a manifest (target, module, Jazzer's `DEDUP_TOKEN`) as the 7-day artifact
+    `fuzz-finding-<target>`, and fails. Its log shows the target and the `DEDUP_TOKEN` (a hash of the finding's stack
+    frames), never the input.
+  - The advisory job then runs on a fresh runner, only for a dispatch of `main`, with the `FUZZ_ADVISORY_TOKEN` secret
+    of the `fuzz-advisory` environment, whose deployment branches are limited to `main`. The token is a fine-grained
+    personal access token of an administrator, for this repository only, with "Repository security advisories: Read
+    and write"; renew it before it expires. The job never checks out the tree or runs Gradle: it fetches only
+    `.github/scripts/fuzz_advisory.py` at the run's commit. The script checks the artifact as hostile data, and files
+    one private **draft security advisory** per new `DEDUP_TOKEN` (`fuzz: <target> <token>`), at most 8 per run, with
+    each sealed file inline.
+
+  To triage a finding:
+  1. Open the draft advisory (Security → Advisories). Copy the armoured block from the draft advisory into
+     `finding.age`, then run `rage -d -i <identity-file> finding.age > finding.bin` (`age -d -i` works too), and
+     `tar -xzf finding.bin` for the input, the minimised input and the logs.
+  2. If the advisory job failed or was skipped (a dispatch of another branch files no advisory), or a file was too
+     large to inline, use the run's `fuzz-finding-<target>` artifact instead (within its 7 days):
+     `gh run download <run-id> -n fuzz-finding-<target>`, then decrypt each `finding-<n>.tar.age` the same way.
+  3. Reproduce it: save the input under the target's `src/jvmTest/resources/<package>/<Class>Inputs/`, or pass it to the
+     target. Triage follows SECURITY.md, and the fix CONTRIBUTING §8.
+  4. Delete the decrypted files once the advisory holds what triage needs.
+
+  Rotating the key means setting the variable to the new public key; older advisories and artifacts need the old key.
 - Android emulator matrix (API 26, 31, 34, 36) on hosted Linux runners with KVM, from the mirrored system
   images (§11), including the null-host probe, the StrictMode main-thread probe and the API-26 futures
   fixture; triggered by schedule, `workflow_dispatch`, and the `run/android` label on a PR. Robolectric on the
