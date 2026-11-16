@@ -3,9 +3,9 @@
 #
 # protected-paths (CONTRIBUTING §5): counts maintainer approvals on protected paths, reading MAINTAINERS.md and
 # .github/protected-paths.txt from the BASE branch. Passes at once when no protected path changed. Honest note: with
-# two maintainers it adds nothing beyond code-owner review; it becomes a boundary at three. In the solo phase it would
-# require nothing, so the job is skipped (a skipped job reports success to the required check, #211) until the
-# TWO_PERSON_RULE repository variable is `true`; pr-lint fails once MAINTAINERS.md lists two maintainers and it is not.
+# two maintainers it adds nothing beyond code-owner review; it becomes a boundary at three. While the base's
+# MAINTAINERS.md lists one maintainer it passes at once, before reading any path (#211); the PR that adds the second
+# maintainer switches it on by itself.
 name: protected-paths
 
 on:
@@ -21,7 +21,6 @@ permissions:
 jobs:
   protected-paths:
     name: protected-paths
-    if: vars.TWO_PERSON_RULE == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

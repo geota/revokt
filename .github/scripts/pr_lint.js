@@ -57,19 +57,15 @@ if (maintainers.length < 2 && !pr.draft && !isRenovate) {
   }
 }
 
-// The solo phase skips protected-paths and turns off the cooling schedule (#211). Once MAINTAINERS.md lists two
-// maintainers, both come back: the TWO_PERSON_RULE repository variable, and the schedule in the PR head's cooling.yml
-// (read from the head, so the PR that restores it can pass).
+// The solo phase turns off the cooling schedule (#211). Once MAINTAINERS.md lists two maintainers it comes back: the
+// PR head's cooling.yml must have an active cron (read from the head, so the PR that restores it can pass).
 if (maintainers.length >= 2) {
-  if (process.env.TWO_PERSON_RULE !== 'true') {
-    failures.push('MAINTAINERS.md lists two maintainers: set the TWO_PERSON_RULE repository variable to true so the protected-paths job runs (CONTRIBUTING §5)');
-  }
   let cooling = '';
   try {
     const { data } = await github.rest.repos.getContent({ owner, repo, path: '.github/workflows/cooling.yml', ref: pr.head.sha });
     cooling = Buffer.from(data.content || '', 'base64').toString('utf8');
   } catch (e) { core.warning(`cooling.yml not read: ${e.message}`); }
-  if (!/^ {2}schedule:/m.test(cooling)) {
+  if (!/^ {2}schedule:[^\S\r\n]*\r?\n[^\S\r\n]+- cron:/m.test(cooling)) {
     failures.push('MAINTAINERS.md lists two maintainers: turn the cooling schedule back on in .github/workflows/cooling.yml (CONTRIBUTING §8)');
   }
 }

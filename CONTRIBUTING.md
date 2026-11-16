@@ -312,10 +312,9 @@ a trailer rule is violated:
   reads `MAINTAINERS.md` and the changed paths and fails until the required number of **maintainer**
   approvals is present: one while `MAINTAINERS.md` lists two, two for PRs whose author is not a maintainer
   once it lists three or more; it passes at once when no protected path changed, and during the
-  solo-maintainer phase (ADR-0005) it would require nothing, so the job is skipped (a skipped job reports success to
-  the required check) until the `TWO_PERSON_RULE` repository variable is `true`, and `pr-lint` requires the
-  `Independent review` comment instead. `pr-lint` fails once `MAINTAINERS.md` lists two maintainers while the
-  variable is not set or the `cooling` schedule is off (#211).
+  solo-maintainer phase (ADR-0005) it passes at once, before reading any path (#211), and `pr-lint` requires the
+  `Independent review` comment instead; the PR that adds the second maintainer switches it on by itself. `pr-lint`
+  fails once `MAINTAINERS.md` lists two maintainers while the `cooling` schedule is off (#211).
   It reads `MAINTAINERS.md` and `.github/protected-paths.txt` **from the base branch**
   (`ref: ${{ github.event.pull_request.base.sha }}`), never from the PR head, so a PR cannot add its author
   to the list or shrink the paths; it runs on `pull_request` (`opened`, `synchronize`, `reopened`) and
@@ -368,8 +367,9 @@ bootstrap. If a local tool is missing, say so in the PR and push; **CI is author
 every required check in Appendix B passes**.
 
 **Every PR (required checks, offline except where noted):**
-- **Documentation-only PRs** (every changed path under `docs/`, or a Markdown file outside a source set and
-  `corpus/`; the old path of a rename counts too) skip the JDK and OS matrix: a pass-through job reports the same
+- **Documentation-only PRs** (every path changed between the PR's base and head is a Markdown file outside a source
+  set and `corpus/`, or a file under `docs/` that is not a `*.py` or `*.sh` script; the old path of a rename counts
+  too) skip the JDK and OS matrix: a pass-through job reports the same
   `check (…)` names, and `ci-extras` runs only `specStatusCheck`, so a spec change still cannot leave
   `docs/dev/status.md` stale. A push, or a path filter that did not finish, runs everything (#211).
 - `check` on JDK 17, 21, the current LTS and the current feature release (Linux; §9.2 matrix), each at the latest
@@ -386,7 +386,7 @@ every required check in Appendix B passes**.
   `permissions: read-all`; no `pull_request_target` with checkout), wrapper validation, labeler. As their
   own checks: `commitlint` on the title; `pr-lint` (template, trailers, `Spec:` rule, issue link,
   `Independent review` comment in the solo phase; runs on `opened`, `edited`, `synchronize`);
-  `protected-paths` (section 5; skipped in the solo phase); `cooling` (section 8; green at once for other paths, and
+  `protected-paths` (section 5; passes at once in the solo phase); `cooling` (section 8; green at once for other paths, and
   throughout the solo phase); `DCO` (the app's check). ktlint,
   detekt and `specStatus` run inside `check`.
 - Security: CodeQL in its own job (Kotlin needs a traced build; it compiles `compileKotlinJvm`
@@ -515,7 +515,7 @@ approvals per section 5 · threads resolved · squash-merged by auto-merge. Done
 | Trailers, `Spec:` rule, template sections, issue link, AI-assistance section | PR-lint workflow (ours) on the PR body, including the `trailers` check | PR (`opened`, `edited`, `synchronize`) | yes |
 | DCO sign-off on every commit (bots skipped) | DCO GitHub app (free; installed by the owner, after which `DCO` joins the required checks) | PR | yes once installed |
 | Required checks, linear history, no force-push, no deletion, 1 approval, last-push approval, conversation resolution, code-owner review, require up to date before merge (in the solo phase, ADR-0005: 0 approvals and the three approver-dependent rules off) | **rulesets** (free on public repositories, personal accounts included; JSON exported to `docs/dev/rulesets/`), on `main` and `release/*`; tag ruleset on `v*` | GitHub | yes |
-| Two-person rule on protected paths | CODEOWNERS with every maintainer's handle (one owner approval is what GitHub enforces; the second person is the author) + the `protected-paths` Action counting maintainer approvals from `MAINTAINERS.md` (skipped in the solo phase until `TWO_PERSON_RULE` is set, #211) | GitHub; PR | yes |
+| Two-person rule on protected paths | CODEOWNERS with every maintainer's handle (one owner approval is what GitHub enforces; the second person is the author) + the `protected-paths` Action counting maintainer approvals from `MAINTAINERS.md` (passes at once in the solo phase, #211) | GitHub; PR | yes |
 | Formatting | ktlint | `check` | yes |
 | Complexity, forbidden APIs, custom rules | detekt + `revokt-detekt-rules` | `check` | yes |
 | commonMain purity | detekt `detektCommonMain` (fast) and the `linuxX64` compile under `-Prevokt.purityGate` (authoritative) | `check`; `ci-extras` | yes |
@@ -671,7 +671,7 @@ single owner);
 required status checks `check (17)`, `check (21)`, `check (lts)`, `check (feature)`, `check (macos)`,
 `check (windows)` (on a documentation-only PR, a pass-through job reports these names, section 6), `ci-extras`,
 `static`, `commitlint`, `pr-lint` (includes `trailers` and, in the solo phase, the `Independent review` comment),
-`protected-paths` (a skipped job, which reports success, in the solo phase), `DCO` (the app's exact check name; added once the app is installed), `codeql`, `osv`, `dependency-review`,
+`protected-paths` (passes at once in the solo phase), `DCO` (the app's exact check name; added once the app is installed), `codeql`, `osv`, `dependency-review`,
 `coverage`, `cooling` (reports success at once unless the PR touches `data/seed/**`, the release workflows or
 `**/verify/**`; paused throughout the solo phase, section 8); require branches to be up to date before merging; squash merge only (repository
 setting: allow squash merging only, default message "pull request title and description", auto-merge enabled);

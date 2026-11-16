@@ -10,8 +10,9 @@
 #
 # The Linux test jobs block egress except to the hosts their setup needs (GitHub and its Actions cache and artifact
 # storage, Adoptium, the Gradle distribution and plugin portal, Maven Central, Google's Maven, and for the
-# Kotlin/Native compile JetBrains' downloads). Tests reach loopback only. A blocked endpoint fails the job and
-# harden-runner annotates it; add a host here only for a build step, never for a test (CONTRIBUTING §6).
+# Kotlin/Native compile JetBrains' downloads); a test can reach loopback and those hosts, nothing else, and
+# NoHttpClientInTests is the second line. A blocked endpoint fails the job and harden-runner annotates it; add a host
+# only for a build step, never for a test (CONTRIBUTING §6). The two allow-lists below are copies: keep them equal.
 name: ci
 
 on:
@@ -42,20 +43,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
           CHANGED: ${{ github.event.pull_request.changed_files }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [ -z "$PR" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi   # a push runs everything
-          # Every changed path, and the old path of a rename. Documentation is anything under docs/ and any Markdown
-          # file outside a source set and the corpus; the spec and docs/dev/status.md stay covered by specStatusCheck.
-          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | .filename, (.previous_filename // empty)')
+          # Every path changed between the event's base and head (so a later push cannot change the answer), and the old
+          # path of a rename. Documentation is a Markdown file outside a source set and the corpus, or a file under
+          # docs/ that is not a script (verifyHeaderLocations reads *.py and *.sh); the spec and docs/dev/status.md
+          # stay covered by specStatusCheck.
+          compare=$(gh api "repos/$REPO/compare/$BASE...$HEAD")
+          files=$(jq -r '.files[]? | .filename, (.previous_filename // empty)' <<< "$compare")
+          listed=$(jq '.files // [] | length' <<< "$compare")
           code=false
-          listed=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' | grep -c . || true)
           if [ -z "$files" ] || [ "$listed" != "$CHANGED" ]; then code=true; fi   # a truncated or empty list runs everything
           while IFS= read -r f; do
             case $f in
-              corpus/*|src/*|*/src/*) code=true ;;
+              corpus/*|src/*|*/src/*|*.py|*.sh) code=true ;;
               docs/*|*.md) ;;
               *) code=true ;;
             esac
@@ -263,7 +269,7 @@ jobs:
             git fetch --no-tags --depth=1 origin "$BASE"
             echo "property=-Prevokt.growabilityBase=$BASE" >> "$GITHUB_OUTPUT"
           fi
-      - name: purity compile, consumers (Android modules from 0.3), the growability check
+      - name: purity compile, consumers (Android modules from 0.3)
         if: needs.changes.outputs.code != 'false'
         env:
           GROWABILITY_BASE: ${{ steps.base.outputs.property }}

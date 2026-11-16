@@ -132,6 +132,9 @@ jobs:
           : >| "$NEWS"
           problem() { echo "::error::$*"; failed=1; }
           news() { echo "::warning::$*"; printf -- '- %s\n' "$*" >> "$NEWS"; }
+          # A free-form upstream tag name as inert Markdown: only [A-Za-z0-9._/+-] kept, in backticks (no @-mention,
+          # autolink or #-reference in the issue body).
+          inert() { printf '\140%s\140' "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._/+-' '_')"; }
           # The highest vX.Y.Z of the lines on stdin, without its v.
           highest() { { grep -xE "$semver" || true; } | sed 's/^v//' | sort -V | tail -n 1; }
           stale() {
@@ -159,7 +162,7 @@ jobs:
             problem "rustls/upki $upki has no publish date ('$pinned_at'): the releases after it cannot be checked for an unrecognised tag scheme"
           else
             while read -r tag; do
-              news "rustls/upki released $tag in an unrecognised tag scheme: update the upki-release check"
+              news "rustls/upki released $(inert "$tag") in an unrecognised tag scheme: update the upki-release check"
             done < <(printf '%s\n' "$releases" | awk -v at="$pinned_at" '$1 > at { print $2 }' | { grep -vxE "$semver" || true; })
           fi
           stale "rustls/upki" upki "$upki" "$(printf '%s\n' "$releases" | cut -d' ' -f2 | highest)"
@@ -167,7 +170,7 @@ jobs:
           # "<name> <object type> <object sha>" per upki-revocation/<name> tag.
           tags=$(gh api --paginate repos/C2SP/C2SP/git/matching-refs/tags/upki-revocation/ --jq '.[] | "\(.ref | ltrimstr("refs/tags/upki-revocation/")) \(.object.type) \(.object.sha)"')
           while read -r tag; do
-            news "C2SP tagged upki-revocation/$tag in an unrecognised tag scheme: update the upki-release check"
+            news "C2SP tagged $(inert "upki-revocation/$tag") in an unrecognised tag scheme: update the upki-release check"
           done < <(printf '%s\n' "$tags" | awk 'NF { print $1 }' | { grep -vxE "$semver(-rc[.0-9]*)?" || true; })
           read -r _ type sha < <(printf '%s\n' "$tags" | awk -v t="$spec" '$1 == t') || true
           if [ -z "${sha:-}" ]; then
