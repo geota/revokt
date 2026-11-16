@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ClusterFuzzLite project (#119): a JVM project, built by build.sh in Dockerfile's image on the legacy (Ubuntu 20.04)
+# base, the base the pinned ClusterFuzzLite images run on.
+language: jvm

@@ -410,9 +410,24 @@ every required check in Appendix B passes**.
   is a `spec` change: re-verify the Appendix A facts, roll the pin, re-record the index golden
   (`native/revokt-oracle/record-upki-index.sh`; `verifyOracleMatrix` checks it names the pin) and re-run the
   cross-engine suite (0.2+).
-- Fuzzing: ClusterFuzzLite batch matrix, one job per §9.1 target, `base-builder-jvm` pinned by digest, the
-  coverage cron and the corpus storage token configured, corpus merged back weekly; a crash is uploaded as a
-  SARIF artifact and a workflow step files the `security` issue (ClusterFuzzLite does not file issues itself).
+- Fuzzing (`cflite_batch.yml`, `cflite_cron.yml`, #119): the nightly ClusterFuzzLite batch matrix, one job per
+  target that `./gradlew fuzzTargets` lists, on GitHub-hosted runners, on the schedule or a maintainer's dispatch and
+  never on a pull request.
+  - `.clusterfuzzlite/` builds the targets in OSS-Fuzz's `base-builder-jvm`, pinned by digest, and runs each under
+    that image's Jazzer driver on Temurin 25 with §9.1's flags. A target whose source names no `-max_len` fails the
+    build. ClusterFuzzLite's build and run images run by digest through `.clusterfuzzlite/cflite.sh`, not through its
+    GitHub actions: those print every fuzzer log, crashing inputs included, to the public job log, and upload crashes
+    as public artifacts even with a storage repository.
+  - The corpus lives in the private storage repository `geota/revokt-fuzz-corpus` (`main`, `corpus/<Class>-<method>/`).
+    Only the steps that clone and push it get `CFL_CORPUS_TOKEN`, a fine-grained token with Contents read and write
+    on that repository only. Each nightly run of `main` adds to the corpus, and the weekly prune minimises it.
+    Refreshing the committed regression inputs from it stays a manual PR. The daily coverage job writes the JaCoCo
+    report to the storage repository's `gh-pages` branch (`coverage/latest/`, not served), and the totals to the run's
+    summary.
+  - ClusterFuzzLite's own log never reaches the public job log. A finding is sealed and filed as for ad-hoc fuzzing
+    below, by the same advisory job and script. The sealed file holds each reproducer, its minimised form, its stack
+    trace and the log's last 64 KiB. A run that ends in a ClusterFuzzLite error uploads its log, sealed the same way, as
+    the 7-day artifact `cflite-log-<target>`.
 - Ad-hoc fuzzing (`fuzz.yml`, #115): dispatch only, on GitHub-hosted runners, one job per target that
   `./gradlew fuzzTargets` lists. The fuzz job holds no secret.
   - On a finding, it minimises each input (libFuzzer's `-minimize_crash=1`). It then seals one file per finding: a

@@ -1,0 +1,197 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ClusterFuzzLite's coverage and corpus jobs (spec §9.1; CONTRIBUTING §6; #119), beside cflite_batch.yml: the daily
+# coverage report (mode coverage, sanitizer coverage) over every target's stored corpus, written to the private storage
+# repository's gh-pages branch (coverage/latest; not served) with the totals in the run's summary; and the weekly prune
+# (mode prune), which minimises each target's corpus and writes it back to the storage repository's main branch. Runs
+# on the schedule and when a maintainer dispatches it; never on pull_request or pull_request_target. Both build every
+# target, through .clusterfuzzlite/cflite.sh as the batch does, and keep ClusterFuzzLite's log private (a corpus input
+# can crash a target here too); a run that ends in an error uploads its log sealed with age to FUZZ_AGE_RECIPIENT.
+name: cflite-cron
+
+on:
+  schedule:
+    - cron: "41 7 * * *"
+    - cron: "23 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "coverage, prune or both"
+        type: choice
+        options: [coverage, prune, both]
+        default: coverage
+      prune_seconds:
+        description: "Pruning time for all targets together, in seconds (60 to 7200)"
+        type: number
+        default: 3600
+
+permissions: read-all
+
+# Shares no group with cflite-batch: each job writes only its own targets' directories (or the gh-pages branch), and
+# cflite.sh rebases a push on a concurrent one.
+concurrency:
+  group: cflite-cron-${{ github.event.schedule || inputs.job }}
+  cancel-in-progress: false
+
+env:
+  BUILD_IMAGE: gcr.io/oss-fuzz-base/clusterfuzzlite-build-fuzzers@sha256:766c550e0d679fef093876e222f4e4ee2277551b9aaeb7e9a92759a63cc1518e
+  RUN_IMAGE: gcr.io/oss-fuzz-base/clusterfuzzlite-run-fuzzers@sha256:9e195c0a560b5c2af6c88d17a39be403bcc9af09adbde02df2779de59d838a75
+  CORPUS_REPO: geota/revokt-fuzz-corpus
+
+jobs:
+  coverage:
+    name: coverage
+    if: github.event.schedule == '41 7 * * *' || (github.event_name == 'workflow_dispatch' && inputs.job != 'prune')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: age and the recipient
+        env:
+          RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          if ! [[ $RECIPIENT =~ ^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$ ]]; then
+            echo "::error::the FUZZ_AGE_RECIPIENT repository variable is unset or not an age1… recipient (CONTRIBUTING §6)"
+            exit 1
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends age
+          .clusterfuzzlite/cflite.sh prepare
+      - name: build
+        run: |
+          .clusterfuzzlite/cflite.sh build coverage all
+      - name: corpus in
+        env:
+          CFL_CORPUS_TOKEN: ${{ secrets.CFL_CORPUS_TOKEN }}
+        run: |
+          set -euo pipefail
+          .clusterfuzzlite/cflite.sh clone main "$RUNNER_TEMP/cflite/corpus" /corpus/
+          mapfile -t binaries < <(find "$RUNNER_TEMP/cflite/workspace/build-out" -maxdepth 1 -type f -name '*.options' -printf '%f\n' | sed 's/\.options$//' | sort)
+          .clusterfuzzlite/cflite.sh corpus-in "$RUNNER_TEMP/cflite/corpus" "${binaries[@]}"
+      - name: coverage
+        id: fuzz
+        run: |
+          .clusterfuzzlite/cflite.sh run coverage coverage 600
+      # The report's totals (numbers only) in the run's summary; the report itself goes to the storage repository.
+      - name: summary
+        run: |
+          set -euo pipefail
+          summary=$(find "$RUNNER_TEMP/cflite/filestore/coverage/latest" -path '*/linux/summary.json' -print -quit)
+          if [ -z "$summary" ]; then echo "::warning::the coverage report has no summary.json"; exit 0; fi
+          {
+            echo "### ClusterFuzzLite coverage (JaCoCo, over the stored corpus)"
+            echo
+            echo "| | covered | total | % |"
+            echo "|---|---|---|---|"
+            jq -r '.data[0].totals | to_entries[] | select(.value | type == "object" and has("count"))
+              | "| \(.key) | \(.value.covered) | \(.value.count) | \(.value.percent | tostring | .[0:5]) |"' "$summary"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: report out
+        if: github.ref == 'refs/heads/main'
+        env:
+          CFL_CORPUS_TOKEN: ${{ secrets.CFL_CORPUS_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          .clusterfuzzlite/cflite.sh clone gh-pages "$RUNNER_TEMP/cflite/gh-pages" /coverage/latest/
+          rm -rf -- "${RUNNER_TEMP:?}/cflite/gh-pages/coverage/latest"
+          mkdir -p "$RUNNER_TEMP/cflite/gh-pages/coverage"
+          cp -R "$RUNNER_TEMP/cflite/filestore/coverage/latest" "$RUNNER_TEMP/cflite/gh-pages/coverage/latest"
+          .clusterfuzzlite/cflite.sh push "$RUNNER_TEMP/cflite/gh-pages" gh-pages "coverage: run $RUN_ID"
+      - name: seal the log
+        id: seal-log
+        if: failure() && steps.fuzz.outputs.status != '' && steps.fuzz.outputs.status != '0'
+        env:
+          RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
+        run: |
+          .clusterfuzzlite/cflite.sh seal-log
+      - name: upload the sealed log
+        if: failure() && steps.seal-log.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cflite-log-coverage
+          path: ${{ steps.seal-log.outputs.dir }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  prune:
+    name: prune
+    if: github.event.schedule == '23 4 * * 0' || (github.event_name == 'workflow_dispatch' && inputs.job != 'coverage')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: age and the recipient
+        env:
+          RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
+          PRUNE_SECONDS: ${{ inputs.prune_seconds }}
+        run: |
+          set -euo pipefail
+          PRUNE_SECONDS=${PRUNE_SECONDS:-3600}
+          case $PRUNE_SECONDS in ''|*[!0-9]*) echo "::error::prune_seconds must be a whole number"; exit 1 ;; esac
+          if [ "$PRUNE_SECONDS" -lt 60 ] || [ "$PRUNE_SECONDS" -gt 7200 ]; then echo "::error::prune_seconds must be 60 to 7200"; exit 1; fi
+          if ! [[ $RECIPIENT =~ ^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$ ]]; then
+            echo "::error::the FUZZ_AGE_RECIPIENT repository variable is unset or not an age1… recipient (CONTRIBUTING §6)"
+            exit 1
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends age
+          .clusterfuzzlite/cflite.sh prepare
+          echo "PRUNE_SECONDS=$PRUNE_SECONDS" >> "$GITHUB_ENV"
+      - name: build
+        run: |
+          .clusterfuzzlite/cflite.sh build address all
+      - name: corpus in
+        env:
+          CFL_CORPUS_TOKEN: ${{ secrets.CFL_CORPUS_TOKEN }}
+        run: |
+          set -euo pipefail
+          .clusterfuzzlite/cflite.sh clone main "$RUNNER_TEMP/cflite/corpus" /corpus/
+          mapfile -t binaries < <(find "$RUNNER_TEMP/cflite/workspace/build-out" -maxdepth 1 -type f -name '*.options' -printf '%f\n' | sed 's/\.options$//' | sort)
+          .clusterfuzzlite/cflite.sh corpus-in "$RUNNER_TEMP/cflite/corpus" "${binaries[@]}"
+          printf '%s\n' "${binaries[@]}" > "$RUNNER_TEMP/cflite/binaries"
+      - name: prune
+        id: fuzz
+        run: |
+          .clusterfuzzlite/cflite.sh run prune address "$PRUNE_SECONDS"
+      - name: corpus out
+        if: steps.fuzz.outputs.status == '0' && github.ref == 'refs/heads/main'
+        env:
+          CFL_CORPUS_TOKEN: ${{ secrets.CFL_CORPUS_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mapfile -t binaries < "$RUNNER_TEMP/cflite/binaries"
+          .clusterfuzzlite/cflite.sh corpus-out "$RUNNER_TEMP/cflite/corpus" "${binaries[@]}"
+          .clusterfuzzlite/cflite.sh push "$RUNNER_TEMP/cflite/corpus" main "corpus: prune, run $RUN_ID"
+      - name: seal the log
+        id: seal-log
+        if: failure() && steps.fuzz.outputs.status != '' && steps.fuzz.outputs.status != '0'
+        env:
+          RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
+        run: |
+          .clusterfuzzlite/cflite.sh seal-log
+      - name: upload the sealed log
+        if: failure() && steps.seal-log.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cflite-log-prune
+          path: ${{ steps.seal-log.outputs.dir }}/
+          if-no-files-found: error
+          retention-days: 7

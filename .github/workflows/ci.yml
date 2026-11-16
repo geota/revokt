@@ -188,14 +188,18 @@ jobs:
           curl -sSfL -o download-actionlint.bash https://raw.githubusercontent.com/rhysd/actionlint/03d0035246f3e81f36aed592ffb4bebf33a03106/scripts/download-actionlint.bash
           bash download-actionlint.bash 1.7.7
           ./actionlint -color
-      # fuzz.yml's own checks (#115): plain shellcheck over its jobs' run blocks, as actionlint's built-in run does not
-      # report every check (it let an unassigned variable, SC2154, through), and the unit tests of fuzz_advisory.py's
-      # handling of hostile artifacts. shellcheck is the runner image's, as actionlint's own is.
-      - name: fuzz.yml's shellcheck and fuzz_advisory.py's tests
+      # The fuzzing workflows' own checks (#115, #119): plain shellcheck over their jobs' run blocks, as actionlint's
+      # built-in run does not report every check (it let an unassigned variable, SC2154, through), shellcheck over the
+      # ClusterFuzzLite scripts, and the unit tests of fuzz_advisory.py's handling of hostile artifacts and of
+      # cflite_build.py. shellcheck is the runner image's, as actionlint's own is.
+      - name: the fuzzing workflows' shellcheck and the scripts' tests
         run: |
           shellcheck --version
           python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml fuzz
           python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml advisory
+          for job in targets batch advisory; do python3 .github/scripts/fuzz_shellcheck.py .github/workflows/cflite_batch.yml "$job"; done
+          for job in coverage prune; do python3 .github/scripts/fuzz_shellcheck.py .github/workflows/cflite_cron.yml "$job"; done
+          shellcheck -s bash .clusterfuzzlite/build.sh .clusterfuzzlite/cflite.sh
           python3 -I -m unittest discover -s .github/scripts -p 'test_*.py'
 
   labeler:

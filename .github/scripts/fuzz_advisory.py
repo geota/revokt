@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 revokt contributors
 # SPDX-License-Identifier: Apache-2.0
-"""File one private draft security advisory per new fuzz finding (fuzz.yml advisory job, #115; CONTRIBUTING §6).
+"""File one private draft security advisory per new fuzz finding (the advisory jobs of fuzz.yml, #115, and
+cflite_batch.yml, #119; CONTRIBUTING §6).
 
 The findings directory holds one subdirectory per `fuzz-finding-<target>` artifact of the fuzz job, as
 actions/download-artifact lays out a pattern download, or, when exactly one artifact matched, that artifact's files
@@ -184,8 +185,8 @@ def description(finding: Finding, run_url: str) -> str:
         f"`{finding.target}` failed under Jazzer (spec §9.1 Findings), found by {run_url}.",
         "",
         f"- Jazzer DEDUP_TOKEN: {finding.hash or 'none'}",
-        "- Each block below is one finding: a gzipped tar of the input, the minimised input, the JUnit XML and the"
-        " fuzzer and minimiser logs, encrypted with age to the maintainer's key (FUZZ_AGE_RECIPIENT).",
+        "- Each block below is one finding: a gzipped tar of the input, the minimised input and the logs (CONTRIBUTING"
+        " §6 lists what each fuzzing workflow seals), encrypted with age to the maintainer's key (FUZZ_AGE_RECIPIENT).",
         "",
         "Decrypt (CONTRIBUTING §6): copy a block into `finding.age`, then run"
         " `rage -d -i <identity-file> finding.age > finding.bin` (`age -d -i` works too), and"
