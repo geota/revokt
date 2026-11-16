@@ -166,7 +166,16 @@ internal class CrliteSync(
         private val channel = store.channel
         private val clock = SyncClock(now, policy.clockSkewMillis, policy.rollbackWindowMillis)
         private var stage = SyncStage.STORE
-        private var record = UpdaterRecord()
+
+        /**
+         * The `updater.json` this sync read; null until the read returns, and while it is null nothing writes
+         * `updater.json`, so a read that throws never has an empty record written over the real file (#209: that would
+         * drop the watermark, `seedInstalledAtMillis` and every source's cursor, `lastVerified*` and backoff).
+         */
+        private var read: UpdaterRecord? = null
+
+        /** The record read, for every step after the read. */
+        private val record: UpdaterRecord get() = checkNotNull(read) { "updater.json is read first" }
         private var storeFailures = 0
         private var backoff: Long? = null
         private var lastStatus: Int? = null
@@ -228,7 +237,7 @@ internal class CrliteSync(
         private fun steps(): SyncResult {
             stage = SyncStage.STORE
             val loaded = LoadedUpdater.of(store.updater(now))
-            record = loaded.record
+            read = loaded.record
             storeFailures += loaded.storeFailures
             val nextAttempt = UpdaterTransitions.nextAttemptAtMillis(record, source.sourceId, now)
             if (nextAttempt != null && nextAttempt > now) return end(Ended(SyncOutcome.BACKOFF, null, null, "backoff"))
@@ -845,7 +854,7 @@ internal class CrliteSync(
         /**
          * Ends the sync as [ended] without an install: deletes the directory this sync staged, then writes
          * `updater.json` ([UpdaterTransitions.after]; a delete or write that fails is a store failure and leaves the
-         * outcome), then the result.
+         * outcome) unless its read never returned (#209), then the result.
          */
         @Suppress("TooGenericExceptionCaught") // §6.5: the failure path catches every throwable too.
         private fun end(ended: Ended): SyncResult {
@@ -860,15 +869,18 @@ internal class CrliteSync(
                 }
             }
             try {
-                val next =
-                    UpdaterTransitions.after(
-                        record,
-                        source.sourceId,
-                        ended.outcome,
-                        now,
-                        serverBackoffMillis = backoff,
-                    )
-                store.writeUpdater(next, now)
+                // #209: a sync whose read of updater.json did not return writes nothing, leaving the file as it is.
+                read?.let {
+                    val next =
+                        UpdaterTransitions.after(
+                            it,
+                            source.sourceId,
+                            ended.outcome,
+                            now,
+                            serverBackoffMillis = backoff,
+                        )
+                    store.writeUpdater(next, now)
+                }
             } catch (t: Throwable) {
                 restoreInterrupt(t)
                 storeFailures++

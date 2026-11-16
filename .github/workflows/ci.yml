@@ -84,7 +84,7 @@ jobs:
     steps:
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
-          egress-policy: block   # the allow-list is the setup's hosts (header); tests reach loopback only
+          egress-policy: block   # the allow-list is the setup's hosts (header)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
@@ -305,6 +305,8 @@ jobs:
           python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml fuzz
           python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml advisory
           python3 -I -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: pr_lint.js's body rules (#210)
+        run: node .github/scripts/test_pr_lint.js
 
   labeler:
     name: labeler

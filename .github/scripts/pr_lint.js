@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// Runs inside actions/github-script with `github`, `context`, `core` in scope (CONTRIBUTING §5, §12, ADR-0005).
+// Runs inside actions/github-script with `github`, `context`, `core` in scope (CONTRIBUTING §5, §12, ADR-0005, ADR-0006).
 const number = context.payload.pull_request ? context.payload.pull_request.number : context.payload.issue.number;
 const { owner, repo } = context.repo;
 const pr = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
@@ -46,7 +46,21 @@ const needSign = commits.some((c) => /^Signed-off-by:/im.test(c.commit.message))
 if (needCo && !/^Co-authored-by:\s*\S/im.test(trailers)) failures.push('a branch commit carries Co-authored-by but the Trailers block does not: copy it, so the AI disclosure survives the squash (CONTRIBUTING §4)');
 if (needSign && !/^Signed-off-by:\s*\S/im.test(trailers)) failures.push('a branch commit carries Signed-off-by but the Trailers block does not: copy the human sign-off (CONTRIBUTING §4)');
 // Labels this check owns (CONTRIBUTING §2, §12): ai-assisted from the trailers, size/XL from production-source additions.
-const wantAi = /^Co-authored-by:\s*\S/im.test(trailers);
+// One line with a value: the template's blank `Co-authored-by:` above `Signed-off-by:` is not a co-author.
+const wantAi = /^Co-authored-by:[^\S\r\n]*\S/im.test(trailers);
+
+// An agent-written PR carries its Handoff in the body (AGENTS.md §12, ADR-0006): something besides the template's own
+// headings. Grace (#210): a PR opened before the rule existed may keep its Handoff as a "## Handoff" comment.
+const handoffHeadings = /^###[^\S\r\n]*(JDK and OS|Gates not run locally and why|Assumptions made|Files touched outside the issue's module|Open questions)[^\S\r\n]*$/gm;
+if (wantAi && !isRenovate && (section('Handoff') || '').replace(handoffHeadings, '').trim().length === 0) {
+  const grace = new Date(pr.created_at) < new Date('2026-11-18T00:00:00Z');
+  const comments = grace ? await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }) : [];
+  if (comments.some((c) => /^#+\s*Handoff\b/m.test(c.body || ''))) {
+    core.notice('pr-lint: the Handoff is a comment; accepted for a PR opened before 2026-11-18 (#210)');
+  } else {
+    failures.push('section "## Handoff" is missing or empty: an agent-written PR fills it in the body (AGENTS.md §12)');
+  }
+}
 
 // Solo-maintainer phase (ADR-0005): an "Independent review" comment from a fresh-context review is required.
 const maintainers = require('fs').readFileSync('MAINTAINERS.md', 'utf8').match(/\| @([A-Za-z0-9-]+) \|/g) || [];

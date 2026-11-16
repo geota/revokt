@@ -14,7 +14,10 @@ Fixes: #
 
 ## Tests
 
-<!-- fixture ids or test names added or changed; for a bug, the test that failed first and the red run. `none, no behaviour change` for build/ci/docs/chore. -->
+<!-- fixture ids or test names added or changed; for a bug, the test that failed first and the red run. `none, no behaviour change` for build/ci/docs/chore.
+     Say so here if an existing test's assertion changed, and why.
+     Then the commands run and their results (test counts, the full gate), exactly as run.
+     Mutation, if you ran it: the survivors you found and the tests you added for them, not a kill count. -->
 
 ## API
 
@@ -27,6 +30,23 @@ Fixes: #
 ## AI assistance
 
 <!-- "none", or which parts an agent wrote (sets the ai-assisted label) -->
+
+## Handoff
+
+<!-- AGENTS.md §12. Required when an agent wrote any part (pr-lint checks it then); otherwise "none, no agent".
+     Update it after each round of fixes. The commands run go under Tests. -->
+
+### JDK and OS
+
+### Gates not run locally and why
+
+### Assumptions made
+
+<!-- each one lands in a spec revision or is dropped (ADR-0006) -->
+
+### Files touched outside the issue's module
+
+### Open questions
 
 ## Checklist
 
