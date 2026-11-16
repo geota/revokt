@@ -247,6 +247,21 @@ internal class StoreLayout(
     }
 
     /**
+     * The generation directories under this dataset and channel that hold any key, complete or not, by name: for a
+     * reader that cannot trust the pointer to tell it which generations exist (#138).
+     */
+    val directories: Set<String>
+        get() {
+            val prefix = "$root/"
+            return storage
+                .names()
+                .filter { it.startsWith(prefix) }
+                .mapNotNullTo(LinkedHashSet()) { key ->
+                    key.removePrefix(prefix).substringBefore('/', "").takeIf(GenerationNames::isDirectory)
+                }
+        }
+
+    /**
      * Deletes every key in [directory], `meta.json` first (the reverse of the write order), so an interrupted delete
      * never leaves a directory that reads as complete with files missing. Its blobs stay (content-addressed).
      */

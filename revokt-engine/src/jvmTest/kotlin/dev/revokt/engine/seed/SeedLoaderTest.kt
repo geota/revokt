@@ -409,27 +409,22 @@ internal class SeedLoaderTest : SeedFixture() {
     }
 
     @Test
-    fun `a stored MIRROR generation newer than the seed is evicted and pruned (fixture f)`() {
-        val mirror =
-            dev.revokt.engine.update.UpdateFixtures.pending(
-                store,
-                trustClass = TrustClass.MIRROR,
-                generationId = "mirror",
-                sourceTimestampMillis =
-                    ts + day,
-            )
-        val publication =
-            dev.revokt.engine.update
-                .Publication(false, null, true, ts, day)
-        assertIs<dev.revokt.engine.update.InstallResult.Installed>(
-            dev.revokt.engine.update
-                .install(mirror, TestEngine(), store, snapshot, publication, null, logger),
-        )
-        val load = installed(load(Seed()))
-        assertEquals(TrustClass.SIGNED, live().trustClass)
-        val pointer = assertIs<StoreRead.Found<dev.revokt.engine.store.Pointer>>(store.pointer()).value
-        assertEquals(load.directory to null, pointer.live to pointer.previous)
-        assertTrue(storage.names().none { mirror.meta.directory in it }, "the MIRROR directory is pruned")
+    fun `an archive over its total cap fails closed and counted, so a source that never ends ends`() {
+        val endless =
+            SeedSource.of {
+                object : java.io.InputStream() {
+                    override fun read(): Int = 0
+
+                    override fun read(
+                        b: ByteArray,
+                        off: Int,
+                        len: Int,
+                    ): Int = len.also { b.fill(0, off, off + len) }
+                }
+            }
+        val load = assertUnreadable(loader(endless).load(ts), "over its cap of ${SeedArchive.MAX_BYTES} bytes")
+        assertEquals(1, load.storeFailures)
+        assertEquals(1, assertIs<SeedLoad.Unreadable>(loader(endless).checkHeader()).storeFailures)
     }
 
     @Test

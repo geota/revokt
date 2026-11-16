@@ -370,10 +370,30 @@ class SeedArchiveTest {
         )
         val longer = assertNotNull(SeedArchive.open(Opener(bytes, bytes + byteArrayOf(0))::open))
         assertTrue(
-            "changed" in assertFailsWith<SeedFormatException> { read(longer, SeedArchive.RECORDS) }.message.orEmpty(),
+            "grew" in assertFailsWith<SeedFormatException> { read(longer, SeedArchive.RECORDS) }.message.orEmpty(),
         )
         val truncated = assertNotNull(SeedArchive.open(Opener(bytes, bytes.copyOf(40))::open))
         assertFailsWith<EOFException> { read(truncated, SeedArchive.INDEX) }
+    }
+
+    @Test
+    fun `an archive over its total cap, or one that grows between reads, is too large`() {
+        val bytes = fixed().bytes()
+        assertNotNull(SeedArchive.open({ Buffer().write(bytes) }, maxBytes = bytes.size.toLong()))
+        val e =
+            assertFailsWith<SeedTooLargeException> {
+                SeedArchive.open(
+                    { Buffer().write(bytes) },
+                    maxBytes =
+                        bytes.size - 1L,
+                )
+            }
+        assertTrue("over its cap" in e.message.orEmpty(), e.message)
+        val grown = assertNotNull(SeedArchive.open(Opener(bytes, bytes + ByteArray(100_000))::open))
+        assertTrue(
+            "grew" in assertFailsWith<SeedTooLargeException> { read(grown, SeedArchive.RECORDS) }.message.orEmpty(),
+        )
+        assertEquals(256L shl 20, SeedArchive.MAX_BYTES)
     }
 
     @Test

@@ -12,10 +12,15 @@ import okio.buffer
 import okio.use
 
 /** A seed archive that is not one this reader accepts: `SEED_UNREADABLE` (spec §6.5). */
-internal class SeedFormatException(
+internal open class SeedFormatException(
     message: String,
     cause: Throwable? = null,
 ) : Exception(message, cause)
+
+/** An archive over its total cap ([SeedArchive.MAX_BYTES]), or one that grew between reads: a source that may not end. */
+internal class SeedTooLargeException(
+    message: String,
+) : SeedFormatException(message)
 
 /**
  * One central-directory entry of a seed archive, as declared: [name] is its bytes read as ISO-8859-1, so only a byte-equal
@@ -201,6 +206,8 @@ internal class SeedArchive private constructor(
                 val n = s.read(tail, CHUNK)
                 if (n == -1L) break
                 position += n
+                // A source that grew may not end: stop at the first byte past the size the first pass read.
+                if (position > archiveSize) throw SeedTooLargeException("the archive grew between reads")
                 if (tail.size > directory.size) tail.skip(tail.size - directory.size)
             }
             if (position != archiveSize || tail.readByteString() != directory) fail("the archive changed between reads")
@@ -235,6 +242,12 @@ internal class SeedArchive private constructor(
          */
         val maxEntries: Int get() = FIXED.size + RevoktLimits.MAX_CHANGESET_RECORDS
 
+        /**
+         * The most bytes an archive may hold (the coordinator's decision on #138): about 3.7 times the most a channel
+         * holds today (a 6 MB full and 255 deltas of about 242 KB, §6.4), so a source that never ends fails closed.
+         */
+        const val MAX_BYTES: Long = 256L shl 20
+
         /** The most bytes the central directory may take: a real seed's takes about 40 KiB. */
         const val MAX_DIRECTORY_BYTES: Long = 1L shl 20
 
@@ -257,9 +270,15 @@ internal class SeedArchive private constructor(
          * The archive [opener] opens, its end record and central directory read and checked, or null when [opener]
          * opens none. The stream is read to its end, once; an I/O failure is the caller's (an unreadable seed).
          */
-        fun open(opener: () -> Source?): SeedArchive? {
+        fun open(opener: () -> Source?): SeedArchive? = open(opener, MAX_BYTES)
+
+        /** [open] with the total cap [maxBytes] in place of [MAX_BYTES]. */
+        fun open(
+            opener: () -> Source?,
+            maxBytes: Long,
+        ): SeedArchive? {
             val source = opener() ?: return null
-            val (size, tail) = source.use(::readToEnd)
+            val (size, tail) = source.use { readToEnd(it, maxBytes) }
             val end = End.read(tail, size)
             val directory = Buffer().also { tail.copyTo(it, tail.size - END_BYTES - end.size, end.size) }
             val bytes = directory.snapshot()
@@ -277,13 +296,17 @@ internal class SeedArchive private constructor(
         }
 
         /** [source] read to its end: its size, and its last [MAX_DIRECTORY_BYTES] and end record. */
-        private fun readToEnd(source: Source): Pair<Long, Buffer> {
+        private fun readToEnd(
+            source: Source,
+            maxBytes: Long,
+        ): Pair<Long, Buffer> {
             var size = 0L
             val tail = Buffer()
             while (true) {
                 val n = source.read(tail, CHUNK)
                 if (n == -1L) break
                 size += n
+                if (size > maxBytes) throw SeedTooLargeException("the archive is over its cap of $maxBytes bytes")
                 val keep = MAX_DIRECTORY_BYTES + END_BYTES
                 if (tail.size > keep) tail.skip(tail.size - keep)
             }
