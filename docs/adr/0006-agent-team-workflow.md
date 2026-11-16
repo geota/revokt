@@ -17,8 +17,8 @@ The 2026-11-16 design audit (#230, finding C-F5) found that AGENTS.md §12 and A
 process. The repository will be published with its history, so the written process has to be the one in use.
 
 The audit also found that the fresh-context review, with a follow-up after each fix round, is the control that
-finds the serious defects: it found every serious defect the audit traced, including the data-loss bugs of #205 and
-#207.
+finds the serious defects: it found every serious defect the audit traced, including the two data-loss bugs found in
+#207's reviews, one of them in merged code from #200 (#209).
 
 ## Decision
 
@@ -32,24 +32,26 @@ finds the serious defects: it found every serious defect the audit traced, inclu
 - **The coordinator** is one agent session. It turns the maintainer's priorities into issues and lanes, and writes
   each builder's brief ([`docs/dev/builder-brief.md`](../dev/builder-brief.md) plus the issue). It settles narrow
   readings, and sends readings that change observable behaviour to the maintainer. It starts the reviewers, posts
-  their reports as the `Independent review` comment, and merges. It alone edits `docs/spec/`, `ROADMAP.md` and
-  `README.md`.
+  their reports as the `Independent review` comment (or asks the reviewer to post it), and merges. It alone edits
+  `docs/spec/`, `ROADMAP.md` and `README.md`.
 - **Builders** are agents, up to about three at a time, each on one issue in its own worktree and in an area of the
   code the others are not touching. A builder opens a draft PR with the Handoff in its body (AGENTS.md §12),
   reports to the coordinator, and fixes what review finds. It never merges, marks a PR ready, or edits the spec.
 - **Reviewers** are fresh-context agents that did not write the diff ([`docs/dev/reviewer-brief.md`](../dev/reviewer-brief.md)).
   Each works read-only in its own detached worktree and commits nothing. It re-runs the tests rather than trusting
   the Handoff. It aims its own mutants at the guards that decide what is deleted, overwritten, reused or trusted, and
-  challenges the readings the coordinator accepted. Its verdict is one of: must-fix, should-fix, or nothing to fix.
+  challenges the readings the coordinator accepted. Its verdict is one of: must-fix, should-fix, or nothing must be
+  fixed before merge.
 
 ### The flow of one PR
 
 1. The builder posts any reading that touches delete, reuse or trust class on the issue, and waits for the
    coordinator before coding it.
 2. The builder opens a draft PR with every template section filled, Handoff included, after the full gate passes.
-3. A fresh reviewer reviews the head SHA. The coordinator posts the report as the `Independent review` comment.
+3. A fresh reviewer reviews the head SHA. The coordinator posts the report as the `Independent review` comment, or asks
+   the reviewer to post it.
 4. The builder fixes what was found. After a round that fixes a must-fix finding, a follow-up review checks the fix
-   commits (`Independent review: follow-up at <sha>`). The coordinator may ask for one after a should-fix round too,
+   commits (`Independent review: follow-up at <sha>`, or `Independent review (follow-up)`). The coordinator may ask for one after a should-fix round too,
    as on #205. The coordinator checks smaller fixes by reading the diff.
 5. The maintainer reads each must-fix finding and its fix, and answers any decision question, before the merge.
 6. The coordinator marks the PR ready, brings it up to date (`gh pr update-branch`), waits for every required check,
@@ -76,8 +78,8 @@ skipped. This record, the comments on each PR, and the public history are what s
 
 - Throughput is bounded by review, not by one person's reading. The maintainer's time goes to decisions and must-fix
   findings, where it changes outcomes.
-- A defect that neither the builder nor the reviewer imagines can merge. Both data-loss bugs of 2026-11-15 came from
-  a damaged-store state that the builder had not considered and that a reviewer found by improvising a scenario. The
+- A defect that neither the builder nor the reviewer imagines can merge. Both data-loss bugs found in #207's reviews came
+  from a damaged-store state that the builder had not considered and that a reviewer found by improvising a scenario. The
   model-based fault-injection test (#214) adds a second line of defence that does not depend on a reviewer's
   ideas.
 - Builder mutation runs are a working method, not evidence. The reviewer's mutants are the recorded check.

@@ -113,11 +113,11 @@ and the public history are the record that the process below was followed.
 - Describe work as verified that was not run; the Handoff says exactly what ran.
 
 **Review and merge.** A fresh reviewer reviews each draft's head SHA, and the coordinator posts its report under
-the heading `Independent review`. **Reviewers re-run, they do not trust**, the Handoff's claims. They aim their own
+the heading `Independent review` (or asks the reviewer to post it). **Reviewers re-run, they do not trust**, the Handoff's claims. They aim their own
 mutants at the guards that decide delete, overwrite, reuse or "held", every non-`Found` arm of a store read, and
 every `?:` default on a security or data decision; they challenge the readings the coordinator accepted; they check
 that a new parser has a fuzz target. After a round that fixes a must-fix finding, a follow-up review checks the fix
-commits (`Independent review: follow-up at <sha>`). Before the merge **the maintainer** reads every must-fix
+commits (`Independent review: follow-up at <sha>`, or the older `Independent review (follow-up)`). Before the merge **the maintainer** reads every must-fix
 finding and its fix and answers every decision question; **the coordinator** confirms that the diff stays inside the
 issue's scope, that no ruleset, workflow, CODEOWNERS or ingress file changed unless the issue says so, and that the
 trailers are right, then marks the PR ready, brings it up to date and squash-merges it once every required check is

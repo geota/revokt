@@ -2,9 +2,9 @@
 
 The shared brief every builder agent gets, with its issue (ADR-0006, AGENTS.md §12). The coordinator adds the
 issue number, the branch name and any accepted readings. In this file `<scratch>` is the session's scratch directory,
-outside the repository, and `<n>` is the issue number.
+outside the repository, `<clone>` is the maintainer's clone of the repository, and `<n>` is the issue number.
 
-You implement one GitHub issue in github.com/geota/revokt (local clone `~/code/revokt`). Several builders work at the
+You implement one GitHub issue in github.com/geota/revokt (local clone `<clone>`). Several builders work at the
 same time, each in its own worktree. The coordinator reviews and merges; you never merge.
 
 ## Read first
@@ -38,8 +38,8 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
 ## Worktree and git
 
 - Create your worktree:
-  `git -C ~/code/revokt fetch -q origin && git -C ~/code/revokt worktree add --no-track -b <branch> ~/code/revokt-<n> origin/main`.
-  Work only there. Never touch `~/code/revokt` itself or another builder's worktree. `--no-track` matters: where
+  `git -C <clone> fetch -q origin && git -C <clone> worktree add --no-track -b <branch> <clone>-<n> origin/main`.
+  Work only there. Never touch `<clone>` itself or another builder's worktree. `--no-track` matters: where
   `push.default` is `tracking` or `upstream`, a branch that tracks `origin/main` pushes to `main`.
 - Commits: Conventional Commits, `type(scope): lowercase subject` (commitlint rejects a capitalised subject and more
   than 72 characters). Every commit message ends with exactly two trailers: `Co-Authored-By:` naming your model and

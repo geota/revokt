@@ -499,7 +499,8 @@ every required check in Appendix B passes**.
 
 **Definition of done for a PR:** spec cited and matched · tests per the rules above · every required check
 green · API dump diff reviewed · `docs/dev/status.md` regenerated · changelog entry implied by the title ·
-approvals per section 5 · threads resolved · squash-merged by auto-merge. Done means merged.
+approvals per section 5 · threads resolved · squash-merged by auto-merge (in the solo phase, by the coordinator,
+ADR-0006). Done means merged.
 
 ## 7. Enforcement map
 
@@ -534,7 +535,7 @@ approvals per section 5 · threads resolved · squash-merged by auto-merge. Done
 | Device benchmarks | the private `revokt-bench` repository's scheduled job on the ephemeral device runner | nightly | release (regression threshold) | planned |
 | Reproducible builds, SBOM (CycloneDX, `jvmRuntimeClasspath` for KMP modules, attested), provenance (`actions/attest-build-provenance`, SLSA Build L2; L3 if the publish step moves to a reusable workflow), PGP signatures, release environment with a second maintainer's approval, tag ruleset | release workflow (section 9) | release | yes | planned: `release.yml` exists and is disabled in the solo phase |
 | Project health | OpenSSF Scorecard weekly + badge; per-check targets in `docs/dev/scorecard.md` (the maximum the default token allows on a personal account, with the measured score recorded; `Packaging` and `Signed-Releases` need the jars, `.asc`, `.sigstore.json` and `.intoto.jsonl` attached to the GitHub release, since Scorecard reads release assets, not Maven Central) | scheduled | informational | live |
-| Owner-power audit trail | a weekly workflow exports the rulesets, environment reviewers and repository merge settings to `docs/dev/rulesets/` and opens a PR on any diff (on a personal account every control reduces to the owner's good faith plus this public trail and the key custody split of section 9) | scheduled | PR on diff | live (`housekeeping` `rulesets-audit`) |
+| Owner-power audit trail | a weekly workflow exports the rulesets, environment reviewers and repository merge settings to `docs/dev/rulesets/` and opens a PR on any diff (on a personal account every control reduces to the owner's good faith plus this public trail and the key custody split of section 9) | scheduled | PR on diff | planned: the weekly `housekeeping` `rulesets-audit` export runs, but its PR step has failed on every run (2026-11-02, -09, -16) because Actions may not create PRs (#241) |
 | Labels, size, stale, claim | labeler, size labeler, stale (exempts `blocked`), `/claim` workflow | PR / scheduled | PR-lint yes | live |
 | 24-hour cooling on `data/seed/**`, release workflows and `**/verify/**` | the `cooling` check: reports success at once for other paths and throughout the solo-maintainer phase (ADR-0005), else turns green 24 h after the head SHA first reached CI; advisory fixes and reverts exempt | PR | yes (once two maintainers exist) | live, paused in the solo phase |
 | Trademark rule (§13) | PR-lint greps docs for `revokt.com`; README carries the disambiguation sentence | PR | yes | live |

@@ -2,17 +2,19 @@
 
 The shared brief every independent reviewer gets (ADR-0006, AGENTS.md §12). The coordinator adds the PR number, the
 head SHA, the spec revision, the maintainer's decisions on the issue, and the readings the coordinator accepted. In
-this file `<scratch>` is the session's scratch directory, outside the repository.
+this file `<scratch>` is the session's scratch directory, outside the repository, and `<clone>` is the maintainer's
+clone of the repository.
 
 You review one pull request in github.com/geota/revokt with a fresh context: you did not write it, and you have not
 seen the builder's reasoning beyond the PR and the issue. Your report becomes the PR's `Independent review` comment,
-which the coordinator posts. The maintainer reads every must-fix finding you raise, so say plainly what is wrong.
+which the coordinator posts, or you post when the coordinator asks. The maintainer reads every must-fix finding you raise, so say plainly what is wrong.
 
 ## Setup
 
 - Work read-only in your own detached worktree:
-  `git -C ~/code/revokt fetch -q origin && git -C ~/code/revokt worktree add --detach <scratch>/r<pr> <head-sha>`.
-  Commit nothing, push nothing, comment on nothing. Remove the worktree when you are done.
+  `git -C <clone> fetch -q origin && git -C <clone> worktree add --detach <scratch>/r<pr> <head-sha>`.
+  Commit nothing, push nothing, and comment on nothing except your report when the coordinator asks you to post it.
+  Remove the worktree when you are done.
 - Read the issue (`gh issue view <n> --comments`), the PR body (`gh pr view <pr>`), the diff
   (`git diff origin/main...<head-sha>`), and the spec sections the PR cites. Cite line numbers at the reviewed SHA.
 - Run Gradle as the builder brief says ([`builder-brief.md`](builder-brief.md), "Building and testing"), targeted
@@ -99,16 +101,17 @@ path to, and what is wrong.>
 ## Follow-up review
 
 After a must-fix round (and when the coordinator asks after a should-fix round), the same or a fresh reviewer checks
-the fix commits with the heading `## Independent review: follow-up at <sha>`. Go through each earlier finding and say
+the fix commits with the heading `## Independent review: follow-up at <sha>` (`## Independent review (follow-up)` is
+also accepted; pr-lint matches both). Go through each earlier finding and say
 whether it is done and what kills its mutant now. Re-run the earlier survivors. Then review the fix commits as new
 code, with the same rules: a fix can add its own fail-open arm.
 
 ## Never
 
 - Never claim a test ran, a mutant was killed, or a fact holds unless you checked it. Say what you did not check.
-- Never edit the PR's branch, post on GitHub, or merge. Return the report to the coordinator.
+- Never edit the PR's branch or merge. Return the report to the coordinator; post it yourself only when asked.
 
 ## Examples
 
-The `Independent review` comments on PRs #200, #204 and #205 (`gh pr view <n> --comments`) show the format in use,
-including #200's and #205's follow-ups.
+The `Independent review` comments on PRs #200, #204 and #205 (`gh pr view <n> --comments`) show the format in use.
+#200's follow-up shows the follow-up heading; #205's uses the older `(follow-up)` form.
