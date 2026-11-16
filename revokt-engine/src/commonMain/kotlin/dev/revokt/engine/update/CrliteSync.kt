@@ -247,8 +247,12 @@ internal class CrliteSync(
             val expected = ok(polled) { return it }
             gates.nearCap(polled, "monitor/changes", RevoktLimits.MAX_JSON_BYTES)
             val cursor = record.sources[source.sourceId]?.lastVerifiedLastModified
+            // The stored records are the merge base of a _since changeset only: the whole collection, fetched when there is
+            // no cursor (a malformed updater.json, a clock-behind install), merges over nothing (#236).
+            val since = cursor?.takeIf { base != null }
+            val merged = if (since != null) base.orEmpty() else emptyList()
             val verified =
-                when (val fetched = Changesets().verified(expected, cursor?.takeIf { base != null }, base.orEmpty())) {
+                when (val fetched = Changesets().verified(expected, since, merged)) {
                     is Fetched.Verified -> fetched.verified
                     is Fetched.Unverified -> return unverified(fetched.failure)
                     is Fetched.Ended -> return fetched.result

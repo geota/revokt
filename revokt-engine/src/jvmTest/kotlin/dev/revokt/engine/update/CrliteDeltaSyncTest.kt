@@ -268,6 +268,20 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
     }
 
     @Test
+    fun `#236 - with no cursor the whole collection is verified alone, never merged over the stored records`() {
+        val server = installedFirst()
+        // A malformed updater.json loses the cursor; the pointed generation's records.json still reads.
+        storage.inner.write("crlite/compat/updater.json", "{".encodeToByteArray())
+        // The next collection drops the first delta: merged over the stored records, it would keep it and fail.
+        next(server, listOf(full, delta2), listOf(tombstone))
+        val now = ts2 + hour
+        val run = sync(server, now = now).assert(SyncOutcome.INSTALLED)
+        assertEquals(1, run.storeFailures)
+        assertEquals(server.changesetUrl, server.fetcher.requests[1].url)
+        assertEquals("$ts2/${delta2.id}", live().generationId)
+    }
+
+    @Test
     fun `a pointed records json that does not read is a store failure, and the sync fetches in full`() {
         val server = installedFirst()
         storage.inner.write("crlite/compat/$directory1/records.json", "{".encodeToByteArray())
