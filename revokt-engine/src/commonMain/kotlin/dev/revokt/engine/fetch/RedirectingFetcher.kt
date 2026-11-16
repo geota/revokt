@@ -57,8 +57,8 @@ internal class RedirectRefused(
  *   [fetch] under one `fetchWithin(timeoutMillis)`, which interrupts a hop that outlives it.
  * - A hop to another host or port drops [CREDENTIAL_HEADERS] (compared ignoring case) from that hop and every later
  *   one, as reqwest 0.13.0's `remove_sensitive_headers` does; every other header is sent on every hop unchanged.
- * - Every hop carries the request's `maxBodyBytes`, so the body cap applies to the final response, which is returned
- *   as [fetcher] gave it; the caller re-checks it (§3).
+ * - Every hop carries the request's `maxBodyBytes`, so the body cap applies to every hop, the final response
+ *   included; that response is returned as [fetcher] gave it, and the caller re-checks it (§3).
  *
  * A refused chain throws [RedirectRefused]; a throw from [fetcher] propagates.
  */
