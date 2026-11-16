@@ -3,8 +3,8 @@
 
 # Roadmap
 
-**Current focus**: 0.2, a working engine. 0.1's scope is merged, and 0.2's issues are being planned
-(CONTRIBUTING §2).
+**Current focus**: 0.2, a working engine, built as a vertical slice first: one chain evaluated end to end
+through a real `Revokt` before anything else in 0.2 (see [the order](#order), CONTRIBUTING §2).
 
 > [!WARNING]
 > revokt is pre-release and not production ready. Nothing is published yet, and the public API may change in any
@@ -22,7 +22,7 @@ follows the critical path in
 | Milestone | What you get | Estimate | State |
 |---|---|---|---|
 | [0.1](#01-foundations) | The engine's foundations: certificate parser, filter decoder, rule model | 5 weeks | ✅ done |
-| [0.2](#02-a-working-engine) | A minimal working `Revokt`: path walker, signed Mozilla feed, in-memory updates | 4 weeks | ⏳ not started |
+| [0.2](#02-a-working-engine) | A minimal working `Revokt`: path walker, signed Mozilla feed, in-memory updates | 4 weeks | 🚧 in progress |
 | [0.3](#03-usable-in-apps) | Usable in apps: durable store, OkHttp and Ktor bindings, Android, WorkManager | 5 weeks | ⏳ not started |
 | [M2: 0.4 → 1.0](#m2-04--10-intermediates-onecrl-and-crlsets) | Intermediate preloading, OneCRL, the bundled denylist, Chrome CRLSets; the 1.0 API promise | | ⏳ not started |
 | [M3](#m3-certificate-transparency) | Certificate Transparency policy | | ⏳ not started |
@@ -67,12 +67,31 @@ independent implementations before anything is built on them. Nothing in 0.1 che
 - **Cross-engine checks:** a CI-only engine over rustls/upki, compared with revokt's on the same queries.
 - **Benchmarks** for the per-handshake cost goal: p95 under 1 ms with a warm JIT and a cached path.
 
+### Order
+
+Decided 2026-11-16 after the design audit (#230). The walker, the feed and the in-memory updater are largely merged,
+but no `Revokt` can be built yet, so the vertical slice comes first:
+
+1. #110, the `revokt-jsse` module;
+2. #127 (`JvmPlatformTrust`, the PKIX fallback and read fallback) and #128 (`JdkHttpFetcher`);
+3. #139, `Revokt.Builder`, `build()` and `validate()`;
+4. #143, starting and closing a `Revokt` with its seed and evaluator;
+5. alongside these, #138: reading, verifying and installing a seed archive.
+
+**Moved out of 0.2**, to be scheduled later: #114 (the filter and DER allocation budgets) and #118 (the in-process
+Panama oracle shim). Both refine test infrastructure that already works.
+
+**Cut or replaced:**
+- ~~The C2SP mirror (#194) and its cross-engine leg (#148)~~: cut by #218, which removes the MIRROR and SYSTEM
+  sources. Every generation is then Mozilla-signed.
+- ~~The ClusterFuzzLite batch (#119)~~: replaced by #213, scheduled fuzzing with targets for outside bytes.
+
 ## 0.3: usable in apps
 
 **Goal:** everything an Android or JVM application needs to adopt revokt.
 
-- **A durable store** that survives crashes and is safe between processes, with a lock, plus the C2SP mirror and
-  the system cache as bootstrap-only sources.
+- **A durable store** that survives crashes and is safe between processes, with a lock. ~~The C2SP mirror and the
+  system cache as bootstrap-only sources~~ are cut by #218.
 - **Bindings:** OkHttp, and one adapter per Ktor engine.
 - **Per-delegate trust managers** for private CAs, verdict and path caches, the lifecycle state machine and a
   readiness future.
