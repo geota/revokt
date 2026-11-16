@@ -20,13 +20,18 @@ and the #192 decisions are written.
   `:443` dropped, dot segments removed, an empty path `/`), never as the configured string or the `Location` value.
 - **§7.3, `Location`** (Q1, Q4): a 301, 302, 303, 307 or 308 with no `Location` is returned as the final response, as
   reqwest and Necko return it, and the mirror client fails it with its `httpStatus` (#194); distinct `Location` values
-  on one response are `FAILED`, as Necko's are, and equal ones collapse.
+  on a redirect response are `FAILED`, as Necko's are, and equal ones collapse.
 - **§7.3, the loop key** (Q5): the re-serialised URL without its fragment, the initial URL counted; it is RFC 3986's
   simple string comparison, so `%2e` is not a dot segment (a loop spelled with it ends at the hop limit, `FAILED`
   either way).
 - **§7.3, the accepted readings:** the five credential headers are stripped on a host or port change from the
-  previous hop and stay stripped for every later hop; `If-Modified-Since` is kept and no `Referer` is sent; the body
-  cap and the time left apply to each hop, not only to the final response.
+  previous hop and stay stripped for every later hop, which is stricter than reqwest (it rebuilds each hop's headers
+  from the original request, so it re-sends them on a later same-host hop); `If-Modified-Since` is kept and no
+  `Referer` is sent, where reqwest, and so upki, sends one on every hop; the body cap and the time left apply to each
+  hop, not only to the final response.
+- **§7.3, the mirror client's 3xx rule** (a reading the lead accepted, from #204's review mapping for #194): the mirror
+  client fails any 3xx the wrapper returns except the manifest's 304, with that `httpStatus`; this is revision 56's
+  "any other 3xx is `FAILED`" moved to the caller, and it covers a 304 to a filter request.
 - **§4:** the `c2spMirror` URL is read by §7.3's hop grammar (IP literals allowed), and `build()` throws when it fails;
   the "https with no userinfo" rule names the other source URLs only.
 - **§7.1:** the x5u URL is read by the same shared grammar, DNS host names only; its rules are unchanged.
@@ -40,8 +45,9 @@ and the #192 decisions are written.
 - **§10:** the TLS-only mirror item names the shared grammar, the re-serialised fetch and the headers that stay
   stripped.
 - **Appendix A:** reqwest 0.13.0 with tower-http 0.6.11 (upki v1.0.1's pins) and Firefox's Necko at
-  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, for the statuses followed, a 3xx with no `Location`, duplicate `Location`
-  values, IP literal hosts and the redirect limit; upki v1.0.1's `fetch.rs`, for how it tells a manifest failure from
+  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, for the statuses followed, a 3xx with no `Location` and duplicate
+  `Location` values; reqwest alone for IP literal hosts, the redirect limit, the headers it re-sends and its
+  `Referer`; the revision 56 entry's "does the same" is narrowed to the per-hop strip; upki v1.0.1's `fetch.rs`, for how it tells a manifest failure from
   a file failure.
 
 ### Changes in revision 57 (the items queued on #160 after revision 56, 2026-11-14)
@@ -3476,8 +3482,9 @@ only when it is not 443, the path (`/` when empty, dot segments removed) and the
 303, 307 or 308 answering a `GET` is followed (every mirror request is one); any other status, another 3xx included,
 is returned as the final response, and so is one of the five with no `Location` (the lead's Q1), as reqwest and
 Firefox's Necko return it (Appendix A). The mirror client fails any 3xx it is handed but the manifest's 304 above (a
-300 or 305, or a 302 with no `Location`, for example) as `FAILED` with that `httpStatus` (#194). A `Location` value is
-trimmed of SP and HTAB; distinct values on one response are `FAILED`, as Necko refuses a differing duplicate
+300 or 305, a 302 with no `Location`, or a 304 to a filter request, for example) as `FAILED` with that `httpStatus`
+(#194; a reading the lead accepted, from #204's review). A `Location` value is
+trimmed of SP and HTAB; distinct values on a redirect response are `FAILED`, as Necko refuses a differing duplicate
 `Location`, and equal ones collapse to one (Q4). At most 10 redirects are followed, as reqwest's `Policy::limited(10)`
 allows, so a chain makes at most 11 requests; an eleventh redirect is `FAILED`, and so is a hop to a URL already
 requested in the chain, the initial URL counted (a loop). **The loop key** (Q5) is the re-serialised URL above, which
@@ -3489,8 +3496,11 @@ either way, and the host cannot change. `FETCH_TIMEOUT` (30 s) is one deadline f
 timeout is: each hop is sent with the time left, and a response that arrives at or after the deadline is `FAILED`. A
 hop to another host or port than the previous hop's drops the headers that carry credentials (`Authorization`,
 `Cookie`, `Cookie2`, `Proxy-Authorization`, `WWW-Authenticate`, compared ignoring case), as reqwest 0.13.0's
-`remove_sensitive_headers` does, and they stay dropped on every later hop, whatever its host (revokt sends none
-today); every other header, `If-Modified-Since` included, is sent on every hop unchanged, and no `Referer` is added.
+`remove_sensitive_headers` does for that hop; unlike reqwest, which rebuilds each hop's headers from the original
+request (tower-http 0.6.11 `follow_redirect/mod.rs` line 327) and so re-sends them on a later same-host hop, they stay
+dropped on every later hop, whatever its host (revokt sends none today). Every other header, `If-Modified-Since`
+included, is sent on every hop unchanged, and no `Referer` is added, a departure from upki: reqwest adds one on every
+hop by default and upki does not turn it off (Appendix A).
 The body cap (`maxBodyBytes`) and the time left apply to each hop, a 3xx body included, and the caller re-checks the
 final response's body (§3). Remote Settings fetches are not wrapped and never follow a redirect (§7.1). **Manifest names** (revision 52; a mirror's data is unsigned, so a name it serves is checked
 before it names anything): every `manifest.json` filename passes §6.3's filename rule (1 to 64 bytes of
@@ -3741,7 +3751,11 @@ tests; **live checks** are informational.
   IPv6 literal (`https://[2001:db8::1]/revocation/manifest.json`) → followed, a `Location` of
   `HTTPS://mirror.example/revocation/manifest.json` → `FAILED`, a redirect carrying two differing `Location` values →
   `FAILED` and two equal ones → followed, a 302 with no `Location` → `FAILED` with `httpStatus` 302 at the mirror
-  client, and a `Location` whose host is `[1.2.3.4::]` → `FAILED`; the manifest request after a
+  client, and a `Location` whose host is `[1.2.3.4::]` → `FAILED`; a 302 whose body is over the request's cap →
+  `FAILED`; a configured `c2spMirror("https://M.example:443/a/../revocation/")` → the first request is
+  `https://m.example/revocation/manifest.json`; a `Location` with port 0 or 65536 → `FAILED`; a `c2spMirror` URL the
+  hop grammar refuses (`HTTPS://mirror.example/revocation/`) → `build()` throws `IllegalArgumentException`; the
+  manifest request after a
   live `MIRROR` install carries `If-Modified-Since` as an IMF-fixdate of the time that generation's manifest was stored,
   and no filter request carries one; a system cache
   whose `index.bin` starts `upkiidx0` → not installed, `STORE_UNREADABLE`; a manifest name
@@ -4703,7 +4717,7 @@ justified in writing.
   generation directory and adds nothing to a URL but that name; redirects are followed only by the shared
   `RedirectingFetcher` under §7.3's per-hop rules (each hop read by the strict grammar shared with the x5u URL, IP
   literals allowed, and fetched as revokt re-serialises it, `FetcherTls` and the §8 host checks on every hop, at most
-  10 and no loops, one deadline, credentials dropped across origins and kept dropped; revisions 56 and 58),
+  10 and no loops, one deadline, credentials dropped across origins and kept dropped, stricter than reqwest; revisions 56 and 58),
   and a manifest or generation with no filters or no coverage is refused, so an empty mirror cannot turn `NO_DATA`'s
   reject into an allow; residual: a mirror's `If-Modified-Since` comes from the local clock, so a clock running ahead
   can draw a false 304 and keep an older mirror generation, as with upki;
@@ -5253,7 +5267,8 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     `https`-to-`http` hop, which revokt refuses (§7.3). The live mirror listed 40 files (1 full and 39 deltas, 14.3 MB)
     on 2026-11-06. reqwest 0.13.0's `remove_sensitive_headers` (`src/redirect.rs`) drops `Authorization`, `Cookie`,
     `cookie2`, `Proxy-Authorization` and `WWW-Authenticate` on a hop to another host or port; §7.3's
-    `RedirectingFetcher` does the same.
+    `RedirectingFetcher` strips the same headers on such a hop, but keeps them stripped where reqwest re-sends them
+    (revision 58 sources).
   - **The memory figures** (§6.4): the live `cert-revocations` changeset
     (`/v1/buckets/security-state/collections/cert-revocations/changeset?_expected=0`), read 2026-11-12, `timestamp`
     1794499022363, 106 records; per channel 1 full and 52 deltas; the signed `attachment.size` values sum to 8,558,354
@@ -5308,9 +5323,16 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     and follows the first of two differing `Location`s, where revokt fails, as Necko does. reqwest's
     `TowerRedirectPolicy::redirect` (`src/redirect.rs`, lines 306 to 334) refuses a hop only for a scheme other than
     `http` or `https` (and `http` under `https_only`), so a hop to an IP literal host is followed: url 2.5.8's `Host` is
-    `Domain`, `Ipv4` or `Ipv6` (`src/host.rs`, lines 46 to 62). `Policy::limited(10)` is the default (lines 160 to
+    `Domain`, `Ipv4` or `Ipv6` (`src/host.rs`, lines 46 to 64). `Policy::limited(10)` is the default (lines 160 to
     164) and only counts: it errors once the URLs already requested, the initial one included, exceed 10 (lines 131
     to 141), so it follows 10 redirects as revokt does, and has no loop check of its own; revokt's is its own rule.
+    tower-http rebuilds each hop's headers from the original request's (`follow_redirect/mod.rs` line 327,
+    `*req.headers_mut() = this.headers.clone()`), and reqwest's `on_request` then strips the five credential headers from
+    that copy only when the next host or port differs from the previous URL's (`src/redirect.rs`, lines 239 to 250 and
+    336 to 338), so on a chain A → B → B reqwest strips them for the first hop to B and sends them again on the second;
+    revokt keeps them stripped. The same `on_request` adds a `Referer` when `referer` is set (lines 339 to 345), which
+    reqwest's `ClientBuilder` defaults to true (`src/async_impl/client.rs` line 308); upki's client (`fetch.rs`, lines
+    50 to 58) does not turn it off, so upki sends one on every hop, and revokt sends none.
   - **Firefox's Necko** at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, `netwerk/protocol/http/`, read through the
     GitHub contents API. `nsHttpChannel.cpp` processes 301, 302, 303, 307 and 308 as redirects, 305 being disabled
     (lines 3371 to 3378). `AsyncProcessRedirection` returns `NS_ERROR_FAILURE` when there is no `Location` ("carry on as
@@ -5320,7 +5342,7 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     not and `NS_ERROR_CORRUPTED_CONTENT` is. `nsHttpHeaderArray::SetHeaderFromNet` fails a response whose second value
     of a header differs from the first with `NS_ERROR_CORRUPTED_CONTENT` when `IsSuspectDuplicateHeader` names the
     header (`nsHttpHeaderArray.cpp`, lines 192 to 196), and it names `Content-Length`, `Content-Disposition` and
-    `Location` (`nsHttpHeaderArray.h`, lines 300 to 303); an equal second value is kept as one. That Necko follows a
+    `Location` (`nsHttpHeaderArray.h`, lines 300 to 304); an equal second value is kept as one. That Necko follows a
     hop to an IP literal host is not cited here.
   - **upki v1.0.1's failure split** (§7.3 "Stages"), `upki/src/revocation/fetch.rs` in the cargo git checkout of tag
     `v1.0.1` (`9821cce`): a manifest request that fails to send or has an error status is `FetchError::HttpFetch`
