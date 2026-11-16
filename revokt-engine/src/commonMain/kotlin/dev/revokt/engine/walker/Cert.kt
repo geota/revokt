@@ -69,6 +69,12 @@ internal class Cert private constructor(
     val producerKeyable: Boolean = keyabilityClause == null
     val algorithmIdMismatch: Boolean = p.envelope.algorithmIdMismatch
     val issuer: IssuerProfile = IssuerProfile.of(p)
+
+    /** The nameConstraints this certificate imposes on those below it (#237), read on first use; null when none. */
+    val nameConstraints: NameConstraints? by lazy { NameConstraints.of(p) }
+
+    /** The names it presents to a name constraint above it, read on first use; null when unreadable. */
+    val presentedNames: List<PresentedName>? by lazy { PresentedName.of(p) }
     val isCa: Boolean get() = issuer.isCa
 
     override fun toString(): String = "Cert(${bytesHash.hex()})"

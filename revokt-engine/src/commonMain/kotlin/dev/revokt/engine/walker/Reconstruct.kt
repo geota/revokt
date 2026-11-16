@@ -84,6 +84,13 @@ private class Reconstruction(
     /** The path size at the node where a limit was detected, set before unwinding. */
     private var endDepth = 0
 
+    /** Name-constraint comparisons made so far, bounded by [NameConstraints.MAX_COMPARISONS] for the whole walk. */
+    private var comparisons = 0
+    private val comparisonBudget =
+        ComparisonBudget {
+            if (comparisons >= NameConstraints.MAX_COMPARISONS) false else true.also { comparisons++ }
+        }
+
     /** (child bytesHash, candidate spkiHash) → result. */
     private val memo = HashMap<Pair<ByteString, ByteString>, VerifyResult>()
 
@@ -198,6 +205,16 @@ private class Reconstruction(
             if (!index.isAnchorBytes(candidate)) countOwn(candidate)
         }
 
+        /** [candidate]'s nameConstraints checked against every certificate on [path], the leaf first. */
+        private fun constrains(candidate: Cert): NameConstraints.Result {
+            val nc = candidate.nameConstraints ?: return NameConstraints.Result.CONFORMS
+            for (below in path) {
+                val r = nc.check(below.presentedNames, comparisonBudget)
+                if (r != NameConstraints.Result.CONFORMS) return r
+            }
+            return NameConstraints.Result.CONFORMS
+        }
+
         private fun explore(
             candidate: Cert,
             isRelated: Boolean,
@@ -212,6 +229,14 @@ private class Reconstruction(
             // The issuer rules (#225, #237), checked before the link as pkix checks them: the candidate would sit at
             // path index path.size, with path.size - 1 CAs between it and the leaf.
             if (!anchor && !candidate.issuer.mayIssue(path.size - 1, requiredEku)) return null
+            // Its nameConstraints, an anchor's included, bind every certificate below it (webpki, pkix); a walk that
+            // spends the comparison budget ends as any other limit does.
+            val constrained = constrains(candidate)
+            if (constrained == NameConstraints.Result.VIOLATION) return null
+            if (constrained == NameConstraints.Result.EXHAUSTED) {
+                endDepth = path.size
+                return WalkEnd.EXPLORATION_BUDGET
+            }
             val result = verifyOnce(child, candidate)
             when (result) {
                 null -> {
