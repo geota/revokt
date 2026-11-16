@@ -38,7 +38,8 @@ and the #192 decisions are written.
   stripped.
 - **Appendix A:** reqwest 0.13.0 with tower-http 0.6.11 (upki v1.0.1's pins) and Firefox's Necko at
   `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, for the statuses followed, a 3xx with no `Location`, duplicate `Location`
-  values, IP literal hosts and the redirect limit.
+  values, IP literal hosts and the redirect limit; upki v1.0.1's `fetch.rs`, for how it tells a manifest failure from
+  a file failure.
 
 ### Changes in revision 57 (the items queued on #160 after revision 56, 2026-11-14)
 The maintainer approved writing in every item queued on #160 since revision 56 as one revision (2026-11-14). Each is a
@@ -2140,7 +2141,7 @@ enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
 enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
 enum class ChainSource { PLATFORM, RECONSTRUCTED, PRESENTED /* reserved; produced by no M1 path */ }   // growable; PLATFORM: a platform-verified chain, §5.1 decision step 4 or EvaluationRequest.verifiedPath; M2: MIXED (paths from both a PLATFORM chain and the re-walk)
 enum class SyncOutcome { INSTALLED, UNCHANGED, DEFERRED /* a metered-deferred full (§7.2); not UNCHANGED, which reads as healthy */, FAILED, CLOCK_SKEW, ROLLBACK_REFUSED, BACKOFF, STORE_FAILED, STORE_LOCKED, BLOCKED_BY_SELF }   // growable
-enum class SyncStage { FETCHER_TRUST, CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: FETCHER_TRUST = the §5.1 build retry failed (no fetch); CHANGESET = the changeset fetch or its last_modified CLOCK_SKEW; X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), any x5u PEM or chain failure other than validity (which is CLOCK_SKEW at X5U), or the content signature (revision 57, §7.1); ATTACHMENT = a body fetch or the over-cap signed record; each producing bullet names its stage
+enum class SyncStage { FETCHER_TRUST, CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: FETCHER_TRUST = the §5.1 build retry failed (no fetch); CHANGESET = the changeset fetch or its last_modified CLOCK_SKEW, and a mirror's manifest fetch or a malformed or over-cap manifest (§7.3, revision 58); X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), any x5u PEM or chain failure other than validity (which is CLOCK_SKEW at X5U), or the content signature (revision 57, §7.1); ATTACHMENT = a body fetch or the over-cap signed record, and a mirror file's fetch or a body whose size or SHA-256 differs from the manifest's (§7.3, revision 58); each producing bullet names its stage
 
 /** jvmMain. Time fields are stored as millis. Java: *Millis properties and java.time.Duration accessors/factories (API 26+). Kotlin: kotlin.time.Duration via @JvmSynthetic extensions. No inline value class on the surface. commonMain sees only an internal PolicyTable these compile to. */
 class Staleness private constructor(…) { val staleAfterMillis: Long; val rejectStaleAfterMillis: Long?   // staleAfter: loud threshold only (DataState.stale). rejectStaleAfter: the only threshold at which Rule.STALE fires; null = STALE never fires for this dataset
@@ -3448,6 +3449,11 @@ file. upki sends `If-Modified-Since` from its cached file's modification time an
 does the same (the maintainer's decision): on the manifest request only, as an IMF-fixdate (RFC 9110 §5.6.7), its
 `If-Modified-Since` is the time the live `MIRROR` generation's manifest was stored, taken from the local clock as upki's file time is and persisted in that generation's `meta.json`, none without a live `MIRROR` generation, and a 304 is
 `UNCHANGED`. Each file is fetched as `<base><filename>`. Every request has the `FETCH_TIMEOUT` (30 s, upki's too).
+**Stages** (revision 58, the maintainer's decision for #194, 2026-11-15): the manifest fetch, a malformed manifest
+and an over-cap manifest are stage `CHANGESET`; a file fetch, or a file body whose size or SHA-256 differs from its
+manifest entry, is stage `ATTACHMENT`. upki splits its errors the same way, but only by the URL its fetch error
+carries (Appendix A). A manifest name or `hash` that fails the rules below is `INDEX_INCONSISTENT` at stage `INDEX`,
+as before.
 **Redirects** (revision 56, the maintainer's decision; the grammar and the rules below revision 58, the decisions on
 #192; code `RedirectingFetcher`, #204): followed in the fetch layer by one shared internal `RedirectingFetcher` that
 wraps a C2SP mirror source's `HttpFetcher`; neither the loader nor any client follows one, and the underlying client
@@ -5313,6 +5319,13 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     header (`nsHttpHeaderArray.cpp`, lines 192 to 196), and it names `Content-Length`, `Content-Disposition` and
     `Location` (`nsHttpHeaderArray.h`, lines 300 to 303); an equal second value is kept as one. That Necko follows a
     hop to an IP literal host is not cited here.
+  - **upki v1.0.1's failure split** (§7.3 "Stages"), `upki/src/revocation/fetch.rs` in the cargo git checkout of tag
+    `v1.0.1` (`9821cce`): a manifest request that fails to send or has an error status is `FetchError::HttpFetch`
+    carrying the manifest URL (lines 82 to 93), and a body that is not a manifest is `FetchError::FileDecode` with no
+    path (lines 95 to 104). A file download that fails to send, has an error status or fails while its body is read
+    is the same `FetchError::HttpFetch`, carrying the file's URL (lines 290 to 310), and a body whose SHA-256 differs
+    is `FetchError::HashMismatch` with the local path (lines 317 to 319). upki has no stage, so only the URL in the
+    error tells a manifest fetch from a file fetch; revokt's `CHANGESET` and `ATTACHMENT` make that split explicit.
 - Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
   2026-10-30: `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` reads the SCT extension's
   `extnValue` with `der::ExpectTagAndGetValueAtEnd(extnValue, der::OCTET_STRING, …)`, which requires the tag `0x04`
