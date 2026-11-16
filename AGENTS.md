@@ -24,46 +24,67 @@ reuse lint && actionlint          # headers and workflows
 
 ## 0. The operating prompt (read this before touching the repo)
 
-You are working on revokt, a Kotlin TLS revocation library that will be published as open source with its
-full commit history. The spec in `docs/spec/` is the source of truth; code implements the spec, never the
-other way round. Work is picked up as one GitHub issue per task, done on a short branch, delivered as one
-pull request that is green on every **required check** (Appendix B lists them; nightly jobs, Scorecard and
-live checks never gate a PR) before a human reviews it, and squash-merged by auto-merge once up to date with
-`main`, with a Conventional Commits title. You never push to `main`, never merge or approve, never disable or weaken a
-gate to get green, and never commit a secret, build output, or a generated file other than the ones section 3
-lists as committed on purpose (API dumps, lockfiles, verification metadata and keyring, corpus manifests and
-fuzz corpora). Every **observable behaviour** you implement (public API, a preset row, a fixture outcome, a
-data format, a wire interaction) cites the spec section it implements; an observable behaviour that is not in
-the spec needs a `spec` change first, normally in its own PR (section 1). Tests are the record: a bug fix
-starts with the failing test, a walker or parser change starts with the fixture, and the §9 fixture ids name
-the tests. If you are an AI agent: you work on one issue at a time; the operating human is the git author
-and signs off; your commits carry the `Co-authored-by` trailer that names you; you open PRs as drafts from
-the operating human's account with a Handoff comment in the fixed format; a human marks them ready,
-reviews and merges (section 12). Start every session by running `./gradlew specStatus` and reading the
-issue; when you receive the same correction twice, add it to `AGENTS.md` in the same PR.
+You are working on revokt, a Kotlin TLS revocation library that will be published as open source with its full
+commit history. The spec in `docs/spec/` is the source of truth; code implements the spec, never the other way
+round. Work is picked up as one GitHub issue per task, done on a short branch, delivered as one pull request that
+is green on every **required check** (Appendix B lists them; nightly jobs, Scorecard and live checks never gate a
+PR) before it is reviewed, and squash-merged by the coordinator once up to date with `main`, with a Conventional
+Commits title. You never push to `main` or approve, never merge unless you are the coordinator (section 12),
+never disable or weaken a gate to get green, and never commit a secret, build output, or a generated file other
+than the ones section 3 lists as committed on purpose (API dumps, lockfiles, verification metadata and keyring,
+corpus manifests and fuzz corpora). Every **observable behaviour** you implement (public API, a preset row, a
+fixture outcome, a data format, a wire interaction) cites the spec section it implements; an observable behaviour
+that is not in the spec needs a `spec` change first, normally in its own PR (section 1). Tests are the record: a
+bug fix starts with the failing test, a walker or parser change starts with the fixture, and the §9 fixture ids
+name the tests. If you are an AI agent: as a builder you work on one issue at a time; the operating human is the
+git author and signs off; your commits carry the `Co-authored-by` trailer that names you; you open PRs as drafts
+from the operating human's account with the Handoff in the PR body; a fresh-context reviewer reviews them, the
+maintainer reads every must-fix finding, and the coordinator merges (section 12, ADR-0006). Start every session
+by running `./gradlew specStatus` and reading the issue; when you receive the same correction twice, add it to
+`AGENTS.md` in the same PR.
 
 ## 12. AI-assisted work
 
-**Operating model.** One local agent (Claude Code or equivalent) runs on the maintainer's machine, in the
-maintainer's `gh` session, on one issue at a time. There is no bot identity, no parallel agents and no
-agent-owned module: the **git author and `Signed-off-by` are the operating human**, who takes DCO
-responsibility for the agent's output, and the PR author is that human. The model is named in
-`Co-authored-by: <vendor model name and version> <vendor no-reply address>` (GitHub shows no account for it;
-the history is the record; PR-lint's `trailers` check matches the token case-insensitively). "Substantially
-co-authored" means any commit where an agent produced or rewrote a hunk beyond single-line completion; when
-in doubt, add the trailer. The PR's "AI assistance" section and the `ai-assisted` label disclose which parts
-an agent wrote. Outside contributors using agents follow the same rules under their own account.
+**Operating model** (ADR-0006). The maintainer directs a small team of agents (Claude Code or equivalent) on their
+own machine, in their own `gh` session:
+- **a coordinator**, one session, that turns the maintainer's priorities into lanes, briefs the builders, settles
+  narrow readings, starts the reviewers, posts their reports and merges;
+- **builders**, up to about three at a time, each on one issue in its own worktree and in an area the others are not
+  touching ([`docs/dev/builder-brief.md`](docs/dev/builder-brief.md));
+- **reviewers**, fresh-context agents that did not write the diff, read-only, one per review round
+  ([`docs/dev/reviewer-brief.md`](docs/dev/reviewer-brief.md)).
 
-**Always**
+There is no bot identity and no agent-owned module. The **git author and `Signed-off-by` are the operating
+human**, who takes DCO responsibility for the agents' output, and every PR, comment and merge runs under that human's
+account. The model is named in `Co-authored-by: <vendor model name and version> <vendor no-reply address>` (GitHub
+shows no account for it; the history is the record; PR-lint's `trailers` check matches the token
+case-insensitively). "Substantially co-authored" means any commit where an agent produced or rewrote a hunk beyond
+single-line completion; when in doubt, add the trailer. The PR's "AI assistance" section and the `ai-assisted` label
+disclose which parts an agent wrote. Outside contributors using agents follow the same rules under their own account.
+
+**The gates guard against mistakes, not against the process being skipped.** Every gate runs as one account, so
+`pr-lint` can see that an `Independent review` comment exists but not who wrote it. ADR-0006, the comments on each PR
+and the public history are the record that the process below was followed.
+
+**Always** (builders)
 - Start a session with `./gradlew specStatus`, the issue, and the spec sections it names; read
   `docs/dev/local.md` for the commands.
 - Write the acceptance test (or fixture) before the code; run `./gradlew check` before every push.
-- Cite the spec section for every observable behaviour; state assumptions in the PR's What section.
-- Open the PR as a draft with the template fully filled and a **Handoff comment** with the fixed headings:
-  `Commands run and results` · `JDK and OS` · `Gates not run locally and why` · `Assumptions made` ·
-  `Files touched outside the issue's module` · `Open questions`.
-- Add the `Co-authored-by` trailer; keep one issue in flight; regenerate `docs/dev/status.md` and the API dump
-  when they change.
+- Cite the spec section for every observable behaviour; state assumptions in the Handoff.
+- **Fail closed.** On a store read that is not `Found` (absent where it matters, malformed, or a throw), never take
+  the path that deletes, overwrites or lowers the trust class. Test every such arm.
+- **Post risky readings first.** A reading that touches delete, reuse or trust class goes on the issue, and waits
+  for the coordinator, before it is coded.
+- **Fuzz new parsers.** A new parser or decoder of bytes from outside (network or disk) gets a Jazzer target in the
+  same PR.
+- Open the PR as a draft with the template fully filled, **Handoff section included**, with the fixed headings:
+  `JDK and OS` · `Gates not run locally and why` · `Assumptions made` · `Files touched outside the issue's module` ·
+  `Open questions`. The commands run and their results go under Tests. Update both after each round of fixes.
+- **Disclose changed tests.** If you change an existing test's assertion, say so under Tests, and why.
+- **Report mutation honestly.** Mutation runs are a working method: report the survivors you found and the tests you
+  added for them, not a kill count.
+- Add the `Co-authored-by` trailer; keep one issue in flight per builder; regenerate `docs/dev/status.md` and the
+  API dump when they change.
 - When the same correction arrives twice, add the rule to `AGENTS.md` in the same PR.
 - On a flaky test you did not write: re-run once, then file the `quarantine` issue and say so in the Handoff.
 
@@ -71,7 +92,8 @@ an agent wrote. Outside contributors using agents follow the same rules under th
 - Two readings of the spec that would produce different **observable behaviour** (public API, preset row,
   fixture outcome, data format, wire interaction): finish the parts that do not depend on it, open a `spec`
   issue with both readings and a recommendation. Anything narrower (internal structure, naming, an unclear
-  issue text, a reviewer comment): pick the reading closest to the spec, state it, continue.
+  issue text, a reviewer comment): pick the reading closest to the spec, state it, continue; the coordinator
+  accepts it or sends it back.
 - Any change to rulesets, workflows, CODEOWNERS, `protected-paths.txt` or the dependency ingress files that
   the issue does not explicitly cover (registering a new fuzz target in the ClusterFuzzLite matrix is part of
   the parser issue; everything else is its own `kind/ci` issue).
@@ -80,23 +102,27 @@ an agent wrote. Outside contributors using agents follow the same rules under th
 - Anything that would spend money, publish, or leave the repository (a release, a seed publish, an external service).
 
 **Never**
-- Push to `main`, merge, approve, enable auto-merge, or edit a ruleset.
+- Push to `main`, approve, or edit a ruleset. Builders and reviewers never merge; the coordinator merges only after
+  the review below.
 - Weaken a gate to get green: no `[skip ci]`, no disabled rule, no baseline, no `@Suppress` without the
   one-line reason, no quarantine tag inside a feature PR, no removal of a failing test.
-- Commit a secret, a credential, build output, a prompt or a transcript. Read or write credentials: release
-  or commit-signing keys, Portal tokens, the credential entries of `~/.gradle/gradle.properties` (its JVM
-  settings are fine), CI secrets.
+- Commit a secret, a credential, build output, a prompt or a transcript (the briefs in `docs/dev/` are rules, not
+  transcripts). Read or write credentials: release or commit-signing keys, Portal tokens, the credential entries of
+  `~/.gradle/gradle.properties` (its JVM settings are fine), CI secrets.
 - Use a maintainer's identity for anything but the PRs the maintainer is operating.
 - Describe work as verified that was not run; the Handoff says exactly what ran.
 
-**What the operating human does** before marking a draft ready: reads the Handoff; re-runs any command it
-says was skipped; confirms the Tests section names the issue's acceptance test; confirms the diff stays
-inside the issue's scope and that no ruleset, workflow, CODEOWNERS or ingress file changed unless the issue
-says so; confirms the trailers; in the solo-maintainer phase, runs the **independent review** (a fresh-context
-agent review of the diff that did not write it, posted under the `Independent review` heading) and reads
-the whole diff before enabling auto-merge. **Reviewers re-run, they do not trust**, the Handoff's claims,
-and the author answers review questions in their own words. Unsolicited agent PRs from outside the project
-are accepted only against a claimed issue and with the disclosure above; others are closed by PR-lint.
+**Review and merge.** A fresh reviewer reviews each draft's head SHA, and the coordinator posts its report under
+the heading `Independent review` (or asks the reviewer to post it). **Reviewers re-run, they do not trust**, the Handoff's claims. They aim their own
+mutants at the guards that decide delete, overwrite, reuse or "held", every non-`Found` arm of a store read, and
+every `?:` default on a security or data decision; they challenge the readings the coordinator accepted; they check
+that a new parser has a fuzz target. After a round that fixes a must-fix finding, a follow-up review checks the fix
+commits (`Independent review: follow-up at <sha>`, or the older `Independent review (follow-up)`). Before the merge **the maintainer** reads every must-fix
+finding and its fix and answers every decision question; **the coordinator** confirms that the diff stays inside the
+issue's scope, that no ruleset, workflow, CODEOWNERS or ingress file changed unless the issue says so, and that the
+trailers are right, then marks the PR ready, brings it up to date and squash-merges it once every required check is
+green. Each item in "Assumptions made" lands in a spec revision or is dropped. Unsolicited agent PRs from outside
+the project are accepted only against a claimed issue and with the disclosure above; others are closed by PR-lint.
 Design reasoning goes into ADRs, PR descriptions and the spec, written for a human reader.
 
 When the same correction is given twice, add the rule here in the same PR.
