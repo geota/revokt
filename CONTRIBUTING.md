@@ -18,7 +18,7 @@ Agents read `AGENTS.md` first (it points back here). Governance is in `GOVERNANC
    the `kind/spec` label and the reviewer checks the spec diff against the three growability contracts
    (§4 Rule model, §3.2 engine seam, §11 milestones).
 3. **ADRs** (`docs/adr/NNNN-title.md`, MADR format) record decisions the spec states but does not argue.
-   The first four, accepted 2026-10-22:
+   Accepted 2026-10-22 unless dated:
    - ADR-0001 `PARSE_FAILED` and `ENGINE_ERROR` allow in `DEFAULT`; a flip is a later minor via the §4 grace rule.
    - ADR-0002 Two presets, `DEFAULT` and `STRICT`; `shadowPolicy` is the migration path, not a third preset.
    - ADR-0003 `revokt-engine` (multiplatform core) and `revokt-jsse` (JVM facade) stay separate artifacts through 0.3.
@@ -30,12 +30,16 @@ Agents read `AGENTS.md` first (it points back here). Governance is in `GOVERNANC
      approve the maintainer's own PRs (GitHub forbids self-approval). Compensating controls, all enforced:
      rulesets require every status check but 0 approvals; every PR carries an **independent review** by a
      fresh-context agent pass (a review that did not write the code; its output is a PR comment under the
-     heading `Independent review`, and PR-lint requires it); the maintainer reads the full diff before
-     enabling auto-merge; the `cooling` check is **paused** (a hold for a second reader means nothing with one
-     reader; it activates with the second maintainer); no release is cut and no
-     `1.0` promise is made in this phase (§14 requires two release-capable maintainers and external review
+     heading `Independent review`, and PR-lint requires it); the `cooling` check is **paused** (a hold for a
+     second reader means nothing with one reader; it activates with the second maintainer); no release is cut
+     and no `1.0` promise is made in this phase (§14 requires two release-capable maintainers and external review
      before 1.0). The phase ends, and the two-person rule of section 5 activates, in the PR that adds the
      second maintainer.
+   - ADR-0006 (2026-11-16) **An agent team under one maintainer.** Replaces ADR-0005's control list with the
+     process in use: a coordinator agent and up to about three builders; a fresh-context reviewer for every PR,
+     and a follow-up review after each must-fix round; the coordinator merges; the maintainer answers the
+     decision questions and reads every must-fix finding. Every gate runs as one account, so the gates guard
+     against mistakes, not against the process being skipped.
 4. **Issues** are the unit of work (section 2). **Milestones** are `0.1`, `0.2`, `0.3`, `0.4`, `1.0`, as §11.
 5. Nothing else is authoritative: not chat transcripts, not a PR description that disagrees with the spec,
    not a comment in code. When code and spec disagree, the spec wins and the code is the bug, unless a
@@ -63,9 +67,10 @@ Agents read `AGENTS.md` first (it points back here). Governance is in `GOVERNANC
   with a template comment asking for one. PRs opened by Renovate are exempt from the issue-link and
   template-section checks; the completing maintainer adds the Trailers block (`Spec: none (deps)` and
   their `Signed-off-by`), which the `trailers` check still enforces.
-- **Sizing.** A PR is reviewable: under about 400 net lines of **production source** (tests, fixtures,
+- **Sizing.** A PR is reviewable: under about 1000 added lines of **production source** (tests, fixtures,
   corpora and dumps excluded), one issue, everything that issue's acceptance test needs and nothing else, in
-  whatever modules that takes. A size labeler adds `size/XL` above 400 and the PR must state the exception
+  whatever modules that takes. PR-lint adds `size/XL` above 1000 (400 until #211, when a quarter of all PRs
+  carried it) and the PR must state the exception
   (the clubcard port's 1:1 translation files, generated API dumps, the bootstrap PR). Larger work is split
   into stacked issues (`part 1/3`).
 - **Order.** §11 gives each milestone's scope; the critical path below and each issue's dependency list give
@@ -79,11 +84,12 @@ Agents read `AGENTS.md` first (it points back here). Governance is in `GOVERNANC
   and its Tests section says "build-logic TestKit tests only". Rulesets (Appendix B) are applied by a
   maintainer immediately after it merges and the exported JSON lands in the next PR. `build`, `ci`, `docs`
   and `chore` PRs may state `Tests: none, no behaviour change`, which PR-lint accepts for those types.
-- **One task in flight.** The agent works on one issue and keeps one open draft at a time; a second issue
-  starts when the first is merged, closed, or parked as `blocked` with a note. Contributors' PRs on the same
-  file set as an open draft carry a note in both issues. When `main` moves, "require
-  branches to be up to date" asks for an update before merge: use GitHub's **Update branch** button or merge
-  `main` into the branch (the squash hides the merge commit); a rebase after review starts needs the
+- **One task in flight per builder.** A builder works on one issue and keeps one open draft at a time; its next
+  issue starts when the first is merged, closed, or parked as `blocked` with a note. The coordinator runs up to
+  about three builders at once, each in an area of the code the others are not touching (ADR-0006).
+  Contributors' PRs on the same file set as an open draft carry a note in both issues. When `main` moves,
+  "require branches to be up to date" asks for an update before merge: use GitHub's **Update branch** button
+  or merge `main` into the branch (the squash hides the merge commit); a rebase after review starts needs the
   reviewer's okay in the thread, since it is a force-push.
 - **Draft early.** Open the PR as a draft on the first commit so CI runs; mark ready only when every required
   check is green. A first-time contributor's workflow runs need a maintainer's approval; ask in the PR if
@@ -290,13 +296,18 @@ a trailer rule is violated:
 1. **What** (one paragraph) and **Why** (link the issue).
 2. **Spec**: sections implemented and "no observable behaviour outside the spec", or the `spec` PR link.
 3. **Tests**: fixture ids or test names added or changed; for a bug, the test that failed first and the CI
-   run or local command that showed it red (the squash hides the first commit, so the PR records it).
+   run or local command that showed it red (the squash hides the first commit, so the PR records it). A change
+   to an existing test's assertion is named here, with the reason. Then the commands run and their results,
+   exactly as run.
 4. **API**: "no public API change" or the `api/*.api` diff summary and the `!` justification.
 5. **Risk and rollout**: the §10 item touched, or "none"; any preset row, data format or `seedFormat` involved.
 6. **AI assistance**: "none", or which parts an agent wrote (sets the `ai-assisted` label).
-7. **Checklist**: spec cited · tests added · `./gradlew check` green locally (or which part was skipped and
+7. **Handoff** (AGENTS.md §12; PR-lint requires it when a `Co-authored-by` trailer is present): JDK and OS,
+   gates not run locally and why, assumptions made, files touched outside the issue's module, open questions.
+   Each assumption lands in a spec revision or is dropped.
+8. **Checklist**: spec cited · tests added · `./gradlew check` green locally (or which part was skipped and
    why) · API dump updated · headers present · dependency entries added · fuzz target added for any new parser.
-8. **Trailers** block, **last in the template** (PR-lint checks it is last), which GitHub copies verbatim
+9. **Trailers** block, **last in the template** (PR-lint checks it is last), which GitHub copies verbatim
    into the squash body with the rest of the description, so `git interpret-trailers` parses them. The
    squash subject is the PR title plus ` (#N)`, so it runs to about 80 characters; the 72-character limit
    applies to the PR title.
@@ -311,7 +322,9 @@ a trailer rule is violated:
   reads `MAINTAINERS.md` and the changed paths and fails until the required number of **maintainer**
   approvals is present: one while `MAINTAINERS.md` lists two, two for PRs whose author is not a maintainer
   once it lists three or more; it passes at once when no protected path changed, and during the
-  solo-maintainer phase (ADR-0005) it requires nothing (0 approvals) and `pr-lint` requires the `Independent review` comment instead.
+  solo-maintainer phase (ADR-0005) it passes at once, before reading any path (#211), and `pr-lint` requires the
+  `Independent review` comment instead; the PR that adds the second maintainer switches it on by itself. `pr-lint`
+  fails once `MAINTAINERS.md` lists two maintainers while the `cooling` schedule is off (#211).
   It reads `MAINTAINERS.md` and `.github/protected-paths.txt` **from the base branch**
   (`ref: ${{ github.event.pull_request.base.sha }}`), never from the PR head, so a PR cannot add its author
   to the list or shrink the paths; it runs on `pull_request` (`opened`, `synchronize`, `reopened`) and
@@ -325,7 +338,8 @@ a trailer rule is violated:
   `gradle/corpus-pin.properties` (which corpus CI trusts) and `gradle/oracle-matrix.properties` (which oracle versions
   it replays).
 - Ordinary paths: one maintainer approval (0 during the solo-maintainer phase, ADR-0005, where the
-  `Independent review` comment and the maintainer's own full read of the diff stand in). The author never
+  `Independent review` comment, a follow-up review after each must-fix round, and the maintainer's read of every
+  must-fix finding and decision question stand in, ADR-0006). The author never
   approves their own PR. Agent review comments are advisory once a second maintainer exists; the human
   approval is the only approval. "Require approval of the most recent
   reviewable push" is on, so a push after approval re-requests it.
@@ -334,7 +348,9 @@ a trailer rule is violated:
   `spec` PR rather than approving a quiet divergence.
 - **Merge: squash only, by auto-merge** ("require branches to be up to date before merging" is on, so the
   required checks always ran against the current `main`; a maintainer enables auto-merge after approving
-  and GitHub merges when the checks pass). Linear history required. **The cost of having no merge queue,
+  and GitHub merges when the checks pass; in the solo phase the coordinator merges instead, with
+  `gh pr update-branch` and then `gh pr merge --squash` once every required check is green, ADR-0006). Linear
+  history required. **The cost of having no merge queue,
   stated honestly**: when `main` moves under an approved PR, "Update branch" (or a merge-base change) dismisses
   the approval as stale, the full required-check matrix reruns, and a maintainer re-approves before auto-merge
   fires. Mitigations: approve and enable auto-merge one PR at a time on a busy day; the **author** updates the
@@ -364,6 +380,11 @@ bootstrap. If a local tool is missing, say so in the PR and push; **CI is author
 every required check in Appendix B passes**.
 
 **Every PR (required checks, offline except where noted):**
+- **Documentation-only PRs** (every path changed between the PR's base and head is a Markdown file outside a source
+  set and `corpus/`, or a file under `docs/` that is not a `*.py` or `*.sh` script; the old path of a rename counts
+  too) skip the JDK and OS matrix: a pass-through job reports the same
+  `check (…)` names, and `ci-extras` runs only `specStatusCheck`, so a spec change still cannot leave
+  `docs/dev/status.md` stale. A push, or a path filter that did not finish, runs everything (#211).
 - `check` on JDK 17, 21, the current LTS and the current feature release (Linux; §9.2 matrix), each at the latest
   patch at run time (`check-latest`; the test JDK's patch and vendor are inputs of the replay's tests, so a cached result never stands
   in for another patch, and a patch that changes an outcome fails `check` until the records are regenerated), with
@@ -372,12 +393,14 @@ every required check in Appendix B passes**.
   `check`; `verifyOracleMatrix` keeps CI and the nightly in step with the file); Kover instrumentation only on the
   JDK 21 job; `check` on JDK 21 on macOS and Windows for `revokt-engine` and `revokt-jsse` only (file
   locking, `ATOMIC_MOVE`).
-- `ci-extras` on Linux/JDK 21: `-Prevokt.ci` (Android lint and Robolectric from 0.3, consumer builds, purity).
+- `ci-extras` on Linux/JDK 21: `-Prevokt.ci` (Android lint and Robolectric from 0.3, consumer builds, purity). The
+  purity compile has no nightly job: this one runs it on every PR and push.
 - Static (the `static` job): `reuse lint`, `actionlint` (actions pinned by SHA; top-level
   `permissions: read-all`; no `pull_request_target` with checkout), wrapper validation, labeler. As their
   own checks: `commitlint` on the title; `pr-lint` (template, trailers, `Spec:` rule, issue link,
   `Independent review` comment in the solo phase; runs on `opened`, `edited`, `synchronize`);
-  `protected-paths`; `cooling` (section 8; green at once for other paths, and throughout the solo phase); `DCO` (the app's check). ktlint,
+  `protected-paths` (section 5; passes at once in the solo phase); `cooling` (section 8; green at once for other paths, and
+  throughout the solo phase); `DCO` (the app's check). ktlint,
   detekt and `specStatus` run inside `check`.
 - Security: CodeQL in its own job (Kotlin needs a traced build; it compiles `compileKotlinJvm`
   `compileDebugKotlin` without tests, on its own budget; when a Kotlin bump leaves CodeQL's supported window,
@@ -386,10 +409,13 @@ every required check in Appendix B passes**.
   date), `dependency-review-action` with a licence allow-list, secret scanning with push protection
   (repository setting).
 - **No network in the test jobs**: `step-security/harden-runner` with `egress-policy: block` on the Linux
-  jobs (loopback allowed, so the project's loopback TLS fixtures run; it must be the first step, so caches
-  are warmed by a separate job whose outputs the test job restores). harden-runner is audit-only on macOS
-  and Windows, so those two jobs run Gradle `--offline` after cache restore and rely on `NoHttpClientInTests`;
-  the table marks them advisory.
+  `check` jobs and `ci-extras` (#211), as their first step. The allow-list in `ci.yml` names only the hosts the
+  setup needs: GitHub and its Actions cache and artifact storage, Adoptium, the Gradle distribution and plugin
+  portal, Maven Central, Google's Maven, and JetBrains' downloads for the Kotlin/Native compile. Loopback is
+  allowed, so the project's loopback TLS fixtures run; a test that reaches any other host fails the job. A
+  test could still reach an allowed host; `NoHttpClientInTests` is the second line. The `static` job and the
+  other workflows stay on `audit`. harden-runner does not run on macOS and Windows, so those two jobs rely on
+  `NoHttpClientInTests` alone; the table marks them advisory.
 - Coverage: Kover branch floor of 90 % per parser package over the committed replay (§9.1), as a hard rule.
   The path walker, the store, the updater and the fetch layer have floors a little under their measured branch
   coverage (#161: walker 98.96 %, store 94.26 % at f2c54fc; #212: `update` 91.46 % and `fetch` 96.69 % at 36dafac,
@@ -397,19 +423,25 @@ every required check in Appendix B passes**.
   coverage artifact from `main` (#212 removed that comparison, which failed a PR that deleted well-covered code
   and tied a required check to artifact storage).
 
-**Nightly and on release branches (blocking for a release, informational on `main`):**
+**Nightly and on release branches (blocking for a release, informational on `main`):** the nightly goes red only
+when something breaks. An upstream release is news, not breakage: the two release watches below open one issue
+each, rewrite it while the news holds, close it once the pins are current, and stay green (#211).
 - The native job: builds `native/` (Rust cdylib, Go CLI) and `revokt-engine-upki`, runs the §9 oracles, the
   end-to-end CRLite oracle over the pinned corpus, the cross-engine suite (0.2+), and regenerates oracle
   goldens for corpus admission.
 - The producer job (spec §9.2; weekly, on every producer, certificate-transparency-go, zcrypto or Go pin change, and
   before each release): oracle 4 at the pin and at `mozilla/crlite` `main` over the union corpus, plus at least
   100 000 fresh CT entries; publishes the D8 gap by clause.
-- The EA replay (spec §9.2, revision 40): D1 over the committed corpus on the matrix's JDK early-access release, and a
-  check that no Conscrypt release is newer than the matrix's current one (a newer one is admitted under §3 and rolled
-  into `gradle/oracle-matrix.properties`; no unverified Conscrypt artifact is resolved in CI).
-- The upki-release check (spec §3.2, Appendix A): fails when `rustls/upki` has a GitHub release (pre-releases excluded)
-  or C2SP an `upki-revocation/*` tag newer than the `upki` and `upki-revocation` pins in
-  `gradle/oracle-matrix.properties`, or when the pinned tag no longer points at `upki-revocation.commit`. Admitting one
+- The EA replay (spec §9.2, revision 40): D1 over the committed corpus on the matrix's JDK early-access release.
+- The Conscrypt release watch: keeps the issue "chore(oracle): admit the newest Conscrypt release" open while a
+  Conscrypt release is newer than the matrix's current one (a newer one is admitted under §3 and rolled into
+  `gradle/oracle-matrix.properties`; no unverified Conscrypt artifact is resolved in CI). A version it cannot read
+  fails the job.
+- The upki release watch (spec §3.2, Appendix A): keeps the issue "chore(upki): admit the newest upki release or
+  upki-revocation tag" open while `rustls/upki` has a GitHub release (pre-releases excluded) or C2SP an
+  `upki-revocation/*` tag newer than the `upki` and `upki-revocation` pins in `gradle/oracle-matrix.properties`, a
+  stable release or tag is in a scheme it does not understand, or the pinned tag no longer points at
+  `upki-revocation.commit`. A missing or unpublished pin, or an API it cannot read, fails the job. Admitting one
   is a `spec` change: re-verify the Appendix A facts, roll the pin, re-record the index golden
   (`native/revokt-oracle/record-upki-index.sh`; `verifyOracleMatrix` checks it names the pin) and re-run the
   cross-engine suite (0.2+).
@@ -487,45 +519,50 @@ every required check in Appendix B passes**.
 
 **Definition of done for a PR:** spec cited and matched · tests per the rules above · every required check
 green · API dump diff reviewed · `docs/dev/status.md` regenerated · changelog entry implied by the title ·
-approvals per section 5 · threads resolved · squash-merged by auto-merge. Done means merged.
+approvals per section 5 · threads resolved · squash-merged by auto-merge (in the solo phase, by the coordinator,
+ADR-0006). Done means merged.
 
 ## 7. Enforcement map
 
-| Convention | Tool | Where | Blocking |
-|---|---|---|---|
-| Title grammar, types, scopes | commitlint (`.commitlintrc.cjs`, Appendix A) on the PR title | PR (`opened`, `edited`, `synchronize`) | yes |
-| Trailers, `Spec:` rule, template sections, issue link, AI-assistance section | PR-lint workflow (ours) on the PR body, including the `trailers` check | PR (`opened`, `edited`, `synchronize`) | yes |
-| DCO sign-off on every commit (bots skipped) | DCO GitHub app (free; installed by the owner, after which `DCO` joins the required checks) | PR | yes once installed |
-| Required checks, linear history, no force-push, no deletion, 1 approval, last-push approval, conversation resolution, code-owner review, require up to date before merge (in the solo phase, ADR-0005: 0 approvals and the three approver-dependent rules off) | **rulesets** (free on public repositories, personal accounts included; JSON exported to `docs/dev/rulesets/`), on `main` and `release/*`; tag ruleset on `v*` | GitHub | yes |
-| Two-person rule on protected paths | CODEOWNERS with every maintainer's handle (one owner approval is what GitHub enforces; the second person is the author) + the `protected-paths` Action counting maintainer approvals from `MAINTAINERS.md` | GitHub; PR | yes |
-| Formatting | ktlint | `check` | yes |
-| Complexity, forbidden APIs, custom rules | detekt + `revokt-detekt-rules` | `check` | yes |
-| commonMain purity | detekt `detektCommonMain` (fast) and the `linuxX64` compile under `-Prevokt.purityGate` (authoritative) | `check`; `ci-extras` | yes |
-| API-26 safety of jvm modules | animal-sniffer `gummy-bears-api-26` | `check` | yes |
-| License headers, per-path licences, header location, POM licences | `reuse lint`; `verifyHeaderLocations`; `verifyPomLicenses` | PR job; `check` | yes |
-| Dependency scopes | `verifyDependencyScopes` | `check` | yes |
-| Public API freeze | binary-compatibility-validator `apiCheck` with `nonPublicMarkers` | `check` | yes |
-| Dependency integrity | locking (`STRICT`), verification metadata + committed keyring, wrapper validation | `check`; PR job | yes |
-| Dependency updates and licences | Renovate (maintainer-completed); `dependency-review-action` | scheduled; PR | PRs; yes |
-| Vulnerable dependencies | OSV-Scanner (allow-list with expiry) | PR | yes |
-| SAST | CodeQL (own job, compile-only) | PR + weekly | yes (with the Kotlin-window exception) |
-| Secrets | secret scanning + push protection; `permissions: read-all`; Actions allow-list; Actions may not approve PRs; fork runs need approval | repository settings; actionlint | yes |
-| No network in tests | harden-runner `egress-policy: block` (Linux); Gradle `--offline` + `NoHttpClientInTests` (macOS, Windows) | test jobs | Linux yes; macOS/Windows advisory |
-| Workflow hygiene | actionlint; SHA-pinned actions; no `pull_request_target` checkout; `cache-read-only` off `main`; no cache in release/repro jobs | PR job; review | yes |
-| Coverage | Kover per-package branch floors | `check` | yes |
-| Spec inventory and ratchets | `specStatus` (stale `docs/dev/status.md` or a decreased fixture count fails) | `check` | yes |
-| §9.2 version matrix | `gradle/oracle-matrix.properties`; `verifyOracleMatrix` (CI and the nightly match it); `jvmTestConscryptPrevious`; the nightly EA replay, Conscrypt-release and upki-release checks | `check`; nightly | yes; for a release |
-| Independent review in the solo phase | PR-lint requires the `Independent review` comment (ADR-0005) | PR | yes while solo |
-| Fuzzing | Jazzer regression on PRs; ClusterFuzzLite nightly; OSS-Fuzz once admitted | `check`; nightly | nightly blocks release |
-| Oracles, cross-engine suite, emulator matrix, minified build | nightly jobs; `run/android` label | nightly | release |
-| Producer drift and CT sample | the scheduled producer job (spec §9.2) | weekly; pin bumps; release | release |
-| Device benchmarks | the private `revokt-bench` repository's scheduled job on the ephemeral device runner | nightly | release (regression threshold) |
-| Reproducible builds, SBOM (CycloneDX, `jvmRuntimeClasspath` for KMP modules, attested), provenance (`actions/attest-build-provenance`, SLSA Build L2; L3 if the publish step moves to a reusable workflow), PGP signatures, release environment with a second maintainer's approval, tag ruleset | release workflow (section 9) | release | yes |
-| Project health | OpenSSF Scorecard weekly + badge; per-check targets in `docs/dev/scorecard.md` (the maximum the default token allows on a personal account, with the measured score recorded; `Packaging` and `Signed-Releases` need the jars, `.asc`, `.sigstore.json` and `.intoto.jsonl` attached to the GitHub release, since Scorecard reads release assets, not Maven Central) | scheduled | informational |
-| Owner-power audit trail | a weekly workflow exports the rulesets, environment reviewers and repository merge settings to `docs/dev/rulesets/` and opens a PR on any diff (on a personal account every control reduces to the owner's good faith plus this public trail and the key custody split of section 9) | scheduled | PR on diff |
-| Labels, size, stale, claim | labeler, size labeler, stale (exempts `blocked`), `/claim` workflow | PR / scheduled | PR-lint yes |
-| 24-hour cooling on `data/seed/**`, release workflows and `**/verify/**` | the `cooling` check: reports success at once for other paths and throughout the solo-maintainer phase (ADR-0005), else turns green 24 h after the head SHA first reached CI; advisory fixes and reverts exempt | PR | yes (once two maintainers exist) |
-| Trademark rule (§13) | PR-lint greps docs for `revokt.com`; README carries the disambiguation sentence | PR | yes |
+| Convention | Tool | Where | Blocking | Live / planned |
+|---|---|---|---|---|
+| Title grammar, types, scopes | commitlint (`.commitlintrc.cjs`, Appendix A) on the PR title | PR (`opened`, `edited`, `synchronize`) | yes | live |
+| Trailers, `Spec:` rule, template sections, issue link, AI-assistance section, the Handoff section of an agent-written PR | PR-lint workflow (ours) on the PR body, including the `trailers` check | PR (`opened`, `edited`, `synchronize`) | yes | live |
+| DCO sign-off on every commit (bots skipped) | DCO GitHub app (free; installed by the owner, after which `DCO` joins the required checks) | PR | yes once installed | planned: the app is not installed, and `DCO` is not a required check yet |
+| Required checks, linear history, no force-push, no deletion, 1 approval, last-push approval, conversation resolution, code-owner review, require up to date before merge (in the solo phase, ADR-0005: 0 approvals and the three approver-dependent rules off) | **rulesets** (free on public repositories, personal accounts included; JSON exported to `docs/dev/rulesets/`), on `main` and `release/*`; tag ruleset on `v*` | GitHub | yes | live, in the solo configuration |
+| Two-person rule on protected paths | CODEOWNERS with every maintainer's handle (one owner approval is what GitHub enforces; the second person is the author) + the `protected-paths` Action counting maintainer approvals from `MAINTAINERS.md` (passes at once in the solo phase, #211) | GitHub; PR | yes | planned: activates with the second maintainer; until then `protected-paths` passes at once |
+| Formatting | ktlint | `check` | yes | live |
+| Complexity, forbidden APIs, custom rules | detekt + `revokt-detekt-rules` | `check` | yes | live |
+| commonMain purity | detekt `detektCommonMain` (fast) and the `linuxX64` compile under `-Prevokt.purityGate` (authoritative) | `check`; `ci-extras` | yes | live |
+| API-26 safety of jvm modules | animal-sniffer `gummy-bears-api-26` | `check` | yes | planned: wired in `revokt.jvm-library`, which no module applies until `revokt-jsse` (#110) |
+| License headers, per-path licences, header location, POM licences | `reuse lint`; `verifyHeaderLocations`; `verifyPomLicenses` | PR job; `check` | yes | live |
+| Dependency scopes | `verifyDependencyScopes` | `check` | yes | live |
+| Public API freeze | binary-compatibility-validator `apiCheck` with `nonPublicMarkers` | `check` | yes | live |
+| Dependency integrity | locking (`STRICT`), verification metadata + committed keyring, wrapper validation | `check`; PR job | yes | live |
+| Dependency updates and licences | Renovate (maintainer-completed); `dependency-review-action` | scheduled; PR | PRs; yes | `dependency-review` live; Renovate: `renovate.json` committed, no Renovate PR yet |
+| Vulnerable dependencies | OSV-Scanner (allow-list with expiry) | PR | yes | live |
+| SAST | CodeQL (own job, compile-only) | PR + weekly | yes (with the Kotlin-window exception) | live |
+| Secrets | secret scanning + push protection; `permissions: read-all`; Actions allow-list; Actions may not approve PRs; fork runs need approval | repository settings; actionlint | yes | live (secret scanning and push protection on) |
+| No network in tests | harden-runner `egress-policy: block` with the setup's hosts allowed (Linux `check`, `ci-extras`); `NoHttpClientInTests` (everywhere, and alone on macOS and Windows) | test jobs | Linux yes; macOS/Windows advisory | live (#211); the other jobs and workflows stay on `audit` |
+| Workflow hygiene | actionlint; SHA-pinned actions; no `pull_request_target` checkout; `cache-read-only` off `main`; no cache in release/repro jobs | PR job; review | yes | live |
+| Coverage | Kover per-package branch floors | `check` | yes | live |
+| Spec inventory and ratchets | `specStatus` (stale `docs/dev/status.md` or a decreased fixture count fails) | `check` | yes | live |
+| §9.2 version matrix | `gradle/oracle-matrix.properties`; `verifyOracleMatrix` (CI and the nightly match it); `jvmTestConscryptPrevious`; the nightly EA replay; the Conscrypt and upki release watches (an issue each, never red on news) | `check`; nightly | yes; for a release | live |
+| Independent review in the solo phase | PR-lint requires the `Independent review` comment (ADR-0005) | PR | yes while solo | live |
+| Fuzzing | Jazzer regression on PRs; ClusterFuzzLite nightly; OSS-Fuzz once admitted | `check`; nightly | nightly blocks release | Jazzer regression live; `fuzz.yml` dispatch only and not yet run; the scheduled batch planned (#213, replacing #119); OSS-Fuzz planned |
+| Oracles, cross-engine suite, emulator matrix, minified build | nightly jobs; `run/android` label | nightly | release | native oracles live; cross-engine suite planned (#142); emulator matrix and minified build planned (0.3) |
+| Producer drift and CT sample | the scheduled producer job (spec §9.2) | weekly; pin bumps; release | release | planned |
+| Device benchmarks | the private `revokt-bench` repository's scheduled job on the ephemeral device runner | nightly | release (regression threshold) | planned |
+| Reproducible builds, SBOM (CycloneDX, `jvmRuntimeClasspath` for KMP modules, attested), provenance (`actions/attest-build-provenance`, SLSA Build L2; L3 if the publish step moves to a reusable workflow), PGP signatures, release environment with a second maintainer's approval, tag ruleset | release workflow (section 9) | release | yes | planned: `release.yml` exists and is disabled in the solo phase |
+| Project health | OpenSSF Scorecard weekly + badge; per-check targets in `docs/dev/scorecard.md` (the maximum the default token allows on a personal account, with the measured score recorded; `Packaging` and `Signed-Releases` need the jars, `.asc`, `.sigstore.json` and `.intoto.jsonl` attached to the GitHub release, since Scorecard reads release assets, not Maven Central) | scheduled | informational | live |
+| Owner-power audit trail | a weekly workflow exports the rulesets, environment reviewers and repository merge settings to `docs/dev/rulesets/` and opens a PR on any diff (on a personal account every control reduces to the owner's good faith plus this public trail and the key custody split of section 9) | scheduled | PR on diff | planned: the weekly `housekeeping` `rulesets-audit` export runs, but its PR step has failed on every run (2026-11-02, -09, -16) because Actions may not create PRs (#241) |
+| Labels, size, stale, claim | labeler, `size/XL` from PR-lint (above 1000 production lines), stale (exempts `blocked`), `/claim` workflow | PR / scheduled | PR-lint yes | live |
+| 24-hour cooling on `data/seed/**`, release workflows and `**/verify/**` | the `cooling` check: reports success at once for other paths and throughout the solo-maintainer phase (ADR-0005), else turns green 24 h after the head SHA first reached CI, through its hourly schedule (off in the solo phase, #211); advisory fixes and reverts exempt | PR | yes (once two maintainers exist) | live, paused in the solo phase |
+| Trademark rule (§13) | PR-lint greps docs for `revokt.com`; README carries the disambiguation sentence | PR | yes | live |
+
+**What the gates prove.** Every gate, the merge and every token run as the one maintainer account, so the gates
+guard against mistakes, not against the process being skipped: `pr-lint` sees that an `Independent review` comment
+exists, not who wrote it. ADR-0006 and each PR's comments are the record that the process was followed.
 
 No gate may be skipped with `[skip ci]`, a disabled rule, a baseline file, a `@Suppress` without a one-line
 justification and the reviewer's explicit okay, or an allow-list entry without an expiry date. `@Suppress`
@@ -558,7 +595,8 @@ Protected paths (section 5) additionally require: the `security` label (auto-app
 naming the §10 item or "none"; a fuzz target for any new byte parser; and, for `data/seed/**`, the release
 workflows and `**/verify/**`, the 24-hour `cooling` check and a **verification note** comment in the PR from
 one maintainer to the other naming what was verified. In the solo-maintainer phase (ADR-0005) the cooling check is
-paused and the note is the maintainer's own.
+paused, its hourly schedule is off (#211; the PR that adds the second maintainer turns it back on, and `pr-lint`
+fails until it does), and the note is the maintainer's own.
 
 **Embargoed security fixes** are developed in a GitHub security advisory's temporary private fork, where
 Actions do not run and rulesets are not enforced. The written exception: both maintainers run
@@ -577,7 +615,8 @@ PGP fingerprint, a Gradle `trusted-key` snippet, `gh attestation verify`).
   minor of the previous major for 12 months, through `release/*` branches protected like `main`.
 - **The version being developed** is `revokt.version` in `gradle.properties`. Bump its minor in a `chore` PR when the
   next milestone opens: its `major.minor` is the current minor that `verifyRuleGrowability` holds new `Rule` rows and
-  `ALLOW → REJECT` flips to (§4 growability, #73). The release workflow passes the tag's version instead. The contract
+  `ALLOW → REJECT` flips to (§4 growability, #73). `check` runs `verifyRuleGrowability` from 0.3 on: before that
+  nothing is released, so the contract protects no one (#211); `./gradlew verifyRuleGrowability` runs it on demand. The release workflow passes the tag's version instead. The contract
   starts afresh only in the PR whose base is on the previous major, so changes a new major makes to the fixture go in the
   PR that bumps the major. The same PR sets `PolicyTable.CURRENT_MINOR` (revokt-engine) to the new `major.minor`: the
   `flippedIn` grace rules read it, and `RevoktPolicyTest` fails while the two disagree.
@@ -649,8 +688,9 @@ recent reviewable push; require review from code owners (in the solo-maintainer 
 last-push-approval, code-owner-review and unattributed-changes rules off, since each needs an approver other than the
 single owner);
 required status checks `check (17)`, `check (21)`, `check (lts)`, `check (feature)`, `check (macos)`,
-`check (windows)`, `ci-extras`, `static`, `commitlint`, `pr-lint` (includes `trailers` and, in the solo
-phase, the `Independent review` comment), `protected-paths`, `DCO` (the app's exact check name; added once the app is installed), `codeql`, `osv`, `dependency-review`,
+`check (windows)` (on a documentation-only PR, a pass-through job reports these names, section 6), `ci-extras`,
+`static`, `commitlint`, `pr-lint` (includes `trailers` and, in the solo phase, the `Independent review` comment),
+`protected-paths` (passes at once in the solo phase), `DCO` (the app's exact check name; added once the app is installed), `codeql`, `osv`, `dependency-review`,
 `cooling` (reports success at once unless the PR touches `data/seed/**`, the release workflows or
 `**/verify/**`; paused throughout the solo phase, section 8); require branches to be up to date before merging; squash merge only (repository
 setting: allow squash merging only, default message "pull request title and description", auto-merge enabled);
@@ -669,5 +709,6 @@ git switch -c feat/42-tbs-parser main
 ./gradlew apiDump                                 # only when the public surface changed; commit the diff
 git commit -s                                     # human sign-off on every commit; fixup! commits are fine
 gh pr create --draft --template .github/PULL_REQUEST_TEMPLATE.md   # title in Conventional Commits; fill every section; mark ready when every required check is green
-# after approval (or the independent review in the solo phase) the maintainer runs: gh pr merge --squash --auto
+# after approval the maintainer runs: gh pr merge --squash --auto
+# solo phase (ADR-0006): after the independent review the coordinator runs gh pr update-branch, then gh pr merge --squash
 ```
