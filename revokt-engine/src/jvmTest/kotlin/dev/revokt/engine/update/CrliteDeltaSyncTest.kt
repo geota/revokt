@@ -298,6 +298,52 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
         assertNotNull(store.meta(directory1))
     }
 
+    @Test
+    fun `#236 - a running loader re-serving the same ts beside a malformed pointer installs, with no previous`() {
+        // The retried-flip path: the target is the engine's live directory, so it is never its own previous.
+        val server = installedFirst()
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        server.fetcher.requests.clear()
+        sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(StoreRead.Found(Pointer(directory1, null)), store.pointer())
+        assertEquals(emptyList(), server.attachmentRequests())
+        sync(server, now = ts + 9 * hour).assert(SyncOutcome.UNCHANGED)
+    }
+
+    @Test
+    fun `#236 - beside a malformed pointer a complete directory with an altered delta fails, and is never deleted`() {
+        val server = installedFirst()
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        val key = "crlite/compat/$directory1/${delta.filename}"
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).also { it[0] = (it[0] + 1).toByte() })
+        freshLoader()
+        server.fetcher.requests.clear()
+
+        fun files() =
+            storage.inner.names().filter { "/$directory1/" in it }.associateWith {
+                checkNotNull(storage.inner.read(it)).toList()
+            }
+        val before = files()
+        repeat(2) { i ->
+            sync(server, now = ts + (2 + 7 * i) * hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+            assertEquals(before, files(), "sync $i left the directory byte-identical")
+        }
+        assertEquals(emptyList(), server.attachmentRequests())
+    }
+
+    @Test
+    fun `#236 - a running loader whose live meta json is malformed heals a new ts with no previous, counted`() {
+        val server = installedFirst()
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        storage.inner.write("crlite/compat/$directory1/meta.json", "{".encodeToByteArray())
+        next(server, listOf(full, delta, delta2))
+        val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+        // One for the malformed pointer, one for the unreadable fallback candidate.
+        assertEquals(2, run.storeFailures)
+        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
+        assertEquals(StoreRead.Found(Pointer(directory2, null)), store.pointer())
+    }
+
     private fun freshLoader() =
         snapshot.publish(
             GenerationSnapshot(
