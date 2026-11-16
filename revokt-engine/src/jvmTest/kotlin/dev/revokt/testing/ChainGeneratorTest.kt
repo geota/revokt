@@ -37,6 +37,7 @@ class ChainGeneratorTest {
             DropIntermediate(s),
             Recover(s, s),
             Recover(s + 1),
+            EndEntityIssuer(s, s + 1),
             SameKeyDecoy(s),
             CrossCertToNonAnchor(s + 1),
             Stuff(20, related = true, at = s),
@@ -313,9 +314,9 @@ class ChainGeneratorTest {
     private companion object {
         val GOLDEN: Map<Long, String> =
             mapOf(
-                0L to "dd1f9bcd9993d6328450fa71dbb8d4beb2b9be81a0e8efd3a1c14f4da3e62d9a",
-                1L to "9cdc74876d6a97425dcf6054343371a2018f45183ba42bed0bd66912e234aea0",
-                91L to "929b3a9738292e7bf03ab45d3411f62e5122363ea6a0aaea5f0da21949b02e9b",
+                0L to "e6bbda0c144fb7b190cc914f2ce36db1f4d0aded6c106d5ae9f1adf527983b19",
+                1L to "ae41b41852e68ffef2a2c167ecf702a7e87cb04ae341a16c9562eab12be58442",
+                91L to "8f519bc67510a19f62d8a79d33cd7844209c2fb40f58b653faa50b6717af5ad6",
             )
     }
 }

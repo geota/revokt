@@ -80,6 +80,7 @@ class ReferenceWalkerTest {
     @Test
     fun `the other attacker mutations and the name and algorithm world mutations leave the result unchanged`() {
         assertUnchanged { seed -> listOf(SameKeyDecoy(seed.toInt())) }
+        assertUnchanged { seed -> listOf(EndEntityIssuer(0, seed.toInt()), EndEntityIssuer(seed.toInt(), 1)) }
         assertUnchanged { seed -> listOf(CrossCertToNonAnchor(seed.toInt())) }
         assertUnchanged { seed -> listOf(Stuff(Stuff.MAX, related = true, at = seed.toInt())) }
         assertUnchanged { listOf(Stuff(40, related = false)) }
