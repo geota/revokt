@@ -9,8 +9,8 @@ maintainer's working notes on 2026-11-16 (#217); earlier entries keep their word
   which is not in the repository.
 - "The 2026-11-16 design audit" is the Fable 5.2 audit of decisions, architecture and process, tracked in #230.
 - Divergences from the references are in [DIVERGENCES.md](DIVERGENCES.md).
-- Rewritten on the move: entries about another project's security findings are stated in generic terms, and the
-  reproduction detail of a CI hardening finding is summarised.
+- Rewritten on the move: an entry about filename validation is stated in generic terms, and the reproduction detail
+  of a CI hardening finding is summarised.
 
 ---
 
@@ -80,7 +80,7 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
 ## upki audit decisions (maintainer, 2026-11-06); rows in [DIVERGENCES.md](DIVERGENCES.md)
 - Q12: MAX_MANIFEST_ENTRIES 32 → 256; fix §7.2 "about four days" and recompute §6.4's memory table from live mirror sizes.
 - Q24: a MIRROR/SYSTEM generation with no filters or no coverage is refused (NO_DATA keeps firing), with a warning naming the source.
-- Q15: validate every mirror and index filename per C2SP filename rules before it is used, whatever the reference does.
+- Q15: validate every mirror and index filename per C2SP filename rules before it is used.
 - Q13: the mirror fetch follows up to 10 redirects, HTTPS only; write upki's manifest/fetch grammar into §7.3.
 - Q14: a mirror generation's age = now − newest coverage end, capped at now (a future end raises clock-behind).
 - Q16: mirror filenames over 32 bytes get §6.5's derived names, with the collision check before any fetch.
