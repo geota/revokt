@@ -127,6 +127,22 @@ internal sealed interface SeedLoad {
     }
 
     /**
+     * Rule (b) of the seed-load rule (lead, 2026-11-16): no pointer could be trusted, and a complete directory newer
+     * than the seed, whose stored files re-verify, was adopted instead: the pointer now names [directory] (at
+     * [timestampMillis]) and the seed was not installed. The loader loads that generation, as it loads a pointed one.
+     * Nothing was deleted.
+     */
+    class Adopted(
+        val directory: String,
+        val timestampMillis: Long,
+        override val storeFailures: Int,
+    ) : SeedLoad {
+        override val warnings: List<PolicyDiagnostic> get() = emptyList()
+
+        override fun toString(): String = "Adopted($directory at $timestampMillis)"
+    }
+
+    /**
      * The seed is live: activated, published at [generationEpoch] as [generationId], pointed to, and `updater.json`
      * written with the watermark at `max(watermark, `[timestampMillis]`)` and `seedInstalledAtMillis`. [clockBehind]
      * when its signed timestamp is beyond local now + `clockSkew` (§6.5: it installs, loudly).
@@ -227,16 +243,16 @@ internal class SeedLoader(
      * 5. The schema check, then the channel's records and names ([placeFilters]: one full, distinct derived names),
      *    each placed record's signed size within `MAX_FILTER_BYTES`, and the `attachments/` entries exactly the placed
      *    records' filenames ([SeedArchive.attachments]), before any attachment is inflated.
-     * 6. The store read: a read that throws is [SeedLoad.Failed], nothing written; a malformed `updater.json` reads
-     *    as absent; a malformed pointer or pointed `meta.json` leaves the generations unknown, so every complete
-     *    directory is read and none is pruned. Then the seed-vs-stored rule ([SeedLoad.Skipped]).
+     * 6. The store read (a throw is [SeedLoad.Failed], nothing written; a malformed `updater.json` reads as absent),
+     *    then the seed-load rule ([decide]): (a) a trusted pointer whose `live` is not older skips the seed; (b) with no
+     *    trusted pointer, a newer complete directory that re-verifies is adopted, else the seed installs.
      * 7. Each attachment inflated under `min(signed size, MAX_FILTER_BYTES)`, checked against its signed size and
      *    SHA-256, and written as the sync writes it: a full as its blob, a delta staged in the generation directory.
      * 8. `index.bin` rebuilt ([buildIndex]) and byte-compared with the archive's; the `SIGNED` coverage bound
      *    ([SyncRules.coverageWithinBound]) at `<ts>`; every placed filter's encoding listed by the engine.
      * 9. The install ([install]): `SIGNED`, `fromSeed`, [Freshness.SEED_SIGNED_TIME], generation id `"<ts>/<last placed
      *    record id>"`, `updater.json` with the watermark at `max(watermark, <ts>)` and `seedInstalledAtMillis` = now;
-     *    then the prune, as after a sync's install, unless the stored generations were unknown.
+     *    then the prune, as after a sync's install, never in a rule (b) load nor past a newer complete directory.
      *
      * Any seed fault is [SeedLoad.Unreadable]; a failed `prepare`, self-check or `activate` is too (§6.5: "the
      * corresponding load failure, `SEED_UNREADABLE` for the seed"). Any directory this load staged is deleted on a
@@ -281,9 +297,14 @@ internal class SeedLoader(
     /** A store state the load does not write over: it ends as [SeedLoad.Failed] at `STORE`, nothing written. */
     private class StoreFault(
         message: String,
+        /** Whether the store read that found this fault already counted it, so it is counted once. */
+        val counted: Boolean = false,
     ) : Exception(message)
 
-    private fun fault(message: String): Nothing = throw StoreFault(message)
+    private fun fault(
+        message: String,
+        counted: Boolean = false,
+    ): Nothing = throw StoreFault(message, counted)
 
     /** The verified fixed entries: the records, `<ts>`, the x5u path, the signature, and the bytes kept. */
     private class Verified(
@@ -296,19 +317,25 @@ internal class SeedLoader(
     )
 
     /**
-     * What the store holds for this dataset and channel: the [updater] record, the [pointer] when it read
-     * ([pointerMalformed] when it did not), and every complete generation directory with its timestamp ([complete]),
-     * pointed or not, which the seed must not displace when one is not older (the decision on #235's review: a seed never
-     * prunes a newer complete generation). [known] when the pointer and every directory it names read; otherwise the
-     * generations are unknown and the load never prunes (the decisions on #138: heal, never brick, never delete).
+     * What the store holds for this dataset and channel: the [updater] record, the [pointer] when it read, and every
+     * complete generation directory with its timestamp ([complete]). [trusted] is rule (a) of the seed-load rule (lead,
+     * 2026-11-16): the pointer is valid and its `live` generation's `meta.json` reads, at [liveTimestampMillis].
+     * [pointedUnread] when a directory the pointer names has a `meta.json` that does not read (counted).
      */
     private class Stored(
         val updater: UpdaterRecord,
         val pointer: Pointer?,
-        val pointerMalformed: Boolean,
+        val trusted: Boolean,
+        val liveTimestampMillis: Long?,
+        val pointedUnread: Boolean,
         val complete: Map<String, Long>,
-        val known: Boolean,
-    )
+    ) {
+        /**
+         * Whether an install at [ts] may prune: never in a rule (b) load, nor past a pointed directory whose `meta.json`
+         * does not read or a complete directory newer than the seed.
+         */
+        fun prunable(ts: Long): Boolean = trusted && !pointedUnread && complete.values.none { it > ts }
+    }
 
     /** One load's state: what it staged and what its failure path undoes. */
     @OptIn(RevoktInternalApi::class)
@@ -344,7 +371,7 @@ internal class SeedLoader(
             discard()
             val storeFault = t is StoreFault || (inStore && t !is SeedFormatException && !isFatal(t))
             if (storeFault) {
-                storeFailures++
+                if (!(t is StoreFault && t.counted)) storeFailures++
                 logger.safeLog(LogLevel.WARN, "${store.root}: the seed load failed at STORE", t)
                 val detail = t.message ?: t.toString()
                 return SeedLoad.Failed(SyncOutcome.STORE_FAILED, SyncStage.STORE, detail, t, false, storeFailures)
@@ -410,7 +437,7 @@ internal class SeedLoader(
             val stored = stored { read() }
             val generationId = "$ts/${placed.last().record.id}"
             val directory = GenerationNames.directory(ts, generationId)
-            newer(stored, ts, directory)?.let { return SeedLoad.Skipped(ts, it, storeFailures) }
+            decide(stored, ts)?.let { return it }
             val held = stored { open(directory, stored) }
             val bodies = Bodies(directory, held)
             val bySeedEntry = entries.zip(signed).toMap()
@@ -429,7 +456,7 @@ internal class SeedLoader(
             bodies.unlisted(placed)?.let { fail("${it.record.id} is in an encoding the engine does not list") }
             val meta = meta(verified, generationId, bodies.format(placed), bodies.blobs)
             val pending = PendingGeneration(meta, built.index, bodies.deltas, verified.recordsJson)
-            return installed(pending, stored.updater, stored.known)
+            return installed(pending, stored.updater, stored.prunable(ts), heal = !stored.trusted)
         }
 
         /**
@@ -501,11 +528,10 @@ internal class SeedLoader(
 
         /**
          * `updater.json`, the pointer, every directory it names, and every complete directory (the decisions on #138 and
-         * #235's review). A read that throws fails the load as a store failure, nothing written ([thrown]). Each fault is
-         * counted here, once, where it is found, and the install is told so ([Publication.pointerCounted]):
-         * - a malformed `updater.json` reads as absent (§6.5), and the install writes a fresh one;
-         * - a malformed pointer, or a pointed directory whose `meta.json` does not read, leaves the stored generations
-         *   unknown, so nothing is pruned in this load.
+         * the seed-load rule). A read that throws fails the load as a store failure, nothing written ([thrown]). Each
+         * fault is counted here, once, where it is found, and the install is told so ([Publication.pointerCounted]): a
+         * malformed `updater.json` (read as absent, §6.5; the install writes a fresh one), a malformed pointer, and each
+         * pointed directory whose `meta.json` does not read.
          */
         private fun read(): Stored {
             val updater =
@@ -533,68 +559,133 @@ internal class SeedLoader(
                     }.toMap()
             val pointer =
                 when (val read = store.pointer()) {
-                    StoreRead.Absent -> return Stored(updater, null, false, complete, known = true)
-                    StoreRead.Malformed -> return unknown(Stored(updater, null, true, complete, known = false), 1)
-                    is StoreRead.Found -> read.value
-                }
-            val unread = listOfNotNull(pointer.live, pointer.previous).count { store.readMeta(it) !is StoreRead.Found }
-            if (unread > 0) return unknown(Stored(updater, pointer, false, complete, known = false), unread)
-            return Stored(updater, pointer, false, complete, known = true)
-        }
+                    StoreRead.Absent -> {
+                        return Stored(updater, null, false, null, false, complete)
+                    }
 
-        /** [stored], whose generations are unknown for [faults] store faults, each counted. */
-        private fun unknown(
-            stored: Stored,
-            faults: Int,
-        ): Stored {
-            storeFailures += faults
-            val why = if (stored.pointerMalformed) "the pointer is malformed" else "a pointed meta.json does not read"
-            logger.safeLog(LogLevel.WARN, "${store.root}: $why; the seed load does not prune")
-            return stored
+                    StoreRead.Malformed -> {
+                        storeFailures++
+                        logger.safeLog(LogLevel.WARN, "${store.root}: the pointer is malformed")
+                        return Stored(updater, null, false, null, false, complete)
+                    }
+
+                    is StoreRead.Found -> {
+                        read.value
+                    }
+                }
+            val live = (store.readMeta(pointer.live) as? StoreRead.Found)?.value
+            val unread = listOfNotNull(pointer.live, pointer.previous).count { store.readMeta(it) !is StoreRead.Found }
+            if (unread > 0) {
+                storeFailures += unread
+                logger.safeLog(LogLevel.WARN, "${store.root}: $unread pointed meta.json do not read")
+            }
+            return Stored(updater, pointer, live != null, live?.sourceTimestampMillis, unread > 0, complete)
         }
 
         /**
-         * The timestamp of the live generation or of a complete stored one that is not older than [ts] (the seed is then
-         * skipped), or null. Every generation is Mozilla-signed (#218), so no trust class is compared. The seed's own
-         * [directory] counts only when the pointer names it as `live` (the start task loads it); otherwise it is this
-         * generation, which the load installs as it stands or completes afresh (#235's review: never brick).
+         * The seed-load rule (lead, 2026-11-16), or null to install the seed. Every generation is Mozilla-signed (#218),
+         * so no trust class is compared.
+         * - (a) A valid pointer whose `live` reads: the seed is [SeedLoad.Skipped] when that generation, or the one the
+         *   engine holds live, is not older than it; the loader loads it, as today.
+         * - (b) Anything else (no pointer, a malformed one, or a `live` that does not read): the seed must leave a live
+         *   generation behind. The newest complete directory newer than the seed whose stored files re-verify
+         *   ([verifies]) is [SeedLoad.Adopted]: the pointer is flipped to it and the seed is not installed. With none,
+         *   a generation the engine holds live that is newer than the seed is [SeedLoad.Skipped] (never rolled back);
+         *   otherwise the seed installs, a same-generation directory of its name as it stands.
          */
-        private fun newer(
+        private fun decide(
             stored: Stored,
             ts: Long,
-            directory: String,
-        ): Long? {
-            val live = snapshot.snapshot.datasets[Dataset.CRLITE]?.takeIf { it.generationId != null }
-            val others = stored.complete.filterKeys { it != directory || it == stored.pointer?.live }.values
-            val candidates = listOfNotNull(live?.sourceTimestampMillis) + others
-            return candidates.maxOrNull()?.takeIf { it >= ts }
+        ): SeedLoad? {
+            val engineLive =
+                snapshot.snapshot.datasets[Dataset.CRLITE]
+                    ?.takeIf { it.generationId != null }
+                    ?.sourceTimestampMillis
+            if (stored.trusted) {
+                val notOlder = listOfNotNull(engineLive, stored.liveTimestampMillis).maxOrNull()?.takeIf { it >= ts }
+                return notOlder?.let { SeedLoad.Skipped(ts, it, storeFailures) }
+            }
+            val adoptable =
+                stored.complete.entries
+                    .filter { it.value > ts }
+                    .sortedByDescending { it.value }
+                    .firstOrNull { stored { verifies(it.key) } }
+            if (adoptable != null) {
+                stored { store.point(Pointer(adoptable.key, null)) }
+                logger.safeLog(LogLevel.INFO, "${store.root}: adopted ${adoptable.key}, newer than the seed's $ts")
+                return SeedLoad.Adopted(adoptable.key, adoptable.value, storeFailures)
+            }
+            return engineLive?.takeIf { it > ts }?.let { SeedLoad.Skipped(ts, it, storeFailures) }
         }
 
         /**
-         * Readies [directory] as the sync does (#242's held rule). It is held when the engine holds it live or the pointer
-         * names it, or when the pointer is malformed and its `meta.json` reads complete: a held directory is never written,
-         * and the install compares it with this generation and installs it as it stands, or fails `STORE_FAILED`; one
-         * live or pointed whose `meta.json` does not read is a [StoreFault]. Beside a malformed pointer, a directory of the
-         * seed's name whose `meta.json` is present but malformed is not a generation anyone can load, and is rewritten
-         * from the verified seed (the coordinator's note on #235: holding it would brick a sole-seed configuration). Any
-         * other directory is this load's, a complete orphan reopened first. Whether it is held.
+         * Whether the complete generation in [directory] re-verifies from its stored files: [StoreLayout.readGeneration]
+         * reads it (its `index.bin` and every file it names, each blob re-hashed), and every file but `index.bin`
+         * re-hashes to the `attachment.hash` of the record of its name in the stored `records.json`. The signature is not
+         * re-checked: the store is trusted at the OS level (§6.5).
+         */
+        private fun verifies(directory: String): Boolean {
+            val generation = store.readGeneration(directory) ?: return false
+            val records = store.file(directory, StoreLayout.RECORDS)?.let(::storedRecords) ?: return false
+            val signed =
+                when (val check = CrliteSchema.check(records, channel, RevoktLimits.MAX_CHANGESET_RECORDS)) {
+                    is RecordCheck.Passed -> {
+                        check.records.associate {
+                            GenerationNames.derive(it.attachment.filename) to
+                                it.attachment.sha256
+                        }
+                    }
+
+                    is RecordCheck.Rejected -> {
+                        return false
+                    }
+                }
+            val files = generation.files
+            return files.names.filter { it != StoreLayout.INDEX }.all { name ->
+                signed[name]?.let { it.toByteArray().contentEquals(files.sha256(name)) } == true
+            }
+        }
+
+        /** The records under `data` of a stored `records.json`, or null when it is not one. */
+        private fun storedRecords(bytes: ByteArray): List<JsonObject>? {
+            val root =
+                try {
+                    Json.parse(bytes, RevoktLimits.MAX_JSON_BYTES) as? JsonObject
+                } catch (ignored: JsonParseException) {
+                    null
+                }
+            return (root?.get("data") as? JsonArray)?.items?.map { it as? JsonObject ?: return null }
+        }
+
+        /**
+         * Readies [directory], the seed's own.
+         * - Rule (b): a complete one is held, installed as it stands when it is this generation (the install compares
+         *   everything but `freshness` and the signed members), else `STORE_FAILED`; one whose `meta.json` is absent or
+         *   present but unreadable is this load's to complete from the verified seed (the lead's Note 1), never a
+         *   complete one deleted.
+         * - Rule (a), as the sync does: one the engine holds live or the pointer names is held when complete, and a
+         *   [StoreFault] otherwise (counted once: a pointed one's unreadable `meta.json` was counted by [read]); any other
+         *   is this load's, a complete orphan reopened first.
+         *
+         * Whether it is held.
          */
         private fun open(
             directory: String,
             stored: Stored,
         ): Boolean {
-            val pointer = stored.pointer
-            val holders = listOfNotNull(liveDirectory(), pointer?.live, pointer?.previous)
             val read = store.readMeta(directory)
-            if (directory in holders) {
+            if (!stored.trusted) {
                 if (read is StoreRead.Found) return true
-                fault("$directory is live or pointed to, and its meta.json is not readable")
+                staged = directory
+                return false
             }
-            when {
-                stored.pointerMalformed && read is StoreRead.Found -> return true
-                stored.pointerMalformed && read is StoreRead.Malformed -> store.deleteGeneration(directory)
-                read is StoreRead.Found -> store.reopen(directory)
+            val pointer = checkNotNull(stored.pointer)
+            if (directory == liveDirectory() || directory == pointer.live || directory == pointer.previous) {
+                if (read is StoreRead.Found) return true
+                val counted = directory == pointer.live || directory == pointer.previous
+                fault("$directory is live or pointed to, and its meta.json is not readable", counted)
             }
+            if (read is StoreRead.Found) store.reopen(directory)
             staged = directory
             return false
         }
@@ -705,7 +796,8 @@ internal class SeedLoader(
         private fun installed(
             pending: PendingGeneration,
             read: UpdaterRecord,
-            known: Boolean,
+            prunable: Boolean,
+            heal: Boolean,
         ): SeedLoad {
             val ts = pending.meta.sourceTimestampMillis
             val updated =
@@ -716,7 +808,15 @@ internal class SeedLoader(
             // §8: the gate opens once a sync attempt completes after the seed's install, or at once with no fetching source.
             val gateOpen = !policy.fetchingSource || (read.datasetLastAttemptAtMillis ?: Long.MIN_VALUE) >= now
             val publication =
-                Publication(true, SEED_FORMAT.toInt(), gateOpen, now, policy.clockSkewMillis, pointerCounted = true)
+                Publication(
+                    true,
+                    SEED_FORMAT.toInt(),
+                    gateOpen,
+                    now,
+                    policy.clockSkewMillis,
+                    pointerCounted = true,
+                    heal = heal,
+                )
             installing = true
             val result = install(pending, engine, store, snapshot, publication, updated, logger)
             // The install deleted its directory on a failure before activation, and keeps it after one.
@@ -724,9 +824,9 @@ internal class SeedLoader(
             storeFailures += result.storeFailures
             return when (result) {
                 is InstallResult.Installed -> {
-                    // With the stored generations unknown, the flip heals the pointer and nothing is pruned: the next
-                    // install over a valid pointer prunes.
-                    if (known) prune(result.directory)
+                    // In a rule (b) load the flip heals the pointer and nothing is pruned: the next install over a
+                    // valid pointer prunes.
+                    if (prunable) prune(result.directory)
                     val clockBehind = ts > saturatingAdd(now, policy.clockSkewMillis)
                     val warnings =
                         if (clockBehind) {

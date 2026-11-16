@@ -61,6 +61,9 @@ internal class PendingGeneration(
  * `clockSkew` that `clockBehind` is recomputed from at the publish. [pointerCounted] when the caller has already counted
  * a malformed pointer and each pointed `meta.json` that does not read (the seed load, which reads them first, #138), so
  * the install's own read of them for the new `previous` does not count them again: each store fault is counted once.
+ * [heal] when the caller found no trustworthy pointer (rule (b) of the seed-load rule, lead 2026-11-16): a complete
+ * directory of this generation's name is then held and installed as it stands when it is this generation, and one whose
+ * `meta.json` is absent or does not read is this install's to complete, pointed or not.
  */
 internal class Publication(
     val fromSeed: Boolean,
@@ -69,6 +72,7 @@ internal class Publication(
     val nowMillis: Long,
     val clockSkewMillis: Long,
     val pointerCounted: Boolean = false,
+    val heal: Boolean = false,
 ) {
     init {
         require(fromSeed == (seedFormat != null)) { "seedFormat is set exactly for a seed" }
@@ -234,7 +238,8 @@ private class Install(
      * one the pointer names, or when the pointer is malformed (it may name any directory) and [directory]'s `meta.json`
      * is present, complete or malformed (#236, fail closed). A directory nothing holds is this install's: it is
      * completed over its staged deltas, or deleted on a failure before activation. A complete one becomes this install's
-     * only once [StoreLayout.reopen] accepts it.
+     * only once [StoreLayout.reopen] accepts it. Under [Publication.heal] (the seed's rule (b), #138) it is held exactly
+     * when it is complete: an incomplete one is this install's, pointed or not, and a complete one is never reopened.
      */
     private fun claim(directory: String): Pair<Boolean, StoreRead<GenerationMeta>> {
         liveBefore = liveDirectory()
@@ -243,7 +248,12 @@ private class Install(
         // reused when it is this generation, never reopened, rewritten or deleted. The flip then writes a pointer that
         // reads. Only a directory with no meta.json is staged.
         val unknown = store.pointer() is StoreRead.Malformed && existing !is StoreRead.Absent
-        val held = directory == liveDirectory() || directory in pointed() || unknown
+        val held =
+            if (publication.heal) {
+                existing is StoreRead.Found
+            } else {
+                directory == liveDirectory() || directory in pointed() || unknown
+            }
         if (!held && existing !is StoreRead.Found) written = directory
         return held to existing
     }
@@ -294,7 +304,8 @@ private class Install(
      * `isFilterOnDisk` and upki's `Plan::construct` re-hash theirs; the full filters' blobs are re-hashed when the
      * directory is read). A collection re-signed under the same `<ts>` is the same signed records, so a retried flip over
      * it installs rather than failing every sync until the next `<ts>` (the maintainer's decision on #200; Firefox treats
-     * an equal timestamp as up to date, `RemoteSettingsClient.sys.mjs:778` at `cac25a6`).
+     * an equal timestamp as up to date, `RemoteSettingsClient.sys.mjs:778` at `cac25a6`). Under [Publication.heal] the
+     * `freshness` is not compared either: a seed and a sync of one `<ts>` are one generation (#138, the seed-load rule).
      */
     private fun sameGeneration(
         stored: GenerationMeta,
@@ -302,7 +313,8 @@ private class Install(
     ): Boolean =
         // Same trust class first, so the copy keeps "signed members iff SIGNED".
         stored.trustClass == meta.trustClass &&
-            stored.copy(signed = meta.signed) == meta &&
+            stored.copy(signed = meta.signed, freshness = if (publication.heal) meta.freshness else stored.freshness) ==
+            meta &&
             store.file(directory, StoreLayout.INDEX).contentEquals(generation.index) &&
             store.file(directory, StoreLayout.RECORDS).contentEquals(generation.records) &&
             generation.deltas.all { (name, sha256) -> store.file(directory, name, sha256) != null }

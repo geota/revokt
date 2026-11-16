@@ -145,15 +145,116 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
-    fun `a malformed pointer beside a newer complete generation skips the seed, counted, nothing written`() {
-        installedAt(ts + hour)
+    fun `with no trusted pointer a newer complete generation that re-verifies is adopted, nothing else written`() {
+        val newer = installedAt(ts + hour)
         storage.inner.write(pointerKey, "garbage".encodeToByteArray())
         reset(keepStore = true)
         val before = contents()
-        val skipped = assertIs<SeedLoad.Skipped>(load(Seed()))
-        assertEquals(ts + hour, skipped.storedTimestampMillis)
-        assertEquals(1, skipped.storeFailures, "the malformed pointer, counted where it is found")
+        val adopted = assertIs<SeedLoad.Adopted>(load(Seed()))
+        assertEquals(newer to ts + hour, adopted.directory to adopted.timestampMillis)
+        assertEquals(1, adopted.storeFailures, "the malformed pointer, counted where it is found")
+        assertEquals(Pointer(newer, null), (store.pointer() as StoreRead.Found).value)
+        assertEquals(before - pointerKey, contents() - pointerKey, "only the pointer is written")
+        // With no pointer at all (a first sync that crashed before its flip), the same.
+        storage.inner.delete(pointerKey)
+        assertIs<SeedLoad.Adopted>(load(Seed()))
+        assertEquals(Pointer(newer, null), (store.pointer() as StoreRead.Found).value)
+    }
+
+    @Test
+    fun `with no trusted pointer and nothing to adopt, a newer generation live in the engine is kept`() {
+        snapshot.publish(
+            dev.revokt.engine.update.GenerationSnapshot(
+                1,
+                mapOf(
+                    dev.revokt.Dataset.CRLITE to
+                        dev.revokt.engine.update.DatasetGeneration(
+                            "${ts + hour}/x",
+                            dev.revokt.TrustClass.SIGNED,
+                            dev.revokt.Freshness.RECORD_LAST_MODIFIED,
+                            false,
+                            ts + hour,
+                            null,
+                            false,
+                            true,
+                            false,
+                        ),
+                ),
+                null,
+            ),
+        )
+        val before = contents()
+        assertEquals(ts + hour, assertIs<SeedLoad.Skipped>(load(Seed())).storedTimestampMillis)
         assertEquals(before, contents())
+    }
+
+    @Test
+    fun `a newer complete generation that does not re-verify is not adopted, and is kept while the seed installs`() {
+        val newer = installedAt(ts + hour)
+        storage.inner.write("$root/$newer/${delta.filename}", ByteArray(3))
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        val kept = files(newer)
+        val load = installed(load(Seed()))
+        assertEquals(Pointer(load.directory, null), (store.pointer() as StoreRead.Found).value)
+        assertEquals(kept, files(newer), "never pruned in a rule (b) load")
+    }
+
+    @Test
+    fun `a sync's directory of the seed's own generation, beside a malformed pointer, installs as it stands`() {
+        val own = installedAt(ts)
+        val meta = checkNotNull(store.meta(own))
+        storage.inner.write(
+            "$root/$own/meta.json",
+            dev.revokt.engine.store.MetaJson
+                .write(meta.copy(freshness = dev.revokt.Freshness.RECORD_LAST_MODIFIED)),
+        )
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        reset(keepStore = true)
+        val kept = files(own)
+        val load = installed(load(Seed()))
+        assertEquals(own, load.directory)
+        assertEquals(Pointer(own, null), (store.pointer() as StoreRead.Found).value)
+        assertEquals(kept, files(own))
+        assertTrue(live().fromSeed)
+    }
+
+    @Test
+    fun `a trusted pointer whose live is the seed's own directory with an unreadable meta_json heals it`() {
+        val own = installedAt(ts)
+        storage.inner.write("$root/$own/meta.json", "{}".encodeToByteArray())
+        reset(keepStore = true)
+        val load = installed(load(Seed()))
+        assertEquals(own, load.directory)
+        assertEquals(1, load.storeFailures, "the unreadable pointed meta.json, counted once")
+        assertTrue(store.meta(own) != null)
+        assertEquals(own, liveDirectory())
+    }
+
+    @Test
+    fun `the seed's own directory as pointed previous with an unreadable meta_json fails, counted once`() {
+        val older = installedAt(ts - hour)
+        val own = installedAt(ts)
+        store.point(Pointer(older, own))
+        storage.inner.write("$root/$own/meta.json", "{}".encodeToByteArray())
+        reset(keepStore = true)
+        val before = contents()
+        val failed = failed(load(Seed()), "is live or pointed to, and its meta.json is not readable")
+        assertEquals(1, failed.storeFailures)
+        assertEquals(before, contents())
+    }
+
+    @Test
+    fun `both pointed meta_json unreadable are two faults, and the seed installs`() {
+        val first = installedAt(ts - 2 * hour)
+        val second = installedAt(ts - hour)
+        storage.inner.write("$root/$first/meta.json", "{}".encodeToByteArray())
+        storage.inner.write("$root/$second/meta.json", "{}".encodeToByteArray())
+        reset(keepStore = true)
+        val load = installed(load(Seed()))
+        assertEquals(2, load.storeFailures)
+        assertEquals(Pointer(load.directory, null), (store.pointer() as StoreRead.Found).value)
+        assertTrue(files(first).isNotEmpty() && files(second).isNotEmpty(), "not pruned")
     }
 
     @Test
@@ -166,21 +267,22 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
-    fun `a newer complete generation the pointer does not name is never pruned by a seed`() {
+    fun `under a trusted pointer to an older live generation the seed installs and never prunes a newer one`() {
         // A sync completed gen-(ts + 1 h) and crashed before its flip; the pointer still names an older one.
         val older = installedAt(ts - hour)
         val newer = installedAt(ts + hour)
         store.point(Pointer(older, null))
         reset(keepStore = true)
-        val before = contents()
-        assertEquals(ts + hour, assertIs<SeedLoad.Skipped>(load(Seed())).storedTimestampMillis)
-        assertEquals(before, contents())
-        assertTrue(store.meta(newer) != null)
+        val kept = files(newer)
+        val load = installed(load(Seed()))
+        assertEquals(Pointer(load.directory, older), (store.pointer() as StoreRead.Found).value)
+        assertEquals(kept, files(newer), "the newer complete directory is not pruned")
         // And a pointed previous newer than live, with the seed between them.
+        reset(keepStore = true)
         store.point(Pointer(older, newer))
-        val pointed = contents()
-        assertIs<SeedLoad.Skipped>(load(Seed()))
-        assertEquals(pointed, contents())
+        val again = installed(load(Seed()))
+        assertEquals(kept, files(newer))
+        assertTrue(store.meta(again.directory) != null)
     }
 
     @Test
@@ -250,11 +352,14 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         assertEquals("$ts/${delta.id}", engine.live)
         assertTrue(store.meta(GenerationNames.directory(ts, "$ts/${delta.id}")) != null)
         assertEquals(updater, storage.inner.read(updaterKey)?.toList())
-        // The seed is live in the engine though the store does not point to it: a second load never displaces it.
+        // The seed is live in the engine though no pointer names it: a second load installs its directory as it stands,
+        // and the flip heals the pointer (rule (b)).
         storage.failWrite = { null }
-        val before = contents()
-        assertIs<SeedLoad.Skipped>(load(Seed()))
-        assertEquals(before, contents())
+        val directory = GenerationNames.directory(ts, "$ts/${delta.id}")
+        val kept = files(directory)
+        assertEquals(directory, installed(load(Seed(), engine = engine)).directory)
+        assertEquals(Pointer(directory, null), (store.pointer() as StoreRead.Found).value)
+        assertEquals(kept, files(directory))
     }
 
     @Test
@@ -304,14 +409,27 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
-    fun `a complete orphan directory of the seed's name is completed afresh`() {
+    fun `under a trusted pointer a complete orphan of the seed's name is completed afresh`() {
+        val older = installedAt(ts - hour)
         val directory = installedAt(ts)
-        storage.inner.delete(pointerKey)
+        store.point(Pointer(older, null))
         reset(keepStore = true)
         storage.inner.write("$root/$directory/stale-file", ByteArray(1))
         val load = installed(load(Seed()))
         assertEquals(directory, load.directory)
         assertNull(storage.inner.read("$root/$directory/stale-file"))
+    }
+
+    @Test
+    fun `with no pointer the seed's own complete directory is installed as it stands`() {
+        val directory = installedAt(ts)
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        val kept = files(directory)
+        val load = installed(load(Seed()))
+        assertEquals(directory, load.directory)
+        assertEquals(kept, files(directory))
+        assertEquals(Pointer(directory, null), (store.pointer() as StoreRead.Found).value)
     }
 
     @Test

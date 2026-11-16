@@ -279,6 +279,9 @@ class SeedArchiveTest {
         // Across the whole archive, at open: two entries at one offset, read in different passes or not at all.
         val shared = fixed().apply { entry(SeedArchive.INDEX).offset = { 0 } }.bytes()
         assertTrue("overlaps" in assertFailsWith<SeedFormatException> { open(shared) }.message.orEmpty())
+        // One byte is enough: index.bin starting one byte before x5u.pem's end (the entries sit back to back).
+        val oneByte = fixed().apply { entry(SeedArchive.INDEX).offset = { it - 1 } }.bytes()
+        assertTrue("overlaps" in assertFailsWith<SeedFormatException> { open(oneByte) }.message.orEmpty())
         // A stored attachment whose data range holds the whole records.json entry.
         val covering = fixed()
         covering.entries.add(1, TestZip.Entry("attachments/x", ByteArray(400), TestZip.STORED))
