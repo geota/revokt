@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Nightly (CONTRIBUTING §6): the native oracle job, the EA replay, fuzzing, the Android matrix and the minified-build
-# tests. Each job is added with its milestone; today the native build skeleton, the purity compile, the EA replay, the
-# Conscrypt-release check and the upki-release check run. Never a PR gate.
+# tests. Each job is added with its milestone; today the native build skeleton, the EA replay and the two release
+# watches run. Never a PR gate. The nightly goes red only when something breaks: a newer upstream release is news, not
+# a failure, so the release watches open, update or close one issue each and stay green (#211). The purity compile
+# runs in ci-extras on every PR and push, so it has no nightly job.
 name: nightly
 
 on:
@@ -30,28 +32,6 @@ jobs:
         run: cargo build --locked --manifest-path native/Cargo.toml
       - name: test the native workspace
         run: cargo test --locked --manifest-path native/Cargo.toml
-
-  purity:
-    name: purity (linuxX64 compile)
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
-        with:
-          cache-read-only: true
-      - name: konan cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.konan
-          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
-      - run: ./gradlew :revokt-engine:compileKotlinLinuxX64 :revokt-clubcard:compileKotlinLinuxX64 -Prevokt.purityGate --no-daemon
 
   ea-replay:
     name: ea replay (D1 on the newest JDK EA)
@@ -81,18 +61,23 @@ jobs:
           -Prevokt.testJdk=28 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_28_X64 --no-daemon
 
   conscrypt-release:
-    name: conscrypt release (the newest is admitted to the matrix)
+    name: conscrypt release (an issue while a newer one awaits admission)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write   # the one release-watch issue
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Spec §9.2 revision 40: a release newer than the matrix's current Conscrypt cannot be replayed until it is
-      # admitted like any dependency (CONTRIBUTING §3), so this fails until it is; alphas and patches of an older minor
-      # do not count.
-      - name: the newest Conscrypt release is not newer than the matrix's current one
+      # admitted like any dependency (CONTRIBUTING §3), so the release-watch issue stays open until it is; alphas and
+      # patches of an older minor do not count. A version that cannot be read fails the job.
+      - name: the newest Conscrypt release against the matrix's current one
+        env:
+          NEWS: ${{ runner.temp }}/release-watch.md
         run: |
           set -euo pipefail
           key=$(sed -n 's/^conscrypt[[:space:]]*[=:][[:space:]]*//p' gradle/oracle-matrix.properties | cut -d, -f1 | tr -d ' ')
@@ -102,37 +87,54 @@ jobs:
               https://repo1.maven.org/maven2/org/conscrypt/conscrypt-openjdk-uber/maven-metadata.xml \
             | sed -n 's:.*<version>\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)</version>.*:\1:p' | sort -V | tail -n 1)
           if [ -z "$current" ] || [ -z "$newest" ]; then echo "::error::cannot read the Conscrypt versions"; exit 1; fi
+          : >| "$NEWS"
           if [ "$(printf '%s\n' "$current" "$newest" | sort -V | tail -n 1)" != "$current" ]; then
-            echo "::error::Conscrypt $newest is released and the matrix's current is $current: admit it (CONTRIBUTING §3) and roll gradle/oracle-matrix.properties"
-            exit 1
+            msg="Conscrypt $newest is released and the matrix's current is $current: admit it (CONTRIBUTING §3) and roll gradle/oracle-matrix.properties"
+            echo "::warning::$msg"
+            printf -- '- %s\n' "$msg" >> "$NEWS"
           fi
+      - name: open, update or close the release-watch issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEWS: ${{ runner.temp }}/release-watch.md
+          TITLE: "chore(oracle): admit the newest Conscrypt release"
+          LABELS: area/oracle,kind/chore
+        run: bash .github/scripts/release_watch.sh "$NEWS"
 
   upki-release:
-    name: upki release (the newest upki and upki-revocation are the pinned ones)
+    name: upki release (an issue while a newer upki or upki-revocation awaits admission)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
+      issues: write   # the one release-watch issue
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Spec §3.2 and Appendix A: the upki engine and the C2SP reader are verified against one rustls/upki release and
       # one C2SP upki-revocation tag at one commit, all pinned in gradle/oracle-matrix.properties (verifyOracleMatrix
-      # keeps this job reading them). A newer release fails this until it is admitted, which is a spec change. Only
-      # vX.Y.Z tags are compared; pre-releases, -rc tags and patches of an older line do not count, and a stable release
-      # or tag in another scheme fails as one this check does not understand. A pin that is not published fails too, as
-      # does a pinned tag that C2SP moved to another commit. Every problem is reported before the job fails.
-      - name: the newest upki release and upki-revocation tag are the pinned ones
+      # keeps this job reading them). Upstream news keeps the release-watch issue open until it is admitted, which is a
+      # spec change: a newer release or tag, a stable release or tag in a scheme this check does not understand, or a
+      # pinned tag that C2SP moved to another commit. Only vX.Y.Z tags are compared; pre-releases, -rc tags and patches
+      # of an older line do not count. A missing or unpublished pin, or an API that cannot be read, fails the job. Every
+      # finding is reported before the job ends.
+      - name: the newest upki release and upki-revocation tag against the pins
         env:
           GH_TOKEN: ${{ github.token }}
+          NEWS: ${{ runner.temp }}/release-watch.md
         run: |
           set -euo pipefail
           pin() { sed -n "s/^$1[[:space:]]*[=:][[:space:]]*//p" gradle/oracle-matrix.properties | tr -d ' ' | tail -n 1; }
           semver='v[0-9]+\.[0-9]+\.[0-9]+'
           failed=0
+          : >| "$NEWS"
           problem() { echo "::error::$*"; failed=1; }
+          news() { echo "::warning::$*"; printf -- '- %s\n' "$*" >> "$NEWS"; }
+          # A free-form upstream tag name as inert Markdown: only [A-Za-z0-9._/+-] kept, in backticks (no @-mention,
+          # autolink or #-reference in the issue body).
+          inert() { printf '\140%s\140' "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._/+-' '_')"; }
           # The highest vX.Y.Z of the lines on stdin, without its v.
           highest() { { grep -xE "$semver" || true; } | sed 's/^v//' | sort -V | tail -n 1; }
           stale() {
@@ -140,7 +142,7 @@ jobs:
             printf '%s\n' "$pinned" | grep -qxE "$semver" || return 0
             if [ -z "$latest" ]; then problem "cannot read the $name versions"; return; fi
             if [ "$(printf '%s\n' "${pinned#v}" "$latest" | sort -V | tail -n 1)" != "${pinned#v}" ]; then
-              problem "$name v$latest is released and the pin is $pinned: admit it (a spec change: re-verify spec Appendix A, roll $key in gradle/oracle-matrix.properties, re-record the index golden with native/revokt-oracle/record-upki-index.sh, re-run the cross-engine suite)"
+              news "$name v$latest is released and the pin is $pinned: admit it (a spec change: re-verify spec Appendix A, roll $key in gradle/oracle-matrix.properties, re-record the index golden with native/revokt-oracle/record-upki-index.sh, re-run the cross-engine suite)"
             fi
           }
           upki=$(pin upki)
@@ -160,7 +162,7 @@ jobs:
             problem "rustls/upki $upki has no publish date ('$pinned_at'): the releases after it cannot be checked for an unrecognised tag scheme"
           else
             while read -r tag; do
-              problem "rustls/upki released $tag in an unrecognised tag scheme: update the upki-release check"
+              news "rustls/upki released $(inert "$tag") in an unrecognised tag scheme: update the upki-release check"
             done < <(printf '%s\n' "$releases" | awk -v at="$pinned_at" '$1 > at { print $2 }' | { grep -vxE "$semver" || true; })
           fi
           stale "rustls/upki" upki "$upki" "$(printf '%s\n' "$releases" | cut -d' ' -f2 | highest)"
@@ -168,7 +170,7 @@ jobs:
           # "<name> <object type> <object sha>" per upki-revocation/<name> tag.
           tags=$(gh api --paginate repos/C2SP/C2SP/git/matching-refs/tags/upki-revocation/ --jq '.[] | "\(.ref | ltrimstr("refs/tags/upki-revocation/")) \(.object.type) \(.object.sha)"')
           while read -r tag; do
-            problem "C2SP tagged upki-revocation/$tag in an unrecognised tag scheme: update the upki-release check"
+            news "C2SP tagged $(inert "upki-revocation/$tag") in an unrecognised tag scheme: update the upki-release check"
           done < <(printf '%s\n' "$tags" | awk 'NF { print $1 }' | { grep -vxE "$semver(-rc[.0-9]*)?" || true; })
           read -r _ type sha < <(printf '%s\n' "$tags" | awk -v t="$spec" '$1 == t') || true
           if [ -z "${sha:-}" ]; then
@@ -176,11 +178,18 @@ jobs:
           else
             if [ "$type" = tag ]; then sha=$(gh api "repos/C2SP/C2SP/git/tags/$sha" --jq .object.sha); fi
             if [ "$commit_ok" = 1 ] && [ "$sha" != "$commit" ]; then
-              problem "C2SP re-pointed upki-revocation/$spec at $sha, the pin is $commit: the spec text changed under the same version; re-verify it (a spec change) and roll upki-revocation.commit"
+              news "C2SP re-pointed upki-revocation/$spec at $sha, the pin is $commit: the spec text changed under the same version; re-verify it (a spec change) and roll upki-revocation.commit"
             fi
           fi
           stale "C2SP upki-revocation" upki-revocation "$spec" "$(printf '%s\n' "$tags" | cut -d' ' -f1 | highest)"
           exit "$failed"
+      - name: open, update or close the release-watch issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEWS: ${{ runner.temp }}/release-watch.md
+          TITLE: "chore(upki): admit the newest upki release or upki-revocation tag"
+          LABELS: area/upki,kind/chore
+        run: bash .github/scripts/release_watch.sh "$NEWS"
 
   android:
     name: android (emulator matrix; from 0.3)

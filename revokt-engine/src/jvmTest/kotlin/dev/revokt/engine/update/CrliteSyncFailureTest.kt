@@ -97,6 +97,37 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     }
 
     @Test
+    fun `#209 - an updater json read that throws leaves the file byte-identical, the watermark and cursor kept`() {
+        val server = Server()
+        server.headers = arrayOf("Backoff" to "60")
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val key = "crlite/compat/updater.json"
+        val before = checkNotNull(storage.inner.read(key))
+        assertEquals(ts, updater().watermarkMillis)
+        // Past the backoff, so the sync reads updater.json first; each read throws, a fatal error included.
+        val at = ts + 2 * hour
+        for (thrown in listOf(IllegalStateException("read"), OutOfMemoryError("read"))) {
+            storage.failRead = { if (it.endsWith("updater.json")) thrown else null }
+            val run = sync(server, now = at)
+            if (thrown is OutOfMemoryError) {
+                run.assert(SyncOutcome.FAILED, SyncStage.STORE, *failed())
+                assertEquals(0, run.storeFailures)
+            } else {
+                run.assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+                assertEquals(1, run.storeFailures)
+            }
+            storage.failRead = { null }
+            assertContentEquals(before, storage.inner.read(key), "$thrown")
+        }
+        val s = sourceRecord(at)
+        assertEquals(
+            listOf<Any?>(ts, ts + hour, 0),
+            listOf(s.lastVerifiedLastModified, s.lastVerifiedAtMillis, s.consecutiveFailures),
+        )
+        assertEquals(ts, updater(at).watermarkMillis)
+    }
+
+    @Test
     fun `a store that throws is STORE_FAILED at STORE, and a failing updater write is counted, not thrown`() {
         storage.failRead = { if (it.endsWith("updater.json")) IllegalStateException("read") else null }
         sync(Server()).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed()).also {
