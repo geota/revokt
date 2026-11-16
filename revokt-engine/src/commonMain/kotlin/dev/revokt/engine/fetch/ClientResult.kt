@@ -62,11 +62,15 @@ internal sealed class ClientResult<out T> {
     /** The longest `Backoff` or `Retry-After` wait in milliseconds, at most `MAX_BACKOFF`; null when none ([Backoff]). */
     abstract val backoffMillis: Long?
 
-    /** [value] passed every check; [httpStatus] is null for the record check, which fetches nothing. */
+    /**
+     * [value] passed every check; [httpStatus] is null for the record check, which fetches nothing. [bodyBytes] is the
+     * size of the body read, for the sync's half-cap warning (spec §4 `CAP_NEAR_LIMIT`); null when nothing was fetched.
+     */
     class Ok<out T>(
         val value: T,
         override val httpStatus: Int?,
         override val backoffMillis: Long?,
+        val bodyBytes: Long? = null,
     ) : ClientResult<T>()
 
     /** A 304 to the changeset's `If-None-Match`: the collection is at the verified cursor (spec §3 `UNCHANGED`). */

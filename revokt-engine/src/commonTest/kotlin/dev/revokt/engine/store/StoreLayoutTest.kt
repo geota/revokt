@@ -89,11 +89,12 @@ class StoreLayoutTest {
         val directory = install()
         assertEquals(GenerationNames.directory(1_762_430_400_000, "g1"), directory)
         val prefix = "crlite/compat/$directory/"
+        // A delta is staged first, as the sync writes each body when it arrives (#141), and meta.json comes last.
         assertEquals(
             listOf(
                 "crlite/compat/blobs/${StoreFixtures.sha256(fullBytes).hex()}",
-                prefix + "index.bin",
                 prefix + deltaName,
+                prefix + "index.bin",
                 prefix + "records.json",
                 prefix + "meta.json",
             ),
@@ -126,7 +127,7 @@ class StoreLayoutTest {
         assertEquals("g1", stored.files.generationId)
         assertEquals(TrustClass.SIGNED, stored.files.trustClass)
         assertEquals(1_762_430_400_000, stored.files.sourceTimestampMillis)
-        assertContentEquals("{\"data\":[]}".encodeToByteArray(), layout.records(directory))
+        assertContentEquals("{\"data\":[]}".encodeToByteArray(), layout.file(directory, StoreLayout.RECORDS))
     }
 
     @Test
@@ -135,7 +136,7 @@ class StoreLayoutTest {
         val stored = assertNotNull(layout.readGeneration(directory))
         assertEquals(TrustClass.MIRROR, stored.meta.trustClass)
         assertEquals(TrustClass.MIRROR, stored.files.trustClass)
-        assertNull(layout.records(directory))
+        assertNull(layout.file(directory, StoreLayout.RECORDS))
     }
 
     @Test
@@ -279,6 +280,28 @@ class StoreLayoutTest {
         assertContentEquals(fullBytes, layout.readBlob(sha))
         storage.write(layout.blobKey(sha), byteArrayOf(3, 0, 1, 2, 4))
         assertNull(layout.readBlob(sha))
+    }
+
+    @Test
+    fun `reopen refuses a directory the pointer names, and deletes only an orphan's meta json`() {
+        val older = install(generationId = "g0", sourceTimestampMillis = 1)
+        val newer = install(generationId = "g1", sourceTimestampMillis = 2, full = byteArrayOf(3, 0, 5))
+        val orphan = install(generationId = "g2", sourceTimestampMillis = 3, full = byteArrayOf(3, 0, 6))
+        layout.point(Pointer(newer, older))
+        for (pointed in listOf(newer, older)) {
+            assertFailsWith<IllegalArgumentException> { layout.reopen(pointed) }
+            assertNotNull(layout.meta(pointed), pointed)
+        }
+        // Fail closed: a malformed pointer may name any directory, so not even the orphan is reopened.
+        storage.write("crlite/compat/current", "{".encodeToByteArray())
+        assertEquals(StoreRead.Malformed, layout.pointer())
+        assertFailsWith<IllegalArgumentException> { layout.reopen(orphan) }
+        assertNotNull(layout.meta(orphan))
+        layout.point(Pointer(newer, older))
+        layout.reopen(orphan)
+        assertNull(layout.meta(orphan))
+        assertNotNull(layout.file(orphan, StoreLayout.INDEX))
+        assertNotNull(layout.file(orphan, deltaName))
     }
 
     @Test
