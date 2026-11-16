@@ -144,7 +144,13 @@ internal class MirrorSync(
         private val source = client.source
         private val clock = SyncClock(now, clockSkewMillis, 0)
         private var stage = SyncStage.STORE
-        private var record = UpdaterRecord()
+
+        /**
+         * The `updater.json` this sync read, set once the record is read and the bootstrap check has passed; while it is
+         * null nothing writes `updater.json`, so a store that throws during the check never has an unread record written
+         * over it (#207's follow-up review).
+         */
+        private var record: UpdaterRecord? = null
         private var storeFailures = 0
         private var lastStatus: Int? = null
 
@@ -194,9 +200,9 @@ internal class MirrorSync(
         /** The sync's result, or null when it does not run ([bootstrapHolds] false). */
         private fun steps(): SyncResult? {
             stage = SyncStage.STORE
-            if (!bootstrapHolds()) return null
             val loaded = LoadedUpdater.of(store.updater(now))
-            record = loaded.record
+            if (!bootstrapHolds()) return null
+            val record = loaded.record.also { record = it }
             storeFailures += loaded.storeFailures
             val nextAttempt = UpdaterTransitions.nextAttemptAtMillis(record, source.sourceId, now)
             if (nextAttempt != null && nextAttempt > now) return end(Ended(SyncOutcome.BACKOFF, null, null, "backoff"))
@@ -256,11 +262,15 @@ internal class MirrorSync(
         ): SyncResult {
             stage = SyncStage.ATTACHMENT
             val max = client.limits.maxFilterBytes
+            // Each body above half its cap warns (§4), on a manifest that a file over the cap refuses too; that file's own
+            // warning is the refusal's code.
+            for (f in files.filter { it.size <= max }) {
+                nearCap(f.size, RevoktLimits.MAX_FILTER_BYTES) { "${f.filename}: $it bytes" }
+            }
             files.firstOrNull { it.size > max }?.let {
                 val detail = "${it.filename}: ${it.size} bytes declared, cap $max"
                 return end(Ended(SyncOutcome.FAILED, stage, DiagnosticCode.CAP_NEAR_LIMIT, detail))
             }
-            for (f in files) nearCap(f.size, RevoktLimits.MAX_FILTER_BYTES) { "${f.filename}: $it bytes" }
             val reused = files.filter { stored { store.blob(it.sha256) } == BlobState.MATCH }
             installing = true
             for (file in files) {
@@ -336,7 +346,7 @@ internal class MirrorSync(
 
         /** Runs [install] for [pending] and ends the sync with its outcome; a successful install is then pruned to. */
         private fun installed(pending: PendingGeneration): SyncResult {
-            val updated = UpdaterTransitions.afterUnsignedInstall(record, source.sourceId, now)
+            val updated = UpdaterTransitions.afterUnsignedInstall(checkNotNull(record), source.sourceId, now)
             val publication = Publication(false, null, true, now, clockSkewMillis)
             return when (val result = install(pending, engine, store, snapshot, publication, updated, logger)) {
                 is InstallResult.Installed -> {
@@ -441,11 +451,20 @@ internal class MirrorSync(
                 ),
             )
 
-        /** Ends the sync as [ended] without an install: writes `updater.json` (a failure there is a store failure). */
+        /**
+         * Ends the sync as [ended] without an install: writes `updater.json` (a failure there is a store failure), unless
+         * the record was never read or the bootstrap check never passed ([record] null): a store read that threw there is
+         * `STORE_FAILED` at `STORE`, counted, and leaves `updater.json` as it was.
+         */
         @Suppress("TooGenericExceptionCaught") // §6.5: the failure path catches every throwable too.
         private fun end(ended: Ended): SyncResult {
             try {
-                store.writeUpdater(UpdaterTransitions.after(record, source.sourceId, ended.outcome, now), now)
+                record?.let {
+                    store.writeUpdater(
+                        UpdaterTransitions.after(it, source.sourceId, ended.outcome, now),
+                        now,
+                    )
+                }
             } catch (t: Throwable) {
                 restoreInterrupt(t)
                 storeFailures++

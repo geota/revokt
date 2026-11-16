@@ -28,6 +28,7 @@ import dev.revokt.engine.policy.PolicyForm
 import dev.revokt.engine.policy.Preset
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.Pointer
+import dev.revokt.engine.store.SourceRecord
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
@@ -35,6 +36,7 @@ import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import dev.revokt.engine.update.UpdateFixtures.log
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
@@ -49,130 +51,7 @@ import kotlin.test.assertTrue
  * does not mark those whole fixtures done). The filters are v4 files written field by field ([UpdateFixtures.v4]), so
  * their coverage can sit at any time relative to the sync's clock.
  */
-internal class MirrorSyncTest {
-    private val hour = 3_600_000L
-    private val day = 24 * hour
-
-    /** The sync's clock: 2027-01-15T08:00:00Z. */
-    private val now = 1_800_000_000_000
-    private val base = "https://mirror.example/revocation/"
-
-    /** The store's storage: in memory, its writes failing where a test says. */
-    private class Failing(
-        val inner: RevoktStorage = RevoktStorage.inMemory(),
-    ) : RevoktStorage by inner {
-        var failWrite: (String) -> Boolean = { false }
-
-        override fun write(
-            name: String,
-            bytes: ByteArray,
-        ) {
-            if (failWrite(name)) throw java.io.IOException("injected: $name")
-            inner.write(name, bytes)
-        }
-    }
-
-    private val storage = Failing()
-    private val store = StoreLayout(storage, Dataset.CRLITE, CrliteChannel.COMPAT)
-    private val empty = DatasetGeneration(null, null, null, false, null, null, false, false, false)
-    private val snapshot = SnapshotRef(GenerationSnapshot(0, mapOf(Dataset.CRLITE to empty), null))
-
-    /** A v4 filter covering log [i] for a day up to [high]. */
-    private fun filter(
-        i: Int,
-        high: Long = now - 3 * hour,
-    ): ByteArray = UpdateFixtures.v4(listOf(log(i) to (high - day to high)))
-
-    private fun hex(bytes: ByteArray): String = bytes.toByteString().sha256().hex()
-
-    /**
-     * The scripted mirror at [url]: `manifest.json` listing [files] (name to body), each served at the base followed by
-     * its name; [entries] overrides the listed entries, [manifest] the manifest's answer.
-     */
-    private inner class Mirror(
-        var files: List<Pair<String, ByteArray>>,
-        val url: String = base,
-    ) {
-        var entries: () -> String = {
-            files.joinToString(",") { (name, body) ->
-                """{"filename":"$name","size":${body.size},"hash":"${hex(body)}"}"""
-            }
-        }
-        var manifest: ((FetchRequest) -> FetchResponse)? = null
-        private val prefix = if (url.endsWith("/")) url else "$url/"
-        val manifestUrl get() = prefix + "manifest.json"
-
-        val json: String get() = """{"generated_at":1799990000,"comment":"test mirror","files":[${entries()}]}"""
-
-        /** The generation id: the manifest's SHA-256. */
-        val id: String get() = json.encodeUtf8().sha256().hex()
-
-        val fetcher =
-            ScriptedFetcher { r ->
-                if (r.url == manifestUrl) {
-                    manifest?.invoke(r) ?: ok(json)
-                } else {
-                    files.firstOrNull { prefix + it.first == r.url }?.let { response(200, it.second) } ?: response(404)
-                }
-            }
-
-        fun fileRequests(): List<FetchRequest> = fetcher.requests.filter { it.url != manifestUrl }
-    }
-
-    private fun client(
-        url: String,
-        fetcher: ScriptedFetcher,
-        maxManifestEntries: Int = RevoktLimits.MAX_MANIFEST_ENTRIES,
-        io: CoroutineDispatcher = Dispatchers.Default,
-    ): C2spMirrorClient =
-        C2spMirrorClient(C2spMirrorSource.Builder(url).build(), fetcher, io, maxManifestEntries = maxManifestEntries)
-
-    private fun sync(
-        mirror: Mirror,
-        at: Long = now,
-        engine: TestEngine = TestEngine(),
-        maxManifestEntries: Int = RevoktLimits.MAX_MANIFEST_ENTRIES,
-        client: C2spMirrorClient = client(mirror.url, mirror.fetcher, maxManifestEntries),
-    ): SyncRun = checkNotNull(attempt(mirror, at, engine, client)) { "the sync did not run" }
-
-    /** The sync's run, or null when it does not run (the bootstrap condition does not hold, #207's Q1). */
-    private fun attempt(
-        mirror: Mirror,
-        at: Long = now,
-        engine: TestEngine = TestEngine(),
-        client: C2spMirrorClient = client(mirror.url, mirror.fetcher),
-    ): SyncRun? = MirrorSync(client, store, engine, snapshot, day, UpdateFixtures.Recording()).syncOnce(at)
-
-    private fun SyncRun.assert(
-        outcome: SyncOutcome,
-        stage: SyncStage? = null,
-        vararg codes: DiagnosticCode,
-    ): SyncRun {
-        assertEquals(outcome to stage, result.outcome to result.stage, "$result")
-        assertEquals(codes.toList(), result.warnings.map { it.code }, "$result")
-        return this
-    }
-
-    private fun failed(vararg codes: DiagnosticCode): Array<DiagnosticCode> =
-        arrayOf(DiagnosticCode.SYNC_FAILED, *codes)
-
-    private fun live(): DatasetGeneration = snapshot.snapshot.datasets.getValue(Dataset.CRLITE)
-
-    private fun pointer(): Pointer? = (store.pointer() as? StoreRead.Found)?.value
-
-    private fun updater(): UpdaterRecord = (store.updater(now) as? StoreRead.Found)?.value?.record ?: UpdaterRecord()
-
-    /** Nothing but `updater.json` is stored: no blob, no directory, no pointer. */
-    private fun assertNothingWritten() {
-        assertEquals(listOf("crlite/compat/updater.json"), storage.names().sorted())
-        assertNull(live().generationId)
-    }
-
-    private fun installed(mirror: Mirror): String {
-        sync(mirror).assert(SyncOutcome.INSTALLED)
-        return checkNotNull(pointer()).live
-    }
-
+internal class MirrorSyncTest : MirrorSyncFixture() {
     @Test
     fun `fixture (c) - with no generation at all the mirror installs as MIRROR`() {
         val mirror = Mirror(listOf("a.filter" to filter(1), "b.filter" to filter(2, now - 5 * hour)))
@@ -385,6 +264,30 @@ internal class MirrorSyncTest {
     }
 
     @Test
+    fun `beside a file over MAX_FILTER_BYTES each file above half of it still warns, once`() {
+        val mirror = Mirror(listOf("a.filter" to filter(1), "b.filter" to filter(2)))
+        val nine = 9 * RevoktLimits.MiB
+        val seventeen = 17 * RevoktLimits.MiB
+        mirror.entries = {
+            """{"filename":"a.filter","size":$nine,"hash":"${hex(mirror.files[0].second)}"},""" +
+                """{"filename":"b.filter","size":$seventeen,"hash":"${hex(mirror.files[1].second)}"}"""
+        }
+        val run = sync(mirror)
+        run.assert(
+            SyncOutcome.FAILED,
+            SyncStage.ATTACHMENT,
+            *failed(DiagnosticCode.CAP_NEAR_LIMIT, DiagnosticCode.CAP_NEAR_LIMIT),
+        )
+        val (over, half) =
+            run.result.warnings
+                .drop(1)
+                .map { it.message }
+        assertTrue("b.filter: $seventeen bytes declared" in over, over)
+        assertTrue("a.filter: $nine bytes, above half of" in half, half)
+        assertTrue(mirror.fileRequests().isEmpty())
+    }
+
+    @Test
     fun `fixture (e) - without a trailing slash every file is fetched from the URL, a slash and its name`() {
         val mirror = Mirror(listOf("a.filter" to filter(1)), url = "https://mirror.example/revocation")
         sync(mirror).assert(SyncOutcome.INSTALLED)
@@ -479,117 +382,6 @@ internal class MirrorSyncTest {
     }
 
     @Test
-    fun `fixture (c) - a live SIGNED generation, a seed or a stored one, stops the mirror, which does not run`() {
-        val mirror = Mirror(listOf("a.filter" to filter(1)))
-        for (fromSeed in listOf(false, true)) {
-            snapshot.publish(
-                GenerationSnapshot(
-                    1,
-                    mapOf(
-                        Dataset.CRLITE to
-                            empty.copy(
-                                generationId = "1/x",
-                                trustClass = TrustClass.SIGNED,
-                                sourceTimestampMillis = 1,
-                                fromSeed = fromSeed,
-                            ),
-                    ),
-                    null,
-                ),
-            )
-            // Not UNCHANGED: no result at all, which the loader never publishes (the maintainer's decision, Q1).
-            assertNull(attempt(mirror))
-            assertTrue(mirror.fetcher.requests.isEmpty())
-            assertTrue(storage.names().isEmpty(), "updater.json is not written either")
-        }
-        // A stored SIGNED generation the pointer names, though the snapshot holds none, stops it too.
-        snapshot.publish(GenerationSnapshot(2, mapOf(Dataset.CRLITE to empty), null))
-        val signed = UpdateFixtures.pending(store)
-        store.writeGeneration(signed.meta, signed.index, signed.deltas, signed.records)
-        store.point(Pointer(signed.meta.directory, null))
-        assertNull(attempt(mirror))
-        assertTrue(mirror.fetcher.requests.isEmpty())
-    }
-
-    /** A stored generation of [trustClass] as [UpdateFixtures.pending] builds it, written but not pointed to. */
-    private fun stored(
-        trustClass: TrustClass,
-        id: String,
-    ): String {
-        val g = UpdateFixtures.pending(store, trustClass = trustClass, generationId = id)
-        return store.writeGeneration(g.meta, g.index, g.deltas, g.records)
-    }
-
-    /** Nothing fetched, the store's keys unchanged, and the `SIGNED` directory [signed] still complete. */
-    private fun assertStopped(
-        mirror: Mirror,
-        signed: String?,
-    ) {
-        val before = storage.names().sorted()
-        assertNull(attempt(mirror), "the sync does not run")
-        assertTrue(mirror.fetcher.requests.isEmpty(), "nothing fetched")
-        assertEquals(before, storage.names().sorted(), "nothing written or deleted")
-        signed?.let { assertEquals(TrustClass.SIGNED, checkNotNull(store.meta(it)).trustClass) }
-    }
-
-    @Test
-    fun `fixture (c) - a malformed pointer stops the mirror, and the stored SIGNED generation survives`() {
-        val signed = stored(TrustClass.SIGNED, "1792587631204/s")
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
-        assertStopped(Mirror(listOf("a.filter" to filter(1))), signed)
-        // With no generation stored at all, a malformed pointer still fails closed.
-        storage.names().filter { "/gen-" in it }.forEach(storage::delete)
-        assertStopped(Mirror(listOf("a.filter" to filter(1))), null)
-    }
-
-    @Test
-    fun `fixture (c) - a pointed directory whose meta json is missing or malformed stops the mirror`() {
-        val mirror = Mirror(listOf("a.filter" to filter(1)))
-        // Two MIRROR generations, so no SIGNED one elsewhere in the store stops the mirror instead.
-        val live = stored(TrustClass.MIRROR, "m-live")
-        val previous = stored(TrustClass.MIRROR, "m-previous")
-        store.point(Pointer(live, previous))
-        for (pointed in listOf(live, previous)) {
-            val key = store.fileKey(pointed, StoreLayout.META)
-            val meta = checkNotNull(storage.read(key))
-            for (broken in listOf(null, "{".encodeToByteArray())) {
-                if (broken == null) storage.delete(key) else storage.inner.write(key, broken)
-                assertStopped(mirror, null)
-            }
-            storage.inner.write(key, meta)
-        }
-    }
-
-    @Test
-    fun `fixture (c) - a SIGNED previous behind a MIRROR or SYSTEM live stops the mirror`() {
-        for (lower in listOf(TrustClass.MIRROR, TrustClass.SYSTEM)) {
-            storage.names().forEach(storage::delete)
-            val live = stored(lower, "low-$lower")
-            val signed = stored(TrustClass.SIGNED, "1792587631204/s")
-            store.point(Pointer(live, signed))
-            assertStopped(Mirror(listOf("a.filter" to filter(1))), signed)
-        }
-    }
-
-    @Test
-    fun `fixture (c) - a stored SIGNED generation the pointer does not name stops the mirror and survives`() {
-        val mirror = Mirror(listOf("a.filter" to filter(1)))
-        val signed = stored(TrustClass.SIGNED, "1792587631204/s")
-        assertStopped(mirror, signed)
-        // Beside a pointed MIRROR generation too, and a directory whose meta json is malformed counts as one.
-        storage.delete(store.fileKey(signed, StoreLayout.META))
-        val live = stored(TrustClass.MIRROR, "m-live")
-        store.point(Pointer(live, null))
-        val other = stored(TrustClass.SIGNED, "1792587631205/t")
-        assertStopped(mirror, other)
-        storage.inner.write(store.fileKey(other, StoreLayout.META), "{".encodeToByteArray())
-        assertStopped(mirror, null)
-        // An interrupted install (no meta json) says nothing, so the mirror then runs.
-        storage.delete(store.fileKey(other, StoreLayout.META))
-        sync(mirror).assert(SyncOutcome.INSTALLED)
-    }
-
-    @Test
     fun `a file declared above half of MAX_FILTER_BYTES warns CAP_NEAR_LIMIT once per file, and the sync goes on`() {
         // v3 accepts trailing bytes, so a corpus filter padded past 8 MiB still decodes.
         val full = UpdateFixtures.bodies.getValue(UpdateFixtures.fullRecord.filename)
@@ -622,6 +414,16 @@ internal class MirrorSyncTest {
     }
 
     @Test
+    fun `a manifest body of exactly half of MAX_JSON_BYTES does not warn`() {
+        val mirror = Mirror(listOf("a.filter" to filter(1)))
+        val half = (RevoktLimits.MAX_JSON_BYTES / 2).toInt()
+        val padded = mirror.json + " ".repeat(half - mirror.json.length)
+        assertEquals(half, padded.encodeUtf8().size)
+        mirror.manifest = { ok(padded) }
+        sync(mirror).assert(SyncOutcome.INSTALLED)
+    }
+
+    @Test
     fun `a manifest body above half of MAX_JSON_BYTES warns CAP_NEAR_LIMIT`() {
         val mirror = Mirror(listOf("a.filter" to filter(1)))
         val padded = mirror.json + " ".repeat((RevoktLimits.MAX_JSON_BYTES / 2).toInt())
@@ -634,22 +436,6 @@ internal class MirrorSyncTest {
                 .startsWith("c2spMirror: manifest.json is "),
         )
         assertEquals(padded.encodeUtf8().sha256().hex(), live().generationId)
-    }
-
-    @Test
-    fun `fixture (c) - a live SYSTEM generation does not stop the mirror, which ranks above it`() {
-        snapshot.publish(
-            GenerationSnapshot(
-                1,
-                mapOf(
-                    Dataset.CRLITE to
-                        empty.copy(generationId = "sys", trustClass = TrustClass.SYSTEM, sourceTimestampMillis = 1),
-                ),
-                null,
-            ),
-        )
-        sync(Mirror(listOf("a.filter" to filter(1)))).assert(SyncOutcome.INSTALLED)
-        assertEquals(TrustClass.MIRROR, live().trustClass)
     }
 
     @Test
