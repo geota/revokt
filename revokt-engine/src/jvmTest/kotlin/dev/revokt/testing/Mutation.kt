@@ -26,7 +26,7 @@ internal sealed interface Mutation {
                 { r -> UnsupportedOwnSig(r.nextInt()) },
                 { r -> DropIntermediate(r.nextInt()) },
                 { r -> Recover(r.nextInt(), if (r.nextBoolean()) r.nextInt() else null) },
-                { r -> EndEntityIssuer(r.nextInt(), r.nextInt()) },
+                { r -> EndEntityIssuer(r.nextInt(), r.nextInt(), r.nextBoolean()) },
                 { r -> SameKeyDecoy(r.nextInt()) },
                 { r -> CrossCertToNonAnchor(r.nextInt()) },
                 { r -> Stuff(r.nextInt(0, Stuff.MAX + 1), r.nextBoolean(), r.nextInt()) },
@@ -128,19 +128,22 @@ internal data class Recover(
 
 /**
  * `Recover(child)` under an end-entity certificate (#225): a fresh key that verifies an honest leaf or intermediate
- * ([child]), in a certificate named like the child's issuer that the anchor [certifiedBy] (modulo the snapshot) issued
- * without basicConstraints `cA`. Anyone can obtain an end-entity certificate under a real anchor, so the key is never
- * a leaf-issuer key: the result is unchanged.
+ * ([child]), in a certificate that the anchor [certifiedBy] (modulo the snapshot) issued without basicConstraints `cA`.
+ * It is named like the child's issuer, a related candidate, or with [unrelated] a fresh attacker name, so that only the
+ * unrelated loop reaches it. Anyone can obtain an end-entity certificate under a real anchor, so the key is never a
+ * leaf-issuer key: the result is unchanged.
  */
 internal data class EndEntityIssuer(
     val child: Int = 0,
     val certifiedBy: Int = 0,
+    val unrelated: Boolean = false,
 ) : AttackerMutation {
     override fun applyTo(model: WorldModel): Boolean {
         val c = model.honestChildren.pick(child)
         val key = model.recover(c)
         val anchor = model.anchors.pick(certifiedBy)
-        model.insertAfterLeaf(model.issue(c.issuer, anchor.subject, key, anchor.key, ca = false))
+        val subject = if (unrelated) model.freshName("Attacker end entity") else c.issuer
+        model.insertAfterLeaf(model.issue(subject, anchor.subject, key, anchor.key, ca = false))
         return true
     }
 }

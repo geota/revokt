@@ -71,7 +71,7 @@ internal class Cert private constructor(
     val keyabilityClause: KeyabilityClause? = Keyability.firstFailing(p)
     val producerKeyable: Boolean = keyabilityClause == null
     val algorithmIdMismatch: Boolean = p.envelope.algorithmIdMismatch
-    val isCa: Boolean = (ExtensionValues.basicConstraints(p) as? ExtensionRead.Value)?.value?.ca == true
+    val isCa: Boolean = isCa(p)
 
     override fun toString(): String = "Cert(${bytesHash.hex()})"
 
@@ -83,6 +83,10 @@ internal class Cert private constructor(
             p: ParsedCertificate,
             canonicaliser: (ByteArray) -> String?,
         ): Cert = Cert(p, canonicaliser)
+
+        /** [Cert.isCa] of [p]: its one basicConstraints reads `cA = TRUE`; anything else, absence included, is false. */
+        fun isCa(p: ParsedCertificate): Boolean =
+            (ExtensionValues.basicConstraints(p) as? ExtensionRead.Value)?.value?.ca == true
 
         @Suppress("TooGenericExceptionCaught") // §5.5's rule: every throwable but a fatal error is caught
         private fun canonical(

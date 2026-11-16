@@ -9,6 +9,7 @@ import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.TestDer
+import dev.revokt.engine.walker.Cert
 import okio.ByteString.Companion.toByteString
 import java.io.ByteArrayInputStream
 import java.security.cert.CertificateFactory
@@ -38,6 +39,7 @@ class ChainGeneratorTest {
             Recover(s, s),
             Recover(s + 1),
             EndEntityIssuer(s, s + 1),
+            EndEntityIssuer(s + 1, s, unrelated = true),
             SameKeyDecoy(s),
             CrossCertToNonAnchor(s + 1),
             Stuff(20, related = true, at = s),
@@ -234,7 +236,7 @@ class ChainGeneratorTest {
     }
 
     @Test
-    fun `every presented certificate that verifies the leaf is related to it`() {
+    fun `every presented CA that verifies the leaf is related to it`() {
         var verifying = 0
         for (seed in 0L until 200) {
             val world =
@@ -255,7 +257,12 @@ class ChainGeneratorTest {
                     )
                 if (verified != VerifyResult.VERIFIED) continue
                 verifying++
-                assertTrue(related(c, leaf), "seed $seed ${world.mutations}: serial ${c.rawSerial().toList()}")
+                // EndEntityIssuer(unrelated = true) is the one unrelated certificate that verifies a child, and it is
+                // an end entity, which the walkers never use as an issuer (#225).
+                assertTrue(
+                    !Cert.isCa(c) || related(c, leaf),
+                    "seed $seed ${world.mutations}: serial ${c.rawSerial().toList()}",
+                )
             }
         }
         assertTrue(verifying > 400, "$verifying verifying certificates")
@@ -314,9 +321,9 @@ class ChainGeneratorTest {
     private companion object {
         val GOLDEN: Map<Long, String> =
             mapOf(
-                0L to "e6bbda0c144fb7b190cc914f2ce36db1f4d0aded6c106d5ae9f1adf527983b19",
-                1L to "ae41b41852e68ffef2a2c167ecf702a7e87cb04ae341a16c9562eab12be58442",
-                91L to "8f519bc67510a19f62d8a79d33cd7844209c2fb40f58b653faa50b6717af5ad6",
+                0L to "990b51ec325b91a65f439eecd505680d0e15da99fa96e7553e9aa5cd097a4d2f",
+                1L to "1d0817b0ca6499cf747232bbdbfe2420b2d717da3fbeaa4bb8d136f382e800ac",
+                91L to "6bc4cc4529266b94f10928e03358626ab173b79bd08882f681cd5926955f230d",
             )
     }
 }

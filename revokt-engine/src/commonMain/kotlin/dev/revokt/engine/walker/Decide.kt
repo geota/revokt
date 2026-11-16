@@ -322,8 +322,8 @@ private class Decider(
      * Step 6's PKIX fallback: `DISABLED` with none configured, `SKIPPED` over `FALLBACK_MAX_PRESENTED`, else one
      * `build` over the raw presented chain (copies, so the builder cannot change the caller's arrays). `FAILED` is a
      * null, a throw, or a path decide cannot use: empty, holding a null element (a Java builder), not starting with the
-     * presented leaf's bytes (a consumer builder's path could otherwise be keyed by an unrelated issuer), or with a
-     * leaf-issuer key that cannot be read. Reading the result runs inside the catch, so nothing it does escapes as an
+     * presented leaf's bytes (a consumer builder's path could otherwise be keyed by an unrelated issuer), with an
+     * intermediate that does not parse or is not a CA (#225), or with a leaf-issuer key that cannot be read. Reading the result runs inside the catch, so nothing it does escapes as an
      * engine error.
      */
     @Suppress("TooGenericExceptionCaught") // §5.5's rule: every throwable but a fatal error is caught
@@ -339,16 +339,27 @@ private class Decider(
         } ?: Fallback.NotUsed(FallbackReason.FAILED)
     }
 
-    /** A usable fallback [result], or null; [result] is typed as a Java builder may fill it. */
+    /**
+     * A usable fallback [result], or null; [result] is typed as a Java builder may fill it. Every certificate between
+     * the leaf and the last (the anchor) must parse and be a CA ([Cert.isCa]), the walker's own check (#225), so a
+     * consumer builder that skips basicConstraints cannot key the decision by a key an end entity certified.
+     */
     private fun path(
         result: List<ByteArray?>,
         leaf: Cert,
     ): Fallback.Path? {
         val ders = result.map { it ?: return null }
         if (ders.isEmpty() || !ders[0].contentEquals(chain[0])) return null
+        if (!intermediatesAreCas(ders)) return null
         val key = issuerKey(ders, leaf) ?: return null
         return Fallback.Path(ders.map { it.toByteString().sha256() }, key)
     }
+
+    /** True when every certificate of [ders] after the leaf and before the anchor parses and is a CA. */
+    private fun intermediatesAreCas(ders: List<ByteArray>): Boolean =
+        (1 until ders.size - 1).all { i ->
+            (CertificateParser.parse(ders[i]) as? CertificateParse.Parsed)?.let { Cert.isCa(it.certificate) } == true
+        }
 
     /**
      * The leaf-issuer key of a fallback path, the SPKI hash of its second certificate, or of the leaf when the path

@@ -48,6 +48,17 @@ class ReferenceWalkerTest {
     }
 
     @Test
+    fun `an unrelated end-entity issuer the unrelated loop reaches adds no key`() {
+        for (seed in seeds) {
+            val anchor = ChainGenerator.honest(seed, depth = 1).honestAnchor
+            val m = listOf(DropIntermediate(0), EndEntityIssuer(0, certifiedBy = anchor, unrelated = true))
+            val world = ChainGenerator.generate(seed, m, depth = 1)
+            assertEquals(2, world.mutations.size, "seed $seed")
+            assertEquals(emptySet(), world.walk(), "seed $seed: the end entity's recovered key is not an issuer key")
+        }
+    }
+
+    @Test
     fun `Recover of the leaf certified by an anchor adds the recovered key`() {
         for (seed in seeds) {
             val anchor = ChainGenerator.honest(seed).honestAnchor
@@ -81,6 +92,7 @@ class ReferenceWalkerTest {
     fun `the other attacker mutations and the name and algorithm world mutations leave the result unchanged`() {
         assertUnchanged { seed -> listOf(SameKeyDecoy(seed.toInt())) }
         assertUnchanged { seed -> listOf(EndEntityIssuer(0, seed.toInt()), EndEntityIssuer(seed.toInt(), 1)) }
+        assertUnchanged { seed -> listOf(EndEntityIssuer(0, seed.toInt(), unrelated = true)) }
         assertUnchanged { seed -> listOf(CrossCertToNonAnchor(seed.toInt())) }
         assertUnchanged { seed -> listOf(Stuff(Stuff.MAX, related = true, at = seed.toInt())) }
         assertUnchanged { listOf(Stuff(40, related = false)) }
