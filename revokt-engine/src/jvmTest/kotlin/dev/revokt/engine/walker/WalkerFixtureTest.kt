@@ -198,4 +198,9 @@ class WalkerFixtureTest {
     fun `walker (aj) two unrelated anchored leaf issuers are both collected in every order`() {
         assertEquals(4, run(WalkerFixturesS1ToAj.aj()).size)
     }
+
+    @Test
+    fun `walker (aq) an issuer that is not an anchor must be a CA`() {
+        assertEquals(10, run(WalkerFixturesAq.aq()).size)
+    }
 }

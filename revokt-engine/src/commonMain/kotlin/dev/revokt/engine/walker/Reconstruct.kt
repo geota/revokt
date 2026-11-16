@@ -19,6 +19,11 @@ import okio.ByteString
  * Spec §5.1 `reconstruct`: every sound path from the leaf, `presented[0]`, to an anchor of [index], under the budgets of
  * §5.1's limits table. It follows §5.1's pseudocode line for line; the comments name the rules it implements.
  *
+ * - A candidate that is not an anchor must be a CA ([Cert.isCa]: basicConstraints `cA = TRUE`), as webpki
+ *   (`EndEntityUsedAsCa`) and mozilla::pkix (`CheckBasicConstraints`) require of every issuer: anyone can obtain an
+ *   end-entity certificate under a real anchor. One that is not is a dead end before its link is verified, as pkix
+ *   runs the issuer's checks before `VerifySignedData`; it still counts as explored, and as related, and its own
+ *   signature OID is still counted. At the leaf it leaves `ALL_CANDIDATES_INVALID` possible: no issuer verified.
  * - A link is trusted only when [verifier] answers `VERIFIED`. Each (child, candidate key) pair is verified once per
  *   walk (the per-walk memo), and a `VERIFIED` pair once per [crossCallMemo] lifetime; a memo hit costs an exploration
  *   but no verification. A verifier throw is `INVALID` plus a `Finding.VerifierError` with the child's signature OID;
@@ -200,6 +205,9 @@ private class Reconstruction(
             }
             explored++
             if (isRelated) countIssuerIndependent(candidate)
+            val anchor = index.isAnchorBytes(candidate)
+            // webpki's EndEntityUsedAsCa and pkix's ERROR_CA_CERT_INVALID, checked before the link as pkix does.
+            if (!anchor && !candidate.isCa) return null
             val result = verifyOnce(child, candidate)
             when (result) {
                 null -> {
@@ -216,7 +224,7 @@ private class Reconstruction(
                 }
             }
             val before = found.size
-            if (index.isAnchorBytes(candidate)) {
+            if (anchor) {
                 found += WalkPath(path + candidate, TerminalKind.ANCHOR)
             } else {
                 walk(candidate, path + candidate, seen + candidate.bytesHash)?.let { return it }

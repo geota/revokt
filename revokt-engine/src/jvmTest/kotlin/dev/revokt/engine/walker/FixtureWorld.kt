@@ -80,8 +80,10 @@ internal class FixtureWorld {
 
     /**
      * A certificate. [signer] is the key whose link verifies it (null: a signature no key verifies); the outer
-     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs; the
-     * `Validity` is [validity]'s. Each call takes a fresh serial, so two calls never give the same bytes.
+     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs,
+     * after a critical basicConstraints `cA = TRUE` when [ca] (every certificate but a leaf: an issuer must be a CA, and
+     * an attacker sets the bit on its own certificates for free); the `Validity` is [validity]'s. Each call takes a
+     * fresh serial, so two calls never give the same bytes.
      */
     fun cert(
         label: String,
@@ -91,6 +93,7 @@ internal class FixtureWorld {
         signer: SymKey? = null,
         sigOid: String = SymOids.SIGNATURE,
         extensions: List<ByteArray> = emptyList(),
+        ca: Boolean = true,
     ): FixtureCert {
         val serial = ++serials
         val t =
@@ -101,7 +104,7 @@ internal class FixtureWorld {
                 validity = validity,
                 subject = subject,
                 spki = key.spki,
-                extensions = extensions,
+                extensions = if (ca) listOf(TestDer.basicConstraints(ca = true)) + extensions else extensions,
                 outerAlgorithm = TestDer.seq(TestDer.oid(sigOid)),
                 signature = TestDer.tlv(0x03, TestDer.bytes(0x00, serial and 0xff)),
             )

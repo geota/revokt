@@ -245,7 +245,15 @@ class EvaluatorTest {
     fun `a verified path for another leaf cannot be paired with a presented chain`() {
         // #195 review: the leaf's serial queried under another chain's issuer missed a revoked leaf under STRICT.
         val i9 = h.w.cert("I9", h.w.name("Intermediate 9"), h.root.subject, signer = h.root.key)
-        val leaf1 = h.w.cert("L1", h.w.name("other.example"), i9.subject, signer = i9.key, key = h.w.leafKey())
+        val leaf1 =
+            h.w.cert(
+                "L1",
+                h.w.name("other.example"),
+                i9.subject,
+                signer = i9.key,
+                key = h.w.leafKey(),
+                ca = false,
+            )
         val e =
             assertFailsWith<IllegalArgumentException> {
                 request(presented = listOf(h.leaf, h.intermediate), verified = listOf(leaf1, i9, h.root))

@@ -67,6 +67,10 @@ internal object TestDer {
             if (critical == null) ByteArray(0) else tlv(0x01, bytes(if (critical) 0xff else 0)),
             tlv(0x04, value),
         )
+
+    /** A critical basicConstraints extension: `cA = TRUE` with [ca], else the empty SEQUENCE (`cA` at its DEFAULT FALSE). */
+    fun basicConstraints(ca: Boolean): ByteArray =
+        extension("2.5.29.19", if (ca) seq(tlv(0x01, bytes(0xff))) else seq(), critical = true)
 }
 
 /**

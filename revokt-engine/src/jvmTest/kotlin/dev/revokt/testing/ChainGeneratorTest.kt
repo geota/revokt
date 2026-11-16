@@ -313,9 +313,9 @@ class ChainGeneratorTest {
     private companion object {
         val GOLDEN: Map<Long, String> =
             mapOf(
-                0L to "a5f80151f58df6bb93e864fafa673be4fa7a2b721484d4965bd19ad932487ec9",
-                1L to "9e13adfefbd929a11f1ef3001f303059d53fa1a016349a6be0cee1628092ae5c",
-                91L to "158157131c215aa5da2ba36640f48f80de99c1a8b1c2b5c958c2e72dd8fae5e2",
+                0L to "dd1f9bcd9993d6328450fa71dbb8d4beb2b9be81a0e8efd3a1c14f4da3e62d9a",
+                1L to "9cdc74876d6a97425dcf6054343371a2018f45183ba42bed0bd66912e234aea0",
+                91L to "929b3a9738292e7bf03ab45d3411f62e5122363ea6a0aaea5f0da21949b02e9b",
             )
     }
 }

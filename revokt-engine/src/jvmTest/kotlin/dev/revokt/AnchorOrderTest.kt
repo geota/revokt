@@ -29,7 +29,15 @@ class AnchorOrderTest {
     private val rpub = w.root("Rpub", "Public root")
     private val issuerName = w.name("Issuing CA")
     private val issuerKey = w.key()
-    private val leaf = w.cert("L", w.name("leaf.example"), issuerName, signer = issuerKey, key = w.leafKey())
+    private val leaf =
+        w.cert(
+            "L",
+            w.name("leaf.example"),
+            issuerName,
+            signer = issuerKey,
+            key = w.leafKey(),
+            ca = false,
+        )
 
     private fun verdict(
         f: WalkerFixture,
