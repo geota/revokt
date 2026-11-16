@@ -373,30 +373,40 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
 
     @Test
     fun `#205 - an orphan with a corrupted delta is completed afresh by the next sync, never a STORE_FAILED loop`() {
-        // The first sync completes the directory, prepare throws and the delete fails: a complete orphan is left.
-        val server = Server()
+        // The first sync completes the directory, prepare throws and the delete fails: a complete orphan is left. It
+        // holds two deltas; one is then corrupted, and the other stays intact.
+        val records = listOf(full, delta, delta2)
+        val bodies = records.associate { it.location to it.body }
+        val server = Server(records = records.map { it.json() }, bodies = bodies)
+        val orphan = GenerationNames.directory(ts, "$ts/${delta2.id}")
         val throwing =
             UpdateFixtures.TestEngine().apply {
                 onPrepare = {
-                    storage.failDelete = { if ("/$directory1/" in it) IllegalStateException("delete") else null }
+                    storage.failDelete = { if ("/$orphan/" in it) IllegalStateException("delete") else null }
                     throw IllegalArgumentException("corrupt")
                 }
             }
         sync(server, engine = throwing).assert(SyncOutcome.FAILED, SyncStage.PREPARE, *failed())
         storage.failDelete = { null }
-        assertNotNull(store.meta(directory1))
+        assertNotNull(store.meta(orphan))
         assertNull(liveDirectory())
-        val key = "crlite/compat/$directory1/${delta.filename}"
+        val key = "crlite/compat/$orphan/${delta.filename}"
         storage.inner.write(key, checkNotNull(storage.inner.read(key)).also { it[0] = (it[0] + 1).toByte() })
-        server.fetcher.requests.clear()
+        // The same collection, served by another signer, so this sync's verified leaf differs from the orphan's.
+        val p256 = ecPair("x5u-leaf-p256", "secp256r1")
+        val chain2 = chain(leaf = leaf(spki = p256.public.encoded))
+        val resigned = Server(records = server.records, bodies = bodies, pem = pem(chain2), key = p256.private)
         val now = ts + 8 * hour
-        val run = sync(server, now = now).assert(SyncOutcome.INSTALLED)
+        val run = sync(resigned, now = now).assert(SyncOutcome.INSTALLED)
         assertEquals(0, run.storeFailures)
-        assertEquals(listOf(attachments + delta.location), server.attachmentRequests())
-        assertEquals(directory1, liveDirectory())
-        assertContentEquals(delta.body, store.file(directory1, delta.filename, delta.body.toByteString().sha256()))
-        // This sync's verified signature, not the orphan's stored one.
-        assertEquals(served[0].toByteString().sha256(), store.meta(directory1)?.signed?.signerLeafSha256)
+        // Only the corrupted delta is fetched: the full's blob and the intact delta re-hash and are kept.
+        assertEquals(listOf(attachments + delta.location), resigned.attachmentRequests())
+        assertEquals(orphan, liveDirectory())
+        assertContentEquals(delta.body, store.file(orphan, delta.filename, delta.body.toByteString().sha256()))
+        assertContentEquals(delta2.body, store.file(orphan, delta2.filename, delta2.body.toByteString().sha256()))
+        // This sync's verified signer, not the orphan's stored one.
+        assertEquals(chain2[0].toByteString().sha256(), store.meta(orphan)?.signed?.signerLeafSha256)
+        assertFalse(served[0].toByteString().sha256() == store.meta(orphan)?.signed?.signerLeafSha256)
     }
 
     @Test

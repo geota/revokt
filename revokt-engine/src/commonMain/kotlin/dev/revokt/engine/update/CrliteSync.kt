@@ -618,8 +618,9 @@ internal class CrliteSync(
                     if (held) return null
                     return storeFailed("$directory is live or pointed to, and its meta.json is not readable")
                 }
-                staged = directory
                 stored { store.reopen(directory) }
+                // Only once reopen accepted it: a directory the pointer names is never deleted on a failure.
+                staged = directory
                 return null
             }
 

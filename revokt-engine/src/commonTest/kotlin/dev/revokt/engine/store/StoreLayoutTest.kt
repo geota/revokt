@@ -283,6 +283,22 @@ class StoreLayoutTest {
     }
 
     @Test
+    fun `reopen refuses a directory the pointer names, and deletes only an orphan's meta json`() {
+        val older = install(generationId = "g0", sourceTimestampMillis = 1)
+        val newer = install(generationId = "g1", sourceTimestampMillis = 2, full = byteArrayOf(3, 0, 5))
+        val orphan = install(generationId = "g2", sourceTimestampMillis = 3, full = byteArrayOf(3, 0, 6))
+        layout.point(Pointer(newer, older))
+        for (pointed in listOf(newer, older)) {
+            assertFailsWith<IllegalArgumentException> { layout.reopen(pointed) }
+            assertNotNull(layout.meta(pointed), pointed)
+        }
+        layout.reopen(orphan)
+        assertNull(layout.meta(orphan))
+        assertNotNull(layout.file(orphan, StoreLayout.INDEX))
+        assertNotNull(layout.file(orphan, deltaName))
+    }
+
+    @Test
     fun `the pointer round-trips through current, and an absent pointer is not a malformed one`() {
         assertEquals(StoreRead.Absent, layout.pointer())
         val older = install(generationId = "g0", sourceTimestampMillis = 1)

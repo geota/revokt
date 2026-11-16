@@ -226,12 +226,12 @@ private class Install(
     /**
      * Whether [directory] is held (the engine's live generation or one the pointer names) and its `meta.json` as it
      * reads. A directory nothing holds is this install's: it is completed over its staged deltas, or deleted on a
-     * failure before activation.
+     * failure before activation. A complete one becomes this install's only once [StoreLayout.reopen] accepts it.
      */
     private fun claim(directory: String): Pair<Boolean, StoreRead<GenerationMeta>> {
         val held = directory == liveDirectory() || directory in pointed()
         val existing = store.readMeta(directory)
-        if (!held) written = directory
+        if (!held && existing !is StoreRead.Found) written = directory
         return held to existing
     }
 
@@ -264,6 +264,7 @@ private class Install(
             return fail(SyncOutcome.STORE_FAILED, null, cause)
         }
         store.reopen(directory)
+        written = directory
         store.completeGeneration(meta, generation.index, generation.deltas, generation.records)
         return null
     }

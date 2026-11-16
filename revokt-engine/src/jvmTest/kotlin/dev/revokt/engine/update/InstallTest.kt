@@ -3,13 +3,11 @@
 
 package dev.revokt.engine.update
 
-import dev.revokt.CrliteChannel
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
 import dev.revokt.DiagnosticCode
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
-import dev.revokt.RevoktStorage
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
 import dev.revokt.TrustClass
@@ -21,7 +19,6 @@ import dev.revokt.engine.store.MetaJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
-import dev.revokt.engine.store.UpdaterRecord
 import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import dev.revokt.engine.update.UpdateFixtures.deltaRecord
 import dev.revokt.engine.update.UpdateFixtures.fullRecord
@@ -36,73 +33,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /** The §6.5 install order (#130): nothing is live before every check passes; a failure leaves the previous generation. */
-class InstallTest {
-    /** A storage whose writes a test can fail or observe, key by key. */
-    private class Faulty(
-        val inner: RevoktStorage = RevoktStorage.inMemory(),
-    ) : RevoktStorage by inner {
-        var fail: (String) -> Throwable? = { null }
-        var onWrite: (String) -> Unit = {}
-        val writes = mutableListOf<String>()
-
-        override fun write(
-            name: String,
-            bytes: ByteArray,
-        ) {
-            fail(name)?.let { throw it }
-            onWrite(name)
-            writes += name.removePrefix("crlite/compat/")
-            inner.write(name, bytes)
-        }
-    }
-
-    private val storage = Faulty()
-    private val store = StoreLayout(storage, Dataset.CRLITE, CrliteChannel.COMPAT)
-    private val engine = TestEngine()
-    private val logger = UpdateFixtures.Recording()
-    private val empty =
-        GenerationSnapshot(
-            0,
-            mapOf(Dataset.CRLITE to DatasetGeneration(null, null, null, false, null, null, true, false, false)),
-            null,
-        )
-    private val snapshot = SnapshotRef(empty)
-    private val now = 1_792_600_000_000
-    private val publication = Publication(false, null, false, now, 600_000)
-
-    private fun install(
-        pending: PendingGeneration,
-        engine: TestEngine = this.engine,
-        publication: Publication = this.publication,
-        updater: UpdaterRecord? = UpdaterRecord(watermarkMillis = 1),
-    ): InstallResult = install(pending, engine, store, snapshot, publication, updater, logger)
-
-    private fun pending(
-        id: String = "g1",
-        trustClass: TrustClass = TrustClass.SIGNED,
-        timestamp: Long = 1_792_587_631_204,
-    ) = UpdateFixtures.pending(store, trustClass = trustClass, generationId = id, sourceTimestampMillis = timestamp)
-
-    private fun failed(result: InstallResult): InstallResult.Failed = assertIs<InstallResult.Failed>(result)
-
-    /** [p]'s delta files, each the fixture body of its name (every fixture filename is its own derived name). */
-    private fun bytesOf(p: PendingGeneration): Map<String, ByteArray> =
-        p.deltas.mapValues { (name, _) -> UpdateFixtures.bodies.getValue(name) }
-
-    private fun keysOf(directory: String): List<String> = storage.names().filter { it.contains("/$directory/") }
-
-    /** The engine, the snapshot and the pointer are as they were, and [directory] is gone. */
-    private fun assertUntouched(
-        directory: String,
-        live: String? = null,
-        published: GenerationSnapshot = empty,
-    ) {
-        assertEquals(live, engine.live)
-        assertSame(published, snapshot.snapshot)
-        assertEquals(emptyList(), keysOf(directory))
-        if (live == null) assertEquals(StoreRead.Absent, store.pointer())
-    }
-
+internal class InstallTest : InstallFixture() {
     @Test
     fun `a generation installs in the 6_5 order and is published, pointed to and recorded`() {
         val p = pending()
@@ -384,6 +315,20 @@ class InstallTest {
         assertEquals(SyncStage.SELF_CHECK, failed(f).stage)
         assertNotNull(store.readGeneration(dir))
         assertSame(empty, fresh.snapshot)
+    }
+
+    @Test
+    fun `a failed install of the pointer's previous generation keeps it, held as the pointer names it`() {
+        // The r205b probe: g1, then g2, so the pointer is (g2, g1); then a rollback-inside-the-window install of g1
+        // with a fresh snapshot, whose self-check fails. g1 is held through the pointer's previous, so it stays.
+        val g1 = assertIs<InstallResult.Installed>(install(pending("g1"))).directory
+        val g2 = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000))).directory
+        assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
+        engine.preparedAnswer = { CrliteQueryResult.NOT_REVOKED }
+        val f = failed(install(pending("g1"), engine, store, SnapshotRef(empty), publication, null, logger))
+        assertEquals(SyncStage.SELF_CHECK, f.stage)
+        assertNotNull(store.readGeneration(g1))
+        assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
     }
 
     @Test
