@@ -146,9 +146,12 @@ class RootPlugin : Plugin<Project> {
             )
         }
 
-        // `base` registers the root `check` lifecycle task that the gates hang off.
+        // `base` registers the root `check` lifecycle task that the gates hang off. The growability contract is paused
+        // until 0.3 (#211): it is a post-1.0 promise on a project with no release.
+        val enforceGrowability = RuleGrowability.enforcedAt(providers.gradleProperty("revokt.version").getOrElse("0.1.0-SNAPSHOT"))
         tasks.named("check") {
-            dependsOn(specStatusCheck, verifyHeaders, verifyCorpus, verifyMatrix, verifyGrowability)
+            dependsOn(specStatusCheck, verifyHeaders, verifyCorpus, verifyMatrix)
+            if (enforceGrowability) dependsOn(verifyGrowability)
             // build-logic is an included build; its own tests (TestKit, the detekt rules) are part of the gate.
             dependsOn(gradle.includedBuild("build-logic").task(":convention:check"))
             dependsOn(gradle.includedBuild("build-logic").task(":revokt-detekt-rules:check"))

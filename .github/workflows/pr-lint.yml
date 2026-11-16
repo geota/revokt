@@ -87,6 +87,8 @@ jobs:
           git fetch --depth 1 origin "$HEAD_SHA"
           git checkout FETCH_HEAD -- MAINTAINERS.md .github/scripts/pr_lint.js
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TWO_PERSON_RULE: ${{ vars.TWO_PERSON_RULE }}   # set with the second maintainer (#211, CONTRIBUTING §5)
         with:
           script: |
             const fs = require('fs');

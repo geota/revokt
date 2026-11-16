@@ -4,13 +4,15 @@
 # cooling (CONTRIBUTING §8): 24 h between the last push and merge on data/seed/**, the release workflows and
 # **/verify/**. Paused (reports success) while MAINTAINERS.md lists one maintainer (ADR-0005). Reports success at once
 # for other PRs, and a schedule re-runs it so a pending PR turns green without a push. Advisory fixes and reverts are exempt.
+# The schedule is off in the solo phase, when nothing is ever pending (#211); the PR that adds the second maintainer
+# turns it back on, and pr-lint fails until it does (CONTRIBUTING §8).
 name: cooling
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
-  schedule:
-    - cron: "17 * * * *"
+  # schedule:                # solo phase: off (#211); back on with the second maintainer
+  #   - cron: "17 * * * *"
 
 permissions:
   contents: read

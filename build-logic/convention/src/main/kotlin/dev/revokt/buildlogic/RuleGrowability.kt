@@ -78,6 +78,9 @@ abstract class VerifyRuleGrowabilityTask : DefaultTask() {
 /** The fixture's parse and the contract's rules, kept free of Gradle so they can be tested directly. */
 object RuleGrowability {
     private const val NONE = "-"
+
+    /** The 0.x minor from which `check` enforces the contract (#211). */
+    private const val ENFORCED_FROM_MINOR = 3
     private val PRESETS = listOf("DEFAULT", "STRICT")
     private val SECTIONS = listOf("rules", "presets", "datasets")
     private val FROZEN = listOf("class", "layer", "emptyPath", "basicReason", "introducedIn")
@@ -121,6 +124,18 @@ object RuleGrowability {
             "$RULE_FIXTURE changed against $baseRef in ways the growability contract (spec §4) forbids:\n" +
                 found.joinToString("\n") { "  - $it" },
         )
+    }
+
+    /**
+     * Whether the root `check` enforces the contract at [version]: from 0.3 on (#211). Until then nothing is released,
+     * so the contract protects no one; `./gradlew verifyRuleGrowability` still runs it on demand. A version that does
+     * not parse enforces it.
+     */
+    fun enforcedAt(version: String): Boolean {
+        val minor = minorOf(version)
+        val major = major(minor) ?: return true
+        val number = minorNumber(minor) ?: return true
+        return major >= 1 || number >= ENFORCED_FROM_MINOR
     }
 
     /** `major.minor` of a version such as `0.1.0-SNAPSHOT` or `0.2-SNAPSHOT`. */
