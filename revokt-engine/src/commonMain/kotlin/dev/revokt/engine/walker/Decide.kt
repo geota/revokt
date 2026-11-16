@@ -58,6 +58,8 @@ internal class PathDecision(
  * - [platformOnly] is step 6's `PLATFORM_ONLY` promotion of a walk `NotFound` whose fallback failed, one that met an
  *   unsupported algorithm included: on for the trust-manager bindings and `Revokt.evaluate`, which run step 1; off for
  *   the walker-only harness and `Evaluator.evaluate`, where the walker's reason is reported directly.
+ * - [requiredEku] is the purpose an issuer's extKeyUsage must list when it has one (#237): `SERVER_AUTH` unless the
+ *   binding checks a client certificate.
  */
 internal class DecideContext(
     val verifier: SignatureVerifier,
@@ -66,6 +68,7 @@ internal class DecideContext(
     val fallback: PathBuilderFallback?,
     val nowMillis: Long,
     val platformOnly: Boolean,
+    val requiredEku: RequiredEku = RequiredEku.SERVER_AUTH,
 )
 
 /**
@@ -153,7 +156,15 @@ private class Decider(
         if (index.isAnchorBytes(leaf)) return anchorLeaf(leaf)
         leaf.keyabilityClause?.let { return parseFailed(ParseReason.PRODUCER_UNKEYABLE, it) }
         if (presentedCut && overPresented()) return presentedCut(leaf)
-        val walk = reconstruct(presented(leaf), index, context.verifier, context.probe, context.crossCallMemo)
+        val walk =
+            reconstruct(
+                presented(leaf),
+                index,
+                context.verifier,
+                context.probe,
+                context.crossCallMemo,
+                context.requiredEku,
+            )
         findings += walk.findings
         return when (walk) {
             is Walk.Found -> found(walk, leaf)
@@ -358,7 +369,12 @@ private class Decider(
     /** True when every certificate of [ders] after the leaf and before the anchor parses and is a CA. */
     private fun intermediatesAreCas(ders: List<ByteArray>): Boolean =
         (1 until ders.size - 1).all { i ->
-            (CertificateParser.parse(ders[i]) as? CertificateParse.Parsed)?.let { Cert.isCa(it.certificate) } == true
+            (
+                CertificateParser.parse(
+                    ders[i],
+                ) as? CertificateParse.Parsed
+            )?.let { IssuerProfile.of(it.certificate).isCa } ==
+                true
         }
 
     /**
