@@ -77,31 +77,24 @@ public class RevoktPolicy private constructor(
         private var clockSkewMillis = from.clockSkewMillis
         private var signedSourceFailingAfterMillis = from.signedSourceFailingAfterMillis
 
-        /**
-         * Sets [rule]'s outcome. `NO_ISSUER` and `ISSUER_UNVERIFIED` share one outcome, so setting either sets both: a
-         * server can turn one into the other, and only the diagnostic differs (spec §4, §8).
-         */
+        /** Sets [rule]'s outcome (spec §4, §8). */
         public fun rule(
             rule: Rule,
             outcome: Outcome,
-        ): Builder = apply { for (r in PolicyTable.shared(rule)) outcomes[r] = outcome }
+        ): Builder = apply { outcomes[rule] = outcome }
 
-        /**
-         * Registers [exemption] for [rule]; a second call for the same rule replaces the first. `NO_ISSUER` and
-         * `ISSUER_UNVERIFIED` share one exemption, so registering it for either registers it for both.
-         */
+        /** Registers [exemption] for [rule]; a second call for the same rule replaces the first. */
         public fun exempt(
             rule: Rule,
             exemption: Exemption,
-        ): Builder = apply { for (r in PolicyTable.shared(rule)) exemptions[r] = exemption }
+        ): Builder = apply { exemptions[rule] = exemption }
 
-        /** Removes [rule]'s exemption; for `NO_ISSUER` or `ISSUER_UNVERIFIED`, the one both share. */
-        public fun clearExemption(rule: Rule): Builder =
-            apply { for (r in PolicyTable.shared(rule)) exemptions.remove(r) }
+        /** Removes [rule]'s exemption. */
+        public fun clearExemption(rule: Rule): Builder = apply { exemptions.remove(rule) }
 
         /**
          * `exempt(rule, Exemption.anchorIn(sha256s))` for every exemptable rule that is not `EVIDENCE`, is not marked
-         * "empty path" in the §8 table (`NO_ISSUER`, `ISSUER_UNVERIFIED`: use `hostSuffixIn` and `platformOnly`) and
+         * "empty path" in the §8 table (`NO_ISSUER`: use `hostSuffixIn` and `platformOnly`) and
          * whose outcome in this builder is `REJECT` now (spec §4). It applies at its call position: a later [rule] or
          * [exempt] on the same rule wins, and a rule raised to `REJECT` after the call is not covered. Each element of
          * [sha256s] is the SHA-256 of an anchor's DER as revokt reads it (§5.3); the set is copied now.

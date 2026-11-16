@@ -12,8 +12,8 @@ import dev.revokt.RuleClass
 /**
  * A policy as decide and evaluate read it (spec §3, §8): the public `RevoktPolicy` (jvmMain) compiles to it, so
  * commonMain never sees `java.time`. One row per rule, an outcome for every rule and an exemption where one is
- * registered, plus the required datasets, the staleness map and the three time fields in milliseconds. Every input is copied into a read-only collection. Rules that [PolicyTable.shared] groups have the
- * same outcome and the same exemption.
+ * registered, plus the required datasets, the staleness map and the three time fields in milliseconds. Every input is
+ * copied into a read-only collection.
  *
  * [preset] is the preset the policy derives from (spec §4 "Growability contract": `newBuilder()` only from a preset).
  */
@@ -38,15 +38,6 @@ internal class PolicyForm(
     init {
         val missing = Rule.entries.filter { it !in this.outcomes }
         require(missing.isEmpty()) { "a policy has an outcome for every rule; missing $missing" }
-        for (rule in Rule.entries) {
-            for (other in PolicyTable.shared(rule)) {
-                require(
-                    this.outcomes[other] == this.outcomes[rule] && this.exemptions[other] === this.exemptions[rule],
-                ) {
-                    "$rule and $other share one outcome and one exemption"
-                }
-            }
-        }
     }
 
     fun outcome(rule: Rule): Outcome = outcomes.getValue(rule)

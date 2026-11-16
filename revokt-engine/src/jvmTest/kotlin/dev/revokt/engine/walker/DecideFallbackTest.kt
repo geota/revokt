@@ -208,7 +208,43 @@ class DecideFallbackTest {
     }
 
     @Test
-    fun `ISSUER_UNVERIFIED needs the leaf's own unsupported OID against a related candidate, off the bindings`() {
+    fun `a fallback path through an intermediate that is not a CA, or does not parse, is a failed fallback`() {
+        with(Honest()) {
+            // (aq)'s attack, through step 6: F is an end entity under the root, C a CA for a recovered key F signed.
+            val f = w.cert("F", w.name("attacker.example"), root.subject, w.leafKey(), signer = root.key)
+            val c = w.cert("C", intermediate.subject, f.subject, signer = f.key).also { w.verifies(leaf, it.key) }
+            val attack = fixture("fb-ca", presented = listOf(leaf, c, f), walk = notFound(NoIssuerReason.UNANCHORED))
+            val cases =
+                listOf(
+                    "an end entity between the leaf and the anchor" to FakeFallback.finds(leaf, c, f, root),
+                    "an end entity right above the leaf" to FakeFallback.finds(leaf, f, root),
+                    "an intermediate that does not parse" to
+                        FakeFallback { listOf(leaf.der, c.der, byteArrayOf(0x30, 0x00), root.der) },
+                )
+            for ((case, fallback) in cases) {
+                val d = WalkerHarness.decide(attack, fallback)
+                assertPath(d, case) {
+                    status(PathStatus.NO_ISSUER)
+                        .noIssuerReason(NoIssuerReason.UNANCHORED)
+                        .walkerReason(NoIssuerReason.UNANCHORED)
+                        .endReason(WalkEnd.COMPLETE)
+                }
+                assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings, case)
+                assertEquals(emptyList(), d.issuerKeys, case)
+            }
+            // The control: the same builder with only CA intermediates is used, keyed by C.
+            val control = WalkerHarness.decide(attack, FakeFallback.finds(leaf, c, root))
+            assertEquals(PathStatus.FOUND, control.path.status)
+            assertEquals(true, control.path.usedFallback)
+            assertEquals(listOf(c.keyHash), control.issuerKeys)
+            // A path of the leaf and its anchor alone has no intermediate to check.
+            val short = WalkerHarness.decide(attack, FakeFallback.finds(leaf, root))
+            assertEquals(PathStatus.FOUND, short.path.status)
+        }
+    }
+
+    @Test
+    fun `UNSUPPORTED_ALGORITHM needs the leaf's own unsupported OID against a related candidate, off the bindings`() {
         with(Honest()) {
             val leafU =
                 w.cert(
@@ -226,18 +262,17 @@ class DecideFallbackTest {
                     walk = notFound(NoIssuerReason.ALL_CANDIDATES_INVALID),
                 )
             val fallbacks = listOf(FakeFallback.fails() to FallbackReason.FAILED, null to FallbackReason.DISABLED)
+            // On a trust-manager binding the platform accepted the chain: NO_ISSUER(PLATFORM_ONLY) whatever the
+            // label, with the walker's reason and the OID kept.
+            val labels = listOf(false to NoIssuerReason.UNSUPPORTED_ALGORITHM, true to NoIssuerReason.PLATFORM_ONLY)
             fallbacks.forEach { (fallback, reason) ->
-                listOf(false, true).forEach { platformOnly ->
+                labels.forEach { (platformOnly, label) ->
                     val at = "$reason platformOnly=$platformOnly"
                     val d = WalkerHarness.decide(f, fallback, platformOnly = platformOnly)
-                    // On a trust-manager binding the platform accepted the chain: NO_ISSUER(PLATFORM_ONLY) whatever the
-                    // label, with the walker's reason and the OID kept.
                     assertPath(d, at) {
-                        if (platformOnly) {
-                            status(PathStatus.NO_ISSUER).noIssuerReason(NoIssuerReason.PLATFORM_ONLY)
-                        } else {
-                            status(PathStatus.ISSUER_UNVERIFIED)
-                        }.walkerReason(NoIssuerReason.ALL_CANDIDATES_INVALID)
+                        status(PathStatus.NO_ISSUER)
+                            .noIssuerReason(label)
+                            .walkerReason(NoIssuerReason.ALL_CANDIDATES_INVALID)
                             .endReason(WalkEnd.COMPLETE)
                     }
                     assertEquals(listOf(unsupported(!platformOnly), notUsed(reason)), d.findings, at)

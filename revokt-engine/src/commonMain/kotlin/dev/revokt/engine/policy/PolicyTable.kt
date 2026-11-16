@@ -50,8 +50,8 @@ internal object PolicyTable {
         when (rule) {
             Rule.REVOKED, Rule.PATH_BUDGET_EXCEEDED, Rule.NO_DATA -> Outcome.REJECT
 
-            Rule.ENGINE_ERROR, Rule.PARSE_FAILED, Rule.ISSUER_UNVERIFIED, Rule.NO_ISSUER, Rule.NOT_ENROLLED,
-            Rule.NO_SCTS, Rule.NOT_COVERED, Rule.STALE,
+            Rule.ENGINE_ERROR, Rule.PARSE_FAILED, Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.NOT_COVERED,
+            Rule.STALE,
             -> Outcome.ALLOW
         }
 
@@ -61,7 +61,7 @@ internal object PolicyTable {
             Rule.NOT_COVERED -> Outcome.ALLOW
 
             Rule.REVOKED, Rule.PATH_BUDGET_EXCEEDED, Rule.NO_DATA, Rule.ENGINE_ERROR, Rule.PARSE_FAILED,
-            Rule.ISSUER_UNVERIFIED, Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE,
+            Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE,
             -> Outcome.REJECT
         }
 
@@ -95,23 +95,13 @@ internal object PolicyTable {
      * The rules marked "empty path" in the spec §8 table: they fire only on an empty reported path, where `anchorIn`
      * never matches, so `exemptAnchors` skips them.
      */
-    val EMPTY_PATH: Set<Rule> = setOf(Rule.ISSUER_UNVERIFIED, Rule.NO_ISSUER)
-
-    /**
-     * `NO_ISSUER` and `ISSUER_UNVERIFIED` share one outcome and one exemption: a server can turn the first into the
-     * second (an unsupported signature algorithm on a certificate it presents counts toward `ISSUER_UNVERIFIED`), so
-     * a relabel between them changes only the diagnostic. Firefox likewise puts both errors in one override category.
-     */
-    private val SHARED: Set<Rule> = setOf(Rule.NO_ISSUER, Rule.ISSUER_UNVERIFIED)
-
-    /** The rules that share [rule]'s outcome and exemption, [rule] included; a set of one for most rules. */
-    fun shared(rule: Rule): Set<Rule> = if (rule in SHARED) SHARED else setOf(rule)
+    val EMPTY_PATH: Set<Rule> = setOf(Rule.NO_ISSUER)
 
     /** The minor that introduced [rule]: every M1 rule is 0.1's. */
     fun introducedIn(rule: Rule): String =
         when (rule) {
             Rule.REVOKED, Rule.PATH_BUDGET_EXCEEDED, Rule.NO_DATA, Rule.ENGINE_ERROR, Rule.PARSE_FAILED,
-            Rule.ISSUER_UNVERIFIED, Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.NOT_COVERED, Rule.STALE,
+            Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.NOT_COVERED, Rule.STALE,
             -> "0.1"
         }
 

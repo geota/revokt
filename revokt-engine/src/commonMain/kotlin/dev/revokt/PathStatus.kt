@@ -7,7 +7,6 @@ package dev.revokt
 public enum class PathStatus {
     FOUND,
     NO_ISSUER,
-    ISSUER_UNVERIFIED,
     PATH_BUDGET_EXCEEDED,
     PARSE_FAILED,
     NOT_WALKED,
