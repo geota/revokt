@@ -75,7 +75,7 @@ JDK, by probe.
 | E8 | BOOLEAN `cA = 0x01` is MALFORMED | The JDK reads TRUE; webpki requires `00`/`FF` (`der.rs:446-462`) | stricter than the JDK | DER; matches webpki | #164 review | kept |
 | E9 | The TLS-side parser reads any non-zero critical octet as TRUE (`CertificateParser.kt:389`); the x5u chain requires `00`/`FF` (`X5uDer.kt`, `criticalIsDer`), and so does K8 for its extensions | webpki requires `00`/`FF` for the flag too: `Extension::from_der` reads it with `bool::from_der` (`x509.rs:37`, `der.rs:446-462`), now checked | looser on the TLS parser only | §9.2: the CRLite leaf parser is at least as lenient as the platform TLS stacks; the x5u chain matches since #170 | spec §9.2, §7.1 | kept (TLS parser); aligned on the x5u chain (#170) |
 | E10 | GeneralName identifier octets: exactly `a0 81 82 a3 a4 a5 86 87 88` | webpki, the same (`subject_name/mod.rs:290-311`) | none | Aligned in #164 | #164 review | aligned (e92566f) |
-| E11 | Duplicate extension → DUPLICATE (FAILED for #126) | webpki rejects duplicates of the extensions it tracks (`set_extension_once`, `x509.rs:52-63`); the JDK rejects them at parse | none | — | #164 review | kept; #126 also rejects a duplicate of any OID |
+| E11 | Duplicate extension → DUPLICATE (FAILED for #126) | webpki rejects duplicates of the extensions it tracks (`set_extension_once`, `x509.rs:49-62`); the JDK rejects them at parse | none | — | #164 review | kept; #126 also rejects a duplicate of any OID |
 
 ## 3. Content signature
 
@@ -208,7 +208,7 @@ code.
 | X11 | No revocation check of chain certificates | Firefox checks OneCRL on every link | looser | Not in §7.1 | spec | kept |
 | X12 | Unread extension contents (SKI, AKI, policies, AIA) are not held to strict DER | mozpkix parses the extensions it reads | same | Firefox does not read them on this path | #170 review | kept |
 | X13 | The anchor's TLS feature is not read | Firefox CheckTLSFeatures also covers the anchor | looser | The root is pinned; a TLS feature there could only add a constraint | lead (#173) | kept |
-| X14 | webpki-only differences, at 0.104.0-alpha.7: its smaller understood set (keyUsage, subjectAltName, basicConstraints, nameConstraints, cRLDistributionPoints, extKeyUsage and the SCT list; `cert.rs:319-347`); keyUsage recorded but read only for a CRL issuer (`verify_cert.rs:151, 171`); v3 required (`cert.rs:276-291`); algorithms compared as bytes (`signed_data.rs:178`). Unique IDs, rejected by 0.103.15 (`cert.rs:98-101`), are skipped by 0.104.0-alpha.7 (`cert.rs:123-139`), as mozilla::pkix and revokt do, so that one is no longer a difference | — | — | revokt follows mozilla::pkix | maintainer (follow Firefox) | kept |
+| X14 | webpki-only differences, at 0.104.0-alpha.7: its smaller understood set (keyUsage, subjectAltName, basicConstraints, nameConstraints, cRLDistributionPoints, extKeyUsage and the SCT list; `cert.rs:319-347`); keyUsage recorded but read only for a CRL issuer (`verify_cert.rs:151, 171`); v3 required (`cert.rs:276-291`); the outer and TBS algorithms compared as bytes (`cert.rs:90-92`). Unique IDs, rejected by 0.103.15 (`cert.rs:98-101`), are skipped by 0.104.0-alpha.7 (`cert.rs:123-139`), as mozilla::pkix and revokt do, so that one is no longer a difference | — | — | revokt follows mozilla::pkix | maintainer (follow Firefox) | kept |
 
 Now matching Firefox, so no longer differences: strict DER (mozpkix leniencies included); outer = TBS algorithm; LEAF_CA; malformed leaf BC/KU; leaf OCSPSigning; unknown critical extensions; CA EKU codeSigning; the TLS feature below the terminal; nameConstraints dNSName semantics; CheckSubjectPublicKeyInfo; pathLen ≤ 127; non-empty keyUsage; minimal serials; explicit v1; the three PSS encodings and rsaEncryption/id-ecPublicKey keys; the leaf SCT list; the reason boundary (PARSE vs EXTENSION).
 
@@ -268,7 +268,7 @@ audit. Rows with a follow-up issue change when that issue lands.
 
 | # | revokt | upki / webpki | Firefox | Dir | Why | Decided by | Status |
 |---|---|---|---|---|---|---|---|
-| R1 | `NO_DATA` rejects in `DEFAULT` (exemptable) | `missing_data = Error` (`rustls-upki/src/lib.rs:259-267`) | No filter is `Success`, an allow (NSSTD:712-715) | stricter than Firefox | Matches upki | spec §8 | kept; the §8 table now cites both (#217) |
+| R1 | `NO_DATA` rejects in `DEFAULT` (exemptable) | `missing_data = Error` (`rustls-upki/src/lib.rs:259-267`) | No filter is `Success`, so it falls back to OCSP, as `NOT_COVERED` does (NSSTD:712-715) | stricter than Firefox | Matches upki | spec §8 | kept; the §8 table now cites both (#217) |
 | R2 | `ENGINE_ERROR` allows in `DEFAULT` | Hard fail (`rustls-upki/src/lib.rs:132-136`) | `FATAL_ERROR_LIBRARY_FAILURE` (NSSTD:716-720) | looser than both | ADR-0001; see Q21 | ADR-0001, spec §8 | kept |
 
 ## Log

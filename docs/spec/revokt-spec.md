@@ -3566,7 +3566,7 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
 |---|---|---|---|---|---|---|---|
 | `REVOKED` | evidence | reject | reject | reject | reject | reject | CRLite, any evaluated key |
 | `PATH_BUDGET_EXCEEDED` | unevaluable; one of goal 3's two stated exceptions | **reject** | reject | reject: exhaustion is `ERROR_UNKNOWN_ISSUER` | n/a | reject: webpki's budget error is fatal | decision steps 3, 5, 6 |
-| `NO_DATA` | unevaluable | **reject** (exemptable) | reject (exemptable) | allow: no filter is `Success` | n/a | reject: `missing_data = Error` | decision step 7, per required dataset |
+| `NO_DATA` | unevaluable | **reject** (exemptable) | reject (exemptable) | → OCSP: no filter is `Success` | n/a | reject: `missing_data = Error` | decision step 7, per required dataset |
 | `ENGINE_ERROR` | unevaluable | allow | reject | reject: `FATAL_ERROR_LIBRARY_FAILURE` | n/a | reject: a hard error, and rustls-upki fails closed | boundary, engine result, exemption throw |
 | `PARSE_FAILED` | unevaluable (goal 3) | allow | reject | n/a | n/a | n/a | decision step 3 |
 | `ISSUER_UNVERIFIED` | unevaluable | allow | reject (exemptable; **empty path**; shares its outcome and exemption with `NO_ISSUER`, revision 57) | n/a | n/a | n/a | decision step 6 |
@@ -5211,12 +5211,14 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     with `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` (lines 312 to 322:
     `ExpectTagAndGetValueAtEnd(extnValue, OCTET_STRING, …)`), and a failure fails every path through the
     certificate, as revision 46 recorded at `86136a5`.
-  - **webpki's divergences**, consulted and not followed: its understood critical set is only id-ce 15, 17, 19, 30, 31
-    and 37 (keyUsage, subjectAltName, basicConstraints, nameConstraints, cRLDistributionPoints, extKeyUsage;
-    `cert.rs` lines 302 to 317); it rejects any certificate with unique IDs (`cert.rs` line 98); it does not require
-    keyCertSign on a CA, reading keyUsage only for CRL checks; it requires v3 (`UnsupportedCertVersion`); it compares
-    the outer and TBS algorithms by bytes (`SignatureAlgorithmMismatch`); and it checks every descendant's names
-    against nameConstraints.
+  - **webpki's divergences**, consulted and not followed (at 0.104.0-alpha.7, upki's version; re-read for #217): its
+    understood critical set is only id-ce 15, 17, 19, 30, 31 and 37 (keyUsage, subjectAltName, basicConstraints,
+    nameConstraints, cRLDistributionPoints, extKeyUsage) and the SCT list (`cert.rs` lines 319 to 347); it does not
+    require keyCertSign on a CA, reading keyUsage only for CRL checks (`verify_cert.rs` lines 151 and 171); it requires
+    v3 (`UnsupportedCertVersion`, `cert.rs` lines 276 to 291); it compares the outer and TBS algorithms by bytes
+    (`SignatureAlgorithmMismatch`, `cert.rs` lines 90 to 92); and it checks every descendant's names against
+    nameConstraints. Unique IDs, which 0.103.15 rejected, are skipped (`cert.rs` lines 123 to 139), as mozilla::pkix
+    and revokt do.
   - **Differences from mozilla::pkix that remain, each by §7.1's own text:** the terminal is its pinned SPKI only
     (Firefox matches the root's DER and checks it), so the terminal's nameConstraints are never read, and neither is its
     TLS feature, which Firefox also checks against the anchor's child; the path is the
