@@ -79,7 +79,7 @@ internal class MirrorBootstrapTest : MirrorSyncFixture() {
         // A stored SIGNED generation the pointer names, though the snapshot holds none, stops it too.
         snapshot.publish(GenerationSnapshot(2, mapOf(Dataset.CRLITE to empty), null))
         val signed = UpdateFixtures.pending(store)
-        store.writeGeneration(signed.meta, signed.index, signed.deltas, signed.records)
+        store.writeGeneration(signed.meta, signed.index, staged(signed), signed.records)
         store.point(Pointer(signed.meta.directory, null))
         assertNull(attempt(mirror))
         assertTrue(mirror.fetcher.requests.isEmpty())

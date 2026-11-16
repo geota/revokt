@@ -185,8 +185,12 @@ internal open class MirrorSyncFixture {
         id: String,
     ): String {
         val g = UpdateFixtures.pending(store, trustClass = trustClass, generationId = id)
-        return store.writeGeneration(g.meta, g.index, g.deltas, g.records)
+        return store.writeGeneration(g.meta, g.index, staged(g), g.records)
     }
+
+    /** [g]'s delta files as [UpdateFixtures.pending] staged them in its directory, by name. */
+    protected fun staged(g: PendingGeneration): Map<String, ByteArray> =
+        g.deltas.mapValues { (name, _) -> checkNotNull(store.file(g.meta.directory, name)) { "$name is not staged" } }
 
     /** Nothing fetched, the store's keys unchanged, and the `SIGNED` directory [signed] still complete. */
     protected fun assertStopped(

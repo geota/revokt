@@ -70,7 +70,7 @@ internal class MirrorSyncTest : MirrorSyncFixture() {
         val directory = GenerationNames.directory(now - 3 * hour, mirror.id)
         assertEquals(Pointer(directory, null), pointer())
         // The index is built locally, in manifest order, and no index.bin was fetched.
-        val index = C2spIndex.read(checkNotNull(store.index(directory)))
+        val index = C2spIndex.read(checkNotNull(store.file(directory, StoreLayout.INDEX)))
         assertEquals(listOf("a.filter", "b.filter"), index.filenames)
         assertEquals(listOf(base + "a.filter", base + "b.filter"), mirror.fileRequests().map { it.url })
         // Each file is a blob under the lowercase re-encoding of its hash.
@@ -183,7 +183,10 @@ internal class MirrorSyncTest : MirrorSyncFixture() {
         val at = Mirror(files.take(256))
         sync(at, now + hour).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
         assertEquals(256, at.fileRequests().size)
-        assertEquals(256, C2spIndex.read(checkNotNull(store.index(checkNotNull(pointer()).live))).filenames.size)
+        assertEquals(
+            256,
+            C2spIndex.read(checkNotNull(store.file(checkNotNull(pointer()).live, StoreLayout.INDEX))).filenames.size,
+        )
     }
 
     @Test
@@ -303,7 +306,7 @@ internal class MirrorSyncTest : MirrorSyncFixture() {
         val derived = GenerationNames.derive(long)
         assertEquals(32, derived.length)
         assertEquals(listOf(base + "manifest.json", base + long), mirror.fetcher.requests.map { it.url })
-        assertEquals(listOf(derived), C2spIndex.read(checkNotNull(store.index(directory))).filenames)
+        assertEquals(listOf(derived), C2spIndex.read(checkNotNull(store.file(directory, StoreLayout.INDEX))).filenames)
         assertEquals(setOf(derived), checkNotNull(store.meta(directory)).blobs.keys)
     }
 
