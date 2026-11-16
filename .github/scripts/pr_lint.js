@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// Runs inside actions/github-script with `github`, `context`, `core` in scope (CONTRIBUTING §5, §12, ADR-0005).
+// Runs inside actions/github-script with `github`, `context`, `core` in scope (CONTRIBUTING §5, §12, ADR-0005, ADR-0006).
 const number = context.payload.pull_request ? context.payload.pull_request.number : context.payload.issue.number;
 const { owner, repo } = context.repo;
 const pr = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
@@ -47,6 +47,11 @@ if (needCo && !/^Co-authored-by:\s*\S/im.test(trailers)) failures.push('a branch
 if (needSign && !/^Signed-off-by:\s*\S/im.test(trailers)) failures.push('a branch commit carries Signed-off-by but the Trailers block does not: copy the human sign-off (CONTRIBUTING §4)');
 // Labels this check owns (CONTRIBUTING §2, §12): ai-assisted from the trailers, size/XL from production-source additions.
 const wantAi = /^Co-authored-by:\s*\S/im.test(trailers);
+
+// An agent-written PR carries its Handoff in the body (AGENTS.md §12, ADR-0006): something under the section's headings.
+if (wantAi && !isRenovate && (section('Handoff') || '').replace(/^###.*$/gm, '').trim().length === 0) {
+  failures.push('section "## Handoff" is missing or empty: an agent-written PR fills it in the body (AGENTS.md §12)');
+}
 
 // Solo-maintainer phase (ADR-0005): an "Independent review" comment from a fresh-context review is required.
 const maintainers = require('fs').readFileSync('MAINTAINERS.md', 'utf8').match(/\| @([A-Za-z0-9-]+) \|/g) || [];
