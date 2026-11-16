@@ -223,13 +223,13 @@ internal class CrliteSync(
         }
 
         /**
-         * [read] at stage `STORE`, so a store that throws is `STORE_FAILED` ([thrown]); the stage before is restored
+         * [access] at stage `STORE`, so a store that throws is `STORE_FAILED` ([thrown]); the stage before is restored
          * after it returns, never on a throw.
          */
-        private inline fun <T> stored(read: () -> T): T {
+        private inline fun <T> stored(access: () -> T): T {
             val before = stage
             stage = SyncStage.STORE
-            val value = read()
+            val value = access()
             stage = before
             return value
         }
