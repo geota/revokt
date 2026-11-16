@@ -3,6 +3,16 @@
 #
 # The PR tier (CONTRIBUTING §6): `check` on the JDK matrix, `ci-extras`, `static`, `coverage`. Every job is a required
 # status check (Appendix B). Nightly and release live in their own workflows.
+#
+# A PR that changes only documentation (`changes` below) skips the JDK and OS matrix: `check-docs` reports the same
+# check names instead, and ci-extras runs only the spec inventory (specStatusCheck), so the required checks still
+# report (#211). Anything else, a push, or a `changes` job that did not finish runs everything.
+#
+# The Linux test jobs block egress except to the hosts their setup needs (GitHub and its Actions cache and artifact
+# storage, Adoptium, the Gradle distribution and plugin portal, Maven Central, Google's Maven, and for the
+# Kotlin/Native compile JetBrains' downloads); a test can reach loopback and those hosts, nothing else, and
+# NoHttpClientInTests is the second line. A blocked endpoint fails the job and harden-runner annotates it; add a host
+# only for a build step, never for a test (CONTRIBUTING §6). The two allow-lists below are copies: keep them equal.
 name: ci
 
 on:
@@ -22,8 +32,46 @@ env:
   GRADLE_OPTS: -Dorg.gradle.daemon=false
 
 jobs:
+  changes:
+    name: changes (documentation only?)
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.paths.outputs.code }}
+    steps:
+      - name: does the PR change anything but documentation?
+        id: paths
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          CHANGED: ${{ github.event.pull_request.changed_files }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PR" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi   # a push runs everything
+          # Every path changed between the event's base and head (so a later push cannot change the answer), and the old
+          # path of a rename. Documentation is a Markdown file outside a source set and the corpus, or a file under
+          # docs/ that is not a script (verifyHeaderLocations reads *.py and *.sh); the spec and docs/dev/status.md
+          # stay covered by specStatusCheck.
+          compare=$(gh api "repos/$REPO/compare/$BASE...$HEAD")
+          files=$(jq -r '.files[]? | .filename, (.previous_filename // empty)' <<< "$compare")
+          listed=$(jq '.files // [] | length' <<< "$compare")
+          code=false
+          if [ -z "$files" ] || [ "$listed" != "$CHANGED" ]; then code=true; fi   # a truncated or empty list runs everything
+          while IFS= read -r f; do
+            case $f in
+              corpus/*|src/*|*/src/*|*.py|*.sh) code=true ;;
+              docs/*|*.md) ;;
+              *) code=true ;;
+            esac
+          done <<< "$files"
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
   check:
     name: check (${{ matrix.label }})
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -36,14 +84,31 @@ jobs:
     steps:
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
-          egress-policy: audit   # switched to `block` once the warm-up job and cache restore exist (CONTRIBUTING §6)
+          egress-policy: block   # the allow-list is the setup's hosts (header)
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            codeload.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+            api.adoptium.net:443
+            services.gradle.org:443
+            downloads.gradle.org:443
+            plugins.gradle.org:443
+            plugins-artifacts.gradle.org:443
+            repo.maven.apache.org:443
+            repo1.maven.org:443
+            dl.google.com:443
+            maven.google.com:443
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Each feature release at its latest patch, the one users run: a runner's cached patch can lag (17.0.20.1
       # re-encodes the SPKI of an algorithm it does not know, such as ML-DSA, with NULL parameters; 17.0.21 knows
       # ML-DSA). This resolves through api.adoptium.net and downloads from github.com, which the harden-runner policy
-      # must allow once it blocks egress.
+      # allows.
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
@@ -115,6 +180,8 @@ jobs:
 
   check-os:
     name: check (${{ matrix.os }})
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -138,13 +205,48 @@ jobs:
       - name: check (engine and clubcard only; file locking and ATOMIC_MOVE paths)
         run: ./gradlew :revokt-engine:check :revokt-clubcard:check --no-daemon
 
+  # The pass-through for a documentation-only PR: the same check names as check and check-os, reporting success
+  # (#211). Keep its labels equal to theirs.
+  check-docs:
+    name: check (${{ matrix.label }})
+    needs: changes
+    if: needs.changes.outputs.code == 'false'
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        label: ["17", "21", "lts", "feature", "macos", "windows"]
+    steps:
+      - run: echo "Documentation only; the JDK and OS matrix has nothing to test (CONTRIBUTING §6)."
+
   ci-extras:
     name: ci-extras
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
-          egress-policy: audit
+          egress-policy: block   # as `check`, plus JetBrains' downloads for the Kotlin/Native compile
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            codeload.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+            api.adoptium.net:443
+            services.gradle.org:443
+            downloads.gradle.org:443
+            plugins.gradle.org:443
+            plugins-artifacts.gradle.org:443
+            repo.maven.apache.org:443
+            repo1.maven.org:443
+            dl.google.com:443
+            maven.google.com:443
+            download.jetbrains.com:443
+            download-cdn.jetbrains.com:443
+            cache-redirector.jetbrains.com:443
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -156,7 +258,9 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       # The Rule fixture's growability check (spec §4, #73) compares with the PR's base, or on main with the commit before.
+      # `check` enforces it from 0.3 on (#211); the base is passed either way.
       - name: fetch the growability base
+        if: needs.changes.outputs.code != 'false'
         id: base
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -165,10 +269,14 @@ jobs:
             git fetch --no-tags --depth=1 origin "$BASE"
             echo "property=-Prevokt.growabilityBase=$BASE" >> "$GITHUB_OUTPUT"
           fi
-      - name: purity compile, consumers (Android modules from 0.3), the growability check
+      - name: purity compile, consumers (Android modules from 0.3)
+        if: needs.changes.outputs.code != 'false'
         env:
           GROWABILITY_BASE: ${{ steps.base.outputs.property }}
         run: ./gradlew check -Prevokt.ci ${GROWABILITY_BASE:+"$GROWABILITY_BASE"} --no-daemon
+      - name: documentation only; the spec inventory (docs/dev/status.md fresh, the fixture count not lower)
+        if: needs.changes.outputs.code == 'false'
+        run: ./gradlew specStatusCheck --no-daemon
 
   static:
     name: static
