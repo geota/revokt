@@ -89,7 +89,6 @@ internal val RULE_TABLE: List<RuleRow> =
         RuleRow(Rule.NO_DATA) { it.dataRule(Rule.NO_DATA) },
         RuleRow(Rule.ENGINE_ERROR) { Rule.ENGINE_ERROR in it.crliteRules || it.boundaryError || it.exemptionError },
         RuleRow(Rule.PARSE_FAILED) { it.pathRule == Rule.PARSE_FAILED },
-        RuleRow(Rule.ISSUER_UNVERIFIED) { it.pathRule == Rule.ISSUER_UNVERIFIED },
         RuleRow(Rule.NO_ISSUER) { it.pathRule == Rule.NO_ISSUER },
         RuleRow(Rule.NOT_ENROLLED) { Rule.NOT_ENROLLED in it.crliteRules },
         RuleRow(Rule.NO_SCTS) { Rule.NO_SCTS in it.crliteRules },

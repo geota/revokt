@@ -5,6 +5,8 @@ package dev.revokt.engine.walker
 
 import dev.revokt.CrliteSct
 import dev.revokt.KeyabilityClause
+import dev.revokt.engine.parse.ExtensionRead
+import dev.revokt.engine.parse.ExtensionValues
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.ParsedCertificate
@@ -26,6 +28,10 @@ import okio.ByteString.Companion.toByteString
  * - [algorithmIdMismatch] is §5.1's per-certificate `AlgorithmIdMismatch`, computed by the parser after NULL/absent
  *   normalisation. §5.1 declares `findings: List<Finding>` here; decide turns this flag into that finding.
  * - [producerKeyable] and [keyabilityClause] are §9.2's keyability profile; only the leaf's are read (decision step 3).
+ * - [isCa] is true only when the one basicConstraints extension reads with `cA = TRUE`. An absent extension, `cA`
+ *   omitted or FALSE, and a basicConstraints that is malformed, duplicated or spelled with a non-minimal OID arc are
+ *   all false, as webpki (`check_basic_constraints`, `EndEntityUsedAsCa`) and mozilla::pkix (`CheckBasicConstraints`,
+ *   `ERROR_CA_CERT_INVALID`) treat a would-be issuer. [reconstruct] reads it for every non-anchor candidate.
  */
 internal class Cert private constructor(
     p: ParsedCertificate,
@@ -65,6 +71,7 @@ internal class Cert private constructor(
     val keyabilityClause: KeyabilityClause? = Keyability.firstFailing(p)
     val producerKeyable: Boolean = keyabilityClause == null
     val algorithmIdMismatch: Boolean = p.envelope.algorithmIdMismatch
+    val isCa: Boolean = isCa(p)
 
     override fun toString(): String = "Cert(${bytesHash.hex()})"
 
@@ -76,6 +83,10 @@ internal class Cert private constructor(
             p: ParsedCertificate,
             canonicaliser: (ByteArray) -> String?,
         ): Cert = Cert(p, canonicaliser)
+
+        /** [Cert.isCa] of [p]: its one basicConstraints reads `cA = TRUE`; anything else, absence included, is false. */
+        fun isCa(p: ParsedCertificate): Boolean =
+            (ExtensionValues.basicConstraints(p) as? ExtensionRead.Value)?.value?.ca == true
 
         @Suppress("TooGenericExceptionCaught") // §5.5's rule: every throwable but a fatal error is caught
         private fun canonical(

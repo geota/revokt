@@ -28,10 +28,13 @@ public sealed class Finding {
 
         public val source: ChainSource = requireNotNull(builder.source) { "source is not set" }
 
-        /** The reported reason, after any `PLATFORM_ONLY` promotion; set exactly when [status] is `NO_ISSUER`. */
+        /**
+         * The reported reason, after decide's `UNSUPPORTED_ALGORITHM` label or `PLATFORM_ONLY` promotion; set exactly
+         * when [status] is `NO_ISSUER`.
+         */
         public val noIssuerReason: NoIssuerReason? = builder.noIssuerReason
 
-        /** The walker's own reason, before any `PLATFORM_ONLY` promotion. */
+        /** The walker's own reason, before any `UNSUPPORTED_ALGORITHM` label or `PLATFORM_ONLY` promotion. */
         public val walkerReason: NoIssuerReason? = builder.walkerReason
 
         /** Set exactly when [status] is `PARSE_FAILED`. */
@@ -470,7 +473,7 @@ public sealed class Finding {
 
     /**
      * An algorithm OID a layer could not verify (spec §4, §5.1): the walk emits one per OID it met, on every outcome,
-     * with [outcomeDepended] true exactly when the status is `ISSUER_UNVERIFIED`.
+     * with [outcomeDepended] true exactly when the path is `NO_ISSUER` with reason `UNSUPPORTED_ALGORITHM`.
      */
     @OptIn(RevoktTestingApi::class)
     public class UnsupportedAlgorithm private constructor(
