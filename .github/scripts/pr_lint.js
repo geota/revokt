@@ -71,6 +71,19 @@ if (maintainers.length < 2 && !pr.draft && !isRenovate) {
   }
 }
 
+// The solo phase turns off the cooling schedule (#211). Once MAINTAINERS.md lists two maintainers it comes back: the
+// PR head's cooling.yml must have an active cron (read from the head, so the PR that restores it can pass).
+if (maintainers.length >= 2) {
+  let cooling = '';
+  try {
+    const { data } = await github.rest.repos.getContent({ owner, repo, path: '.github/workflows/cooling.yml', ref: pr.head.sha });
+    cooling = Buffer.from(data.content || '', 'base64').toString('utf8');
+  } catch (e) { core.warning(`cooling.yml not read: ${e.message}`); }
+  if (!/^ {2}schedule:[^\S\r\n]*\r?\n[^\S\r\n]+- cron:/m.test(cooling)) {
+    failures.push('MAINTAINERS.md lists two maintainers: turn the cooling schedule back on in .github/workflows/cooling.yml (CONTRIBUTING §8)');
+  }
+}
+
 const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: number, per_page: 100 });
 
 // Trademark rule (spec §13): every added line that mentions revokt.com is the disambiguation sentence, except in
@@ -86,10 +99,11 @@ for (const f of files) {
   }
 }
 
-// size/XL: more than 400 added lines of production source (tests, fixtures, corpora, dumps, lockfiles excluded).
+// size/XL: more than 1000 added lines of production source (tests, fixtures, corpora, dumps, lockfiles excluded); raised
+// from 400 in #211, when a quarter of all PRs carried the label and it had stopped being a signal.
 const nonProduction = /(\/test\/|\/jvmTest\/|\/commonTest\/|^corpus\/|\.api$|\.lockfile$|verification-metadata\.xml$|verification-keyring\.keys$|^docs\/|\.md$|Cargo\.lock$)/;
 const productionAdded = files.filter((f) => !nonProduction.test(f.filename)).reduce((n, f) => n + (f.additions || 0), 0);
-const wantXl = productionAdded > 400;
+const wantXl = productionAdded > 1000;
 {
   const have = new Set(pr.labels.map((l) => l.name));
   const add = []; const remove = [];

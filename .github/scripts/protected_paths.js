@@ -8,6 +8,8 @@ const number = context.payload.pull_request.number;
 const pr = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
 
 const maintainers = (fs.readFileSync('MAINTAINERS.md', 'utf8').match(/\| @([A-Za-z0-9-]+) \|/g) || []).map((m) => m.replace(/[|@ ]/g, ''));
+// Solo phase (ADR-0005, #211): one maintainer, so nothing to count; pass at once. The second maintainer switches it on.
+if (maintainers.length < 2) { core.info('protected-paths: solo-maintainer phase, nothing to count'); return; }
 const globs = fs.readFileSync('.github/protected-paths.txt', 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
 
 function globToRegex(g) {

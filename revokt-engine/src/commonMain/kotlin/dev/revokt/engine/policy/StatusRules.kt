@@ -13,7 +13,6 @@ internal fun PathStatus.firedRule(): Rule? =
     when (this) {
         PathStatus.FOUND, PathStatus.NOT_WALKED -> null
         PathStatus.NO_ISSUER -> Rule.NO_ISSUER
-        PathStatus.ISSUER_UNVERIFIED -> Rule.ISSUER_UNVERIFIED
         PathStatus.PATH_BUDGET_EXCEEDED -> Rule.PATH_BUDGET_EXCEEDED
         PathStatus.PARSE_FAILED -> Rule.PARSE_FAILED
     }
