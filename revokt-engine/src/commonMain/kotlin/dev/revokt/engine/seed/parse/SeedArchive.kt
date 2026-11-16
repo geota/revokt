@@ -53,7 +53,7 @@ internal class ZipEntry(
  * record with no comment as the archive's last bytes, right after the central directory; at most [maxEntries] entries,
  * no duplicate name, none encrypted, each stored or deflated (a stored one's sizes equal), its local header naming the
  * same file with the same method and flags (and, without a data descriptor, the same CRC and sizes), its data ending
- * before the central directory, and no two read entries overlapping; an entry inflates to exactly its declared size and
+ * before the central directory, and no two entries overlapping anywhere in the archive; an entry inflates to exactly its declared size and
  * CRC-32. The caps are enforced while inflating: a declared size is never trusted to bound one.
  */
 internal class SeedArchive private constructor(
@@ -290,6 +290,7 @@ internal class SeedArchive private constructor(
                 entries += entry
             }
             if (!directory.exhausted()) fail("bytes after the last central-directory entry")
+            requireDisjoint(entries)
             val whole = Buffer().write(bytes)
             tail.copyTo(whole, tail.size - END_BYTES, END_BYTES)
             return SeedArchive(opener, size, end.offset, whole.readByteString(), entries)
@@ -348,6 +349,22 @@ internal class SeedArchive private constructor(
                     }
                     return End(count, size, offset)
                 }
+            }
+        }
+
+        /**
+         * No two entries overlap, across the whole archive and not only within one pass: in offset order each starts at
+         * or after the end of the one before, its local header with the central directory's name, then its data (a
+         * lower bound of the end, since a local extra field and a data descriptor are known only once read; within a
+         * pass the reader checks the exact end).
+         */
+        private fun requireDisjoint(entries: List<ZipEntry>) {
+            var end = 0L
+            var before: ZipEntry? = null
+            for (e in entries.sortedBy { it.localOffset }) {
+                if (e.localOffset < end) fail("${printable(e.name)} overlaps ${before?.let { printable(it.name) }}")
+                end = e.localOffset + LOCAL_BYTES + e.name.length + e.compressedSize
+                before = e
             }
         }
 

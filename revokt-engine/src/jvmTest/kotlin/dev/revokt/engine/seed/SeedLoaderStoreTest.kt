@@ -107,20 +107,80 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
-    fun `a malformed pointer beside a stored generation not older than the seed skips it, nothing written`() {
-        installedAt(ts)
+    fun `a malformed pointer beside the seed's own complete directory installs it as it stands, healing the pointer`() {
+        val own = installedAt(ts)
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        reset(keepStore = true)
+        val kept = files(own)
+        val engine = TestEngine()
+        val load = installed(load(Seed(), engine = engine))
+        assertEquals(own, load.directory)
+        assertEquals(1, load.storeFailures, "the malformed pointer, counted once")
+        assertEquals("$ts/${delta.id}", engine.live)
+        assertEquals(Pointer(own, null), (store.pointer() as StoreRead.Found).value)
+        assertEquals(kept, files(own), "installed as it stands, never reopened or rewritten")
+    }
+
+    @Test
+    fun `a malformed pointer beside the seed's own directory holding something else fails and keeps it`() {
+        val own = installedAt(ts)
+        storage.inner.write("$root/$own/${delta.filename}", ByteArray(3))
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        reset(keepStore = true)
+        val before = contents()
+        failed(load(Seed()), "holds another generation")
+        assertEquals(before, contents())
+    }
+
+    @Test
+    fun `a malformed pointer beside the seed's own directory with a malformed meta_json rewrites it from the seed`() {
+        val own = installedAt(ts)
+        storage.inner.write("$root/$own/meta.json", "{}".encodeToByteArray())
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        reset(keepStore = true)
+        val load = installed(load(Seed()))
+        assertEquals(own, load.directory)
+        assertTrue(store.meta(own) != null)
+        assertEquals(Pointer(own, null), (store.pointer() as StoreRead.Found).value)
+    }
+
+    @Test
+    fun `a malformed pointer beside a newer complete generation skips the seed, counted, nothing written`() {
+        installedAt(ts + hour)
         storage.inner.write(pointerKey, "garbage".encodeToByteArray())
         reset(keepStore = true)
         val before = contents()
         val skipped = assertIs<SeedLoad.Skipped>(load(Seed()))
-        assertEquals(ts, skipped.storedTimestampMillis)
-        // Counted once, by the install that reads the pointer; a skip installs nothing (#138).
-        assertEquals(0, skipped.storeFailures)
-        assertEquals(before, contents(), "the seed's own complete directory is never reopened")
-        installedAt(ts + hour)
-        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        assertEquals(ts + hour, skipped.storedTimestampMillis)
+        assertEquals(1, skipped.storeFailures, "the malformed pointer, counted where it is found")
+        assertEquals(before, contents())
+    }
+
+    @Test
+    fun `at a fresh start beside a valid pointer to the seed's own generation, the seed is skipped`() {
+        installedAt(ts)
         reset(keepStore = true)
+        val before = contents()
+        assertIs<SeedLoad.Skipped>(load(Seed()), "the start task loads the pointed generation")
+        assertEquals(before, contents())
+    }
+
+    @Test
+    fun `a newer complete generation the pointer does not name is never pruned by a seed`() {
+        // A sync completed gen-(ts + 1 h) and crashed before its flip; the pointer still names an older one.
+        val older = installedAt(ts - hour)
+        val newer = installedAt(ts + hour)
+        store.point(Pointer(older, null))
+        reset(keepStore = true)
+        val before = contents()
+        assertEquals(ts + hour, assertIs<SeedLoad.Skipped>(load(Seed())).storedTimestampMillis)
+        assertEquals(before, contents())
+        assertTrue(store.meta(newer) != null)
+        // And a pointed previous newer than live, with the seed between them.
+        store.point(Pointer(older, newer))
+        val pointed = contents()
         assertIs<SeedLoad.Skipped>(load(Seed()))
+        assertEquals(pointed, contents())
     }
 
     @Test
@@ -149,6 +209,7 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         storage.inner.write("$root/$first/meta.json", "[]".encodeToByteArray())
         val kept = files(first) + files(second)
         val load = installed(load(Seed()))
+        assertEquals(1, load.storeFailures, "the malformed previous meta.json, counted once")
         assertEquals(load.directory, liveDirectory())
         assertEquals(kept, files(first) + files(second))
     }

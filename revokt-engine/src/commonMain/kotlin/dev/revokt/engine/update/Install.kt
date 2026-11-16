@@ -58,7 +58,9 @@ internal class PendingGeneration(
 /**
  * What an install publishes beside the generation's own fields (spec §4 `DataState`, §5.1): whether it is the seed and
  * the seed's `seedFormat`, the seed `STALE` gate ([DatasetGeneration.staleGateOpen]), and the clock reading and
- * `clockSkew` that `clockBehind` is recomputed from at the publish.
+ * `clockSkew` that `clockBehind` is recomputed from at the publish. [pointerCounted] when the caller has already counted
+ * a malformed pointer and each pointed `meta.json` that does not read (the seed load, which reads them first, #138), so
+ * the install's own read of them for the new `previous` does not count them again: each store fault is counted once.
  */
 internal class Publication(
     val fromSeed: Boolean,
@@ -66,6 +68,7 @@ internal class Publication(
     val staleGateOpen: Boolean,
     val nowMillis: Long,
     val clockSkewMillis: Long,
+    val pointerCounted: Boolean = false,
 ) {
     init {
         require(fromSeed == (seedFormat != null)) { "seedFormat is set exactly for a seed" }
@@ -385,7 +388,8 @@ private class Install(
     /**
      * The pointer's new `previous`: the first of the old `live` and `previous` that is another complete generation of
      * the same or a higher trust class (spec §6.5), else none. A malformed pointer, and a pointed directory whose
-     * `meta.json` is missing or malformed, each count a store failure. Beside a malformed pointer, the candidate is the
+     * `meta.json` is missing or malformed, each count a store failure, unless the caller counted them
+     * ([Publication.pointerCounted]). Beside a malformed pointer, the candidate is the
      * generation the engine holds live, when it is another that qualifies (#236): a running loader keeps its fallback,
      * while a fresh one has none.
      */
@@ -398,7 +402,7 @@ private class Install(
 
                 StoreRead.Malformed -> {
                     // #236: a running loader keeps the generation its engine held as the fallback; a fresh one has none.
-                    storeFailures++
+                    if (!publication.pointerCounted) storeFailures++
                     return liveBefore?.takeIf { it != directory && qualifies(it) }
                 }
 
@@ -413,7 +417,7 @@ private class Install(
                 }
 
                 else -> {
-                    storeFailures++
+                    if (!publication.pointerCounted) storeFailures++
                     false
                 }
             }

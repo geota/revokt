@@ -275,20 +275,27 @@ class SeedArchiveTest {
     }
 
     @Test
-    fun `two read entries never overlap and none runs into the central directory`() {
-        val zip = fixed()
-        val bytes =
-            zip
-                .apply {
-                    entry(SeedArchive.INDEX).offset = { 0 }
-                    entry(SeedArchive.SEED_JSON).offset = { 0 }
-                }.bytes()
-        val archive = open(bytes)
+    fun `no two entries overlap, across passes or within one, and none runs into the central directory`() {
+        // Across the whole archive, at open: two entries at one offset, read in different passes or not at all.
+        val shared = fixed().apply { entry(SeedArchive.INDEX).offset = { 0 } }.bytes()
+        assertTrue("overlaps" in assertFailsWith<SeedFormatException> { open(shared) }.message.orEmpty())
+        // A stored attachment whose data range holds the whole records.json entry.
+        val covering = fixed()
+        covering.entries.add(1, TestZip.Entry("attachments/x", ByteArray(400), TestZip.STORED))
+        covering.entry(SeedArchive.RECORDS).offset = { it - 300 }
+        assertTrue("overlaps" in assertFailsWith<SeedFormatException> { open(covering.bytes()) }.message.orEmpty())
+        // Within one pass, the exact end: a local extra field the central directory does not show.
+        val extra =
+            fixed().apply {
+                entry(SeedArchive.X5U).localExtra = ByteArray(12)
+                entry(SeedArchive.INDEX).offset = { it - 12 }
+            }
+        val archive = open(extra.bytes())
         val e =
             assertFailsWith<SeedFormatException> {
-                archive.read(listOf(archive.entries[0] to (1L shl 20), archive.entries[4] to (1L shl 20))) { _, _ -> }
+                archive.read(listOf(archive.entries[3] to (1L shl 20), archive.entries[4] to (1L shl 20))) { _, _ -> }
             }
-        assertTrue("overlaps" in e.message.orEmpty(), e.message)
+        assertTrue("overlaps the entry before it" in e.message.orEmpty(), e.message)
         val long =
             fixed().apply {
                 entry(SeedArchive.INDEX).apply {
@@ -394,6 +401,32 @@ class SeedArchiveTest {
             "grew" in assertFailsWith<SeedTooLargeException> { read(grown, SeedArchive.RECORDS) }.message.orEmpty(),
         )
         assertEquals(256L shl 20, SeedArchive.MAX_BYTES)
+    }
+
+    /** The central directory size the end record of [bytes] declares. */
+    private fun directorySize(bytes: ByteArray): Long =
+        Buffer().write(bytes, bytes.size - 22 + 12, 4).readIntLe().toLong() and 0xFFFF_FFFFL
+
+    /** [zip] with comments added until its central directory is exactly [size] bytes. */
+    private fun withDirectory(
+        zip: TestZip,
+        size: Long,
+    ): ByteArray {
+        var need = size - directorySize(zip.bytes())
+        for (e in zip.entries) {
+            val n = minOf(need, 65_535L).toInt()
+            e.comment = ByteArray(n)
+            need -= n
+        }
+        check(need == 0L) { "not enough entries" }
+        return zip.bytes().also { check(directorySize(it) == size) }
+    }
+
+    @Test
+    fun `a central directory of 1 MiB opens, and one of 1 MiB + 1 byte is rejected`() {
+        val zip = { fixed(*Array(12) { "p$it" }) }
+        assertEquals(17, open(withDirectory(zip(), SeedArchive.MAX_DIRECTORY_BYTES)).entries.size)
+        rejects(withDirectory(zip(), SeedArchive.MAX_DIRECTORY_BYTES + 1), "central directory")
     }
 
     @Test
