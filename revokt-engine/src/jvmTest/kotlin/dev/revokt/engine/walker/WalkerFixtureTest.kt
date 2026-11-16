@@ -201,6 +201,6 @@ class WalkerFixtureTest {
 
     @Test
     fun `walker (aq) an issuer that is not an anchor must be a CA`() {
-        assertEquals(10, run(WalkerFixturesAq.aq()).size)
+        assertEquals(11, run(WalkerFixturesAq.aq()).size)
     }
 }

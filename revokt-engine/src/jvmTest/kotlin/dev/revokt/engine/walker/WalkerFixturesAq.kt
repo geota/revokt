@@ -67,13 +67,39 @@ internal object WalkerFixturesAq {
      * verifies the leaf (a recovered key, or any key the attacker holds a certificate for). Anyone can obtain such a
      * certificate, so E's key never becomes a leaf-issuer key: with the honest intermediate presented after it the
      * walk is `Found` through I alone; without it, `ALL_CANDIDATES_INVALID`. A probe-listed own signature OID on E is
-     * still recorded (pkix checks the signature algorithm before basicConstraints).
+     * still recorded (pkix checks the signature algorithm before basicConstraints). The first case is the attack the CA
+     * check closes: the attacker signs C, a CA certificate for a recovered key, with the key of its own end-entity
+     * certificate F under the real root; C verifies the leaf, F is a dead end below it and at the leaf's unrelated loop.
      */
     private fun attacker(): List<WalkerFixture> {
         val honest = Honest()
         val e = honest.endEntity("E")
         val unsupported = honest.endEntity("E2", SymOids.UNSUPPORTED_SIGNATURE)
+        val f =
+            honest.w.cert(
+                "F",
+                honest.w.name("attacker.example"),
+                honest.root.subject,
+                honest.w.leafKey(),
+                signer = honest.root.key,
+            )
+        val c =
+            honest.w
+                .cert("C", honest.intermediate.subject, f.subject, signer = f.key)
+                .also { honest.w.verifies(honest.leaf, it.key) }
         return listOf(
+            honest.fixture(
+                "aq",
+                "recovered key in a CA certificate signed by an end entity under the real root",
+                presented = listOf(honest.leaf, c, f),
+                walk =
+                    notFound(NoIssuerReason.UNANCHORED).copy(
+                        verifications = 1,
+                        candidatesExplored = 3,
+                        relatedExploredAtLeaf = 1,
+                        unrelatedExploredAtLeaf = 1,
+                    ),
+            ),
             honest.fixture(
                 "aq",
                 "end-entity certificate under the real root, honest intermediate after it",
