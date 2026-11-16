@@ -391,10 +391,11 @@ every required check in Appendix B passes**.
   and Windows, so those two jobs run Gradle `--offline` after cache restore and rely on `NoHttpClientInTests`;
   the table marks them advisory.
 - Coverage: Kover branch floor of 90 % per parser package over the committed replay (§9.1), as a hard rule.
-  The path walker and the store have floors a little under their measured branch coverage (#161: walker
-  98.96 %, store 94.26 % at f2c54fc). The floors may only be raised. Overall line coverage is compared
-  against the `main` artifact (`coverage-main`, the Kover XML uploaded from `main`) by a script in
-  `build-logic`: not below the `main` value, with the 90 % target reached by 0.2.
+  The path walker, the store, the updater and the fetch layer have floors a little under their measured branch
+  coverage (#161: walker 98.96 %, store 94.26 % at f2c54fc; #212: `update` 91.46 % and `fetch` 96.69 % at 36dafac,
+  floors 91 and 96). The floors may only be raised. They are the coverage ratchet: no check compares with a
+  coverage artifact from `main` (#212 removed that comparison, which failed a PR that deleted well-covered code
+  and tied a required check to artifact storage).
 
 **Nightly and on release branches (blocking for a release, informational on `main`):**
 - The native job: builds `native/` (Rust cdylib, Go CLI) and `revokt-engine-upki`, runs the §9 oracles, the
@@ -511,7 +512,7 @@ approvals per section 5 · threads resolved · squash-merged by auto-merge. Done
 | Secrets | secret scanning + push protection; `permissions: read-all`; Actions allow-list; Actions may not approve PRs; fork runs need approval | repository settings; actionlint | yes |
 | No network in tests | harden-runner `egress-policy: block` (Linux); Gradle `--offline` + `NoHttpClientInTests` (macOS, Windows) | test jobs | Linux yes; macOS/Windows advisory |
 | Workflow hygiene | actionlint; SHA-pinned actions; no `pull_request_target` checkout; `cache-read-only` off `main`; no cache in release/repro jobs | PR job; review | yes |
-| Coverage | Kover floors; `coverage-main` comparison script | `check`; PR job | yes |
+| Coverage | Kover per-package branch floors | `check` | yes |
 | Spec inventory and ratchets | `specStatus` (stale `docs/dev/status.md` or a decreased fixture count fails) | `check` | yes |
 | §9.2 version matrix | `gradle/oracle-matrix.properties`; `verifyOracleMatrix` (CI and the nightly match it); `jvmTestConscryptPrevious`; the nightly EA replay, Conscrypt-release and upki-release checks | `check`; nightly | yes; for a release |
 | Independent review in the solo phase | PR-lint requires the `Independent review` comment (ADR-0005) | PR | yes while solo |
@@ -650,7 +651,7 @@ single owner);
 required status checks `check (17)`, `check (21)`, `check (lts)`, `check (feature)`, `check (macos)`,
 `check (windows)`, `ci-extras`, `static`, `commitlint`, `pr-lint` (includes `trailers` and, in the solo
 phase, the `Independent review` comment), `protected-paths`, `DCO` (the app's exact check name; added once the app is installed), `codeql`, `osv`, `dependency-review`,
-`coverage`, `cooling` (reports success at once unless the PR touches `data/seed/**`, the release workflows or
+`cooling` (reports success at once unless the PR touches `data/seed/**`, the release workflows or
 `**/verify/**`; paused throughout the solo phase, section 8); require branches to be up to date before merging; squash merge only (repository
 setting: allow squash merging only, default message "pull request title and description", auto-merge enabled);
 require conversation resolution; require linear history; block force pushes and deletions; bypass list empty
