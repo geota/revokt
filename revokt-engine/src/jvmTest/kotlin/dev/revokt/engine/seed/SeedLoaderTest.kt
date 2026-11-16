@@ -1,0 +1,456 @@
+// SPDX-FileCopyrightText: 2026 revokt contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package dev.revokt.engine.seed
+
+import dev.revokt.Dataset
+import dev.revokt.DiagnosticCode
+import dev.revokt.FilterFormat
+import dev.revokt.Freshness
+import dev.revokt.RevoktLimits
+import dev.revokt.SeedSource
+import dev.revokt.Severity
+import dev.revokt.TrustClass
+import dev.revokt.engine.evaluate.dataStates
+import dev.revokt.engine.policy.PolicyForm
+import dev.revokt.engine.policy.Preset
+import dev.revokt.engine.seed.parse.SeedArchive
+import dev.revokt.engine.seed.parse.TestZip
+import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.StoreLayout
+import dev.revokt.engine.store.StoreRead
+import dev.revokt.engine.update.UpdateFixtures.TestEngine
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * Spec §6.5 "Seed archive" and §7.2 "Seeds", the loader (#138): its order (verified as raw bytes before any decode), its
+ * header and engine rules, the entry names and caps, the timestamps it takes from the verified bytes, and the
+ * generation it installs. The store's failure arms are [SeedLoaderStoreTest].
+ */
+internal class SeedLoaderTest : SeedFixture() {
+    private val generationId = "$ts/${delta.id}"
+    private val directory = GenerationNames.directory(ts, generationId)
+
+    @Test
+    fun `a seed installs as a SIGNED generation from the seed, with the watermark and seedInstalledAtMillis`() {
+        val now = ts + hour
+        val engine = TestEngine()
+        val seed = Seed()
+        val load = installed(load(seed, now, engine))
+        assertEquals(
+            listOf(generationId, directory, ts),
+            listOf(load.generationId, load.directory, load.timestampMillis),
+        )
+        assertFalse(load.clockBehind)
+        assertEquals(emptyList(), load.warnings)
+        assertEquals(generationId, engine.live)
+        val live = live()
+        assertEquals(TrustClass.SIGNED, live.trustClass)
+        assertTrue(live.fromSeed)
+        assertEquals(1, live.seedFormat)
+        assertEquals(Freshness.SEED_SIGNED_TIME, live.freshness)
+        assertEquals(ts, live.sourceTimestampMillis)
+        assertFalse(live.staleGateOpen, "a fetching source: the gate opens once a sync attempt completes")
+        assertEquals(directory, liveDirectory())
+        val record = updater(now)
+        assertEquals(ts, record.watermarkMillis)
+        assertEquals(now, record.seedInstalledAtMillis)
+        assertNull(record.datasetLastAttemptAtMillis)
+        val meta = checkNotNull(store.meta(directory))
+        assertEquals(
+            listOf(TrustClass.SIGNED, Freshness.SEED_SIGNED_TIME, FilterFormat.V3),
+            listOf(meta.trustClass, meta.freshness, meta.format),
+        )
+        assertEquals(collection, meta.collection)
+        assertEquals(ts, meta.signed?.changesetTimestampMillis)
+        assertContentEquals(seed.payload(), store.file(directory, StoreLayout.RECORDS))
+        assertContentEquals(seed.index(), store.file(directory, StoreLayout.INDEX))
+    }
+
+    @Test
+    fun `with no fetching source the STALE gate is open at once`() {
+        installed(load(Seed(), fetchingSource = false))
+        assertTrue(live().staleGateOpen)
+    }
+
+    @Test
+    fun `the watermark becomes the higher of it and the seed's timestamp, and the rest of updater_json stays`() {
+        val sourceRecord =
+            dev.revokt.engine.store.SourceRecord(
+                lastVerifiedLastModified = ts - day,
+                consecutiveFailures = 2,
+            )
+        store.writeUpdater(
+            dev.revokt.engine.store.UpdaterRecord(
+                ts + day,
+                null,
+                ts - hour,
+                mapOf("mozilla-remote-settings" to sourceRecord),
+            ),
+            ts,
+        )
+        installed(load(Seed()))
+        val record = updater()
+        assertEquals(ts + day, record.watermarkMillis)
+        assertEquals(ts - hour, record.datasetLastAttemptAtMillis)
+        assertEquals(sourceRecord, record.sources["mozilla-remote-settings"])
+        reset()
+        store.writeUpdater(
+            dev.revokt.engine.store
+                .UpdaterRecord(ts - day),
+            ts,
+        )
+        installed(load(Seed()))
+        assertEquals(ts, updater().watermarkMillis)
+    }
+
+    @Test
+    fun `a records_json whose signature fails is never decoded, nor one whose chain fails`() {
+        // The signature is over other bytes and records.json is not JSON: a decode first would say "not JSON".
+        val notJson = "not json {".encodeToByteArray()
+        val badSignature =
+            Seed().apply {
+                payload = notJson
+                signature = Seed().signature()
+            }
+        assertUnreadable(load(badSignature), "does not verify")
+        val badChain = Seed().apply { payload = notJson }
+        assertUnreadable(load(badChain, pins = setOf(hash(leafKey))), "the x5u chain fails")
+        // The control: the same records.json, signed, is decoded and fails as JSON.
+        assertUnreadable(load(Seed().apply { payload = notJson }), "records.json is not JSON")
+    }
+
+    @Test
+    fun `a seed with an expired signer leaf loads, its validity checked at the signed timestamp (data-path d)`() {
+        val expired = leaf(validity = window("20260101000000Z", "20261101000000Z"))
+        val now = millis("2026-11-16T00:00:00Z")
+        val engine = TestEngine()
+        val load = installed(load(Seed(chain = chain(leaf = expired)), now, engine))
+        assertEquals(generationId, engine.live)
+        assertEquals(generationId, load.generationId)
+        val notYet = leaf(validity = window("20261101000000Z", "20261201000000Z"))
+        reset()
+        assertUnreadable(load(Seed(chain = chain(leaf = notYet)), now), "outside its validity at $ts")
+    }
+
+    @Test
+    fun `a seed 25 h ahead loads with clockBehind, ageMillis 0, CLOCK_BEHIND and the watermark at its timestamp`() {
+        val now = ts - 25 * hour
+        val load = installed(load(Seed(), now))
+        assertTrue(load.clockBehind)
+        assertEquals(DiagnosticCode.CLOCK_BEHIND, load.warnings.single().code)
+        assertTrue(live().clockBehind)
+        assertEquals(ts, updater(now).watermarkMillis)
+        val state = dataStates(snapshot.snapshot, PolicyForm.of(Preset.DEFAULT), now).getValue(Dataset.CRLITE)
+        assertEquals(0, state.ageMillis)
+        assertTrue(state.clockBehind)
+        assertTrue(state.fromSeed)
+    }
+
+    @Test
+    fun `a seed with a 70 MiB declared attachment is unreadable before any attachment is inflated`() {
+        val huge =
+            Rec(
+                delta.id,
+                true,
+                delta.effectiveTimestamp,
+                delta.filename,
+                delta.body,
+                size = 70L shl 20,
+                parent = full.id,
+            )
+        val seed = Seed(records = listOf(full, huge)).apply { index = Seed().index() }
+        val bytes = seed.bytes()
+        val counted = Counted { bytes }
+        assertUnreadable(loader(counted.source).load(ts + hour), "over MAX_FILTER_BYTES")
+        assertEquals(3, counted.opens, "the central directory, seed.json and the fixed entries; no attachment pass")
+    }
+
+    @Test
+    fun `attachment filenames of 33 and 64 characters load under their derived names`() {
+        val name33 = "a".repeat(29) + ".flt"
+        val name64 = "b".repeat(56) + ".delta.x"
+        val fullLong = Rec(full.id, false, full.effectiveTimestamp, name33, full.body)
+        val deltaLong = Rec(delta.id, true, delta.effectiveTimestamp, name64, delta.body, parent = full.id)
+        installed(load(Seed(records = listOf(fullLong, deltaLong))))
+        val meta = checkNotNull(store.meta(directory))
+        assertEquals(setOf(GenerationNames.derive(name33)), meta.blobs.keys)
+        assertEquals(32, GenerationNames.derive(name64).length)
+        assertTrue(store.file(directory, GenerationNames.derive(name64)) != null)
+    }
+
+    @Test
+    fun `two filenames that map to one name are unreadable`() {
+        val long = "c".repeat(40)
+        val fullLong = Rec(full.id, false, full.effectiveTimestamp, long, full.body)
+        val deltaAsDerived =
+            Rec(delta.id, true, delta.effectiveTimestamp, GenerationNames.derive(long), delta.body, parent = full.id)
+        val seed = Seed(records = listOf(fullLong, deltaAsDerived)).apply { index = Seed().index() }
+        assertUnreadable(load(seed), "NAME_COLLISION")
+    }
+
+    @Test
+    fun `each entry cap is enforced while inflating, against a lying zip header`() {
+        val caps =
+            mapOf(
+                SeedArchive.SEED_JSON to (64L shl 10),
+                SeedArchive.RECORDS to RevoktLimits.MAX_JSON_BYTES,
+                SeedArchive.SIGNATURE to SeedLoader.MAX_SIGNATURE_BYTES,
+                SeedArchive.X5U to RevoktLimits.MAX_X5U_BYTES,
+                SeedArchive.INDEX to (1L shl 20),
+                SeedArchive.ATTACHMENTS + delta.filename to delta.body.size.toLong(),
+            )
+        for ((name, cap) in caps) {
+            val seed =
+                Seed().apply {
+                    configure = {
+                        val i = entries.indexOfFirst { it.name == name }
+                        // The data is one byte over the cap; the headers declare the real entry's size.
+                        val real = entries[i]
+                        entries[i] =
+                            TestZip.Entry(name, ByteArray(cap.toInt() + 1), TestZip.DEFLATED).apply {
+                                size = real.data.size.toLong()
+                                crc = real.realCrc
+                            }
+                    }
+                }
+            assertUnreadable(load(seed), "past its cap of $cap bytes")
+        }
+    }
+
+    @Test
+    fun `a mutated index_bin or records_json is unreadable`() {
+        val index = Seed().index().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
+        assertUnreadable(load(Seed().apply { this.index = index }), "the shipped index.bin differs")
+        val records = Seed().payload().also { it[10] = (it[10] + 1).toByte() }
+        assertUnreadable(
+            load(
+                Seed().apply {
+                    payload = records
+                    signature = Seed().signature()
+                },
+            ),
+            "does not verify",
+        )
+    }
+
+    @Test
+    fun `the header and engine rules, seedFormat 2, an engineFloor above this engine, another dataset or format`() {
+        assertUnreadable(load(Seed().apply { header = header + ("seedFormat" to 2) }), "seedFormat 2")
+        assertUnreadable(load(Seed().apply { header = header + ("seedFormat" to 0) }), "seedFormat 0")
+        assertUnreadable(load(Seed().apply { header = header + ("engineFloor" to 2) }), "engineFloor 2")
+        assertUnreadable(load(Seed().apply { header = header + ("dataset" to "ONECRL") }), "dataset ONECRL")
+        assertUnreadable(load(Seed().apply { header = header + ("filterFormat" to "v3") }), "not a filter format")
+        assertUnreadable(load(Seed(), engine = TestEngine(setOf(FilterFormat.V4))), "V3 is not in the engine's [V4]")
+        assertUnreadable(load(Seed().apply { header = header - "recordsLastModified" }), "recordsLastModified")
+        // seed.json's recordsLastModified is a hint: the verified <ts> decides.
+        installed(load(Seed().apply { header = header + ("recordsLastModified" to 1) }))
+        assertEquals(ts, live().sourceTimestampMillis)
+    }
+
+    @Test
+    fun `a channel mismatch is SEED_CHANNEL_MISMATCH from the header read alone`() {
+        val seed = Seed().apply { header = header + ("channel" to "DEFAULT") }
+        val bytes = seed.bytes()
+        val counted = Counted { bytes }
+        val mismatch = assertIs<SeedLoad.ChannelMismatch>(loader(counted.source).load(ts))
+        assertEquals("DEFAULT", mismatch.seedChannel)
+        assertEquals(
+            DiagnosticCode.SEED_CHANNEL_MISMATCH to Severity.ERROR,
+            mismatch.warnings.single().let {
+                it.code to
+                    it.severity
+            },
+        )
+        assertEquals(2, counted.opens, "the central directory and seed.json only")
+        assertIs<SeedLoad.ChannelMismatch>(loader(counted.source).checkHeader())
+        assertNothingInstalled()
+    }
+
+    @Test
+    fun `the header read alone passes a good seed and reads nothing else`() {
+        val bytes = Seed().bytes()
+        val counted = Counted { bytes }
+        assertNull(loader(counted.source).checkHeader())
+        assertEquals(2, counted.opens)
+        assertIs<SeedLoad.Absent>(loader(SeedSource.none()).checkHeader())
+        assertIs<SeedLoad.Unreadable>(loader(Counted { ByteArray(3) }.source).checkHeader())
+    }
+
+    @Test
+    fun `no name comes from the zip, so traversal, nesting, absolute, backslash, duplicate, extra and case fail`() {
+        for (name in listOf(
+            "attachments/../x",
+            "attachments/a/b",
+            "/abs",
+            "attachments\\x",
+            "Attachments/x",
+            "extra",
+        )) {
+            assertUnreadable(load(Seed().apply { configure = { add(name, ByteArray(1)) } }), "extra entry")
+        }
+        assertUnreadable(
+            load(Seed().apply { configure = { add(SeedArchive.RECORDS, ByteArray(1)) } }),
+            "duplicate entry",
+        )
+        val upper = delta.filename.uppercase()
+        val cased =
+            Seed().apply {
+                configure =
+                    {
+                        entries.removeIf { it.name.endsWith(delta.filename) }
+                        add("attachments/$upper", delta.body)
+                    }
+            }
+        assertUnreadable(load(cased), "extra entry")
+        val missing = Seed().apply { configure = { entries.removeIf { it.name.endsWith(delta.filename) } } }
+        assertUnreadable(load(missing), "no attachments/${delta.filename}")
+        val reordered = Seed().apply { configure = { directoryOrder = listOf(1, 0) + (2 until entries.size) } }
+        assertUnreadable(load(reordered), "not seed.json")
+    }
+
+    @Test
+    fun `the attachments are the channel's placed records only`() {
+        // records.json holds every channel's records; the other channel's attachments are not entries of this seed.
+        val other = Rec("d-other", false, full.effectiveTimestamp, "other.filter", full.body, channel = "default")
+        installed(load(Seed(records = listOf(full, delta, other))))
+        val withOther =
+            Seed(records = listOf(full, delta, other)).apply {
+                configure =
+                    { add("attachments/other.filter", full.body) }
+            }
+        reset()
+        assertUnreadable(load(withOther), "extra entry \"attachments/other.filter\"")
+    }
+
+    @Test
+    fun `an attachment that does not match its signed record is unreadable, and its staged directory is deleted`() {
+        val index = Seed().index()
+        val seed =
+            Seed().apply {
+                bodies = mapOf(delta.filename to delta.body.copyOf().also { it[0] = (it[0] + 1).toByte() })
+                this.index = index
+            }
+        assertUnreadable(load(seed), "does not match its signed size and hash")
+    }
+
+    @Test
+    fun `records_json must be the canonical payload, timestamp and all`() {
+        fun signed(payload: String) = Seed().apply { this.payload = payload.encodeToByteArray() }
+        val canonical = Seed().payload().decodeToString()
+        assertUnreadable(load(signed(canonical.replace("\"data\":", "\"data\" :"))), "not the canonical payload")
+        assertUnreadable(load(signed("[]")), "no data array")
+        assertUnreadable(load(signed("""{"data":[1],"last_modified":"1"}""")), "not an object")
+        assertUnreadable(load(signed("""{"data":[],"last_modified":1}""")), "13-digit timestamp")
+        assertUnreadable(load(signed("""{"data":[],"last_modified":"99999999999999"}""")), "13-digit timestamp")
+        assertUnreadable(load(signed("""{"data":[],"last_modified":"-1"}""")), "13-digit timestamp")
+        assertUnreadable(
+            load(signed("""{"data":[{"id":"a","deleted":true}],"last_modified":"1"}""")),
+            "not the canonical payload",
+        )
+        assertUnreadable(load(signed("""{"data":[{"id":"a"}],"last_modified":"$ts"}""")), "fails the schema")
+        assertUnreadable(load(signed("""{"data":[],"last_modified":"$ts"}""")), "builds no generation")
+    }
+
+    @Test
+    fun `x5u_pem and signature that do not read are unreadable`() {
+        assertUnreadable(
+            load(
+                Seed().apply {
+                    configure =
+                        {
+                            entry(
+                                "x5u.pem",
+                            ).let {
+                                entries[
+                                    entries.indexOf(
+                                        it,
+                                    ),
+                                ] = TestZip.Entry("x5u.pem", "junk".encodeToByteArray())
+                            }
+                        }
+                },
+            ),
+            "not a PEM chain",
+        )
+        assertUnreadable(load(Seed().apply { signature = "not base64url!" }), "does not verify")
+    }
+
+    @Test
+    fun `a coverage end beyond the signed timestamp plus clockSkew is unreadable`() {
+        val early = ts - 400 * day
+        assertUnreadable(load(Seed(ts = early)), "coverage ends beyond")
+    }
+
+    @Test
+    fun `a stored SIGNED generation not older than the seed is kept and the seed skipped, with nothing written`() {
+        installed(load(Seed()))
+        val before = storage.inner.names().associateWith { checkNotNull(storage.inner.read(it)).toList() }
+        val skipped = assertIs<SeedLoad.Skipped>(load(Seed()))
+        assertEquals(ts to ts, skipped.seedTimestampMillis to skipped.storedTimestampMillis)
+        assertEquals(before, storage.inner.names().associateWith { checkNotNull(storage.inner.read(it)).toList() })
+        assertIs<SeedLoad.Skipped>(load(Seed(ts = ts - hour)))
+    }
+
+    @Test
+    fun `a newer seed replaces an older stored SIGNED generation, which becomes previous`() {
+        val older = Seed(ts = ts - hour)
+        installed(load(older))
+        val oldDirectory = checkNotNull(liveDirectory())
+        installed(load(Seed()))
+        val pointer = assertIs<StoreRead.Found<dev.revokt.engine.store.Pointer>>(store.pointer()).value
+        assertEquals(directory to oldDirectory, pointer.live to pointer.previous)
+    }
+
+    @Test
+    fun `a stored MIRROR generation newer than the seed is evicted and pruned (fixture f)`() {
+        val mirror =
+            dev.revokt.engine.update.UpdateFixtures.pending(
+                store,
+                trustClass = TrustClass.MIRROR,
+                generationId = "mirror",
+                sourceTimestampMillis =
+                    ts + day,
+            )
+        val publication =
+            dev.revokt.engine.update
+                .Publication(false, null, true, ts, day)
+        assertIs<dev.revokt.engine.update.InstallResult.Installed>(
+            dev.revokt.engine.update
+                .install(mirror, TestEngine(), store, snapshot, publication, null, logger),
+        )
+        val load = installed(load(Seed()))
+        assertEquals(TrustClass.SIGNED, live().trustClass)
+        val pointer = assertIs<StoreRead.Found<dev.revokt.engine.store.Pointer>>(store.pointer()).value
+        assertEquals(load.directory to null, pointer.live to pointer.previous)
+        assertTrue(storage.names().none { mirror.meta.directory in it }, "the MIRROR directory is pruned")
+    }
+
+    @Test
+    fun `a failed prepare or self-check is unreadable, counted, and leaves nothing installed`() {
+        val throwing = TestEngine().apply { onPrepare = { error("corrupt") } }
+        val prepare = assertUnreadable(load(Seed(), engine = throwing), "the install failed")
+        assertEquals(1, prepare.storeFailures)
+        val constant = TestEngine().apply { preparedAnswer = { dev.revokt.CrliteQueryResult.NOT_REVOKED } }
+        assertUnreadable(load(Seed(), engine = constant), "ENGINE_SELF_CHECK_FAILED")
+    }
+
+    @Test
+    fun `no archive is Absent, and one that cannot be opened or read is unreadable`() {
+        assertIs<SeedLoad.Absent>(loader(SeedSource.none()).load(ts))
+        assertUnreadable(loader(SeedSource.of { error("unreadable") }).load(ts), "unreadable")
+        var opens = 0
+        val bytes = Seed().bytes()
+        val vanishing = SeedSource.of { if (opens++ < 2) java.io.ByteArrayInputStream(bytes) else null }
+        assertUnreadable(loader(vanishing).load(ts), "gone on a second open")
+        val shrinking = SeedSource.of { java.io.ByteArrayInputStream(if (opens++ < 2) bytes else bytes.copyOf(100)) }
+        opens = 0
+        assertUnreadable(loader(shrinking).load(ts), "EOF")
+    }
+}
