@@ -49,8 +49,7 @@ class C2spManifestTest {
         assertEquals(0, parsed("""{"generated_at":0,"comment":"","files":[]}""").files.size)
         // generated_at is a u64; a size beyond Long saturates, so every cap refuses it.
         val u64 = "18446744073709551615"
-        val big = parsed("""{"generated_at":$u64,"comment":"","files":[{"filename":"a","size":$u64,"hash":"$hash"}]}""")
-        assertEquals(ULong.MAX_VALUE, big.generatedAt)
+        val big = parsed("""{"generated_at":0,"comment":"","files":[{"filename":"a","size":$u64,"hash":"$hash"}]}""")
         assertEquals(Long.MAX_VALUE, big.files.single().size)
     }
 
@@ -79,6 +78,15 @@ class C2spManifestTest {
             """not json""",
         )) {
             malformed(json)
+        }
+    }
+
+    @Test
+    fun `generated_at runs to 9999-12-30T22-00-00Z, the last second upki's jiff Timestamp accepts`() {
+        val last = "253402207200"
+        assertEquals(253_402_207_200uL, parsed("""{"generated_at":$last,"comment":"","files":[]}""").generatedAt)
+        for (past in listOf("253402207201", "253402300799", "9223372036854775807", "18446744073709551615")) {
+            malformed("""{"generated_at":$past,"comment":"","files":[]}""")
         }
     }
 

@@ -133,7 +133,15 @@ internal class MirrorSyncTest {
         engine: TestEngine = TestEngine(),
         maxManifestEntries: Int = RevoktLimits.MAX_MANIFEST_ENTRIES,
         client: C2spMirrorClient = client(mirror.url, mirror.fetcher, maxManifestEntries),
-    ): SyncRun = MirrorSync(client, store, engine, snapshot, day, UpdateFixtures.Recording()).syncOnce(at)
+    ): SyncRun = checkNotNull(attempt(mirror, at, engine, client)) { "the sync did not run" }
+
+    /** The sync's run, or null when it does not run (the bootstrap condition does not hold, #207's Q1). */
+    private fun attempt(
+        mirror: Mirror,
+        at: Long = now,
+        engine: TestEngine = TestEngine(),
+        client: C2spMirrorClient = client(mirror.url, mirror.fetcher),
+    ): SyncRun? = MirrorSync(client, store, engine, snapshot, day, UpdateFixtures.Recording()).syncOnce(at)
 
     private fun SyncRun.assert(
         outcome: SyncOutcome,
@@ -471,7 +479,7 @@ internal class MirrorSyncTest {
     }
 
     @Test
-    fun `fixture (c) - a live SIGNED generation, a seed or a stored SIGNED one, stops the mirror before any fetch`() {
+    fun `fixture (c) - a live SIGNED generation, a seed or a stored one, stops the mirror, which does not run`() {
         val mirror = Mirror(listOf("a.filter" to filter(1)))
         for (fromSeed in listOf(false, true)) {
             snapshot.publish(
@@ -489,17 +497,143 @@ internal class MirrorSyncTest {
                     null,
                 ),
             )
-            sync(mirror).assert(SyncOutcome.UNCHANGED)
+            // Not UNCHANGED: no result at all, which the loader never publishes (the maintainer's decision, Q1).
+            assertNull(attempt(mirror))
             assertTrue(mirror.fetcher.requests.isEmpty())
-            assertTrue(storage.names().isEmpty())
+            assertTrue(storage.names().isEmpty(), "updater.json is not written either")
         }
         // A stored SIGNED generation the pointer names, though the snapshot holds none, stops it too.
         snapshot.publish(GenerationSnapshot(2, mapOf(Dataset.CRLITE to empty), null))
         val signed = UpdateFixtures.pending(store)
         store.writeGeneration(signed.meta, signed.index, signed.deltas, signed.records)
         store.point(Pointer(signed.meta.directory, null))
-        sync(mirror).assert(SyncOutcome.UNCHANGED)
+        assertNull(attempt(mirror))
         assertTrue(mirror.fetcher.requests.isEmpty())
+    }
+
+    /** A stored generation of [trustClass] as [UpdateFixtures.pending] builds it, written but not pointed to. */
+    private fun stored(
+        trustClass: TrustClass,
+        id: String,
+    ): String {
+        val g = UpdateFixtures.pending(store, trustClass = trustClass, generationId = id)
+        return store.writeGeneration(g.meta, g.index, g.deltas, g.records)
+    }
+
+    /** Nothing fetched, the store's keys unchanged, and the `SIGNED` directory [signed] still complete. */
+    private fun assertStopped(
+        mirror: Mirror,
+        signed: String?,
+    ) {
+        val before = storage.names().sorted()
+        assertNull(attempt(mirror), "the sync does not run")
+        assertTrue(mirror.fetcher.requests.isEmpty(), "nothing fetched")
+        assertEquals(before, storage.names().sorted(), "nothing written or deleted")
+        signed?.let { assertEquals(TrustClass.SIGNED, checkNotNull(store.meta(it)).trustClass) }
+    }
+
+    @Test
+    fun `fixture (c) - a malformed pointer stops the mirror, and the stored SIGNED generation survives`() {
+        val signed = stored(TrustClass.SIGNED, "1792587631204/s")
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        assertStopped(Mirror(listOf("a.filter" to filter(1))), signed)
+        // With no generation stored at all, a malformed pointer still fails closed.
+        storage.names().filter { "/gen-" in it }.forEach(storage::delete)
+        assertStopped(Mirror(listOf("a.filter" to filter(1))), null)
+    }
+
+    @Test
+    fun `fixture (c) - a pointed directory whose meta json is missing or malformed stops the mirror`() {
+        val mirror = Mirror(listOf("a.filter" to filter(1)))
+        // Two MIRROR generations, so no SIGNED one elsewhere in the store stops the mirror instead.
+        val live = stored(TrustClass.MIRROR, "m-live")
+        val previous = stored(TrustClass.MIRROR, "m-previous")
+        store.point(Pointer(live, previous))
+        for (pointed in listOf(live, previous)) {
+            val key = store.fileKey(pointed, StoreLayout.META)
+            val meta = checkNotNull(storage.read(key))
+            for (broken in listOf(null, "{".encodeToByteArray())) {
+                if (broken == null) storage.delete(key) else storage.inner.write(key, broken)
+                assertStopped(mirror, null)
+            }
+            storage.inner.write(key, meta)
+        }
+    }
+
+    @Test
+    fun `fixture (c) - a SIGNED previous behind a MIRROR or SYSTEM live stops the mirror`() {
+        for (lower in listOf(TrustClass.MIRROR, TrustClass.SYSTEM)) {
+            storage.names().forEach(storage::delete)
+            val live = stored(lower, "low-$lower")
+            val signed = stored(TrustClass.SIGNED, "1792587631204/s")
+            store.point(Pointer(live, signed))
+            assertStopped(Mirror(listOf("a.filter" to filter(1))), signed)
+        }
+    }
+
+    @Test
+    fun `fixture (c) - a stored SIGNED generation the pointer does not name stops the mirror and survives`() {
+        val mirror = Mirror(listOf("a.filter" to filter(1)))
+        val signed = stored(TrustClass.SIGNED, "1792587631204/s")
+        assertStopped(mirror, signed)
+        // Beside a pointed MIRROR generation too, and a directory whose meta json is malformed counts as one.
+        storage.delete(store.fileKey(signed, StoreLayout.META))
+        val live = stored(TrustClass.MIRROR, "m-live")
+        store.point(Pointer(live, null))
+        val other = stored(TrustClass.SIGNED, "1792587631205/t")
+        assertStopped(mirror, other)
+        storage.inner.write(store.fileKey(other, StoreLayout.META), "{".encodeToByteArray())
+        assertStopped(mirror, null)
+        // An interrupted install (no meta json) says nothing, so the mirror then runs.
+        storage.delete(store.fileKey(other, StoreLayout.META))
+        sync(mirror).assert(SyncOutcome.INSTALLED)
+    }
+
+    @Test
+    fun `a file declared above half of MAX_FILTER_BYTES warns CAP_NEAR_LIMIT once per file, and the sync goes on`() {
+        // v3 accepts trailing bytes, so a corpus filter padded past 8 MiB still decodes.
+        val full = UpdateFixtures.bodies.getValue(UpdateFixtures.fullRecord.filename)
+        val padded = full + ByteArray((RevoktLimits.MAX_FILTER_BYTES / 2).toInt() + 1 - full.size)
+        val mirror = Mirror(listOf("big.filter" to padded, "small.filter" to filter(1)))
+        val run = sync(mirror).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
+        assertTrue(
+            "big.filter: ${padded.size} bytes, above half of" in
+                run.result.warnings
+                    .single()
+                    .message,
+        )
+        // A reused blob is still declared above half, so it warns again, one warning per file, on a failed sync too.
+        val bigger = padded + byteArrayOf(0)
+        val next = Mirror(listOf("big.filter" to padded, "b2.filter" to bigger, "gone.filter" to filter(2)))
+        next.entries = {
+            listOf("big.filter" to padded, "b2.filter" to bigger).joinToString(",") { (name, body) ->
+                """{"filename":"$name","size":${body.size},"hash":"${hex(body)}"}"""
+            } + ""","filename":"gone.filter","size":1,"hash":"${"ab".repeat(32)}"}""".replaceFirst(",", ",{")
+        }
+        next.files = next.files.dropLast(1)
+        val warnings = arrayOf(DiagnosticCode.CAP_NEAR_LIMIT, DiagnosticCode.CAP_NEAR_LIMIT)
+        val failed = sync(next, now + hour).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed(*warnings))
+        assertEquals(404, failed.result.httpStatus)
+        assertEquals(
+            listOf(base + "b2.filter", base + "gone.filter"),
+            next.fileRequests().map { it.url },
+            "big is reused",
+        )
+    }
+
+    @Test
+    fun `a manifest body above half of MAX_JSON_BYTES warns CAP_NEAR_LIMIT`() {
+        val mirror = Mirror(listOf("a.filter" to filter(1)))
+        val padded = mirror.json + " ".repeat((RevoktLimits.MAX_JSON_BYTES / 2).toInt())
+        mirror.manifest = { ok(padded) }
+        val run = sync(mirror).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
+        assertTrue(
+            run.result.warnings
+                .single()
+                .message
+                .startsWith("c2spMirror: manifest.json is "),
+        )
+        assertEquals(padded.encodeUtf8().sha256().hex(), live().generationId)
     }
 
     @Test

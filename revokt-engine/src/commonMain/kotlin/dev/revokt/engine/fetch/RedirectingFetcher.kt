@@ -43,9 +43,9 @@ internal class RedirectRefused(
  *
  * - Every hop is a new request through [fetcher], so it goes through the source's `FetcherTls` and the §8 host checks.
  * - Every URL in the chain, the request's own included, is read by [HopUrl] (the strict grammar shared with the x5u
- *   URL, [StrictUrl]): `https`, no userinfo, a DNS host name or an IP literal, a query allowed, a fragment dropped,
- *   and no port rule (the `c2spMirror` URL's own rule, §4). Each hop is sent as [HopUrl] re-serialised it, never as
- *   the `Location` string.
+ *   URL, [StrictUrl]): `https`, no userinfo, a DNS host name or an IP literal, a port from 1 to 65535 when one is
+ *   written (the `c2spMirror` URL's rule too, §4, §7.3), a query allowed and a fragment dropped. Each hop is sent as
+ *   [HopUrl] re-serialised it, never as the `Location` string.
  * - A relative `Location` resolves against the URL of the request it answered (RFC 3986 §5.2). Distinct `Location`
  *   values on one response refuse the chain, as Firefox's Necko does; a redirect with no `Location` is returned as the
  *   final response, as reqwest and Necko do, and its caller fails it on its status.

@@ -70,29 +70,52 @@ internal class MirrorSync(
 
     /**
      * §7.3 "Bootstrap only": whether the dataset has no generation of a higher trust class than `MIRROR` at all, neither
-     * live in [snapshot] (a seed, or a `SIGNED` generation) nor stored (a `SIGNED` generation the pointer names, live
-     * or previous), so a mirror may install. A `SYSTEM` or an earlier `MIRROR` generation does not stop it. Reads the
-     * store, which may throw.
+     * live in [snapshot] (a seed, or a `SIGNED` generation) nor stored, so a mirror may install. A `SYSTEM` or an earlier
+     * `MIRROR` generation does not stop it. It fails closed whenever the store cannot tell, since the prune after a
+     * mirror install would delete a `SIGNED` generation it did not see (#207's review):
+     * - a malformed `current` pointer;
+     * - a directory the pointer names, `live` or `previous`, whose `meta.json` is absent or malformed;
+     * - any generation directory under the dataset and channel whose `meta.json` is of a higher class, or malformed (its
+     *   class unknown); a directory without one is an interrupted install, which says nothing.
+     *
+     * Reads the store, which may throw.
      */
     fun bootstrapHolds(): Boolean {
         val live = snapshot.snapshot.datasets[Dataset.CRLITE]?.trustClass
         if (live != null && live.rank > TrustClass.MIRROR.rank) return false
-        val pointer = (store.pointer() as? StoreRead.Found)?.value ?: return true
-        return listOfNotNull(pointer.live, pointer.previous).none { directory ->
-            store.meta(directory)?.let { it.trustClass.rank > TrustClass.MIRROR.rank } ?: false
+        val pointed =
+            when (val read = store.pointer()) {
+                StoreRead.Absent -> emptyList()
+                StoreRead.Malformed -> return false
+                is StoreRead.Found -> listOfNotNull(read.value.live, read.value.previous)
+            }
+        // A pointed directory is under the root, so the scan below reads its class; here only its meta.json must read.
+        if (pointed.any { store.readMeta(it) !is StoreRead.Found }) return false
+        return store.directories.none { directory ->
+            when (val read = store.readMeta(directory)) {
+                StoreRead.Absent -> false
+                StoreRead.Malformed -> true
+                is StoreRead.Found -> higher(read.value.trustClass)
+            }
         }
     }
 
+    private fun higher(trustClass: TrustClass): Boolean = trustClass.rank > TrustClass.MIRROR.rank
+
     /**
      * One sync at [nowMillis], the loader's one clock read for it (spec §6.3, §6.5, §7.3):
-     * 1. Unless [bootstrapHolds], nothing is fetched or written: `UNCHANGED`, a mirror being bootstrap-only (the loader
-     *    never runs one then). Under the source's persisted backoff → `BACKOFF`.
+     * 1. Unless [bootstrapHolds], the sync does not run: nothing is fetched or written and the result is null, which the
+     *    loader never publishes (the maintainer's decision on #207, Q1: a mirror is bootstrap-only, and the loader never
+     *    runs one then, so this is a guard, not an outcome). Under the source's persisted backoff → `BACKOFF`.
      * 2. `GET <base>manifest.json`, with `If-Modified-Since` the time the live `MIRROR` generation's manifest was stored
      *    (its `meta.json`), none without a live `MIRROR` generation; a 304 to it is `UNCHANGED`. Redirects are the
      *    client's ([C2spMirrorClient]); any other failure is `FAILED` at `CHANGESET`, as is a body that is not a
      *    manifest ([C2spManifest.parse]).
-     * 3. More than `MAX_MANIFEST_ENTRIES` entries is `FAILED` at `CHANGESET` before any body fetch; above half the
-     *    `RevoktLimits` constant (128) the sync carries `CAP_NEAR_LIMIT` whatever its outcome (§4).
+     * 3. More than `MAX_MANIFEST_ENTRIES` entries is `FAILED` at `CHANGESET` before any body fetch. A manifest body above
+     *    half of `MAX_JSON_BYTES`, more than half of `MAX_MANIFEST_ENTRIES` (128) entries, and (step 6) a file declared
+     *    above half of `MAX_FILTER_BYTES` are each a `CAP_NEAR_LIMIT` warning, once per item, on whatever result the sync
+     *    ends with (§4: "a body, record count or manifest above half the `RevoktLimits` constant, not the overridden
+     *    value"), and the sync goes on. A fetched file is its declared size, so its declared size is the one checked.
      * 4. The names and hashes ([ManifestNames]): any failure is `FAILED` with `INDEX_INCONSISTENT` at `INDEX`; no files is
      *    `FAILED` with `SOURCE_EMPTY` at `INDEX` (revision 56, Q24). Both before any body is fetched or written.
      * 5. The manifest's SHA-256 is the generation id (§4 `DataState.generationId`): the live generation's, pointed to,
@@ -111,7 +134,7 @@ internal class MirrorSync(
      *
      * Every throwable is caught, an `OutOfMemoryError` included, and is `FAILED` at the stage it hit (§6.5).
      */
-    fun syncOnce(nowMillis: Long): SyncRun = Attempt(nowMillis).run()
+    fun syncOnce(nowMillis: Long): SyncRun? = Attempt(nowMillis).run()
 
     /** One sync's state: what it read, what it fetched and what the failure path writes. */
     @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
@@ -125,7 +148,7 @@ internal class MirrorSync(
         private var storeFailures = 0
         private var lastStatus: Int? = null
 
-        /** Warnings every result of this sync carries: `CAP_NEAR_LIMIT` for a manifest above half its cap. */
+        /** The `CAP_NEAR_LIMIT` warnings of this sync (§4), on whatever result it ends with. */
         private val notes = ArrayList<PolicyDiagnostic>()
 
         /** Set once the first body fetch starts: from there on the sync is an *install* (§6.5's order). */
@@ -135,10 +158,10 @@ internal class MirrorSync(
         private var done: SyncResult? = null
 
         @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable, an OutOfMemoryError too.
-        fun run(): SyncRun {
+        fun run(): SyncRun? {
             val result =
                 try {
-                    steps()
+                    steps() ?: return null
                 } catch (t: Throwable) {
                     restoreInterrupt(t)
                     thrown(t)
@@ -168,11 +191,10 @@ internal class MirrorSync(
             return value
         }
 
-        private fun steps(): SyncResult {
+        /** The sync's result, or null when it does not run ([bootstrapHolds] false). */
+        private fun steps(): SyncResult? {
             stage = SyncStage.STORE
-            if (!bootstrapHolds()) {
-                return result(SyncOutcome.UNCHANGED, null, emptyList(), emptyMap())
-            }
+            if (!bootstrapHolds()) return null
             val loaded = LoadedUpdater.of(store.updater(now))
             record = loaded.record
             storeFailures += loaded.storeFailures
@@ -196,6 +218,7 @@ internal class MirrorSync(
             bytes: ByteString,
             live: DatasetGeneration?,
         ): SyncResult {
+            nearCap(bytes.size.toLong(), RevoktLimits.MAX_JSON_BYTES) { "manifest.json is $it bytes" }
             val manifest =
                 when (val read = C2spManifest.parse(bytes, client.limits.maxJsonBytes)) {
                     is ManifestRead.Parsed -> read.manifest
@@ -203,8 +226,8 @@ internal class MirrorSync(
                 }
             val count = manifest.files.size
             val cap = client.maxManifestEntries
-            if (count > RevoktLimits.MAX_MANIFEST_ENTRIES / 2) {
-                notes += warning(DiagnosticCode.CAP_NEAR_LIMIT, "the manifest lists $count files, cap $cap")
+            nearCap(count.toLong(), RevoktLimits.MAX_MANIFEST_ENTRIES.toLong()) {
+                "manifest.json lists $it files"
             }
             if (count > cap) return end(Ended(SyncOutcome.FAILED, stage, null, "$count manifest entries, cap $cap"))
             stage = SyncStage.INDEX
@@ -237,6 +260,7 @@ internal class MirrorSync(
                 val detail = "${it.filename}: ${it.size} bytes declared, cap $max"
                 return end(Ended(SyncOutcome.FAILED, stage, DiagnosticCode.CAP_NEAR_LIMIT, detail))
             }
+            for (f in files) nearCap(f.size, RevoktLimits.MAX_FILTER_BYTES) { "${f.filename}: $it bytes" }
             val reused = files.filter { stored { store.blob(it.sha256) } == BlobState.MATCH }
             installing = true
             for (file in files) {
@@ -331,6 +355,21 @@ internal class MirrorSync(
             }
         }
 
+        /**
+         * A `CAP_NEAR_LIMIT` warning when [value] is above half of [cap], the `RevoktLimits` constant (§4), in the shape
+         * of [CrliteSync]'s (#205). Each item is checked once per sync (the manifest's body and count once, each file
+         * once, filenames being unique), so there is one warning per item.
+         */
+        private inline fun nearCap(
+            value: Long,
+            cap: Long,
+            what: (Long) -> String,
+        ) {
+            if (value > cap / 2) {
+                notes += warning(DiagnosticCode.CAP_NEAR_LIMIT, "${what(value)}, above half of $cap")
+            }
+        }
+
         /** The live generation when it is a `MIRROR` one, else null: the If-Modified-Since source and the id compared. */
         private fun liveMirror(): DatasetGeneration? =
             snapshot.snapshot.datasets[Dataset.CRLITE]?.takeIf {
@@ -385,6 +424,7 @@ internal class MirrorSync(
         }
 
         private fun failed(result: ClientResult.Failed): SyncResult {
+            result.httpStatus?.let { lastStatus = it }
             // A fetcher's fatal error during the body phase is an OutOfMemoryError during an install (§6.5).
             if (installing && result.cause?.let(::isFatal) == true) storeFailures++
             return end(Ended(SyncOutcome.FAILED, result.stage, result.code, result.detail, cause = result.cause))

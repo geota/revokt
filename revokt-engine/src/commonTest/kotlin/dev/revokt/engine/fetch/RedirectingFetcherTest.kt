@@ -209,7 +209,7 @@ class RedirectingFetcherTest {
     }
 
     @Test
-    fun `no port rule applies, and an explicit 443 is the default port`() {
+    fun `any port from 1 to 65535 is followed, and an explicit 443 is the default port`() {
         assertEquals("https://cdn.example:8443/m.json", followed("https://cdn.example:8443/m.json")[1])
         assertEquals("https://cdn.example/m.json", followed("https://cdn.example:443/m.json")[1])
         assertEquals("https://cdn.example:1/m.json", followed("https://cdn.example:0001/m.json")[1])

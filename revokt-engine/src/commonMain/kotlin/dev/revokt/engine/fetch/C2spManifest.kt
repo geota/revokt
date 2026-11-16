@@ -41,10 +41,10 @@ internal class C2spManifest(
     internal companion object {
         /**
          * The manifest in [bytes], parsed with the engine's JSON tree under [maxJsonBytes] (duplicate keys refused), or
-         * why it is not one: not a JSON object; `generated_at` not an integer from 0 to `u64`; no string `comment`;
-         * neither or both of `files` and `filters` (serde refuses an alias given twice as a duplicate field); an entry
-         * that is not an object, or whose `filename` or `hash` is not a string or whose `size` is not an integer from 0
-         * to `u64`. Other members are allowed, as serde allows them. The values are checked by [ManifestNames].
+         * why it is not one: not a JSON object; `generated_at` not an integer from 0 to [MAX_GENERATED_AT] (upki's
+         * range); no string `comment`; neither or both of `files` and `filters` (serde refuses an alias given twice as a
+         * duplicate field); an entry that is not an object, or whose `filename` or `hash` is not a string or whose `size`
+         * is not an integer from 0 to `u64`. Other members are allowed, as serde allows them. The values are checked by [ManifestNames].
          */
         fun parse(
             bytes: ByteString,
@@ -57,7 +57,8 @@ internal class C2spManifest(
                     return ManifestRead.Malformed("not JSON: ${e.message}")
                 } ?: return ManifestRead.Malformed("not a JSON object")
             val generatedAt =
-                unsigned(root["generated_at"]) ?: return ManifestRead.Malformed("generated_at is not an integer ≥ 0")
+                unsigned(root["generated_at"])?.takeIf { it <= MAX_GENERATED_AT }
+                    ?: return ManifestRead.Malformed("generated_at is not an integer from 0 to 9999-12-30T22:00:00Z")
             val comment = string(root["comment"]) ?: return ManifestRead.Malformed("comment is not a string")
             val files = root["files"]
             val filters = root["filters"]
@@ -75,6 +76,14 @@ internal class C2spManifest(
             }
             return ManifestRead.Parsed(C2spManifest(generatedAt, comment, read))
         }
+
+        /**
+         * The last `generated_at` upki v1.0.1 accepts: `Manifest::introduce` (`revocation/mod.rs:124-133`) refuses one
+         * that `jiff::Timestamp::from_second` refuses (`FetchError::InvalidTimestamp`). jiff-core 0.1.1, which upki's
+         * `Cargo.lock` pins under jiff 0.2.38, ends Unix seconds at 9999-12-31T23:59:59 less the largest offset,
+         * 25:59:59 (`bounds.rs:384`): 9999-12-30T22:00:00Z.
+         */
+        const val MAX_GENERATED_AT: ULong = 253_402_207_200uL
 
         private fun string(value: JsonValue?): String? = (value as? JsonString)?.value
 

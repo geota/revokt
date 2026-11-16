@@ -146,6 +146,19 @@ internal class StoreLayout(
     /** The complete generation's `meta.json` in [directory], or null when [readMeta] finds none that is valid here. */
     fun meta(directory: String): GenerationMeta? = (readMeta(directory) as? StoreRead.Found)?.value
 
+    /** The generation directories under this dataset and channel, complete or not, in name order. */
+    val directories: List<String>
+        get() {
+            val prefix = "$root/"
+            return storage
+                .names()
+                .filter { it.startsWith(prefix) }
+                .map { it.removePrefix(prefix).substringBefore('/', "") }
+                .filter(GenerationNames::isDirectory)
+                .distinct()
+                .sorted()
+        }
+
     /**
      * The generation in [directory] as a C2SP image under its names, every blob re-hashed against its key, or null
      * when it is not a complete generation of this dataset and channel, a file is missing, or a blob does not match.
