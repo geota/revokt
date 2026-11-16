@@ -1,6 +1,7 @@
 # ADR-0005: Solo-maintainer phase
 
-- Status: accepted, 2026-10-22
+- Status: accepted, 2026-10-22; the control list and the merge are replaced by [ADR-0006](0006-agent-team-workflow.md)
+  (2026-11-16)
 - Deciders: maintainer
 
 ## Context

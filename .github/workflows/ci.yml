@@ -197,6 +197,8 @@ jobs:
           python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml fuzz
           python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml advisory
           python3 -I -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: pr_lint.js's body rules (#210)
+        run: node .github/scripts/test_pr_lint.js
 
   labeler:
     name: labeler
