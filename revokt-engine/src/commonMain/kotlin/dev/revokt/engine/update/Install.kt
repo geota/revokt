@@ -151,6 +151,9 @@ private class Install(
     private var stage = SyncStage.INDEX
     private var storeFailures = 0
 
+    /** The directory of the generation the engine held live when this install began, before its publish. */
+    private var liveBefore: String? = null
+
     /** The directory this install wrote into, deleted on a failure before activation. */
     private var written: String? = null
     private var prepared: PreparedGeneration? = null
@@ -224,15 +227,19 @@ private class Install(
     }
 
     /**
-     * Whether [directory] is held (the engine's live generation, one the pointer names, or a complete one beside a
-     * malformed pointer, which may name it) and its `meta.json` as it reads. A directory nothing holds is this install's: it is completed over its staged deltas, or deleted on a
-     * failure before activation. A complete one becomes this install's only once [StoreLayout.reopen] accepts it.
+     * Whether [directory] is held and its `meta.json` as it reads. It is held when it is the engine's live generation or
+     * one the pointer names, or when the pointer is malformed (it may name any directory) and [directory]'s `meta.json`
+     * is present, complete or malformed (#236, fail closed). A directory nothing holds is this install's: it is
+     * completed over its staged deltas, or deleted on a failure before activation. A complete one becomes this install's
+     * only once [StoreLayout.reopen] accepts it.
      */
     private fun claim(directory: String): Pair<Boolean, StoreRead<GenerationMeta>> {
+        liveBefore = liveDirectory()
         val existing = store.readMeta(directory)
-        // #236, fail closed: a malformed pointer may name a complete directory, so it is held: compared, reused when it
-        // is this generation, never reopened, rewritten or deleted. The flip then writes a pointer that reads.
-        val unknown = store.pointer() is StoreRead.Malformed && existing is StoreRead.Found
+        // #236, fail closed: a malformed pointer may name a directory whose meta.json is present, so it is held: compared,
+        // reused when it is this generation, never reopened, rewritten or deleted. The flip then writes a pointer that
+        // reads. Only a directory with no meta.json is staged.
+        val unknown = store.pointer() is StoreRead.Malformed && existing !is StoreRead.Absent
         val held = directory == liveDirectory() || directory in pointed() || unknown
         if (!held && existing !is StoreRead.Found) written = directory
         return held to existing
@@ -240,17 +247,19 @@ private class Install(
 
     /**
      * Completes the generation directory, `meta.json` last, or returns the failure. [held] and [existing] were read at
-     * the start of the install.
-     * - A directory the engine holds live or the pointer names is never replaced. When it holds this generation
-     *   ([sameGeneration]: left by an install that failed after the publish, or the pointer's `previous` on a rollback
-     *   inside the window) it is prepared as it stands, its stored `meta.json` kept, so a retry can succeed; when it
-     *   holds another generation, a stored delta that does not re-hash included (#201), or its `meta.json` is malformed
-     *   (a newer binary's `metaVersion`, say, #178) or missing, it stays and fails the install, `STORE_FAILED`.
-     * - Any other directory, complete or not, is referenced by nothing and is completed again over its staged delta
-     *   files ([StoreLayout.reopen], then [StoreLayout.completeGeneration], which deletes every other file of an earlier
-     *   attempt, re-hashes each staged delta and writes this install's own `meta.json` with the signature it verified).
-     *   A staged delta that is missing or does not re-hash fails the install, and the directory is deleted, so the next
-     *   sync stages it afresh rather than failing on it at every sync (the #205 review).
+     * the start of the install ([claim]).
+     * - A held directory (live, pointed to, or beside a malformed pointer with its `meta.json` present) is never
+     *   replaced. When it holds this generation ([sameGeneration]: left by an install that failed after the publish,
+     *   the pointer's `previous` on a rollback inside the window, or the same `<ts>` served again beside a malformed
+     *   pointer) it is prepared as it stands, its stored `meta.json` kept, so a retry can succeed. When it holds another
+     *   generation, a stored delta that does not re-hash included (#201), or its `meta.json` is malformed (a newer
+     *   binary's `metaVersion`, say, #178) or missing, it stays and fails the install, `STORE_FAILED`.
+     * - Any other directory is referenced by nothing, complete or not (beside a malformed pointer, only one with no
+     *   `meta.json`). It is completed again over its staged delta files ([StoreLayout.reopen], then
+     *   [StoreLayout.completeGeneration], which deletes every other file of an earlier attempt, re-hashes each staged
+     *   delta and writes this install's own `meta.json` with the signature it verified). A staged delta that is missing
+     *   or does not re-hash fails the install, and the directory is deleted, so the next sync stages it afresh rather
+     *   than failing on it at every sync (the #205 review).
      */
     private fun directory(
         directory: String,
@@ -263,7 +272,7 @@ private class Install(
                 val cause = IllegalStateException("$directory holds another generation")
                 return fail(SyncOutcome.STORE_FAILED, null, cause)
             }
-            val cause = IllegalStateException("$directory is live or pointed to, and its meta.json is not readable")
+            val cause = IllegalStateException("$directory is held, and its meta.json is not readable")
             return fail(SyncOutcome.STORE_FAILED, null, cause)
         }
         if (existing is StoreRead.Found) {
@@ -376,7 +385,9 @@ private class Install(
     /**
      * The pointer's new `previous`: the first of the old `live` and `previous` that is another complete generation of
      * the same or a higher trust class (spec §6.5), else none. A malformed pointer, and a pointed directory whose
-     * `meta.json` is missing or malformed, each count a store failure.
+     * `meta.json` is missing or malformed, each count a store failure. Beside a malformed pointer, the candidate is the
+     * generation the engine holds live, when it is another that qualifies (#236): a running loader keeps its fallback,
+     * while a fresh one has none.
      */
     private fun previous(directory: String): String? {
         val pointer =
@@ -386,8 +397,9 @@ private class Install(
                 }
 
                 StoreRead.Malformed -> {
+                    // #236: a running loader keeps the generation its engine held as the fallback; a fresh one has none.
                     storeFailures++
-                    return null
+                    return liveBefore?.takeIf { it != directory && qualifies(it) }
                 }
 
                 is StoreRead.Found -> {
@@ -407,6 +419,11 @@ private class Install(
             }
         }
     }
+
+    /** Whether [candidate] is a complete generation of the same or a higher trust class, as a `previous` must be. */
+    private fun qualifies(candidate: String): Boolean =
+        (store.readMeta(candidate) as? StoreRead.Found)?.value?.let { it.trustClass.rank >= meta.trustClass.rank } ==
+            true
 
     /**
      * Ends the install as [outcome]: before activation, closes the prepared generation and deletes the directory this

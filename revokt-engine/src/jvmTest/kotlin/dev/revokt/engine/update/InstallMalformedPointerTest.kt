@@ -5,6 +5,7 @@ package dev.revokt.engine.update
 
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
+import dev.revokt.TrustClass
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreRead
 import kotlin.test.Test
@@ -49,5 +50,47 @@ internal class InstallMalformedPointerTest : InstallFixture() {
         assertEquals(other, store.meta(dir))
         assertNotNull(store.file(dir, dev.revokt.engine.store.StoreLayout.INDEX))
         assertEquals(StoreRead.Malformed, store.pointer())
+    }
+
+    @Test
+    fun `beside a malformed pointer a running loader keeps its live generation as previous, a fresh one has none`() {
+        val g1 = assertIs<InstallResult.Installed>(install(pending("g1"))).directory
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        val g2 = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000))).directory
+        assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        val fresh = SnapshotRef(empty)
+        val r = install(pending("g3", timestamp = 2_000_000_000_001), engine, store, fresh, publication, null, logger)
+        assertEquals(StoreRead.Found(Pointer(assertIs<InstallResult.Installed>(r).directory, null)), store.pointer())
+    }
+
+    @Test
+    fun `beside a malformed pointer a malformed meta json is held and kept, and a new ts installs`() {
+        val dir = assertIs<InstallResult.Installed>(install(pending())).directory
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        storage.inner.write("crlite/compat/$dir/meta.json", "{\"metaVersion\":2}".encodeToByteArray())
+        val before = keysOf(dir).associateWith { checkNotNull(storage.inner.read(it)).toList() }
+        val f = failed(install(pending(), engine, store, SnapshotRef(empty), publication, null, logger))
+        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage)
+        assertEquals(before, keysOf(dir).associateWith { checkNotNull(storage.inner.read(it)).toList() })
+        val r =
+            install(
+                pending("g2", timestamp = 2_000_000_000_000),
+                engine,
+                store,
+                SnapshotRef(empty),
+                publication,
+                null,
+                logger,
+            )
+        assertIs<InstallResult.Installed>(r)
+    }
+
+    @Test
+    fun `beside a malformed pointer a live generation of a lower trust class is not kept as previous`() {
+        assertIs<InstallResult.Installed>(install(pending("g1", TrustClass.MIRROR)))
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        val g2 = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000))).directory
+        assertEquals(StoreRead.Found(Pointer(g2, null)), store.pointer())
     }
 }

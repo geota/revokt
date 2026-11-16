@@ -12,7 +12,9 @@ import dev.revokt.engine.fetch.json
 import dev.revokt.engine.fetch.ok
 import dev.revokt.engine.fetch.response
 import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
+import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.update.UpdateFixtures.log
 import dev.revokt.engine.verify.ContentSignature
 import dev.revokt.engine.verify.ContentSignatureFailure
@@ -287,6 +289,16 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
         val server = installedFirst()
         storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
         // A fresh loader over the same store: nothing is live in its snapshot.
+        freshLoader()
+        server.fetcher.requests.clear()
+        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
+        assertTrue(run.storeFailures >= 1, "the malformed pointer is a store failure")
+        assertEquals(emptyList(), server.attachmentRequests())
+        assertEquals(directory1, liveDirectory())
+        assertNotNull(store.meta(directory1))
+    }
+
+    private fun freshLoader() =
         snapshot.publish(
             GenerationSnapshot(
                 0,
@@ -294,12 +306,56 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
                 null,
             ),
         )
+
+    @Test
+    fun `#236 - beside a malformed pointer a new ts installs, a running loader keeping its live one as previous`() {
+        val server = installedFirst()
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        next(server, listOf(full, delta, delta2))
+        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
+        assertEquals(StoreRead.Found(Pointer(directory2, directory1)), store.pointer())
+        assertNotNull(store.readGeneration(directory1))
+    }
+
+    @Test
+    fun `#236 - beside a malformed pointer a fresh loader installs a new ts, the healed pointer with no previous`() {
+        val server = installedFirst()
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        freshLoader()
+        next(server, listOf(full, delta, delta2))
+        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
+        assertEquals(StoreRead.Found(Pointer(directory2, null)), store.pointer())
+    }
+
+    @Test
+    fun `#236 - beside a malformed pointer a directory whose meta json is malformed is held, and a new ts heals`() {
+        val server = installedFirst()
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        storage.inner.write("crlite/compat/$directory1/meta.json", "{\"metaVersion\":2}".encodeToByteArray())
+        freshLoader()
         server.fetcher.requests.clear()
-        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
-        assertTrue(run.storeFailures >= 1, "the malformed pointer is a store failure")
+        val before =
+            storage.inner
+                .names()
+                .filter {
+                    "/$directory1/" in it
+                }.associateWith { checkNotNull(storage.inner.read(it)).toList() }
+        repeat(2) { i ->
+            sync(server, now = ts + (2 + 7 * i) * hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+            val after =
+                storage.inner
+                    .names()
+                    .filter {
+                        "/$directory1/" in it
+                    }.associateWith { checkNotNull(storage.inner.read(it)).toList() }
+            assertEquals(before, after, "sync $i left the directory byte-identical")
+        }
         assertEquals(emptyList(), server.attachmentRequests())
-        assertEquals(directory1, liveDirectory())
-        assertNotNull(store.meta(directory1))
+        next(server, listOf(full, delta, delta2))
+        sync(server, now = ts2 + 16 * hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(GenerationNames.directory(ts2, "$ts2/${delta2.id}"), liveDirectory())
     }
 
     @Test

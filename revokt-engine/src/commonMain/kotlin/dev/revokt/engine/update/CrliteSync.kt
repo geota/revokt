@@ -606,34 +606,43 @@ internal class CrliteSync(
             val deltas = LinkedHashMap<String, ByteString>()
             private val encodings = HashMap<String, Encoding?>()
 
-            /** Whether [directory] is a complete generation the engine holds live or the pointer names, read as it stands. */
+            /**
+             * Whether [directory] is held and complete, read as it stands: the engine holds it live, the pointer names it,
+             * or it sits beside a malformed pointer, which may name it (#236).
+             */
             private var held = false
 
             /** The live and pointed generations' directories, which a delta of the same name and hash is copied from. */
             private var pointed: List<String> = emptyList()
 
             /**
-             * Readies [directory]. One the engine holds live or the pointer names is never written: a complete one is read
-             * as it stands ([install] then compares it with this generation), and one that is not complete fails the sync
-             * as [install] would, `STORE_FAILED`. Any other is referenced by nothing, so it is completed afresh: its
-             * `meta.json` is deleted ([StoreLayout.reopen]), each of its files is reused only when it re-hashes to a
-             * placed delta, and [install] deletes the rest, so neither a corrupted delta nor another generation's
-             * `meta.json` or `index.bin` there fails every sync of this `<ts>` (the #205 review). The failure that ends
-             * the sync, or null.
+             * Readies [directory]. A held one is never written. It is held when the engine holds it live or the pointer
+             * names it, or when the pointer is malformed (it may name any directory) and [directory]'s `meta.json` is
+             * present (#236, fail closed). A held directory that is complete is read as it stands, and [install] then
+             * compares it with this generation. One whose `meta.json` is malformed or (when live or pointed) missing
+             * fails the sync as [install] would, `STORE_FAILED`, and a new `<ts>` heals it.
+             *
+             * Any other directory is referenced by nothing. Beside a malformed pointer, that means one with no `meta.json`
+             * at all. It is completed afresh: a complete orphan's `meta.json` is deleted ([StoreLayout.reopen]), each of
+             * its files is reused only when it re-hashes to a placed delta, and [install] deletes the rest. So neither a
+             * corrupted delta nor another generation's `meta.json` or `index.bin` there fails every sync of this `<ts>`
+             * (the #205 review). The failure that ends the sync, or null.
              */
             fun open(): SyncResult? {
-                val read = stored { store.pointer() }
-                val pointer = (read as? StoreRead.Found)?.value
+                val pointerRead = stored { store.pointer() }
+                val pointer = (pointerRead as? StoreRead.Found)?.value
                 val live = reads.liveDirectory()
                 val holders = listOfNotNull(live, pointer?.live, pointer?.previous).distinct()
                 pointed = holders.filter { it != directory }
-                val complete = stored { store.readMeta(directory) } is StoreRead.Found
-                // #236, fail closed: a malformed pointer may name a complete directory, so it is held (compared, reused
-                // when it is this generation, never reopened, rewritten or deleted), and the flip heals the pointer.
-                if (directory in holders || (read is StoreRead.Malformed && complete)) {
+                val metaRead = stored { store.readMeta(directory) }
+                val complete = metaRead is StoreRead.Found
+                // #236, fail closed: a malformed pointer may name a directory whose meta.json is present (complete, or
+                // malformed as a torn write or a newer binary leaves it), so it is held, never reopened, rewritten or
+                // deleted; only one with no meta.json is staged.
+                if (directory in holders || (pointerRead is StoreRead.Malformed && metaRead !is StoreRead.Absent)) {
                     held = complete
                     if (held) return null
-                    return storeFailed("$directory is live or pointed to, and its meta.json is not readable")
+                    return storeFailed("$directory is held, and its meta.json is not readable")
                 }
                 // A complete orphan is reopened; an incomplete one needs nothing before its deltas are staged.
                 if (complete) stored { store.reopen(directory) }
