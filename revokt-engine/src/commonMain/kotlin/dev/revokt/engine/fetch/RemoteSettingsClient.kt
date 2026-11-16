@@ -131,7 +131,7 @@ internal class RemoteSettingsClient(
         val expected =
             count((listed.single() as JsonObject)["last_modified"])
                 ?: return malformed(body, "last_modified is not an integer ≥ 0")
-        return ClientResult.Ok(expected, body.status, body.backoffMillis)
+        return ClientResult.Ok(expected, body.status, body.backoffMillis, body.size)
     }
 
     /**
@@ -176,7 +176,7 @@ internal class RemoteSettingsClient(
                 val fields = it as? JsonObject ?: JsonObject.EMPTY
                 SignatureEntry(string(fields["signature"]), string(fields["x5u"]), string(fields["mode"]))
             }
-        return ClientResult.Ok(Changeset(timestamp, changes, signatures), body.status, body.backoffMillis)
+        return ClientResult.Ok(Changeset(timestamp, changes, signatures), body.status, body.backoffMillis, body.size)
     }
 
     /**
@@ -194,7 +194,7 @@ internal class RemoteSettingsClient(
                 )
         return when (val exchange = exchange(SyncStage.X5U, allowed, limits.maxX5uBytes, cursor = null)) {
             is Exchange.Ended -> exchange.result
-            is Exchange.Body -> ClientResult.Ok(exchange.bytes, exchange.status, exchange.backoffMillis)
+            is Exchange.Body -> ClientResult.Ok(exchange.bytes, exchange.status, exchange.backoffMillis, exchange.size)
         }
     }
 
@@ -258,7 +258,7 @@ internal class RemoteSettingsClient(
                 "${record.id}: SHA-256 differs from the signed hash",
             )
         }
-        return ClientResult.Ok(body.bytes, body.status, body.backoffMillis)
+        return ClientResult.Ok(body.bytes, body.status, body.backoffMillis, body.size)
     }
 
     private sealed class Exchange {
@@ -268,6 +268,8 @@ internal class RemoteSettingsClient(
             val status: Int,
             val backoffMillis: Long?,
         ) : Exchange() {
+            val size: Long get() = bytes.size.toLong()
+
             fun failed(
                 stage: SyncStage,
                 failure: ClientFailure,

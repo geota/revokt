@@ -10,6 +10,7 @@ import dev.revokt.Freshness
 import dev.revokt.LogLevel
 import dev.revokt.PolicyDiagnostic
 import dev.revokt.RevocationEngine
+import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktTestingApi
 import dev.revokt.Severity
@@ -27,6 +28,10 @@ import dev.revokt.engine.fetch.ChangesetVerifier
 import dev.revokt.engine.fetch.ClientResult
 import dev.revokt.engine.fetch.CrliteRecord
 import dev.revokt.engine.fetch.RemoteSettingsClient
+import dev.revokt.engine.json.Json
+import dev.revokt.engine.json.JsonArray
+import dev.revokt.engine.json.JsonObject
+import dev.revokt.engine.json.JsonParseException
 import dev.revokt.engine.store.BlobState
 import dev.revokt.engine.store.BlobWrite
 import dev.revokt.engine.store.GenerationMeta
@@ -37,6 +42,7 @@ import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
 import dev.revokt.engine.verify.ContentSignature
 import dev.revokt.engine.verify.RawSignature
+import dev.revokt.engine.walker.absorb
 import dev.revokt.engine.walker.isFatal
 import dev.revokt.engine.walker.restoreInterrupt
 import dev.revokt.safeLog
@@ -52,14 +58,32 @@ internal class SyncRun(
 }
 
 /**
+ * The policy inputs of one [CrliteSync] (`RevoktPolicy`, §4): `clockSkew` and `rollbackWindow`, and CRLite's
+ * `staleAfter`, null when the policy has no staleness entry for it (§7.2's metered deferral lasts until the live data is
+ * past it).
+ */
+internal class SyncPolicy(
+    val clockSkewMillis: Long,
+    val rollbackWindowMillis: Long,
+    val staleAfterMillis: Long?,
+) {
+    init {
+        require(clockSkewMillis >= 0) { "clockSkew is negative" }
+        require(rollbackWindowMillis >= 0) { "rollbackWindow is negative" }
+        require(staleAfterMillis == null || staleAfterMillis >= 0) { "staleAfter is negative" }
+    }
+}
+
+/**
  * The CRLite updater for one Remote Settings source, dataset and channel (spec §11's 0.2 row: "CRLite updater and the
- * updater record over `RevoktStorage.inMemory()`"): [syncOnce] syncs one **full** generation, the whole collection's
- * changeset. Deltas from the cursor, `_since` tombstones, reset-and-retry, the metered deferral and the half-cap
- * warnings are #141's; the schedule is the loader's (#147), which runs [syncOnce] on its dispatcher, never two at once.
+ * updater record over `RevoktStorage.inMemory()`"): [syncOnce] syncs one generation, from the cursor when the store holds
+ * one (#141) and the whole collection otherwise (#137). The schedule is the loader's (#147), which runs [syncOnce] on its
+ * dispatcher, never two at once.
  *
  * [client] is the source's client for `CRLITE`, [store] the dataset and channel's layout over the store, [snapshot] the
  * published snapshot this sync reads the live generation from and publishes to, [verifier] the content-signature and
- * x5u-chain verifier, and [clockSkewMillis] and [rollbackWindowMillis] the policy's (`RevoktPolicy`, §4).
+ * x5u-chain verifier, [policy] the policy's inputs, and [meteredNetwork] the builder's seam (§4: sampled once per sync
+ * before a full download; a throw reads as false).
  */
 internal class CrliteSync(
     private val client: RemoteSettingsClient,
@@ -67,47 +91,71 @@ internal class CrliteSync(
     private val engine: RevocationEngine,
     private val snapshot: SnapshotRef,
     private val verifier: SignatureVerifier,
-    private val clockSkewMillis: Long,
-    private val rollbackWindowMillis: Long,
+    private val policy: SyncPolicy,
     private val logger: RevoktLogger,
+    private val meteredNetwork: () -> Boolean = { false },
 ) {
     init {
         require(store.dataset == Dataset.CRLITE) { "the CRLite updater syncs CRLITE, not ${store.dataset}" }
         requireNotNull(
             client.source.collection(Dataset.CRLITE),
         ) { "${client.source.sourceId} has no CRLite collection" }
-        require(clockSkewMillis >= 0) { "clockSkew is negative" }
-        require(rollbackWindowMillis >= 0) { "rollbackWindow is negative" }
     }
 
     /**
-     * One sync at [nowMillis], the loader's one clock read for it, in the order of #137 (spec §5.1, §6.3, §6.5, §7.1):
+     * One sync at [nowMillis], the loader's one clock read for it, in the order of #137 and #141 (spec §5.1, §6.3, §6.5,
+     * §7.1, §7.2):
      * 1. Under the source's persisted backoff (`backoffUntilMillis` after now) → `BACKOFF`, the attempt fields written.
-     * 2. Poll `monitor/changes`, then fetch the whole collection's changeset at its `_expected`.
-     * 3. Verify it ([ChangesetVerifier]); everything after reads only the verified records and `<ts>`
-     *    ([ChangesetVerification.Verified]), never the changeset's `changes`.
+     * 2. Poll `monitor/changes`, then fetch the collection's changeset at its `_expected`: from the cursor
+     *    (`_since=<cursor>` and `If-None-Match: "<cursor>"`) when `updater.json` holds one and the pointed generation's
+     *    `records.json` reads, else the whole collection. A 304 is `UNCHANGED`.
+     * 3. Verify it ([ChangesetVerifier]) over the stored records with its changes merged, tombstones first
+     *    ([ContentSignature.merge]); everything after reads only the verified records and `<ts>`
+     *    ([ChangesetVerification.Verified]), never the changeset's `changes`. A `_since` changeset that does not verify is
+     *    fetched once more as the whole collection, which must verify (§7.1 "reset-and-retry once").
      * 4. The schema check and the channel filter ([RemoteSettingsClient.checkRecords]): `SYNC_SCHEMA_REJECTED`.
      * 5. The generation's records and names ([placeFilters]): not exactly one full, or two attachments that map to one
      *    name, is `FAILED` with `INDEX_INCONSISTENT` at `INDEX` before any body is fetched.
      * 6. The decision before any body ([SyncRules.admit]): `UNCHANGED`, `ROLLBACK_REFUSED`, `CLOCK_SKEW`, or on.
      * 7. The cap before any body: a signed record over `MAX_FILTER_BYTES` is `FAILED` with `CAP_NEAR_LIMIT` at
      *    `ATTACHMENT`, and nothing is fetched. There is no per-sync total, as neither Firefox nor upki has one (the
-     *    maintainer's decision on #137; `MAX_SYNC_BYTES` is dropped). Then each body is fetched, checked
-     *    against its signed size and hash, and written one at a time: a full as a blob, reused without a fetch when its
-     *    blob is stored and re-hashes (§6.5; a mismatch is fetched and rewritten, `storeFailures++`), a delta for the
-     *    generation directory.
-     * 8. [buildIndex], then the decision on the coverage ([SyncRules.decide]), then [install] in §6.5's order, which
+     *    maintainer's decision on #137; `MAX_SYNC_BYTES` is dropped).
+     * 8. The metered deferral (§7.2): when the full must be downloaded (no stored blob re-hashes to it), the dataset has
+     *    data, and that data is not past `staleAfter`, a metered network defers the sync: `DEFERRED` with
+     *    `METERED_DEFERRED`.
+     * 9. Each body, one at a time, checked against its signed size and hash and written: a full as a blob, reused without
+     *    a fetch when its blob is stored and re-hashes (§6.5; a mismatch is fetched and rewritten, `storeFailures++`); a
+     *    delta staged as a file of the generation directory, copied without a fetch from a pointed generation whose file
+     *    of that name re-hashes to it, as Firefox and upki reuse a filter on disk whose hash matches.
+     * 10. [buildIndex], then the decision on the coverage ([SyncRules.decide]), then [install] in §6.5's order, which
      *    writes `updater.json` after the pointer flip; on success the store is pruned to what the pointer names.
      *
-     * Every outcome but `INSTALLED` writes `updater.json` itself ([UpdaterTransitions.after]): the cursor,
-     * `lastVerified*` and the watermark advance only through an install. Every throwable is caught, an
-     * `OutOfMemoryError` included, and is `FAILED` at the stage it hit (§6.5: "every loader task catches `Throwable`").
+     * Every outcome but `INSTALLED` writes `updater.json` itself ([UpdaterTransitions.after]) and deletes any directory
+     * this sync staged: the cursor, `lastVerified*` and the watermark advance only through an install. Every throwable is
+     * caught, an `OutOfMemoryError` included, and is `FAILED` at the stage it hit (§6.5: "every loader task catches
+     * `Throwable`"). A body, record count or response above half its `RevoktLimits` constant is a `CAP_NEAR_LIMIT` warning
+     * on whatever result the sync ends with (§4), and the sync goes on.
      *
      * `UNCHANGED`-by-timestamp against a generation the snapshot holds live but the pointer does not name (an install
-     * whose flip or `updater.json` failed after `activate`, #184) is not the end: the install is retried, which skips the
-     * already-written directory and flips the pointer (#137's notes from #184 and #190).
+     * whose flip or `updater.json` failed after `activate`, #184) is not the end: the install is retried, which reuses
+     * the already-written directory and flips the pointer (#137's notes from #184 and #190).
      */
     fun syncOnce(nowMillis: Long): SyncRun = Attempt(nowMillis).run()
+
+    /** What fetching one changeset gave: its verified records, a failure to verify, or the end of the sync. */
+    private sealed interface Fetched {
+        class Verified(
+            val verified: ChangesetVerification.Verified,
+        ) : Fetched
+
+        class Unverified(
+            val failure: ChangesetVerification.Failed,
+        ) : Fetched
+
+        class Ended(
+            val result: SyncResult,
+        ) : Fetched
+    }
 
     /** One sync's state: what it read, what it fetched and what the failure path writes. */
     @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
@@ -116,12 +164,18 @@ internal class CrliteSync(
     ) {
         private val source = client.source
         private val channel = store.channel
-        private val clock = SyncClock(now, clockSkewMillis, rollbackWindowMillis)
+        private val clock = SyncClock(now, policy.clockSkewMillis, policy.rollbackWindowMillis)
         private var stage = SyncStage.STORE
         private var record = UpdaterRecord()
         private var storeFailures = 0
         private var backoff: Long? = null
         private var lastStatus: Int? = null
+
+        private val reads = Reads()
+        private val gates = Gates()
+
+        /** The generation directory this sync staged delta files in, until an install takes it over. */
+        private var staged: String? = null
 
         /** Set once the first body fetch starts: from there on the sync is an *install* (§6.5's order). */
         private var installing = false
@@ -178,19 +232,96 @@ internal class CrliteSync(
             storeFailures += loaded.storeFailures
             val nextAttempt = UpdaterTransitions.nextAttemptAtMillis(record, source.sourceId, now)
             if (nextAttempt != null && nextAttempt > now) return end(Ended(SyncOutcome.BACKOFF, null, null, "backoff"))
+            val base = stored { reads.deltaBase() }
             stage = SyncStage.CHANGESET
-            val expected = ok(client.pollChanges()) { return it }
-            val changeset = ok(client.fetchChangeset(expected, since = null)) { return it }
-            stage = SyncStage.SIGNATURE
-            val merged = ContentSignature.merge(emptyList(), changeset.changes) ?: changeset.changes
+            val polled = client.pollChanges()
+            val expected = ok(polled) { return it }
+            gates.nearCap(polled, "monitor/changes", RevoktLimits.MAX_JSON_BYTES)
+            val cursor = record.sources[source.sourceId]?.lastVerifiedLastModified
             val verified =
-                when (val verification = ChangesetVerifier(client, verifier, now).verify(changeset, merged)) {
-                    is ChangesetVerification.Verified -> verification.also { backoff(it.backoffMillis) }
-                    is ChangesetVerification.Failed -> return unverified(verification)
+                when (val fetched = Changesets().verified(expected, cursor?.takeIf { base != null }, base.orEmpty())) {
+                    is Fetched.Verified -> fetched.verified
+                    is Fetched.Unverified -> return unverified(fetched.failure)
+                    is Fetched.Ended -> return fetched.result
                 }
             stage = SyncStage.SCHEMA
             val crlite = ok(client.checkRecords(verified.records, channel)) { return it }
+            val count = crlite.size.toLong()
+            gates.nearCap(
+                count,
+                RevoktLimits.MAX_CHANGESET_RECORDS.toLong(),
+                "records",
+            ) { "$channel holds $count records" }
             return generation(verified, crlite)
+        }
+
+        /** The changeset fetches of one sync, which share one [ChangesetVerifier] (§7.1: one x5u fetch per URL per sync). */
+        private inner class Changesets {
+            /**
+             * The changeset at [expected], verified: from [since] over [base] (the pointed generation's records) when
+             * [since] is set, and once more as the whole collection when that does not verify ([ChangesetVerifier] shared,
+             * so an x5u URL is fetched once per sync, §7.1); the whole collection when [since] is null.
+             */
+            fun verified(
+                expected: Long,
+                since: Long?,
+                base: List<JsonObject>,
+            ): Fetched {
+                val signatures = ChangesetVerifier(client, verifier, now)
+                val first = changeset(signatures, expected, since, base)
+                // Every verification failure resets, as Firefox retries every InvalidSignatureError of an import from scratch.
+                if (first !is Fetched.Unverified || since == null) return first
+                backoff(first.failure.backoffMillis)
+                first.failure.httpStatus?.let { lastStatus = it }
+                logger.safeLog(
+                    LogLevel.WARN,
+                    "${source.sourceId} ${store.root}: the changeset since $since did not verify (${first.failure}); " +
+                        "fetching the whole collection",
+                )
+                if (first.failure.stage == SyncStage.X5U) {
+                    // §7.1: an x5u URL is fetched and validated once per sync, so the retry reuses this failure.
+                    logger.safeLog(
+                        LogLevel.WARN,
+                        "${source.sourceId} ${store.root}: the retry reuses this sync's failed x5u result; it fails " +
+                            "the same way when the whole collection names the same x5u",
+                    )
+                }
+                return changeset(signatures, expected, null, emptyList())
+            }
+
+            /** One changeset at [expected] from [since] (null: the whole collection), verified over [base] merged with it. */
+            private fun changeset(
+                signatures: ChangesetVerifier,
+                expected: Long,
+                since: Long?,
+                base: List<JsonObject>,
+            ): Fetched {
+                stage = SyncStage.CHANGESET
+                val fetched = client.fetchChangeset(expected, since)
+                if (fetched is ClientResult.Unchanged) {
+                    backoff(fetched.backoffMillis)
+                    lastStatus = fetched.httpStatus
+                    return Fetched.Ended(
+                        end(Ended(SyncOutcome.UNCHANGED, null, null, "304: the collection is at $since")),
+                    )
+                }
+                val changeset = ok(fetched) { return Fetched.Ended(it) }
+                gates.nearCap(fetched, "the changeset", RevoktLimits.MAX_JSON_BYTES)
+                stage = SyncStage.SIGNATURE
+                val merged = ContentSignature.merge(base, changeset.changes) ?: changeset.changes
+                return when (val verification = signatures.verify(changeset, merged)) {
+                    is ChangesetVerification.Verified -> {
+                        backoff(verification.backoffMillis)
+                        val x5u = verification.x5uBody.size.toLong()
+                        gates.nearCap(x5u, RevoktLimits.MAX_X5U_BYTES, "x5u") { "the x5u is $x5u bytes" }
+                        Fetched.Verified(verification)
+                    }
+
+                    is ChangesetVerification.Failed -> {
+                        Fetched.Unverified(verification)
+                    }
+                }
+            }
         }
 
         /** Steps 5 and 6, over the [verified] changeset's schema-checked records of the channel, [crlite]. */
@@ -215,10 +346,10 @@ internal class CrliteSync(
                     is Placement.Placed -> placement.filters
                     is IndexBuild.Refused -> return refused(placement)
                 }
-            val live = liveGeneration()
+            val live = reads.liveGeneration()
             var ruled = live
             var admitted = SyncRules.admit(ts, record.watermarkMillis, ruled, clock)
-            if (admitted == SyncDecision.UNCHANGED && live != null && !pointed(live)) {
+            if (admitted == SyncDecision.UNCHANGED && live != null && !reads.pointed(live)) {
                 // The live generation's install activated but its flip did not land: retry it, never stop (#190).
                 ruled = null
                 admitted = SyncRules.admit(ts, record.watermarkMillis, null, clock)
@@ -228,7 +359,7 @@ internal class CrliteSync(
         }
 
         /**
-         * Steps 7 and 8 for the [placed] filters of [records] (the channel's [crlite] records), decided against
+         * Steps 7 to 10 for the [placed] filters of [records] (the channel's [crlite] records), decided against
          * [ruled], the live generation the rules compare with.
          */
         private fun fetched(
@@ -242,12 +373,15 @@ internal class CrliteSync(
             stage = SyncStage.ATTACHMENT
             val byId = crlite.associateBy { it.id }
             val attachments = placed.map { byId.getValue(it.record.id) }
-            val reused =
-                attachments.filter { !it.incremental && stored { store.blob(it.attachment.sha256) } == BlobState.MATCH }
-            cap(attachments)?.let { return it }
+            val full = attachments.single { !it.incremental }
+            val reuse = stored { store.blob(full.attachment.sha256) } == BlobState.MATCH
+            gates.cap(attachments)?.let { return it }
+            if (!reuse) gates.deferred()?.let { return it }
             installing = true
-            val bodies = Bodies()
-            for (r in attachments) bodies.fetch(r, r in reused)?.let { return it }
+            val generationId = "$ts/${placed.last().record.id}"
+            val bodies = Bodies(GenerationNames.directory(ts, generationId))
+            bodies.open()?.let { return it }
+            for (r in attachments) bodies.fetch(r, reuse)?.let { return it }
             stage = SyncStage.INDEX
             val built =
                 when (val build = buildIndex(records, channel) { bodies.bytes(byId.getValue(it.id)) }) {
@@ -261,23 +395,23 @@ internal class CrliteSync(
                 val detail = "${filter.record.id} is in an encoding the engine does not list (${engine.formats})"
                 return end(Ended(SyncOutcome.FAILED, SyncStage.PREPARE, DiagnosticCode.FORMAT_UNSUPPORTED, detail))
             }
-            val pending = pending(verified, placed, built, bodies, bodies.format(placed))
+            val pending = pending(verified, generationId, built, bodies, bodies.format(placed))
             return installed(pending, decision == SyncDecision.INSTALL_CLOCK_BEHIND)
         }
 
         /**
-         * The generation to install: id `"<ts>/<last placed record id>"` (spec §4 `DataState.generationId`), its
-         * `meta.json`, [built]'s index, the fetched deltas and `records.json`, the verified payload without its prefix.
+         * The generation to install: id [generationId], `"<ts>/<last placed record id>"` (spec §4
+         * `DataState.generationId`), its `meta.json`, [built]'s index, the staged deltas and `records.json`, the verified
+         * payload without its prefix.
          */
         private fun pending(
             verified: ChangesetVerification.Verified,
-            placed: List<PlacedFilter>,
+            generationId: String,
             built: IndexBuild.Built,
             bodies: Bodies,
             format: FilterFormat,
         ): PendingGeneration {
             val ts = verified.timestamp
-            val generationId = "$ts/${placed.last().record.id}"
             val meta =
                 GenerationMeta(
                     dataset = Dataset.CRLITE,
@@ -309,10 +443,11 @@ internal class CrliteSync(
                     seedFormat = null,
                     staleGateOpen = true,
                     nowMillis = now,
-                    clockSkewMillis = clockSkewMillis,
+                    clockSkewMillis = policy.clockSkewMillis,
                 )
             return when (val result = install(pending, engine, store, snapshot, publication, updated, logger)) {
                 is InstallResult.Installed -> {
+                    staged = null
                     storeFailures += result.storeFailures
                     val warnings =
                         if (clockBehind) {
@@ -323,11 +458,13 @@ internal class CrliteSync(
                     val installed =
                         result(SyncOutcome.INSTALLED, null, warnings, mapOf(Dataset.CRLITE to result.generationId))
                     done = installed
-                    prune(result.directory)
+                    reads.prune(result.directory)
                     installed
                 }
 
                 is InstallResult.Failed -> {
+                    // An activated generation's directory is live in the engine: it stays for the retried flip (#184).
+                    if (result.activated) staged = null
                     storeFailures += result.storeFailures
                     end(Ended(result.outcome, result.stage, result.code, "the install failed", cause = result.cause))
                 }
@@ -362,26 +499,137 @@ internal class CrliteSync(
             }
 
         /**
-         * Spec §5.1's cap over [attachments], every placed record's, before any body is fetched: a signed record
-         * declaring more than `MAX_FILTER_BYTES` is `FAILED` with `CAP_NEAR_LIMIT` at `ATTACHMENT`, or null.
+         * The checks on sizes and the network before and around the bodies: the cap and the half-cap warnings (§4, §5.1
+         * limits) and the metered deferral (§7.2).
          */
-        private fun cap(attachments: List<CrliteRecord>): SyncResult? {
-            val max = client.limits.maxFilterBytes
-            val over = attachments.firstOrNull { it.attachment.size > max } ?: return null
-            val detail = "${over.id}: ${over.attachment.size} bytes declared, cap $max"
-            return end(Ended(SyncOutcome.FAILED, SyncStage.ATTACHMENT, DiagnosticCode.CAP_NEAR_LIMIT, detail))
+        private inner class Gates {
+            /** The `CAP_NEAR_LIMIT` warnings of this sync (§4), on whatever result it ends with. */
+            val nearCaps = ArrayList<PolicyDiagnostic>()
+
+            /** The items [nearCaps] warns about. */
+            private val warned = HashSet<String>()
+
+            /**
+             * Spec §5.1's cap over [attachments], every placed record's, before any body is fetched: a signed record
+             * declaring more than `MAX_FILTER_BYTES` is `FAILED` with `CAP_NEAR_LIMIT` at `ATTACHMENT`, or null. Otherwise
+             * each declared size above half of `MAX_FILTER_BYTES` is a `CAP_NEAR_LIMIT` warning (§4: "the signed size
+             * notwithstanding"), a reused full's included.
+             */
+            fun cap(attachments: List<CrliteRecord>): SyncResult? {
+                val max = client.limits.maxFilterBytes
+                attachments.firstOrNull { it.attachment.size > max }?.let { over ->
+                    val detail = "${over.id}: ${over.attachment.size} bytes declared, cap $max"
+                    return end(Ended(SyncOutcome.FAILED, SyncStage.ATTACHMENT, DiagnosticCode.CAP_NEAR_LIMIT, detail))
+                }
+                for (r in attachments) {
+                    nearCap(
+                        r.attachment.size,
+                        RevoktLimits.MAX_FILTER_BYTES,
+                        r.id,
+                    ) { "${r.id}: ${r.attachment.size} bytes" }
+                }
+                return null
+            }
+
+            /**
+             * §7.2's metered deferral of a full download, or null: `DEFERRED` with `METERED_DEFERRED` while the dataset's
+             * live generation is not past `staleAfter` and [meteredNetwork], sampled here once, reports true. A dataset with
+             * no data always downloads ("missing data always downloads"), and so does one whose policy has no
+             * `staleAfter`.
+             */
+            fun deferred(): SyncResult? {
+                val live = reads.liveGeneration() ?: return null
+                val staleAfter = policy.staleAfterMillis ?: return null
+                if (now > saturatingAdd(live.sourceTimestampMillis, staleAfter) || !metered()) return null
+                val detail = "a full download on a metered network, while ${live.sourceTimestampMillis} is fresh"
+                return end(Ended(SyncOutcome.DEFERRED, null, DiagnosticCode.METERED_DEFERRED, detail))
+            }
+
+            /** [meteredNetwork], a throw read as false (§4); a fatal error is rethrown, to [run]'s catch. */
+            @Suppress("TooGenericExceptionCaught") // §4: a throwing meteredNetwork reads as false.
+            private fun metered(): Boolean =
+                try {
+                    meteredNetwork()
+                } catch (t: Throwable) {
+                    absorb(t)
+                    logger.safeLog(LogLevel.WARN, "${source.sourceId}: meteredNetwork threw; read as false", t)
+                    false
+                }
+
+            /** A `CAP_NEAR_LIMIT` warning for [what]'s body when [result] read one above half of [cap] (§4). */
+            fun nearCap(
+                result: ClientResult<*>,
+                what: String,
+                cap: Long,
+            ) {
+                val size = (result as? ClientResult.Ok)?.bodyBytes ?: return
+                nearCap(size, cap, what) { "$what is $size bytes" }
+            }
+
+            /**
+             * A `CAP_NEAR_LIMIT` warning when [value] is above half of [cap], the `RevoktLimits` constant (§4), once per
+             * [item] per sync: a reset that fetches the changeset twice warns about it once.
+             */
+            fun nearCap(
+                value: Long,
+                cap: Long,
+                item: String,
+                what: () -> String,
+            ) {
+                if (value > cap / 2 && warned.add(item)) {
+                    nearCaps += warning(DiagnosticCode.CAP_NEAR_LIMIT, "${what()}, above half of $cap")
+                }
+            }
         }
 
-        /** The bodies of one generation, fetched one at a time; a full's bytes stay in its blob, not here. */
-        private inner class Bodies {
+        /**
+         * The bodies of one generation in [directory], fetched one at a time and written as each arrives: a full as its
+         * blob, a delta as a file staged in [directory] (§6.5: "write …, drop the body"). Neither stays here.
+         */
+        private inner class Bodies(
+            private val directory: String,
+        ) {
             val blobs = LinkedHashMap<String, ByteString>()
-            val deltas = LinkedHashMap<String, ByteArray>()
-            private val deltaBytes = HashMap<String, ByteArray>()
+            val deltas = LinkedHashMap<String, ByteString>()
             private val encodings = HashMap<String, Encoding?>()
+
+            /** Whether [directory] is a complete generation the engine holds live or the pointer names, read as it stands. */
+            private var held = false
+
+            /** The live and pointed generations' directories, which a delta of the same name and hash is copied from. */
+            private var pointed: List<String> = emptyList()
+
+            /**
+             * Readies [directory]. One the engine holds live or the pointer names is never written: a complete one is read
+             * as it stands ([install] then compares it with this generation), and one that is not complete fails the sync
+             * as [install] would, `STORE_FAILED`. Any other is referenced by nothing, so it is completed afresh: its
+             * `meta.json` is deleted ([StoreLayout.reopen]), each of its files is reused only when it re-hashes to a
+             * placed delta, and [install] deletes the rest, so neither a corrupted delta nor another generation's
+             * `meta.json` or `index.bin` there fails every sync of this `<ts>` (the #205 review). The failure that ends
+             * the sync, or null.
+             */
+            fun open(): SyncResult? {
+                val pointer = stored { (store.pointer() as? StoreRead.Found)?.value }
+                val live = reads.liveDirectory()
+                val holders = listOfNotNull(live, pointer?.live, pointer?.previous).distinct()
+                pointed = holders.filter { it != directory }
+                if (directory in holders) {
+                    held = stored { store.readMeta(directory) } is StoreRead.Found
+                    if (held) return null
+                    return storeFailed("$directory is live or pointed to, and its meta.json is not readable")
+                }
+                // A complete orphan is reopened; an incomplete one needs nothing before its deltas are staged.
+                if (stored { store.readMeta(directory) } is StoreRead.Found) stored { store.reopen(directory) }
+                // Only once reopen accepted it: a directory the pointer names is never deleted on a failure.
+                staged = directory
+                return null
+            }
 
             /**
              * Fetches [r]'s body and writes it, or for a [reuse]d full only names its stored blob; the failure that ends
-             * the sync, or null.
+             * the sync, or null. A delta is read from a held [directory]; otherwise it is kept when [directory] already
+             * holds it re-hashing, else copied from a pointed generation's file of its name that re-hashes to its signed
+             * hash, else fetched, and staged in [directory].
              */
             fun fetch(
                 r: CrliteRecord,
@@ -389,31 +637,40 @@ internal class CrliteSync(
             ): SyncResult? {
                 val name = GenerationNames.derive(r.attachment.filename)
                 val sha256 = r.attachment.sha256
-                if (reuse) {
+                if (!r.incremental) {
+                    if (!reuse) {
+                        val bytes = ok(client.fetchAttachment(r)) { return it }.toByteArray()
+                        if (stored { store.putBlob(bytes) } == BlobWrite.REWRITTEN) storeFailures++
+                    }
                     blobs[name] = sha256
                     return null
                 }
-                val bytes = ok(client.fetchAttachment(r)) { return it }.toByteArray()
-                if (r.incremental) {
-                    deltas[name] = bytes
-                    deltaBytes[r.id] = bytes
-                } else {
-                    if (stored { store.putBlob(bytes) } == BlobWrite.REWRITTEN) storeFailures++
-                    blobs[name] = sha256
-                }
+                deltas[name] = sha256
+                // #201: a stored delta is re-hashed against its signed record before it is reused.
+                if (stored { store.file(directory, name, sha256) } != null) return null
+                if (held) return storeFailed("$directory holds another generation: $name does not re-hash")
+                val bytes =
+                    stored { pointed.firstNotNullOfOrNull { store.file(it, name, sha256) } }
+                        ?: ok(client.fetchAttachment(r)) { return it }.toByteArray()
+                stored { store.stageFile(directory, name, bytes) }
                 return null
             }
 
             /**
-             * [r]'s body for [buildIndex], which reads each once: a delta's as fetched, a full's read back from its blob
-             * and re-hashed. The full's encoding is noted for [format].
+             * [r]'s body for [buildIndex], which reads each once: a delta's from [directory], a full's from its blob, each
+             * re-hashed. Its encoding is noted for [format] and [unlisted].
              */
             fun bytes(r: CrliteRecord): ByteArray {
+                val sha256 = r.attachment.sha256
                 val bytes =
-                    deltaBytes[r.id]
-                        ?: stored {
-                            checkNotNull(store.readBlob(r.attachment.sha256)) { "the blob of ${r.id} is gone" }
+                    stored {
+                        if (r.incremental) {
+                            val name = GenerationNames.derive(r.attachment.filename)
+                            checkNotNull(store.file(directory, name, sha256)) { "$directory/$name is gone" }
+                        } else {
+                            checkNotNull(store.readBlob(sha256)) { "the blob of ${r.id} is gone" }
                         }
+                    }
                 encodings[r.id] = encoding(bytes)
                 return bytes
             }
@@ -448,42 +705,84 @@ internal class CrliteSync(
                 }
         }
 
-        /** The dataset's live generation as the snapshot publishes it, for [SyncRules]; null when it has none. */
-        private fun liveGeneration(): LiveGeneration? {
-            val live = snapshot.snapshot.datasets[Dataset.CRLITE] ?: return null
-            val trustClass = live.trustClass ?: return null
-            val timestamp = live.sourceTimestampMillis ?: return null
-            return LiveGeneration(trustClass, timestamp, live.maxCoverageMillis)
-        }
-
-        /** Whether the pointer names [live]'s directory as `live`. */
-        private fun pointed(live: LiveGeneration): Boolean {
-            val id = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId ?: return false
-            val directory = GenerationNames.directory(live.sourceTimestampMillis, id)
-            return (stored { store.pointer() } as? StoreRead.Found)?.value?.live == directory
-        }
-
-        /**
-         * Prunes the store to the directories the pointer names, after the install of [installed]; a failure is a store
-         * failure, never the sync's. When the pointer does not read back as [installed] (a storage that breaks
-         * read-after-write), nothing is deleted: a store failure and a warning, never "delete everything".
-         */
-        @Suppress("TooGenericExceptionCaught") // §6.5: the loader catches every throwable.
-        private fun prune(installed: String) {
-            try {
-                if ((store.pointer() as? StoreRead.Found)?.value?.live != installed) {
+        /** What this sync reads of the store and the snapshot beyond `updater.json`, and the prune after an install. */
+        private inner class Reads {
+            /**
+             * The pointed generation's verified records, which a `_since` changeset is merged with (spec §6.5: "so a `_since`
+             * changeset can be verified against it (tombstones merged) without a full re-fetch"), or null when there is none
+             * to merge with: no pointer, no complete `SIGNED` generation, or a `records.json` that does not read.
+             *
+             * Only the last counts a store failure here: it is the one store fault no other step of the sync reads. A
+             * malformed pointer, or a pointed `meta.json` that is malformed, is counted by the install when it reads the
+             * pointer for its new `previous` (`Install.previous`), so counting it here too would count it twice; and a
+             * pointed generation that is not `SIGNED` is not a fault (a mirror's has no `records.json`).
+             */
+            fun deltaBase(): List<JsonObject>? {
+                val live = (store.pointer() as? StoreRead.Found)?.value?.live ?: return null
+                if (store.meta(live)?.trustClass != TrustClass.SIGNED) return null
+                val records = store.file(live, StoreLayout.RECORDS)?.let(::recordsOf)
+                if (records == null) {
                     storeFailures++
-                    logger.safeLog(
-                        LogLevel.WARN,
-                        "${store.root}: the pointer does not read back as $installed; not pruned",
-                    )
-                    return
+                    logger.safeLog(LogLevel.WARN, "${store.root}: $live/records.json does not read; fetching in full")
                 }
-                store.prune()
-            } catch (t: Throwable) {
-                restoreInterrupt(t)
-                storeFailures++
-                logger.safeLog(LogLevel.WARN, "pruning ${store.root} failed", t)
+                return records
+            }
+
+            /** The records under `data` of a `records.json`, or null when it is not one. */
+            private fun recordsOf(bytes: ByteArray): List<JsonObject>? {
+                val root =
+                    try {
+                        Json.parse(bytes, client.limits.maxJsonBytes) as? JsonObject
+                    } catch (ignored: JsonParseException) {
+                        null
+                    }
+                return (root?.get("data") as? JsonArray)?.items?.map { it as? JsonObject ?: return null }
+            }
+
+            /** The dataset's live generation as the snapshot publishes it, for [SyncRules]; null when it has none. */
+            fun liveGeneration(): LiveGeneration? {
+                val live = snapshot.snapshot.datasets[Dataset.CRLITE] ?: return null
+                val trustClass = live.trustClass ?: return null
+                val timestamp = live.sourceTimestampMillis ?: return null
+                return LiveGeneration(trustClass, timestamp, live.maxCoverageMillis)
+            }
+
+            /** The directory of the generation the snapshot publishes live, or null. */
+            fun liveDirectory(): String? {
+                val live = snapshot.snapshot.datasets[Dataset.CRLITE] ?: return null
+                val id = live.generationId ?: return null
+                return live.sourceTimestampMillis?.let { GenerationNames.directory(it, id) }
+            }
+
+            /** Whether the pointer names [live]'s directory as `live`. */
+            fun pointed(live: LiveGeneration): Boolean {
+                val id = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId ?: return false
+                val directory = GenerationNames.directory(live.sourceTimestampMillis, id)
+                return (stored { store.pointer() } as? StoreRead.Found)?.value?.live == directory
+            }
+
+            /**
+             * Prunes the store to the directories the pointer names, after the install of [installed]; a failure is a store
+             * failure, never the sync's. When the pointer does not read back as [installed] (a storage that breaks
+             * read-after-write), nothing is deleted: a store failure and a warning, never "delete everything".
+             */
+            @Suppress("TooGenericExceptionCaught") // §6.5: the loader catches every throwable.
+            fun prune(installed: String) {
+                try {
+                    if ((store.pointer() as? StoreRead.Found)?.value?.live != installed) {
+                        storeFailures++
+                        logger.safeLog(
+                            LogLevel.WARN,
+                            "${store.root}: the pointer does not read back as $installed; not pruned",
+                        )
+                        return
+                    }
+                    store.prune()
+                } catch (t: Throwable) {
+                    restoreInterrupt(t)
+                    storeFailures++
+                    logger.safeLog(LogLevel.WARN, "pruning ${store.root} failed", t)
+                }
             }
         }
 
@@ -507,7 +806,7 @@ internal class CrliteSync(
                     )
                 }
 
-                // Only the conditional changeset fetch answers Unchanged, and this sync's is unconditional (#141's).
+                // Only the conditional changeset fetch answers Unchanged, and [changeset] reads that one itself.
                 is ClientResult.Unchanged -> {
                     failed(end(Ended(SyncOutcome.FAILED, stage, null, "304 to an unconditional request")))
                 }
@@ -533,16 +832,33 @@ internal class CrliteSync(
                 ),
             )
 
+        /** `STORE_FAILED` at `STORE` for a directory that cannot be this generation, as [install] fails it. */
+        private fun storeFailed(detail: String): SyncResult {
+            storeFailures++
+            return end(Ended(SyncOutcome.STORE_FAILED, SyncStage.STORE, null, detail, IllegalStateException(detail)))
+        }
+
         private fun backoff(millis: Long?) {
             if (millis != null) backoff = maxOf(backoff ?: millis, millis)
         }
 
         /**
-         * Ends the sync as [ended] without an install: writes `updater.json` ([UpdaterTransitions.after]; a write that
-         * fails is a store failure and leaves the outcome), then the result.
+         * Ends the sync as [ended] without an install: deletes the directory this sync staged, then writes
+         * `updater.json` ([UpdaterTransitions.after]; a delete or write that fails is a store failure and leaves the
+         * outcome), then the result.
          */
         @Suppress("TooGenericExceptionCaught") // §6.5: the failure path catches every throwable too.
         private fun end(ended: Ended): SyncResult {
+            staged?.let {
+                staged = null
+                try {
+                    store.deleteGeneration(it)
+                } catch (t: Throwable) {
+                    restoreInterrupt(t)
+                    storeFailures++
+                    logger.safeLog(LogLevel.WARN, "deleting ${store.root}/$it failed", t)
+                }
+            }
             try {
                 val next =
                     UpdaterTransitions.after(
@@ -588,7 +904,7 @@ internal class CrliteSync(
                 .stage(stage)
                 .httpStatus(if (outcome == SyncOutcome.BACKOFF) null else lastStatus)
                 .cause(cause)
-                .warnings(warnings)
+                .warnings(warnings + gates.nearCaps)
                 .build()
     }
 

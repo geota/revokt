@@ -102,10 +102,8 @@ internal class StoreLayout(
     }
 
     /**
-     * Writes the generation [meta] describes into its directory: [index], every file in [deltas] and, for `SIGNED`,
-     * [records], then `meta.json` last. [index] must name exactly the keys of `meta.blobs` and [deltas], which do not
-     * overlap; the blobs must already be stored. A directory that already holds a `meta.json` is immutable. Returns the
-     * directory name.
+     * Writes the generation [meta] describes into its directory: every file in [deltas], then [completeGeneration].
+     * Returns the directory name.
      */
     fun writeGeneration(
         meta: GenerationMeta,
@@ -113,22 +111,85 @@ internal class StoreLayout(
         deltas: Map<String, ByteArray>,
         records: ByteArray?,
     ): String {
-        require(
-            meta.dataset == dataset && meta.channel == channel,
-        ) { "meta.json is for ${meta.dataset}/${meta.channel}" }
-        require((records != null) == (meta.trustClass == TrustClass.SIGNED)) { "records.json iff SIGNED" }
-        val named = GenerationFiles.filenamesIn(index)
-        require(
-            named.none { it == INDEX || it == META || it == RECORDS },
-        ) { "$INDEX names a file the directory reserves" }
-        require(deltas.keys.none { it in meta.blobs }) { "a file is both a blob and a delta" }
-        require(named == meta.blobs.keys + deltas.keys) { "$INDEX names $named, not the generation's files" }
+        requireConsistent(meta, index, deltas.keys, records, storage.names())
+        check(meta(meta.directory) == null) { "${meta.directory} is complete and immutable" }
+        for ((name, bytes) in deltas) stageFile(meta.directory, name, bytes)
+        return completeGeneration(meta, index, deltas.mapValues { it.value.toByteString().sha256() }, records)
+    }
+
+    /**
+     * Makes [directory] incomplete again by deleting its `meta.json` alone, so its files stay to be re-hashed and reused
+     * by [completeGeneration]: for a directory referenced by nothing that an install completes afresh. Never for one the
+     * engine holds live or the pointer names: a directory the pointer names throws [IllegalArgumentException] and stays
+     * as it is, so a caller that mistakes a pointed generation for an orphan fails loudly rather than deleting it. It
+     * fails closed: a pointer that is present but malformed may name any directory, so nothing is reopened then either
+     * (a pointer that cannot be read at all throws from the read).
+     */
+    fun reopen(directory: String) {
+        val named =
+            when (val read = pointer()) {
+                StoreRead.Absent -> emptySet()
+                StoreRead.Malformed -> null
+                is StoreRead.Found -> setOfNotNull(read.value.live, read.value.previous)
+            }
+        requireNotNull(named) { "the pointer is malformed, so $directory is never reopened" }
+        require(directory !in named) { "$directory is pointed to and is never reopened" }
+        storage.delete(fileKey(directory, META))
+    }
+
+    /**
+     * Writes [bytes] as the file [name] of [directory], a generation not yet complete: a delta body written as it is
+     * fetched, so the loader holds one body at a time (spec §6.5: "write …, drop the body"), and the directory is
+     * completed later by [completeGeneration]. A complete directory is immutable.
+     */
+    fun stageFile(
+        directory: String,
+        name: String,
+        bytes: ByteArray,
+    ) {
+        require(name != INDEX && name != META && name != RECORDS) { "$name is a file the directory reserves" }
+        check(meta(directory) == null) { "$directory is complete and immutable" }
+        storage.write(fileKey(directory, name), bytes)
+    }
+
+    /**
+     * The file [name] of [directory] ([INDEX], [RECORDS] or a delta), or null when it is absent; with [sha256], the
+     * signed record's hash, re-hashed against it, and null when it mismatches too (#201: a stored delta is re-hashed
+     * before it is reused, as a blob is).
+     */
+    fun file(
+        directory: String,
+        name: String,
+        sha256: ByteString? = null,
+    ): ByteArray? =
+        storage.read(fileKey(directory, name))?.takeIf { sha256 == null || it.toByteString().sha256() == sha256 }
+
+    /**
+     * Completes the generation [meta] describes in its directory, whose delta files [deltas] (each name to its signed
+     * SHA-256) are already staged ([stageFile]): deletes every other key of the directory, a malformed `meta.json`
+     * first, so no file of an earlier attempt stays; checks each staged delta re-hashes; then writes [index] and, for
+     * `SIGNED`, [records], and `meta.json` last. [index] must name exactly the keys of `meta.blobs` and [deltas], which
+     * do not overlap; the blobs must already be stored. A directory that already holds a `meta.json` is immutable.
+     * Returns the directory name; a staged delta that is missing or does not re-hash throws [IllegalStateException].
+     */
+    fun completeGeneration(
+        meta: GenerationMeta,
+        index: ByteArray,
+        deltas: Map<String, ByteString>,
+        records: ByteArray?,
+    ): String {
         val keys = storage.names()
-        for (sha256 in meta.blobs.values) require(blobKey(sha256) in keys) { "blob ${sha256.hex()} is not stored" }
+        requireConsistent(meta, index, deltas.keys, records, keys)
         val directory = meta.directory
-        check(storage.read(fileKey(directory, META)) == null) { "$directory is complete and immutable" }
+        check(meta(directory) == null) { "$directory is complete and immutable" }
+        val prefix = fileKey(directory, "")
+        val staged = deltas.keys.mapTo(HashSet()) { fileKey(directory, it) }
+        storage.delete(fileKey(directory, META))
+        for (key in keys) if (key.startsWith(prefix) && key !in staged) storage.delete(key)
+        for ((name, sha256) in deltas) {
+            checkNotNull(file(directory, name, sha256)) { "$directory/$name is not staged, or does not re-hash" }
+        }
         storage.write(fileKey(directory, INDEX), index)
-        for ((name, bytes) in deltas) storage.write(fileKey(directory, name), bytes)
         if (records != null) storage.write(fileKey(directory, RECORDS), records)
         storage.write(fileKey(directory, META), MetaJson.write(meta))
         return directory
@@ -139,7 +200,7 @@ internal class StoreLayout(
      * ("a `channel` mismatch is no generation"), or belongs in another directory.
      */
     fun readMeta(directory: String): StoreRead<GenerationMeta> =
-        read(fileKey(directory, META)) { bytes ->
+        read(storage, fileKey(directory, META)) { bytes ->
             MetaJson.read(bytes)?.takeIf { it.dataset == dataset && it.channel == channel && it.directory == directory }
         }
 
@@ -185,12 +246,6 @@ internal class StoreLayout(
         return StoredGeneration(directory, meta, image)
     }
 
-    /** The `index.bin` in [directory], or null. */
-    fun index(directory: String): ByteArray? = storage.read(fileKey(directory, INDEX))
-
-    /** The `records.json` of the `SIGNED` generation in [directory], or null. */
-    fun records(directory: String): ByteArray? = storage.read(fileKey(directory, RECORDS))
-
     /**
      * Deletes every key in [directory], `meta.json` first (the reverse of the write order), so an interrupted delete
      * never leaves a directory that reads as complete with files missing. Its blobs stay (content-addressed).
@@ -202,7 +257,7 @@ internal class StoreLayout(
     }
 
     /** The `current` pointer. */
-    fun pointer(): StoreRead<Pointer> = read(currentKey, PointerJson::read)
+    fun pointer(): StoreRead<Pointer> = read(storage, currentKey, PointerJson::read)
 
     /**
      * Flips the pointer to [pointer]. Both directories must hold complete generations of this dataset and channel, and
@@ -220,7 +275,7 @@ internal class StoreLayout(
     }
 
     /** The updater record, its backoffs clamped against [nowMillis], with the ids of any dropped source entries. */
-    fun updater(nowMillis: Long): StoreRead<UpdaterRead> = read(updaterKey) { UpdaterJson.read(it, nowMillis) }
+    fun updater(nowMillis: Long): StoreRead<UpdaterRead> = read(storage, updaterKey) { UpdaterJson.read(it, nowMillis) }
 
     fun writeUpdater(
         record: UpdaterRecord,
@@ -263,40 +318,69 @@ internal class StoreLayout(
                         HashSet(),
                     ) { "$BLOBS_DIR/${it.hex()}" }
             }
-        val doomed = storage.names().filter { key -> isPruned(key, kept, blobs) }
+        val doomed = storage.names().filter { key -> isPruned(root, key, kept, blobs) }
         doomed.forEach(storage::delete)
         return doomed.size
-    }
-
-    /**
-     * Whether prune deletes [key]: a key in a directory under [root] other than [kept], or a blob not in [blobs] (null
-     * keeps every blob).
-     */
-    private fun isPruned(
-        key: String,
-        kept: Set<String>,
-        blobs: Set<String>?,
-    ): Boolean {
-        val rest = key.removePrefix("$root/")
-        val slash = rest.indexOf('/')
-        if (rest == key || slash < 0) return false
-        val top = rest.substring(0, slash)
-        return if (top == BLOBS_DIR) blobs != null && rest !in blobs else top !in kept
-    }
-
-    /** [key]'s file through [decode], whose null means malformed. */
-    private fun <T> read(
-        key: String,
-        decode: (ByteArray) -> T?,
-    ): StoreRead<T> {
-        val bytes = storage.read(key) ?: return StoreRead.Absent
-        return decode(bytes)?.let { StoreRead.Found(it) } ?: StoreRead.Malformed
     }
 
     companion object {
         const val INDEX: String = "index.bin"
         const val META: String = "meta.json"
         const val RECORDS: String = "records.json"
-        private const val BLOBS_DIR = "blobs"
     }
 }
+
+/**
+ * [meta], [index], the delta names [deltas] and [records] describe one generation of [meta]'s dataset and channel for a
+ * [StoreLayout] whose store holds [keys]: `records.json` iff `SIGNED`, and [index] naming exactly the blobs and deltas,
+ * none of them a reserved name; every blob is stored.
+ */
+private fun StoreLayout.requireConsistent(
+    meta: GenerationMeta,
+    index: ByteArray,
+    deltas: Set<String>,
+    records: ByteArray?,
+    keys: Set<String>,
+) {
+    require(
+        meta.dataset == dataset && meta.channel == channel,
+    ) { "meta.json is for ${meta.dataset}/${meta.channel}" }
+    require((records != null) == (meta.trustClass == TrustClass.SIGNED)) { "records.json iff SIGNED" }
+    val named = GenerationFiles.filenamesIn(index)
+    require(
+        named.none { it == StoreLayout.INDEX || it == StoreLayout.META || it == StoreLayout.RECORDS },
+    ) { "${StoreLayout.INDEX} names a file the directory reserves" }
+    require(deltas.none { it in meta.blobs }) { "a file is both a blob and a delta" }
+    require(named == meta.blobs.keys + deltas) { "${StoreLayout.INDEX} names $named, not the generation's files" }
+    for (sha256 in meta.blobs.values) require(blobKey(sha256) in keys) { "blob ${sha256.hex()} is not stored" }
+}
+
+/**
+ * Whether prune deletes [key] under [root]: a key in a directory under [root] other than [kept], or a blob not in
+ * [blobs] (null keeps every blob).
+ */
+private fun isPruned(
+    root: String,
+    key: String,
+    kept: Set<String>,
+    blobs: Set<String>?,
+): Boolean {
+    val rest = key.removePrefix("$root/")
+    val slash = rest.indexOf('/')
+    if (rest == key || slash < 0) return false
+    val top = rest.substring(0, slash)
+    return if (top == BLOBS_DIR) blobs != null && rest !in blobs else top !in kept
+}
+
+/** [key]'s file in [storage] through [decode], whose null means malformed. */
+private fun <T> read(
+    storage: RevoktStorage,
+    key: String,
+    decode: (ByteArray) -> T?,
+): StoreRead<T> {
+    val bytes = storage.read(key) ?: return StoreRead.Absent
+    return decode(bytes)?.let { StoreRead.Found(it) } ?: StoreRead.Malformed
+}
+
+/** The directory of the content-addressed full filters under a layout's root. */
+private const val BLOBS_DIR = "blobs"

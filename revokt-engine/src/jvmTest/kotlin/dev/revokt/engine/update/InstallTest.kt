@@ -3,13 +3,11 @@
 
 package dev.revokt.engine.update
 
-import dev.revokt.CrliteChannel
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
 import dev.revokt.DiagnosticCode
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
-import dev.revokt.RevoktStorage
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
 import dev.revokt.TrustClass
@@ -17,10 +15,10 @@ import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.Window
 import dev.revokt.engine.store.GenerationMeta
 import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.MetaJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
-import dev.revokt.engine.store.UpdaterRecord
 import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import dev.revokt.engine.update.UpdateFixtures.deltaRecord
 import dev.revokt.engine.update.UpdateFixtures.fullRecord
@@ -35,69 +33,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /** The §6.5 install order (#130): nothing is live before every check passes; a failure leaves the previous generation. */
-class InstallTest {
-    /** A storage whose writes a test can fail or observe, key by key. */
-    private class Faulty(
-        val inner: RevoktStorage = RevoktStorage.inMemory(),
-    ) : RevoktStorage by inner {
-        var fail: (String) -> Throwable? = { null }
-        var onWrite: (String) -> Unit = {}
-        val writes = mutableListOf<String>()
-
-        override fun write(
-            name: String,
-            bytes: ByteArray,
-        ) {
-            fail(name)?.let { throw it }
-            onWrite(name)
-            writes += name.removePrefix("crlite/compat/")
-            inner.write(name, bytes)
-        }
-    }
-
-    private val storage = Faulty()
-    private val store = StoreLayout(storage, Dataset.CRLITE, CrliteChannel.COMPAT)
-    private val engine = TestEngine()
-    private val logger = UpdateFixtures.Recording()
-    private val empty =
-        GenerationSnapshot(
-            0,
-            mapOf(Dataset.CRLITE to DatasetGeneration(null, null, null, false, null, null, true, false, false)),
-            null,
-        )
-    private val snapshot = SnapshotRef(empty)
-    private val now = 1_792_600_000_000
-    private val publication = Publication(false, null, false, now, 600_000)
-
-    private fun install(
-        pending: PendingGeneration,
-        engine: TestEngine = this.engine,
-        publication: Publication = this.publication,
-        updater: UpdaterRecord? = UpdaterRecord(watermarkMillis = 1),
-    ): InstallResult = install(pending, engine, store, snapshot, publication, updater, logger)
-
-    private fun pending(
-        id: String = "g1",
-        trustClass: TrustClass = TrustClass.SIGNED,
-        timestamp: Long = 1_792_587_631_204,
-    ) = UpdateFixtures.pending(store, trustClass = trustClass, generationId = id, sourceTimestampMillis = timestamp)
-
-    private fun failed(result: InstallResult): InstallResult.Failed = assertIs<InstallResult.Failed>(result)
-
-    private fun keysOf(directory: String): List<String> = storage.names().filter { it.contains("/$directory/") }
-
-    /** The engine, the snapshot and the pointer are as they were, and [directory] is gone. */
-    private fun assertUntouched(
-        directory: String,
-        live: String? = null,
-        published: GenerationSnapshot = empty,
-    ) {
-        assertEquals(live, engine.live)
-        assertSame(published, snapshot.snapshot)
-        assertEquals(emptyList(), keysOf(directory))
-        if (live == null) assertEquals(StoreRead.Absent, store.pointer())
-    }
-
+internal class InstallTest : InstallFixture() {
     @Test
     fun `a generation installs in the 6_5 order and is published, pointed to and recorded`() {
         val p = pending()
@@ -108,10 +44,10 @@ class InstallTest {
         assertEquals("g1", r.generationId)
         assertEquals(1, r.generationEpoch)
         assertEquals(0, r.storeFailures)
+        // The delta was staged before the install (UpdateFixtures.pending, as the sync stages each body it fetches).
         assertEquals(
             listOf(
                 "$dir/index.bin",
-                "$dir/${deltaRecord.filename}",
                 "$dir/records.json",
                 "$dir/meta.json",
                 "current",
@@ -296,9 +232,16 @@ class InstallTest {
         val system = pending(trustClass = TrustClass.SYSTEM)
         val read = PendingGeneration(system.meta, over.index, system.deltas, null)
         assertEquals(DiagnosticCode.STORE_UNREADABLE, failed(install(read)).code)
-        // C2SP's reader allows trailing bytes, so zero padding makes a valid index of exactly the cap.
+        // C2SP's reader allows trailing bytes, so zero padding makes a valid index of exactly the cap. The failures
+        // deleted the staged delta, so it is staged again.
+        val again = pending()
         val atCap =
-            PendingGeneration(p.meta, p.index + ByteArray(C2spIndex.MAX_BYTES - p.index.size), p.deltas, p.records)
+            PendingGeneration(
+                again.meta,
+                again.index + ByteArray(C2spIndex.MAX_BYTES - again.index.size),
+                again.deltas,
+                again.records,
+            )
         assertIs<InstallResult.Installed>(install(atCap))
     }
 
@@ -313,7 +256,7 @@ class InstallTest {
         assertEquals(emptyList(), engine.prepared)
         assertUntouched(p.meta.directory)
         storage.fail = { if (it.endsWith("/meta.json")) OutOfMemoryError("store") else null }
-        val oom = failed(install(p))
+        val oom = failed(install(pending()))
         assertEquals(SyncOutcome.FAILED, oom.outcome)
         assertEquals(SyncStage.STORE, oom.stage)
         assertEquals(1, oom.storeFailures)
@@ -357,8 +300,10 @@ class InstallTest {
     @Test
     fun `a failed retry deletes an orphan complete directory and keeps a pointed one`() {
         val orphan = pending()
-        store.writeGeneration(orphan.meta, orphan.index, orphan.deltas, orphan.records)
+        store.completeGeneration(orphan.meta, orphan.index, orphan.deltas, orphan.records)
         engine.preparedAnswer = { CrliteQueryResult.NOT_REVOKED }
+        // The orphan holds this generation, so it is prepared as it stands, and as the directory the install was given
+        // it is deleted on the failure (§6.5).
         assertEquals(SyncStage.SELF_CHECK, failed(install(pending())).stage)
         assertEquals(emptyList(), keysOf(orphan.meta.directory))
         // Pointed to, but not live in this snapshot: a failure leaves it for recovery.
@@ -373,20 +318,43 @@ class InstallTest {
     }
 
     @Test
-    fun `a complete directory holding another meta json or index bin fails and stays`() {
+    fun `a failed install of the pointer's previous generation keeps it, held as the pointer names it`() {
+        // The r205b probe: g1, then g2, so the pointer is (g2, g1); then a rollback-inside-the-window install of g1
+        // with a fresh snapshot, whose self-check fails. g1 is held through the pointer's previous, so it stays.
+        val g1 = assertIs<InstallResult.Installed>(install(pending("g1"))).directory
+        val g2 = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000))).directory
+        assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
+        engine.preparedAnswer = { CrliteQueryResult.NOT_REVOKED }
+        val f = failed(install(pending("g1"), engine, store, SnapshotRef(empty), publication, null, logger))
+        assertEquals(SyncStage.SELF_CHECK, f.stage)
+        assertNotNull(store.readGeneration(g1))
+        assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
+    }
+
+    @Test
+    fun `an orphan holding another meta json or index bin is completed afresh, and a held one fails and stays`() {
+        // Referenced by nothing: completed again with this generation's files, as main replaced it whole (#205 review).
         val p = pending()
         val other = p.meta.copy(collection = "security-state/other")
-        store.writeGeneration(other, p.index, p.deltas, p.records)
-        val f = failed(install(p))
-        assertEquals(SyncOutcome.STORE_FAILED, f.outcome)
-        assertEquals(SyncStage.STORE, f.stage)
-        assertEquals(other, store.meta(p.meta.directory))
+        store.completeGeneration(other, p.index, p.deltas, p.records)
+        assertIs<InstallResult.Installed>(
+            install(pending(), engine, store, SnapshotRef(empty), publication, null, logger),
+        )
+        assertEquals(p.meta, store.meta(p.meta.directory))
+        storage.inner.delete("crlite/compat/current")
         store.deleteGeneration(p.meta.directory)
         val padded = p.index + ByteArray(4)
-        store.writeGeneration(p.meta, padded, p.deltas, p.records)
-        assertEquals(SyncOutcome.STORE_FAILED, failed(install(p)).outcome)
-        assertTrue(padded.contentEquals(store.index(p.meta.directory)))
-        assertEquals(emptyList(), engine.prepared)
+        store.writeGeneration(p.meta, padded, bytesOf(p), p.records)
+        assertIs<InstallResult.Installed>(
+            install(pending(), engine, store, SnapshotRef(empty), publication, null, logger),
+        )
+        assertTrue(p.index.contentEquals(store.file(p.meta.directory, StoreLayout.INDEX)))
+        // Pointed to: another meta json fails and stays.
+        storage.inner.write("crlite/compat/${p.meta.directory}/meta.json", MetaJson.write(other))
+        val f = failed(install(pending(), engine, store, SnapshotRef(empty), publication, null, logger))
+        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage)
+        assertTrue("holds another generation" in f.cause?.message.orEmpty())
+        assertEquals(other, store.meta(p.meta.directory))
     }
 
     @Test
@@ -478,21 +446,71 @@ class InstallTest {
     }
 
     @Test
-    fun `only a live or pointed directory is reused, and an orphan one is replaced whole`() {
+    fun `an orphan holding this generation is completed afresh with its meta json, a pointed one reused as is`() {
         val p = pending()
-        val dir = p.meta.directory
-        val delta = p.deltas.keys.single()
-        // An orphan holding this generation's meta json and index bin, with a delta that is not this generation's.
-        store.writeGeneration(p.meta, p.index, mapOf(delta to byteArrayOf(4, 0)), p.records)
+        val signed = checkNotNull(p.meta.signed)
+        val stale = p.meta.copy(signed = signed.copy(signature = ByteArray(96) { 3 }.toByteString()))
+        store.completeGeneration(stale, p.index, p.deltas, p.records)
         storage.writes.clear()
+        // An orphan (neither live nor pointed): its files re-hash and stay, and it carries this install's signature.
         assertIs<InstallResult.Installed>(install(pending()))
-        assertTrue("$dir/$delta" in storage.writes, "${storage.writes}")
-        assertTrue(p.deltas.getValue(delta).contentEquals(storage.inner.read("crlite/compat/$dir/$delta")))
+        val dir = p.meta.directory
+        assertEquals(
+            listOf("$dir/index.bin", "$dir/records.json", "$dir/meta.json", "current", "updater.json"),
+            storage.writes,
+        )
+        assertEquals(p.meta, store.meta(dir))
         // Pointed to (not live in a fresh snapshot): reused as it stands.
         storage.writes.clear()
         val r = install(pending(), engine, store, SnapshotRef(empty), publication, null, logger)
         assertIs<InstallResult.Installed>(r)
         assertEquals(listOf("current"), storage.writes)
+    }
+
+    @Test
+    fun `#201 - a stored delta that does not re-hash fails a held directory, and an orphan is deleted for a restage`() {
+        // An orphan holding this generation's meta json, index bin and records json, with a corrupted delta: the
+        // install fails and deletes it, so the next one stages afresh and installs, never a STORE_FAILED loop.
+        val p = pending()
+        val dir = p.meta.directory
+        val delta = p.deltas.keys.single()
+        store.writeGeneration(p.meta, p.index, mapOf(delta to byteArrayOf(4, 0)), p.records)
+        val orphan = failed(install(pending()))
+        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, orphan.outcome to orphan.stage)
+        assertEquals(emptyList(), keysOf(dir))
+        assertEquals(emptyList(), engine.prepared)
+        val fresh = TestEngine()
+        assertIs<InstallResult.Installed>(
+            install(pending(), fresh, store, SnapshotRef(empty), publication, null, logger),
+        )
+        storage.inner.delete("crlite/compat/current")
+        // The live directory a failed flip left unpointed, its delta then corrupted: the retried flip fails and keeps it.
+        store.deleteGeneration(dir)
+        storage.fail = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        assertEquals(true, failed(install(pending())).activated)
+        storage.fail = { null }
+        storage.inner.write("crlite/compat/$dir/$delta", bytesOf(p).getValue(delta).copyOf().also { it[0] = 9 })
+        val held = failed(install(pending()))
+        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, held.outcome to held.stage)
+        assertTrue("holds another generation" in held.cause?.message.orEmpty())
+        assertNotNull(store.meta(dir))
+        assertEquals(StoreRead.Absent, store.pointer())
+    }
+
+    @Test
+    fun `a staged delta that is missing or does not re-hash is STORE_FAILED and the directory is deleted`() {
+        val p = pending()
+        val dir = p.meta.directory
+        val delta = p.deltas.keys.single()
+        storage.inner.write("crlite/compat/$dir/$delta", byteArrayOf(1))
+        val f = failed(install(p))
+        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage)
+        assertEquals(1, f.storeFailures)
+        assertUntouched(dir)
+        // Missing: nothing staged at all.
+        val g = failed(install(p))
+        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, g.outcome to g.stage)
+        assertUntouched(dir)
     }
 
     @Test
@@ -564,14 +582,16 @@ class InstallTest {
         assertEquals(DiagnosticCode.STORE_UNREADABLE, f.code)
         assertEquals(emptyList(), engine.prepared)
         assertUntouched(p.meta.directory)
-        assertIs<InstallResult.Installed>(install(p))
+        assertIs<InstallResult.Installed>(install(pending(trustClass = TrustClass.SYSTEM)))
     }
 
     @Test
     fun `a filter the loader cannot decode fails at PREPARE before the engine sees it`() {
         val p = pending(trustClass = TrustClass.SYSTEM)
-        val garbage = p.deltas.mapValues { byteArrayOf(4, 0, 0) }
-        val f = failed(install(PendingGeneration(p.meta, p.index, garbage, null)))
+        val garbage = byteArrayOf(4, 0, 0)
+        for (name in p.deltas.keys) store.stageFile(p.meta.directory, name, garbage)
+        val hashes = p.deltas.mapValues { garbage.toByteString().sha256() }
+        val f = failed(install(PendingGeneration(p.meta, p.index, hashes, null)))
         assertEquals(SyncOutcome.FAILED, f.outcome)
         assertEquals(SyncStage.PREPARE, f.stage)
         assertEquals(1, f.storeFailures)

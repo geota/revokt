@@ -27,6 +27,7 @@ import dev.revokt.engine.fetch.client
 import dev.revokt.engine.fetch.json
 import dev.revokt.engine.fetch.ok
 import dev.revokt.engine.fetch.response
+import dev.revokt.engine.json.JsonInteger
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.SourceRecord
 import dev.revokt.engine.store.StoreLayout
@@ -118,7 +119,9 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
     /**
      * The scripted Remote Settings: `monitor/changes` listing the collection at [ts], its changeset of [records] at
      * [ts] signed under [key] (or with [signature]), the x5u at [x5u] and each record's attachment; [overrides] answer
-     * a URL first, and anything else is a 404.
+     * a URL first, and anything else is a 404. A changeset `_since` a cursor lists the records whose `last_modified` is
+     * after it and every tombstone of [tombstones], or [since]'s changes when set; with `If-None-Match` at [ts] it is a
+     * 304, as Kinto answers a current ETag.
      */
     protected inner class Server(
         var ts: Long = this.ts,
@@ -130,12 +133,43 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
         val overrides = HashMap<String, (FetchRequest) -> FetchResponse>()
         var headers: Array<Pair<String, String>> = emptyArray()
         var signature: String? = null
+        var tombstones: List<String> = emptyList()
+
+        /** An unread member of that many bytes in the changeset envelope, to grow its body. */
+        var padding: Int = 0
+        var since: ((Long) -> List<String>)? = null
         private val signatures = HashMap<Pair<Long, List<String>>, String>()
 
-        val fetcher = ScriptedFetcher { request -> overrides[request.url]?.invoke(request) ?: answer(request.url) }
+        val fetcher = ScriptedFetcher { request -> overrides[request.url]?.invoke(request) ?: answer(request) }
 
         val changesetUrl: String
             get() = "$base/buckets/security-state/collections/cert-revocations/changeset?_expected=$ts"
+
+        /** The changeset URL from [cursor]. */
+        fun sinceUrl(cursor: Long): String = "$changesetUrl&_since=$cursor"
+
+        /** The changes after [cursor]: [since]'s, else the records modified after it and [tombstones]. */
+        fun changes(cursor: Long): List<String> =
+            since?.invoke(cursor)
+                ?: (
+                    records.filter {
+                        checkNotNull(
+                            (json(it)["last_modified"] as JsonInteger).toLongOrNull(),
+                        ) > cursor
+                    } +
+                        tombstones
+                )
+
+        /** The changeset from [cursor], as served whatever `If-None-Match` says. */
+        fun sinceResponse(cursor: Long): FetchResponse = changeset(changes(cursor))
+
+        private fun changeset(changes: List<String>): FetchResponse =
+            ok(
+                """{"changes":[${changes.joinToString(",")}],"timestamp":$ts,"metadata":{"signatures":""" +
+                    """[{"x5u":"$x5u","signature":"${sign()}","mode":"p384ecdsa"}]}""" +
+                    (if (padding > 0) ""","padding":"${"x".repeat(padding)}"}""" else "}"),
+                *headers,
+            )
 
         fun attachmentRequests(): List<String> = fetcher.requests.map { it.url }.filter { it.startsWith(attachments) }
 
@@ -152,8 +186,9 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
                 )
             }
 
-        private fun answer(url: String): FetchResponse =
-            when {
+        private fun answer(request: FetchRequest): FetchResponse {
+            val url = request.url
+            return when {
                 url == monitor -> {
                     ok(
                         """{"changes":[{"id":"x","bucket":"security-state","collection":"cert-revocations",""" +
@@ -163,11 +198,15 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
                 }
 
                 url == changesetUrl -> {
-                    ok(
-                        """{"changes":[${records.joinToString(",")}],"timestamp":$ts,"metadata":{"signatures":""" +
-                            """[{"x5u":"$x5u","signature":"${sign()}","mode":"p384ecdsa"}]}}""",
-                        *headers,
-                    )
+                    changeset(records)
+                }
+
+                url.startsWith("$changesetUrl&_since=") -> {
+                    if (request.headers["If-None-Match"] == "\"$ts\"") {
+                        response(304, ByteArray(0), *headers)
+                    } else {
+                        changeset(changes(url.substringAfter("&_since=").toLong()))
+                    }
                 }
 
                 url == x5u -> {
@@ -182,6 +221,7 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
                     response(404)
                 }
             }
+        }
     }
 
     /** A storage whose reads and writes a test can fail, key by key. */
@@ -238,6 +278,8 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
         engine: TestEngine = TestEngine(),
         limits: FetchLimits = FetchLimits(),
         with: SignatureVerifier = verifier,
+        staleAfter: Long? = 3 * day,
+        metered: () -> Boolean = { false },
     ): SyncRun =
         CrliteSync(
             client(server.fetcher, source, limits),
@@ -245,9 +287,9 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
             engine,
             snapshot,
             with,
-            day,
-            day,
+            SyncPolicy(day, day, staleAfter),
             logger,
+            metered,
         ).syncOnce(now)
 
     protected fun SyncRun.assert(

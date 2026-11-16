@@ -18,6 +18,7 @@ import dev.revokt.RevocationEngine
 import dev.revokt.RevoktLogger
 import dev.revokt.TrustClass
 import dev.revokt.engine.store.GenerationMeta
+import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.SignedMeta
 import dev.revokt.engine.store.StoreLayout
 import okio.Buffer
@@ -72,7 +73,8 @@ internal object UpdateFixtures {
 
     /**
      * A generation as the sync would assemble it from [records]: [buildIndex]'s index, each full stored as a blob in
-     * [store] and named in `meta.json`, each delta a file of the directory.
+     * [store] and named in `meta.json`, each delta a file staged in the directory (unless the directory is already
+     * complete, as the sync stages nothing there) and named with its SHA-256.
      */
     fun pending(
         store: StoreLayout,
@@ -95,6 +97,8 @@ internal object UpdateFixtures {
                 deltas[p.name] = bytes
             }
         }
+        val directory = GenerationNames.directory(sourceTimestampMillis, generationId)
+        if (store.meta(directory) == null) for ((name, bytes) in deltas) store.stageFile(directory, name, bytes)
         val signed = trustClass == TrustClass.SIGNED
         val meta =
             GenerationMeta(
@@ -127,7 +131,12 @@ internal object UpdateFixtures {
                         null
                     },
             )
-        return PendingGeneration(meta, built.index, deltas, if (signed) "{\"data\":[]}".encodeToByteArray() else null)
+        return PendingGeneration(
+            meta,
+            built.index,
+            deltas.mapValues { it.value.toByteString().sha256() },
+            if (signed) "{\"data\":[]}".encodeToByteArray() else null,
+        )
     }
 
     /** A logger that keeps every message. */
