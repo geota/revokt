@@ -5,7 +5,6 @@ package dev.revokt.engine.update
 
 import dev.revokt.Dataset
 import dev.revokt.Freshness
-import dev.revokt.TrustClass
 
 /**
  * What the loader publishes for handshakes to read (spec §3 "Purity gate", §5.1 flow step 2): one immutable value
@@ -39,9 +38,9 @@ internal class GenerationSnapshot(
 
 /**
  * One dataset's published generation, the inputs of its `Finding.DataState` (spec §4, §8 data rules) other than the
- * age, which the handshake computes from its own clock read. [trustClass] is null exactly when [generationId] is.
+ * age, which the handshake computes from its own clock read; [generationId] is null when the dataset has none.
  *
- * - [pending]: the start task has not yet passed the seed and system-cache steps for this dataset (in-process).
+ * - [pending]: the start task has not yet passed the seed step for this dataset (in-process).
  * - [staleGateOpen]: §8's persisted `STALE` gate for a seed generation, evaluated by the loader when it writes
  *   `updater.json` (`datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`, or no fetching source), so the handshake
  *   never reads the store. Read only when [fromSeed].
@@ -53,7 +52,6 @@ internal class GenerationSnapshot(
  */
 internal data class DatasetGeneration(
     val generationId: String?,
-    val trustClass: TrustClass?,
     val freshness: Freshness?,
     val fromSeed: Boolean,
     val sourceTimestampMillis: Long?,
@@ -62,11 +60,4 @@ internal data class DatasetGeneration(
     val staleGateOpen: Boolean,
     val clockBehind: Boolean,
     val maxCoverageMillis: Long? = null,
-) {
-    init {
-        require((trustClass == null) == (generationId == null)) {
-            "trustClass is null exactly when generationId is (spec §4): got trustClass=$trustClass, " +
-                "generationId=$generationId"
-        }
-    }
-}
+)

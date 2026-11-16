@@ -7,7 +7,6 @@ import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.GenerationFiles
 import dev.revokt.RevoktStorage
-import dev.revokt.TrustClass
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.IndexFormatException
 import okio.ByteString
@@ -46,7 +45,7 @@ internal enum class BlobWrite { WRITTEN, REUSED, REWRITTEN }
  * Spec §6.5's layout over a [RevoktStorage] for one [dataset] and [channel], under the key prefix
  * `<dataset>/<channel>/`, both lowercase enum names:
  * - `current`: the [Pointer];
- * - `gen-<timestamp>-<hash16>/`: `index.bin`, the delta files and, for `SIGNED`, `records.json`, each under the file's
+ * - `gen-<timestamp>-<hash16>/`: `index.bin`, the delta files and `records.json`, each under the file's
  *   name in the generation, then `meta.json` last as the completeness marker;
  * - `blobs/<sha256>`: content-addressed full filters, referenced from `meta.json`;
  * - `updater.json`: the [UpdaterRecord].
@@ -109,7 +108,7 @@ internal class StoreLayout(
         meta: GenerationMeta,
         index: ByteArray,
         deltas: Map<String, ByteArray>,
-        records: ByteArray?,
+        records: ByteArray,
     ): String {
         requireConsistent(meta, index, deltas.keys, records, storage.names())
         check(meta(meta.directory) == null) { "${meta.directory} is complete and immutable" }
@@ -167,8 +166,8 @@ internal class StoreLayout(
     /**
      * Completes the generation [meta] describes in its directory, whose delta files [deltas] (each name to its signed
      * SHA-256) are already staged ([stageFile]): deletes every other key of the directory, a malformed `meta.json`
-     * first, so no file of an earlier attempt stays; checks each staged delta re-hashes; then writes [index] and, for
-     * `SIGNED`, [records], and `meta.json` last. [index] must name exactly the keys of `meta.blobs` and [deltas], which
+     * first, so no file of an earlier attempt stays; checks each staged delta re-hashes; then writes [index], [records]
+     * and `meta.json` last. [index] must name exactly the keys of `meta.blobs` and [deltas], which
      * do not overlap; the blobs must already be stored. A directory that already holds a `meta.json` is immutable.
      * Returns the directory name; a staged delta that is missing or does not re-hash throws [IllegalStateException].
      */
@@ -176,7 +175,7 @@ internal class StoreLayout(
         meta: GenerationMeta,
         index: ByteArray,
         deltas: Map<String, ByteString>,
-        records: ByteArray?,
+        records: ByteArray,
     ): String {
         val keys = storage.names()
         requireConsistent(meta, index, deltas.keys, records, keys)
@@ -190,7 +189,7 @@ internal class StoreLayout(
             checkNotNull(file(directory, name, sha256)) { "$directory/$name is not staged, or does not re-hash" }
         }
         storage.write(fileKey(directory, INDEX), index)
-        if (records != null) storage.write(fileKey(directory, RECORDS), records)
+        storage.write(fileKey(directory, RECORDS), records)
         storage.write(fileKey(directory, META), MetaJson.write(meta))
         return directory
     }
@@ -213,7 +212,7 @@ internal class StoreLayout(
      */
     fun readGeneration(directory: String): StoredGeneration? {
         val meta = meta(directory) ?: return null
-        if (meta.trustClass == TrustClass.SIGNED && storage.read(fileKey(directory, RECORDS)) == null) return null
+        if (storage.read(fileKey(directory, RECORDS)) == null) return null
         val index = storage.read(fileKey(directory, INDEX)) ?: return null
         val named =
             try {
@@ -235,7 +234,6 @@ internal class StoreLayout(
                 GenerationFiles(
                     meta.generationId,
                     meta.dataset,
-                    meta.trustClass,
                     meta.format,
                     files,
                     meta.sourceTimestampMillis,
@@ -260,17 +258,11 @@ internal class StoreLayout(
     fun pointer(): StoreRead<Pointer> = read(storage, currentKey, PointerJson::read)
 
     /**
-     * Flips the pointer to [pointer]. Both directories must hold complete generations of this dataset and channel, and
-     * `previous` must be of the same or a higher trust class than `live`, so recovery never falls to a lower class.
+     * Flips the pointer to [pointer]. Both directories must hold complete generations of this dataset and channel.
      */
     fun point(pointer: Pointer) {
-        val live = requireNotNull(meta(pointer.live)) { "${pointer.live} is not a complete generation" }
-        pointer.previous?.let {
-            val previous = requireNotNull(meta(it)) { "$it is not a complete generation" }
-            require(previous.trustClass.rank >= live.trustClass.rank) {
-                "previous is ${previous.trustClass}, below live's ${live.trustClass}"
-            }
-        }
+        requireNotNull(meta(pointer.live)) { "${pointer.live} is not a complete generation" }
+        pointer.previous?.let { requireNotNull(meta(it)) { "$it is not a complete generation" } }
         storage.write(currentKey, PointerJson.write(pointer))
     }
 
@@ -332,20 +324,19 @@ internal class StoreLayout(
 
 /**
  * [meta], [index], the delta names [deltas] and [records] describe one generation of [meta]'s dataset and channel for a
- * [StoreLayout] whose store holds [keys]: `records.json` iff `SIGNED`, and [index] naming exactly the blobs and deltas,
- * none of them a reserved name; every blob is stored.
+ * [StoreLayout] whose store holds [keys]: [index] names exactly the blobs and deltas, none of them a reserved name, and
+ * every blob is stored.
  */
 private fun StoreLayout.requireConsistent(
     meta: GenerationMeta,
     index: ByteArray,
     deltas: Set<String>,
-    records: ByteArray?,
+    records: ByteArray,
     keys: Set<String>,
 ) {
     require(
         meta.dataset == dataset && meta.channel == channel,
     ) { "meta.json is for ${meta.dataset}/${meta.channel}" }
-    require((records != null) == (meta.trustClass == TrustClass.SIGNED)) { "records.json iff SIGNED" }
     val named = GenerationFiles.filenamesIn(index)
     require(
         named.none { it == StoreLayout.INDEX || it == StoreLayout.META || it == StoreLayout.RECORDS },

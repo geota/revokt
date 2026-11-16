@@ -4,10 +4,9 @@
 package dev.revokt.engine.update
 
 import dev.revokt.SyncStage
-import dev.revokt.TrustClass
 
 /**
- * What [SyncRules] decides for a verified `SIGNED` changeset (spec §6.3 "Coverage sanity at install", §7.1 "Rollback
+ * What [SyncRules] decides for a verified changeset (spec §6.3 "Coverage sanity at install", §7.1 "Rollback
  * guard"). [stage] is the `SyncResult.stage` of a refusal that has one.
  */
 internal enum class SyncDecision(
@@ -36,18 +35,15 @@ internal enum class SyncDecision(
 }
 
 /**
- * The dataset's live generation as the published snapshot holds it, for [SyncRules]: its [trustClass], its
- * `sourceTimestampMillis`, and its maximum coverage `high` (`DatasetGeneration.maxCoverageMillis`, decoded by the
+ * The dataset's live generation as the published snapshot holds it, for [SyncRules]: its `sourceTimestampMillis`, and its maximum coverage `high` (`DatasetGeneration.maxCoverageMillis`, decoded by the
  * loader from the generation's `index.bin` and clamped to [Long.MAX_VALUE]), null when it covers no log. Never read from
  * `updater.json` (§6.5), nor from the engine's `coverageEndMillis`.
  */
 internal class LiveGeneration(
-    val trustClass: TrustClass,
     val sourceTimestampMillis: Long,
     val maxCoverageMillis: Long?,
 ) {
-    override fun toString(): String =
-        "LiveGeneration($trustClass at $sourceTimestampMillis, maxCoverage=$maxCoverageMillis)"
+    override fun toString(): String = "LiveGeneration(at $sourceTimestampMillis, maxCoverage=$maxCoverageMillis)"
 }
 
 /**
@@ -72,8 +68,8 @@ internal class SyncClock(
 }
 
 /**
- * Spec §6.3's coverage sanity at install and §7.1's rollback guard, for one verified `SIGNED` changeset of a dataset and
- * channel. Every input is a value the caller passes: the changeset's signed `<ts>` ([signedTimestampMillis], the
+ * Spec §6.3's coverage sanity at install and §7.1's rollback guard, for one verified changeset of a dataset and
+ * channel. Every generation is Mozilla-signed (#218 cut the mirror and system-cache sources). Every input is a value the caller passes: the changeset's signed `<ts>` ([signedTimestampMillis], the
  * verified envelope `timestamp` the client returns in `Changeset`, #181; never `pollChanges`' `last_modified`), the
  * dataset's watermark from `updater.json`, the [LiveGeneration] from the published snapshot (null when the dataset has
  * none: no stored generation, no seed) and the [SyncClock]. The candidate generation's coverage is `coverageHighs`:
@@ -82,21 +78,20 @@ internal class SyncClock(
  *
  * The coverage tests need the filter bodies, so the decision runs in two phases: [admit] before any body is fetched,
  * and [decide] once every filter's coverage is known, which repeats [admit] and adds the coverage tests. Their order:
- * 1. `UNCHANGED`-by-timestamp: `<ts>` equals the live `SIGNED` generation's `sourceTimestampMillis`. It precedes the
- *    `CLOCK_SKEW` test (§6.3). Only a `SIGNED` live generation matches, so a `SIGNED` changeset always evicts a `MIRROR`
- *    or `SYSTEM` one.
+ * 1. `UNCHANGED`-by-timestamp: `<ts>` equals the live generation's `sourceTimestampMillis`. It precedes the
+ *    `CLOCK_SKEW` test (§6.3).
  * 2. The rollback guard: `<ts>` older than the watermark by `rollbackWindow` or more is `ROLLBACK_REFUSED` (§7.1: older
  *    by less than the window may still install).
  * 3. `CLOCK_SKEW`: `<ts>` beyond local now + `clockSkew`, unless the dataset has no generation or its live generation
  *    is itself `clockBehind` (recomputed here as `sourceTimestampMillis > now + clockSkew`, never read from the last
  *    publish) and `<ts>` is newer than it, which is [SyncDecision.INSTALL_CLOCK_BEHIND].
- * 4. ([decide] only) The trust-class coverage bound, [coverageWithinBound]: `FAILED` at stage `INDEX`.
- * 5. ([decide] only) Inside the window (`<ts> ≤ watermark`), a maximum coverage below the live `SIGNED` generation's is
+ * 4. ([decide] only) The coverage bound, [coverageWithinBound]: `FAILED` at stage `INDEX`.
+ * 5. ([decide] only) Inside the window (`<ts> ≤ watermark`), a maximum coverage below the live generation's is
  *    `ROLLBACK_REFUSED`; equal or above installs. A changeset newer than the watermark installs whatever its coverage.
  *
  * **The watermark floor** (revision 56, #188): the watermark both phases compare against is the higher of the stored one
- * and the live generation's `sourceTimestampMillis`, when the live generation is `SIGNED` and not itself `clockBehind`
- * ([floored]). A malformed or absent `updater.json` beside a live `SIGNED` generation (#178: it reads as an empty
+ * and the live generation's `sourceTimestampMillis`, when the live generation is not itself `clockBehind`
+ * ([floored]). A malformed or absent `updater.json` beside a live generation (#178: it reads as an empty
  * record, a store failure) therefore cannot reopen a rollback to anything older than what is installed, while a
  * far-future live generation installed under the carve-out never pins the watermark, so it cannot freeze the feed.
  *
@@ -114,11 +109,7 @@ internal object SyncRules {
         live: LiveGeneration?,
         clock: SyncClock,
     ): SyncDecision {
-        if (live != null && live.trustClass == TrustClass.SIGNED &&
-            signedTimestampMillis == live.sourceTimestampMillis
-        ) {
-            return SyncDecision.UNCHANGED
-        }
+        if (live != null && signedTimestampMillis == live.sourceTimestampMillis) return SyncDecision.UNCHANGED
         val watermark = floored(watermarkMillis, live, clock)
         if (watermark != null && beyondWindow(signedTimestampMillis, watermark, clock.rollbackWindowMillis)) {
             return SyncDecision.ROLLBACK_REFUSED
@@ -131,8 +122,8 @@ internal object SyncRules {
     }
 
     /**
-     * The decision for a changeset whose candidate generation's coverage is [coverageHighs]: [admit], then the `SIGNED`
-     * coverage bound, then the coverage-monotonic rule inside the window.
+     * The decision for a changeset whose candidate generation's coverage is [coverageHighs]: [admit], then the coverage
+     * bound, then the coverage-monotonic rule inside the window.
      */
     fun decide(
         signedTimestampMillis: Long,
@@ -143,12 +134,12 @@ internal object SyncRules {
     ): SyncDecision {
         val admitted = admit(signedTimestampMillis, watermarkMillis, live, clock)
         if (admitted != SyncDecision.INSTALL && admitted != SyncDecision.INSTALL_CLOCK_BEHIND) return admitted
-        if (!coverageWithinBound(TrustClass.SIGNED, coverageHighs, signedTimestampMillis, clock)) {
+        if (!coverageWithinBound(coverageHighs, signedTimestampMillis, clock)) {
             return SyncDecision.FAILED
         }
         val watermark = floored(watermarkMillis, live, clock)
         val insideWindow = watermark != null && signedTimestampMillis <= watermark
-        if (insideWindow && live != null && live.trustClass == TrustClass.SIGNED) {
+        if (insideWindow && live != null) {
             val liveMax = live.maxCoverageMillis
             if (liveMax != null && !coverageAtLeast(coverageHighs, liveMax)) return SyncDecision.ROLLBACK_REFUSED
         }
@@ -156,31 +147,16 @@ internal object SyncRules {
     }
 
     /**
-     * Spec §6.3's coverage bound for a generation of [trustClass], one function for every class: `SIGNED`, no coverage
-     * `high` is later than the changeset's signed `<ts>` ([signedTimestampMillis]) + `clockSkew` ("the timestamp compared
-     * everywhere here (…, coverage bound, `CLOCK_SKEW`) is the signed `<ts>`"); `MIRROR` and `SYSTEM`, none is later
-     * than local now + `clockSkew`, with no [signedTimestampMillis]. A `high` is compared unsigned, so one past
-     * [Long.MAX_VALUE] is beyond every bound. `BUNDLED` has no source in this dataset and is refused.
-     *
-     * The `MIRROR` and `SYSTEM` branch has no caller in 0.2 (no such source before 0.3, §11): it is kept, tested here,
-     * and must survive the dead-code pass (#150).
+     * Spec §6.3's coverage bound: no coverage `high` is later than the changeset's signed `<ts>`
+     * ([signedTimestampMillis]) + `clockSkew` ("the timestamp compared everywhere here (…, coverage bound, `CLOCK_SKEW`)
+     * is the signed `<ts>`"). A `high` is compared unsigned, so one past [Long.MAX_VALUE] is beyond every bound.
      */
     fun coverageWithinBound(
-        trustClass: TrustClass,
         coverageHighs: List<ULong>,
-        signedTimestampMillis: Long?,
+        signedTimestampMillis: Long,
         clock: SyncClock,
     ): Boolean {
-        require(trustClass != TrustClass.BUNDLED) { "no BUNDLED source carries CRLite coverage" }
-        require((trustClass == TrustClass.SIGNED) == (signedTimestampMillis != null)) {
-            "the signed <ts> is given exactly for SIGNED"
-        }
-        val bound =
-            if (signedTimestampMillis != null) {
-                saturatingAdd(signedTimestampMillis, clock.clockSkewMillis)
-            } else {
-                clock.futureBoundMillis
-            }
+        val bound = saturatingAdd(signedTimestampMillis, clock.clockSkewMillis)
         return coverageHighs.all { bound >= 0 && it <= bound.toULong() }
     }
 
@@ -195,19 +171,15 @@ internal object SyncRules {
 
     /**
      * The watermark the rules compare against: [watermarkMillis] raised to the live generation's
-     * `sourceTimestampMillis` when that generation is `SIGNED` and not `clockBehind` (`sourceTimestampMillis ≤ now +
-     * clockSkew`, recomputed here), else [watermarkMillis] as stored; null when neither gives one.
+     * `sourceTimestampMillis` when that generation is not `clockBehind` (`sourceTimestampMillis ≤ now + clockSkew`,
+     * recomputed here), else [watermarkMillis] as stored; null when neither gives one.
      */
     private fun floored(
         watermarkMillis: Long?,
         live: LiveGeneration?,
         clock: SyncClock,
     ): Long? {
-        if (live == null || live.trustClass != TrustClass.SIGNED ||
-            live.sourceTimestampMillis > clock.futureBoundMillis
-        ) {
-            return watermarkMillis
-        }
+        if (live == null || live.sourceTimestampMillis > clock.futureBoundMillis) return watermarkMillis
         return maxOf(watermarkMillis ?: Long.MIN_VALUE, live.sourceTimestampMillis)
     }
 

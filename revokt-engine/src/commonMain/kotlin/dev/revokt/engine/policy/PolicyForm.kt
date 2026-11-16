@@ -8,18 +8,14 @@ import dev.revokt.Exemption
 import dev.revokt.Outcome
 import dev.revokt.Rule
 import dev.revokt.RuleClass
-import dev.revokt.TrustClass
 
 /**
  * A policy as decide and evaluate read it (spec §3, §8): the public `RevoktPolicy` (jvmMain) compiles to it, so
  * commonMain never sees `java.time`. One row per rule, an outcome for every rule and an exemption where one is
- * registered, plus the required datasets, the staleness and `minTrustClass` maps and the three time fields in
- * milliseconds. Every input is copied into a read-only collection. Rules that [PolicyTable.shared] groups have the
+ * registered, plus the required datasets, the staleness map and the three time fields in milliseconds. Every input is copied into a read-only collection. Rules that [PolicyTable.shared] groups have the
  * same outcome and the same exemption.
  *
  * [preset] is the preset the policy derives from (spec §4 "Growability contract": `newBuilder()` only from a preset).
- * [minTrustClass] holds only the entries the policy set; a dataset with none takes the preset's floor, which
- * therefore applies to datasets added later (§4).
  */
 internal class PolicyForm(
     val preset: Preset,
@@ -27,7 +23,6 @@ internal class PolicyForm(
     exemptions: Map<Rule, Exemption>,
     requiredDatasets: Set<Dataset>,
     staleness: Map<Dataset, StalenessTable>,
-    minTrustClass: Map<Dataset, TrustClass>,
     val rollbackWindowMillis: Long,
     val clockSkewMillis: Long,
     val signedSourceFailingAfterMillis: Long,
@@ -39,9 +34,6 @@ internal class PolicyForm(
     val requiredDatasets: Set<Dataset> = buildSet { addAll(requiredDatasets) }
 
     val staleness: Map<Dataset, StalenessTable> = buildMap { putAll(staleness) }
-
-    /** The `minTrustClass` entries this policy set; [minTrustClass] falls back to the preset for the others. */
-    val minTrustClassEntries: Map<Dataset, TrustClass> = buildMap { putAll(minTrustClass) }
 
     init {
         val missing = Rule.entries.filter { it !in this.outcomes }
@@ -63,11 +55,8 @@ internal class PolicyForm(
 
     fun staleness(dataset: Dataset): StalenessTable? = staleness[dataset]
 
-    fun minTrustClass(dataset: Dataset): TrustClass =
-        minTrustClassEntries[dataset] ?: PolicyTable.preset(preset).minTrustClass.getValue(dataset)
-
     companion object {
-        /** [preset] itself, as spec §8 tabulates it: no exemptions, every `minTrustClass` the preset floor. */
+        /** [preset] itself, as spec §8 tabulates it, with no exemptions. */
         fun of(preset: Preset): PolicyForm {
             val table = PolicyTable.preset(preset)
             return PolicyForm(
@@ -76,7 +65,6 @@ internal class PolicyForm(
                 exemptions = emptyMap(),
                 requiredDatasets = table.requiredDatasets,
                 staleness = table.staleness,
-                minTrustClass = emptyMap(),
                 rollbackWindowMillis = table.rollbackWindowMillis,
                 clockSkewMillis = table.clockSkewMillis,
                 signedSourceFailingAfterMillis = table.signedSourceFailingAfterMillis,

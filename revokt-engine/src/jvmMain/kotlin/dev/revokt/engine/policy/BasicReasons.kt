@@ -18,6 +18,6 @@ internal fun Rule.basicReason(): BasicReason =
         Rule.REVOKED -> BasicReason.REVOKED
 
         Rule.PATH_BUDGET_EXCEEDED, Rule.NO_DATA, Rule.ENGINE_ERROR, Rule.PARSE_FAILED, Rule.ISSUER_UNVERIFIED,
-        Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.NOT_COVERED, Rule.STALE, Rule.UNSIGNED_DATA,
+        Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.NOT_COVERED, Rule.STALE,
         -> BasicReason.UNDETERMINED_REVOCATION_STATUS
     }

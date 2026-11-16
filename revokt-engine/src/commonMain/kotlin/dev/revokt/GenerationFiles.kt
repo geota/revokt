@@ -18,7 +18,6 @@ import okio.ByteString.Companion.toByteString
 public class GenerationFiles internal constructor(
     public val generationId: String,
     public val dataset: Dataset,
-    public val trustClass: TrustClass,
     public val format: FilterFormat,
     files: Map<String, ByteArray>,
     public val sourceTimestampMillis: Long,
@@ -56,7 +55,6 @@ public class GenerationFiles internal constructor(
         Builder()
             .generationId(generationId)
             .dataset(dataset)
-            .trustClass(trustClass)
             .format(format)
             .sourceTimestampMillis(sourceTimestampMillis)
             .also { b -> files.forEach { (name, bytes) -> b.file(name, bytes) } }
@@ -66,16 +64,15 @@ public class GenerationFiles internal constructor(
         other is GenerationFiles &&
             generationId == other.generationId &&
             dataset == other.dataset &&
-            trustClass == other.trustClass &&
             format == other.format &&
             sourceTimestampMillis == other.sourceTimestampMillis &&
             hashes == other.hashes
 
     override fun hashCode(): Int =
-        listOf(generationId, dataset, trustClass, format, sourceTimestampMillis, hashes).hashCode()
+        listOf(generationId, dataset, format, sourceTimestampMillis, hashes).hashCode()
 
     override fun toString(): String =
-        "GenerationFiles(generationId=$generationId, dataset=$dataset, trustClass=$trustClass, format=$format, " +
+        "GenerationFiles(generationId=$generationId, dataset=$dataset, format=$format, " +
             "files=${names.sorted().map { "$it:${hashes.getValue(it).hex().take(HASH_PREFIX)}" }}, " +
             "sourceTimestampMillis=$sourceTimestampMillis)"
 
@@ -84,7 +81,6 @@ public class GenerationFiles internal constructor(
     public class Builder {
         private var generationId: String? = null
         private var dataset: Dataset = Dataset.CRLITE
-        private var trustClass: TrustClass? = null
         private var format: FilterFormat? = null
         private var sourceTimestampMillis: Long? = null
         private val files = LinkedHashMap<String, ByteArray>()
@@ -92,8 +88,6 @@ public class GenerationFiles internal constructor(
         public fun generationId(id: String): Builder = apply { generationId = id }
 
         public fun dataset(dataset: Dataset): Builder = apply { this.dataset = dataset }
-
-        public fun trustClass(trustClass: TrustClass): Builder = apply { this.trustClass = trustClass }
 
         public fun format(format: FilterFormat): Builder = apply { this.format = format }
 
@@ -109,7 +103,6 @@ public class GenerationFiles internal constructor(
             GenerationFiles(
                 generationId = requireNotNull(generationId) { "generationId is not set" },
                 dataset = dataset,
-                trustClass = requireNotNull(trustClass) { "trustClass is not set" },
                 format = requireNotNull(format) { "format is not set" },
                 files = files,
                 sourceTimestampMillis = requireNotNull(sourceTimestampMillis) { "sourceTimestampMillis is not set" },

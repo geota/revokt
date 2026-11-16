@@ -7,7 +7,6 @@ import dev.revokt.Dataset
 import dev.revokt.Finding
 import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
-import dev.revokt.TrustClass
 import dev.revokt.engine.policy.PolicyForm
 import dev.revokt.engine.policy.StalenessTable
 import dev.revokt.engine.update.DatasetGeneration
@@ -16,7 +15,7 @@ import dev.revokt.engine.update.GenerationSnapshot
 /**
  * What one data rule reads about one dataset (spec §8 data rules): its published [generation] (null when the snapshot
  * has no entry for it), whether the policy [required] it, its [ageMillis] (null with no generation or no clock read),
- * the policy's [staleness] entry and [minTrustClass] floor. Plain data, like every fact a rule reads.
+ * and the policy's [staleness] entry. Plain data, like every fact a rule reads.
  */
 internal class DatasetFacts(
     val dataset: Dataset,
@@ -24,7 +23,6 @@ internal class DatasetFacts(
     val required: Boolean,
     val ageMillis: Long?,
     val staleness: StalenessTable?,
-    val minTrustClass: TrustClass,
 ) {
     val generationId: String? get() = generation?.generationId
 
@@ -38,14 +36,15 @@ internal class DataRuleRow(
 )
 
 /**
- * The three data rules, one row each in `Rule.PRECEDENCE` order (spec §4 "Data rules", §8):
+ * The two data rules, one row each in `Rule.PRECEDENCE` order (spec §4 "Data rules", §8):
  * - `NO_DATA` for a required dataset with no generation that is not `pending` (never with a generation installed from
  *   a seed or a system cache, §5.1 decision step 7);
  * - `STALE` for a dataset with a staleness entry whose `rejectStaleAfter` is set, when `ageMillis > rejectStaleAfter`
  *   and, for a `fromSeed` generation, the persisted seed gate is open (a sync attempt has completed since the seed
- *   install, or no fetching source is configured);
- * - `UNSIGNED_DATA` when the generation's `trustClass` ranks below the policy's `minTrustClass` (never on a null
- *   `trustClass`, that is with no generation).
+ *   install, or no fetching source is configured).
+ *
+ * Every generation is Mozilla-signed (#218 cut the mirror and system-cache sources), so age is the only data-quality
+ * dimension.
  */
 internal val DATA_RULES: List<DataRuleRow> =
     listOf(
@@ -56,10 +55,6 @@ internal val DATA_RULES: List<DataRuleRow> =
             val gateOpen = f.generation?.let { !it.fromSeed || it.staleGateOpen } == true
             reject != null && age != null && age > reject && gateOpen
         },
-        DataRuleRow(Rule.UNSIGNED_DATA) { f ->
-            val trustClass = f.generation?.trustClass
-            trustClass != null && trustClass.rank < f.minTrustClass.rank
-        },
     )
 
 /**
@@ -67,7 +62,7 @@ internal val DATA_RULES: List<DataRuleRow> =
  * [policy] requires or [snapshot] holds (the datasets a layer consults), in `Dataset` order, computed before decision
  * step 1 so they are on every verdict whatever the path or any exception. [nowMillis] is the evaluation's one clock
  * read, null when the clock threw: then no age is known, so nothing is stale and `STALE` cannot fire, while `NO_DATA`
- * and `UNSIGNED_DATA`, which need no time, still do.
+ * which needs no time, still does.
  *
  * `ageMillis = now − sourceTimestampMillis`, clamped at 0 (the clock-behind case, §4 `DataState.clockBehind`);
  * `stale` is `ageMillis > staleAfter` for a dataset with a staleness entry, the loud flag that fires no rule; `rules` is
@@ -87,13 +82,12 @@ internal fun dataStates(
             val timestamp = generation?.sourceTimestampMillis
             val age = if (timestamp == null || nowMillis == null) null else (nowMillis - timestamp).coerceAtLeast(0)
             val staleness = policy.staleness(dataset)
-            val facts = DatasetFacts(dataset, generation, required, age, staleness, policy.minTrustClass(dataset))
+            val facts = DatasetFacts(dataset, generation, required, age, staleness)
             put(
                 dataset,
                 Finding.DataState
                     .Builder()
                     .dataset(dataset)
-                    .trustClass(generation?.trustClass)
                     .generationId(generation?.generationId)
                     .freshness(generation?.freshness)
                     .fromSeed(generation?.fromSeed == true)

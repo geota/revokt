@@ -50,9 +50,6 @@ public enum class DiagnosticCode {
     /** S: the fetcher trust manager's snapshot build failed. */
     FETCHER_TRUST_UNAVAILABLE,
 
-    /** V: a `c2spMirror` configured with a seed source; the mirror is bootstrap-only (§7.3). */
-    MIRROR_WITH_SEED_NEVER_INSTALLED,
-
     /** V: `RevoktStorage.inMemory()` with a fetching source. */
     IN_MEMORY_STORE_WITH_FETCHING_SOURCE,
 
@@ -86,9 +83,6 @@ public enum class DiagnosticCode {
     /** V: an `EVIDENCE` rule allowed where the preset the policy derives from rejects. */
     EVIDENCE_LOWERED_BELOW_PRESET,
 
-    /** V: a `MIRROR` or `SYSTEM` source below its dataset's `minTrustClass` while `UNSIGNED_DATA` rejects (§7.3). */
-    LOWER_CLASS_SOURCE_NEVER_INSTALLED,
-
     /** V: a required dataset's staleness entry cleared. */
     STALENESS_CLEARED_FOR_REQUIRED_DATASET,
 
@@ -118,12 +112,6 @@ public enum class DiagnosticCode {
 
     /** sync: a verified changeset whose records fail the collection schema. */
     SYNC_SCHEMA_REJECTED,
-
-    /**
-     * S and sync: a `MIRROR` or `SYSTEM` generation with no filters or no coverage was refused (§7.3), naming the
-     * source; `NO_DATA` keeps firing. A mirror's sync is [SyncOutcome.FAILED] at stage `INDEX`.
-     */
-    SOURCE_EMPTY,
 
     /**
      * V: `ioDispatcher` is exactly `Dispatchers.Unconfined`, so fetches would run on the loader thread and defeat the
