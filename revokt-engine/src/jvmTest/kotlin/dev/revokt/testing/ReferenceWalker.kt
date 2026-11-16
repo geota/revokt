@@ -38,8 +38,9 @@ import javax.security.auth.x500.X500Principal
  *   reachable certificate's distance to an anchor in the graph without the leaf instead of enumerating paths: the
  *   same answer, in polynomial time on stuffed chains.
  * - A candidate that is not an anchor must be a CA: the JDK reads its basicConstraints with `cA = TRUE`
- *   (`X509Certificate.getBasicConstraints() >= 0`; a certificate the JDK cannot parse is not one). The JDK, not revokt's
- *   extension reader, so the oracle checks the walker's [dev.revokt.engine.walker.Cert.isCa] rather than sharing it.
+ *   (`X509Certificate.getBasicConstraints() >= 0`; a certificate the JDK cannot parse is not one). The JDK, not
+ *   revokt's extension reader, so the oracle checks the walker's [dev.revokt.engine.walker.Cert.isCa] rather than
+ *   sharing it.
  * - A link is verified only when [verifier] answers `VERIFIED`; a throw counts as not verified, as §5.1 treats a
  *   verifier throw as `INVALID` "for any verifier" (P7 runs a throwing verifier). It catches [Exception], never an
  *   [Error], and must match what the 0.2 walker treats as a verifier throw.
@@ -188,7 +189,7 @@ internal class ReferenceWalker(
     }
 
     companion object {
-        /** The JDK's reading of [der]'s basicConstraints: `cA = TRUE`; false when it is absent or the JDK rejects [der]. */
+        /** The JDK's reading of [der]'s basicConstraints: `cA = TRUE`; false when absent or the JDK rejects [der]. */
         private fun jdkIsCa(der: ByteArray): Boolean =
             try {
                 val x509 = CertificateFactory.getInstance("X.509").generateCertificate(der.inputStream())

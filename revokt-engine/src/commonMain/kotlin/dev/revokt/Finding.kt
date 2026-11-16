@@ -29,8 +29,8 @@ public sealed class Finding {
         public val source: ChainSource = requireNotNull(builder.source) { "source is not set" }
 
         /**
-         * The reported reason, after decide's `UNSUPPORTED_ALGORITHM` label or `PLATFORM_ONLY` promotion; set exactly when
-         * [status] is `NO_ISSUER`.
+         * The reported reason, after decide's `UNSUPPORTED_ALGORITHM` label or `PLATFORM_ONLY` promotion; set exactly
+         * when [status] is `NO_ISSUER`.
          */
         public val noIssuerReason: NoIssuerReason? = builder.noIssuerReason
 

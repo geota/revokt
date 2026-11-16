@@ -88,7 +88,8 @@ internal class DecideContext(
  *
  * Every exit carries `AlgorithmIdMismatch` once per certificate parsed here whose outer and TBS signature algorithms
  * differ, and every walk `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` once per OID in `Walk.unsupportedOids`,
- * `outcomeDepended` true exactly when the path is `NO_ISSUER(UNSUPPORTED_ALGORITHM)`. Nothing here throws except a fatal error and an empty [chain].
+ * `outcomeDepended` true exactly when the path is `NO_ISSUER(UNSUPPORTED_ALGORITHM)`. Nothing here throws except a
+ * fatal error and an empty [chain].
  */
 internal fun decide(
     chain: List<ByteArray>,

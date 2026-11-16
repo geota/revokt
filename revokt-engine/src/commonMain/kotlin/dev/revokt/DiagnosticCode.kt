@@ -74,7 +74,7 @@ public enum class DiagnosticCode {
     /** V: an exemption on a rule whose outcome is `ALLOW`. */
     EXEMPT_ON_ALLOW,
 
-    /** S: `NO_ISSUER` rejects and the verifier cannot verify a classical algorithm (its `UNSUPPORTED_ALGORITHM` reason). */
+    /** S: `NO_ISSUER` rejects and the verifier cannot verify a classical algorithm (reason `UNSUPPORTED_ALGORITHM`). */
     UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP,
 
     /** V: `STRICT` on `AndroidPlatformTrust` with no `NO_ISSUER` exemption (§5.2). */

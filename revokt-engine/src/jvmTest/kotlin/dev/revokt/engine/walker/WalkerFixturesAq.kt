@@ -67,9 +67,10 @@ internal object WalkerFixturesAq {
      * verifies the leaf (a recovered key, or any key the attacker holds a certificate for). Anyone can obtain such a
      * certificate, so E's key never becomes a leaf-issuer key: with the honest intermediate presented after it the
      * walk is `Found` through I alone; without it, `ALL_CANDIDATES_INVALID`. A probe-listed own signature OID on E is
-     * still recorded (pkix checks the signature algorithm before basicConstraints). The first case is the attack the CA
-     * check closes: the attacker signs C, a CA certificate for a recovered key, with the key of its own end-entity
-     * certificate F under the real root; C verifies the leaf, F is a dead end below it and at the leaf's unrelated loop.
+     * still recorded (pkix checks the signature algorithm before basicConstraints). The first case is the attack the
+     * CA check closes: the attacker signs C, a CA certificate for a recovered key, with the key of its own end-entity
+     * certificate F under the real root; C verifies the leaf, and F is a dead end below it and at the leaf's unrelated
+     * loop.
      */
     private fun attacker(): List<WalkerFixture> {
         val honest = Honest()
