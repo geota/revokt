@@ -13,7 +13,10 @@ import kotlin.jvm.JvmStatic
  * are thread-safe, reads concurrently.
  */
 public interface RevoktStorage {
-    /** The content of [name], or null when no file has that key. */
+    /**
+     * The content of [name], or null when no file has that key. A read that fails throws; it never returns null, which
+     * the loader takes to mean the file is absent (spec §6.5, #236).
+     */
     public fun read(name: String): ByteArray?
 
     /** Replaces [name] with [bytes] atomically and durably before returning; [read] sees it only when complete. */
