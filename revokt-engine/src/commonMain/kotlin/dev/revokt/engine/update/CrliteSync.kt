@@ -622,17 +622,21 @@ internal class CrliteSync(
              * the sync, or null.
              */
             fun open(): SyncResult? {
-                val pointer = stored { (store.pointer() as? StoreRead.Found)?.value }
+                val read = stored { store.pointer() }
+                val pointer = (read as? StoreRead.Found)?.value
                 val live = reads.liveDirectory()
                 val holders = listOfNotNull(live, pointer?.live, pointer?.previous).distinct()
                 pointed = holders.filter { it != directory }
-                if (directory in holders) {
-                    held = stored { store.readMeta(directory) } is StoreRead.Found
+                val complete = stored { store.readMeta(directory) } is StoreRead.Found
+                // #236, fail closed: a malformed pointer may name a complete directory, so it is held (compared, reused
+                // when it is this generation, never reopened, rewritten or deleted), and the flip heals the pointer.
+                if (directory in holders || (read is StoreRead.Malformed && complete)) {
+                    held = complete
                     if (held) return null
                     return storeFailed("$directory is live or pointed to, and its meta.json is not readable")
                 }
                 // A complete orphan is reopened; an incomplete one needs nothing before its deltas are staged.
-                if (stored { store.readMeta(directory) } is StoreRead.Found) stored { store.reopen(directory) }
+                if (complete) stored { store.reopen(directory) }
                 // Only once reopen accepted it: a directory the pointer names is never deleted on a failure.
                 staged = directory
                 return null

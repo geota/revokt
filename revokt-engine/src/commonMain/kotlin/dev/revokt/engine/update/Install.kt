@@ -224,13 +224,16 @@ private class Install(
     }
 
     /**
-     * Whether [directory] is held (the engine's live generation or one the pointer names) and its `meta.json` as it
-     * reads. A directory nothing holds is this install's: it is completed over its staged deltas, or deleted on a
+     * Whether [directory] is held (the engine's live generation, one the pointer names, or a complete one beside a
+     * malformed pointer, which may name it) and its `meta.json` as it reads. A directory nothing holds is this install's: it is completed over its staged deltas, or deleted on a
      * failure before activation. A complete one becomes this install's only once [StoreLayout.reopen] accepts it.
      */
     private fun claim(directory: String): Pair<Boolean, StoreRead<GenerationMeta>> {
-        val held = directory == liveDirectory() || directory in pointed()
         val existing = store.readMeta(directory)
+        // #236, fail closed: a malformed pointer may name a complete directory, so it is held: compared, reused when it
+        // is this generation, never reopened, rewritten or deleted. The flip then writes a pointer that reads.
+        val unknown = store.pointer() is StoreRead.Malformed && existing is StoreRead.Found
+        val held = directory == liveDirectory() || directory in pointed() || unknown
         if (!held && existing !is StoreRead.Found) written = directory
         return held to existing
     }

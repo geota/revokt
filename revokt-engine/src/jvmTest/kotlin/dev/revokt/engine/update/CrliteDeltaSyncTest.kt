@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.update
 
+import dev.revokt.Dataset
 import dev.revokt.DiagnosticCode
 import dev.revokt.RevoktLimits
 import dev.revokt.SyncOutcome
@@ -279,6 +280,26 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
         assertEquals(1, run.storeFailures)
         assertEquals(server.changesetUrl, server.fetcher.requests[1].url)
         assertEquals("$ts2/${delta2.id}", live().generationId)
+    }
+
+    @Test
+    fun `#236 - a malformed pointer and a fresh loader re-serve the same ts, which installs and heals the pointer`() {
+        val server = installedFirst()
+        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        // A fresh loader over the same store: nothing is live in its snapshot.
+        snapshot.publish(
+            GenerationSnapshot(
+                0,
+                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, null, false, null, null, false, false, false)),
+                null,
+            ),
+        )
+        server.fetcher.requests.clear()
+        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
+        assertTrue(run.storeFailures >= 1, "the malformed pointer is a store failure")
+        assertEquals(emptyList(), server.attachmentRequests())
+        assertEquals(directory1, liveDirectory())
+        assertNotNull(store.meta(directory1))
     }
 
     @Test
