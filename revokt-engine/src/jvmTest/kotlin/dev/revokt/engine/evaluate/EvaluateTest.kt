@@ -97,7 +97,6 @@ class EvaluateTest {
                     h.intermediate.subject,
                     signer = h.intermediate.key,
                     key = h.w.leafKey(),
-                    ca = false,
                 )
             }
         val engine = StubEngine.always(CrliteQueryResult.REVOKED)
@@ -408,7 +407,6 @@ class EvaluateTest {
                 h.intermediate.subject,
                 sigOid = SymOids.UNSUPPORTED_SIGNATURE,
                 key = h.w.leafKey(),
-                ca = false,
             )
         h.w.verifies(leafU, h.intermediate.key)
         val leaf6 =
@@ -419,7 +417,6 @@ class EvaluateTest {
                     h.intermediate.subject,
                     signer = h.intermediate.key,
                     key = h.w.leafKey(),
-                    ca = false,
                 )
             }
         val junk = h.junk(RevoktLimits.MAX_PRESENTED)

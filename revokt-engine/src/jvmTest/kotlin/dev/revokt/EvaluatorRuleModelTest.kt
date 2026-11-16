@@ -78,7 +78,6 @@ class EvaluatorRuleModelTest {
                     h.intermediate.subject,
                     signer = h.intermediate.key,
                     key = h.w.leafKey(),
-                    ca = false,
                 )
             }
         val engine = StubEngine.always(CrliteQueryResult.REVOKED)
@@ -98,7 +97,7 @@ class EvaluatorRuleModelTest {
             w.withValidity(
                 K6_VALIDITY,
             ) { w.cert("I6", w.name("Intermediate 6"), h.root.subject, signer = h.root.key) }
-        val leaf = w.cert("L", w.name("leaf.example"), i6.subject, signer = i6.key, key = w.leafKey(), ca = false)
+        val leaf = w.cert("L", w.name("leaf.example"), i6.subject, signer = i6.key, key = w.leafKey())
         assertEquals(KeyabilityClause.TIME, WalkerCerts.cert(i6.der).keyabilityClause)
         val f =
             w.fixture(

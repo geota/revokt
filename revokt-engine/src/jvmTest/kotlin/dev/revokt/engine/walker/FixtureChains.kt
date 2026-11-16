@@ -48,7 +48,6 @@ internal class Honest(
             sigOid = sig,
             extensions = listOfNotNull(leafAki?.let { FixtureWorld.aki(it) }) + leafExtensions,
             key = w.leafKey(),
-            ca = false,
         )
 
     /** The honest path. */
@@ -110,7 +109,7 @@ internal class Deep(
             chain.add(0, parent)
         }
         intermediates = chain
-        leaf = w.cert("L", w.name("leaf.example"), parent.subject, signer = parent.key, key = w.leafKey(), ca = false)
+        leaf = w.cert("L", w.name("leaf.example"), parent.subject, signer = parent.key, key = w.leafKey())
     }
 
     val path: List<FixtureCert> get() = listOf(leaf) + intermediates + root

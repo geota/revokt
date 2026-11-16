@@ -67,7 +67,8 @@ internal class FixtureWorld {
 
     /**
      * A leaf's key: `id-Ed25519`, which §9.2's keyability profile (K7) admits, so decision step 3 queries the leaf
-     * rather than cutting it as `PRODUCER_UNKEYABLE`. It takes the next ordinal, as [key] does.
+     * rather than cutting it as `PRODUCER_UNKEYABLE`. It takes the next ordinal, as [key] does. A certificate under it
+     * is an end entity: [cert] writes no basicConstraints.
      */
     fun leafKey(): SymKey = key(SymOids.ED25519)
 
@@ -80,10 +81,12 @@ internal class FixtureWorld {
 
     /**
      * A certificate. [signer] is the key whose link verifies it (null: a signature no key verifies); the outer
-     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs,
-     * after a critical basicConstraints `cA = TRUE` when [ca] (every certificate but a leaf: an issuer must be a CA, and
-     * an attacker sets the bit on its own certificates for free); the `Validity` is [validity]'s. Each call takes a
-     * fresh serial, so two calls never give the same bytes.
+     * `signatureAlgorithm` is the TBS one ([withOuterAlgorithm] changes it); [extensions] are [ski] and [aki] TLVs; the
+     * `Validity` is [validity]'s. Each call takes a fresh serial, so two calls never give the same bytes.
+     *
+     * A certificate is a CA, with a critical basicConstraints `cA = TRUE` ahead of [extensions], unless its [key] is a
+     * [leafKey], which makes it an end entity with [extensions] alone. An issuer must be a CA (#225), and an attacker
+     * sets the bit on its own certificates for free.
      */
     fun cert(
         label: String,
@@ -93,8 +96,8 @@ internal class FixtureWorld {
         signer: SymKey? = null,
         sigOid: String = SymOids.SIGNATURE,
         extensions: List<ByteArray> = emptyList(),
-        ca: Boolean = true,
     ): FixtureCert {
+        val ca = key.keyOid != SymOids.ED25519
         val serial = ++serials
         val t =
             TestCert(

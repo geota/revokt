@@ -184,7 +184,6 @@ class DecideFallbackTest {
                     intermediate.subject,
                     signer = intermediate.key,
                     key = w.leafKey(),
-                    ca = false,
                 )
             val cases =
                 listOf(
@@ -218,7 +217,6 @@ class DecideFallbackTest {
                     intermediate.subject,
                     sigOid = SymOids.UNSUPPORTED_SIGNATURE,
                     key = w.leafKey(),
-                    ca = false,
                 )
             w.verifies(leafU, intermediate.key)
             val f =
@@ -228,13 +226,13 @@ class DecideFallbackTest {
                     walk = notFound(NoIssuerReason.ALL_CANDIDATES_INVALID),
                 )
             val fallbacks = listOf(FakeFallback.fails() to FallbackReason.FAILED, null to FallbackReason.DISABLED)
+            // On a trust-manager binding the platform accepted the chain: NO_ISSUER(PLATFORM_ONLY) whatever the
+            // label, with the walker's reason and the OID kept.
+            val labels = listOf(false to NoIssuerReason.UNSUPPORTED_ALGORITHM, true to NoIssuerReason.PLATFORM_ONLY)
             fallbacks.forEach { (fallback, reason) ->
-                listOf(false, true).forEach { platformOnly ->
+                labels.forEach { (platformOnly, label) ->
                     val at = "$reason platformOnly=$platformOnly"
                     val d = WalkerHarness.decide(f, fallback, platformOnly = platformOnly)
-                    // On a trust-manager binding the platform accepted the chain: NO_ISSUER(PLATFORM_ONLY) whatever the
-                    // label, with the walker's reason and the OID kept.
-                    val label = if (platformOnly) NoIssuerReason.PLATFORM_ONLY else NoIssuerReason.UNSUPPORTED_ALGORITHM
                     assertPath(d, at) {
                         status(PathStatus.NO_ISSUER)
                             .noIssuerReason(label)
@@ -312,7 +310,7 @@ class DecideFallbackTest {
         val w = FixtureWorld()
         val root = w.root("R", "Root")
         val i = w.cert("I", w.name("Intermediate"), root.subject)
-        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey(), ca = false)
+        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey())
         val fillers =
             List(
                 RevoktLimits.FALLBACK_MAX_PRESENTED - 2,
@@ -439,7 +437,6 @@ class DecideFallbackTest {
                 sigOid = WalkerCerts.SHA256_RSA,
                 extensions = listOf(sctExtension()),
                 key = w.leafKey(),
-                ca = false,
             )
         w.verifies(leaf, honest.key)
         val ec = { w.key(WalkerCerts.EC_KEY, WalkerCerts.P256) }
@@ -493,7 +490,6 @@ class DecideFallbackTest {
                 signer = sub.key,
                 extensions = listOf(sctExtension()),
                 key = w.leafKey(),
-                ca = false,
             )
         val junk = List(RevoktLimits.MAX_RELATED_PER_LEVEL) { w.cert("A$it", name, w.name("Junk issuer $it")) }
         val f = w.fixture("budget", "", listOf(leaf, sub), listOf(root) + junk, notFound(NoIssuerReason.UNANCHORED))

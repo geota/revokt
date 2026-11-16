@@ -107,7 +107,6 @@ class DecideTest {
                         intermediate.subject,
                         signer = intermediate.key,
                         key = w.leafKey(),
-                        ca = false,
                     )
                 }
             assertEquals(KeyabilityClause.TIME, WalkerCerts.cert(leaf6.der).keyabilityClause)
@@ -130,7 +129,7 @@ class DecideTest {
         val w = FixtureWorld()
         val root = w.root("R", "Root")
         val i6 = w.withValidity(K6_VALIDITY) { w.cert("I6", w.name("Intermediate"), root.subject, signer = root.key) }
-        val leaf = w.cert("L", w.name("leaf.example"), i6.subject, signer = i6.key, key = w.leafKey(), ca = false)
+        val leaf = w.cert("L", w.name("leaf.example"), i6.subject, signer = i6.key, key = w.leafKey())
         assertEquals(KeyabilityClause.TIME, WalkerCerts.cert(i6.der).keyabilityClause)
         val d =
             WalkerHarness.decide(
@@ -223,7 +222,7 @@ class DecideTest {
             // A leaf outside the keyability profile is PRODUCER_UNKEYABLE before the cut, too.
             val leaf6 =
                 w.withValidity(K6_VALIDITY) {
-                    w.cert("L6", w.name("leaf.example"), intermediate.subject, key = w.leafKey(), ca = false)
+                    w.cert("L6", w.name("leaf.example"), intermediate.subject, key = w.leafKey())
                 }
             val g = fixture("cut", "K6", listOf(leaf6) + junk(68) + intermediate, notFound(NoIssuerReason.NO_CANDIDATE))
             val d6 = WalkerHarness.decide(g, null, harness = false)

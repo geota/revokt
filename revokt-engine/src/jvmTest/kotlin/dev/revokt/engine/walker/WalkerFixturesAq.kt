@@ -13,7 +13,8 @@ import dev.revokt.testing.SymOids
  * Row (aq), proposed in #225: an issuer that is not an anchor must be a CA (basicConstraints `cA = TRUE`), as webpki
  * (`verify_cert.rs` `check_basic_constraints`, `EndEntityUsedAsCa`) and mozilla::pkix (`pkixcheck.cpp`
  * `CheckBasicConstraints`, `ERROR_CA_CERT_INVALID`) require. A non-CA candidate is a dead end before its link is
- * verified: it is explored, never verified, and its own signature OID still counts.
+ * verified: it is explored, never verified, and its own signature OID still counts. A non-CA certificate here carries
+ * a [FixtureWorld.leafKey], so [FixtureWorld.cert] writes no basicConstraints but the ones a case lists.
  */
 internal object WalkerFixturesAq {
     /** basicConstraints values that do not make a CA, each with what it shows. */
@@ -42,11 +43,11 @@ internal object WalkerFixturesAq {
                     "I",
                     w.name("Intermediate"),
                     root.subject,
+                    key = w.leafKey(),
                     signer = root.key,
-                    ca = false,
                     extensions = extensions,
                 )
-            val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey(), ca = false)
+            val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey())
             w.fixture(
                 "aq",
                 variant,
@@ -116,7 +117,7 @@ internal object WalkerFixturesAq {
         sigOid: String = SymOids.SIGNATURE,
     ): FixtureCert =
         w
-            .cert(label, intermediate.subject, root.subject, signer = root.key, sigOid = sigOid, ca = false)
+            .cert(label, intermediate.subject, root.subject, w.leafKey(), signer = root.key, sigOid = sigOid)
             .also { w.verifies(leaf, it.key) }
 
     /**
@@ -126,9 +127,9 @@ internal object WalkerFixturesAq {
     private fun belowLeaf(): List<WalkerFixture> {
         val w = FixtureWorld()
         val root = w.root("R", "Root")
-        val i2 = w.cert("I2", w.name("Intermediate 2"), root.subject, signer = root.key, ca = false)
+        val i2 = w.cert("I2", w.name("Intermediate 2"), root.subject, w.leafKey(), signer = root.key)
         val i1 = w.cert("I1", w.name("Intermediate 1"), i2.subject, signer = i2.key)
-        val leaf = w.cert("L", w.name("leaf.example"), i1.subject, signer = i1.key, key = w.leafKey(), ca = false)
+        val leaf = w.cert("L", w.name("leaf.example"), i1.subject, signer = i1.key, key = w.leafKey())
         return listOf(
             w.fixture(
                 "aq",
@@ -149,10 +150,10 @@ internal object WalkerFixturesAq {
     private fun anchorWithoutBasicConstraints(): List<WalkerFixture> {
         val w = FixtureWorld()
         val name = w.name("Root")
-        val key = w.key()
-        val root = w.cert("R", name, name, key, signer = key, ca = false)
+        val key = w.leafKey()
+        val root = w.cert("R", name, name, key, signer = key)
         val i = w.cert("I", w.name("Intermediate"), root.subject, signer = root.key)
-        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey(), ca = false)
+        val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key, key = w.leafKey())
         return listOf(
             w.fixture(
                 "aq",

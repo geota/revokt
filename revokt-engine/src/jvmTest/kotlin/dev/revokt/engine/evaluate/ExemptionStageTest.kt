@@ -308,7 +308,6 @@ class ExemptionStageTest {
                 otherIssuer.subject,
                 signer = otherIssuer.key,
                 key = h.w.leafKey(),
-                ca = false,
             )
         val stranger =
             h.fixture(

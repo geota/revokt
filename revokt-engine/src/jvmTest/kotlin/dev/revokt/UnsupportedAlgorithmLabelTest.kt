@@ -72,7 +72,6 @@ class UnsupportedAlgorithmLabelTest {
             h.intermediate.subject,
             sigOid = SymOids.UNSUPPORTED_SIGNATURE,
             key = h.w.leafKey(),
-            ca = false,
         )
 
     private val leaf2Only =
