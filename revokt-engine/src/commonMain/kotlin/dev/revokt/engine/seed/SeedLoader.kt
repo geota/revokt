@@ -38,7 +38,6 @@ import dev.revokt.engine.parse.X5uPemRead
 import dev.revokt.engine.seed.parse.SeedArchive
 import dev.revokt.engine.seed.parse.SeedFormatException
 import dev.revokt.engine.seed.parse.SeedHeader
-import dev.revokt.engine.seed.parse.SeedTooLargeException
 import dev.revokt.engine.store.BlobWrite
 import dev.revokt.engine.store.GenerationMeta
 import dev.revokt.engine.store.GenerationNames
@@ -211,9 +210,6 @@ internal class SeedLoader(
                 is HeaderRead.Ended -> read.load
                 is HeaderRead.Read -> null
             }
-        } catch (e: SeedTooLargeException) {
-            // A source that may never end is counted (the coordinator's decision on #138).
-            unreadable(e.message.orEmpty(), e, 1)
         } catch (t: Throwable) {
             restoreInterrupt(t)
             unreadable(t.message ?: t.toString(), t, 0)
@@ -351,9 +347,9 @@ internal class SeedLoader(
                 val detail = t.message ?: t.toString()
                 return SeedLoad.Failed(SyncOutcome.STORE_FAILED, SyncStage.STORE, detail, t, false, storeFailures)
             }
-            // An archive over its total cap may be a source that never ends: counted (the coordinator's decision on #138).
+            // An archive over its total cap is a source fault, not a store fault, so it is not counted (#138).
             val fatalInStore = inStore && isFatal(t)
-            if (installing || fatalInStore || t is SeedTooLargeException) storeFailures++
+            if (installing || fatalInStore) storeFailures++
             val detail = if (t is SeedFormatException) t.message.orEmpty() else "the load threw: $t"
             return unreadable(detail, t, storeFailures)
         }
@@ -505,8 +501,8 @@ internal class SeedLoader(
          * `updater.json`, the pointer and every directory it names (the coordinator's decisions on #138). A read that
          * throws fails the load as a store failure, nothing written ([thrown]). A malformed `updater.json` reads as
          * absent (§6.5), counted, and the install writes a fresh one. A malformed pointer, or a pointed directory whose
-         * `meta.json` does not read, leaves the stored generations unknown, counted: every complete directory is then
-         * read for the seed-vs-stored rule ([unknown]).
+         * `meta.json` does not read, leaves the stored generations unknown (counted once, by the install, [unknown]):
+         * every complete directory is then read for the seed-vs-stored rule.
          */
         private fun read(): Stored {
             val updater =
@@ -547,7 +543,8 @@ internal class SeedLoader(
             pointer: Pointer?,
             why: String,
         ): Stored {
-            storeFailures++
+            // Not counted here: the install counts it when it reads the pointer for its new `previous`
+            // (`Install.previous`), as `CrliteSync`'s `deltaBase` reasons, so it is counted once (#138).
             logger.safeLog(LogLevel.WARN, "${store.root}: $why; the seed load reads every directory and does not prune")
             val timestamps = store.directories.mapNotNull { store.meta(it)?.sourceTimestampMillis }
             return Stored(updater, pointer, timestamps, known = false)

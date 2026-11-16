@@ -101,7 +101,7 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         storage.inner.write(pointerKey, "garbage".encodeToByteArray())
         reset(keepStore = true)
         val load = installed(load(Seed()))
-        assertTrue(load.storeFailures >= 1, "$load")
+        assertEquals(1, load.storeFailures, "counted once, by the install")
         assertEquals(Pointer(load.directory, null), (store.pointer() as StoreRead.Found).value)
         assertEquals(kept, files(first) + files(second), "no complete directory is reopened, rewritten or pruned")
     }
@@ -114,7 +114,8 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         val before = contents()
         val skipped = assertIs<SeedLoad.Skipped>(load(Seed()))
         assertEquals(ts, skipped.storedTimestampMillis)
-        assertEquals(1, skipped.storeFailures)
+        // Counted once, by the install that reads the pointer; a skip installs nothing (#138).
+        assertEquals(0, skipped.storeFailures)
         assertEquals(before, contents(), "the seed's own complete directory is never reopened")
         installedAt(ts + hour)
         storage.inner.write(pointerKey, "garbage".encodeToByteArray())
@@ -135,7 +136,7 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         reset(keepStore = true)
         val kept = files(old)
         val load = installed(load(Seed()))
-        assertTrue(load.storeFailures >= 1, "$load")
+        assertEquals(1, load.storeFailures, "counted once, by the install")
         assertEquals(load.directory, liveDirectory())
         assertEquals(kept, files(old), "the unreadable pointed directory stays until a prune over a valid pointer")
     }

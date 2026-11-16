@@ -409,7 +409,7 @@ internal class SeedLoaderTest : SeedFixture() {
     }
 
     @Test
-    fun `an archive over its total cap fails closed and counted, so a source that never ends ends`() {
+    fun `an archive over its total cap fails closed, so a source that never ends ends`() {
         val endless =
             SeedSource.of {
                 object : java.io.InputStream() {
@@ -422,9 +422,10 @@ internal class SeedLoaderTest : SeedFixture() {
                     ): Int = len.also { b.fill(0, off, off + len) }
                 }
             }
+        // A source fault, not a store fault: no store failure (#138).
         val load = assertUnreadable(loader(endless).load(ts), "over its cap of ${SeedArchive.MAX_BYTES} bytes")
-        assertEquals(1, load.storeFailures)
-        assertEquals(1, assertIs<SeedLoad.Unreadable>(loader(endless).checkHeader()).storeFailures)
+        assertEquals(0, load.storeFailures)
+        assertEquals(0, assertIs<SeedLoad.Unreadable>(loader(endless).checkHeader()).storeFailures)
     }
 
     @Test
