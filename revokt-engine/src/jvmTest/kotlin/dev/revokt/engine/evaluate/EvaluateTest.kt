@@ -454,7 +454,11 @@ class EvaluateTest {
                     Rule.PATH_BUDGET_EXCEEDED,
                 ),
                 Triple("NO_ISSUER", f("g", listOf(h.leaf.der)), Rule.NO_ISSUER),
-                Triple("ISSUER_UNVERIFIED", f("iu", listOf(leafU.der, h.intermediate.der)), Rule.ISSUER_UNVERIFIED),
+                Triple(
+                    "NO_ISSUER(UNSUPPORTED_ALGORITHM)",
+                    f("iu", listOf(leafU.der, h.intermediate.der)),
+                    Rule.NO_ISSUER,
+                ),
             )
         for ((case, fixture, rule) in cases) {
             for (policy in listOf(RevoktPolicy.DEFAULT, RevoktPolicy.STRICT)) {

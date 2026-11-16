@@ -72,7 +72,7 @@ class RuleModelTest {
 
     @Test
     fun `the empty-path rules are exemptable path rules`() {
-        assertEquals(setOf(Rule.ISSUER_UNVERIFIED, Rule.NO_ISSUER), PolicyTable.EMPTY_PATH)
+        assertEquals(setOf(Rule.NO_ISSUER), PolicyTable.EMPTY_PATH)
         assertTrue(PolicyTable.EMPTY_PATH.all { it.exemptable && it.layer == Layer.PATH })
     }
 
@@ -83,7 +83,6 @@ class RuleModelTest {
                 PathStatus.FOUND to null,
                 PathStatus.NOT_WALKED to null,
                 PathStatus.NO_ISSUER to Rule.NO_ISSUER,
-                PathStatus.ISSUER_UNVERIFIED to Rule.ISSUER_UNVERIFIED,
                 PathStatus.PATH_BUDGET_EXCEEDED to Rule.PATH_BUDGET_EXCEEDED,
                 PathStatus.PARSE_FAILED to Rule.PARSE_FAILED,
             )

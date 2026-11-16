@@ -18,18 +18,18 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
- * A server can relabel `NO_ISSUER` as `ISSUER_UNVERIFIED` (#196 F1, spec §5.1 decision step 6): a related non-anchor
- * counts its own unsupported signature OID before its link is verified, as mozilla::pkix runs
+ * A server can turn a walker reason into `UNSUPPORTED_ALGORITHM` (#196 F1, #225, spec §5.1 decision step 6): a related
+ * non-anchor counts its own unsupported signature OID before its link is verified, as mozilla::pkix runs
  * CheckIssuerIndependentProperties before VerifySignedData, and the leaf's own OID is deferred until it has an issuer
- * candidate. `[L]` is `NO_ISSUER`; `[L, D]`, where D verifies the leaf under a recovered key and signs itself with an
- * unsupported OID under an issuer no candidate matches, and `[L, J]`, where J does not verify the leaf, are
- * `ISSUER_UNVERIFIED`. The two rules share one outcome and one exemption, so the relabel changes only the diagnostic:
- * the verdict is the same under every preset and every exemption, whichever rule it was registered on. On a
- * trust-manager binding (`platformOnly`) every one of them is `NO_ISSUER(PLATFORM_ONLY)`, so `platformOnly()` matches
- * whatever the label would have been.
+ * candidate. `[L]` is `NO_ISSUER(NO_CANDIDATE)`; `[L, D]`, where D verifies the leaf under a recovered key and signs
+ * itself with an unsupported OID under an issuer no candidate matches, and `[L, J]`, where J does not verify the leaf,
+ * are `NO_ISSUER(UNSUPPORTED_ALGORITHM)`. Both are the one rule `NO_ISSUER` (#225), so the label changes only the
+ * diagnostic: the verdict is the same under every preset and every exemption. On a trust-manager binding
+ * (`platformOnly`) every one of them is `NO_ISSUER(PLATFORM_ONLY)`, so `platformOnly()` matches whatever the label
+ * would have been.
  */
 @OptIn(RevoktTestingApi::class)
-class IssuerUnverifiedRelabelTest {
+class UnsupportedAlgorithmLabelTest {
     private val h = Honest()
 
     private val d =
@@ -92,7 +92,7 @@ class IssuerUnverifiedRelabelTest {
     fun `walker a related non-verifying candidate counts its own unsupported OID, as pkix checks it first`() {
         WalkerHarness.check(withJ)
         val decision = WalkerHarness.decide(withJ, fallback = null)
-        assertEquals(PathStatus.ISSUER_UNVERIFIED, decision.path.status)
+        assertUnsupportedLabel(decision.path)
         assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, decision.path.walkerReason)
     }
 
@@ -104,7 +104,7 @@ class IssuerUnverifiedRelabelTest {
         assertEquals(PathStatus.NO_ISSUER, decided.path.status)
         assertEquals(NoIssuerReason.NO_CANDIDATE, decided.path.noIssuerReason)
         assertEquals(emptyList(), decided.findings.filterIsInstance<Finding.UnsupportedAlgorithm>())
-        assertEquals(PathStatus.ISSUER_UNVERIFIED, WalkerHarness.decide(leaf2WithIssuer, fallback = null).path.status)
+        assertUnsupportedLabel(WalkerHarness.decide(leaf2WithIssuer, fallback = null).path)
     }
 
     @Test
@@ -148,7 +148,7 @@ class IssuerUnverifiedRelabelTest {
                     .copy(unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE), unrelatedExploredAtLeaf = 1),
             )
         WalkerHarness.check(f)
-        assertEquals(PathStatus.ISSUER_UNVERIFIED, WalkerHarness.decide(f, fallback = null).path.status)
+        assertUnsupportedLabel(WalkerHarness.decide(f, fallback = null).path)
     }
 
     @Test
@@ -158,12 +158,12 @@ class IssuerUnverifiedRelabelTest {
     }
 
     @Test
-    fun `decide the leaf alone is NO_ISSUER and the leaf with D is ISSUER_UNVERIFIED`() {
+    fun `decide the leaf alone is NO_CANDIDATE and the leaf with D is UNSUPPORTED_ALGORITHM`() {
         val alone = WalkerHarness.decide(leafOnly, fallback = null).path
         assertEquals(PathStatus.NO_ISSUER, alone.status)
         assertEquals(NoIssuerReason.NO_CANDIDATE, alone.noIssuerReason)
         val decision = WalkerHarness.decide(withD, fallback = null)
-        assertEquals(PathStatus.ISSUER_UNVERIFIED, decision.path.status)
+        assertUnsupportedLabel(decision.path)
         assertEquals(NoIssuerReason.UNANCHORED, decision.path.walkerReason)
         val unsupported = decision.findings.filterIsInstance<Finding.UnsupportedAlgorithm>().single()
         assertEquals(SymOids.UNSUPPORTED_SIGNATURE, unsupported.oid)
@@ -171,7 +171,7 @@ class IssuerUnverifiedRelabelTest {
     }
 
     @Test
-    fun `the verdict is the same for both labels under every preset and an exemption on either rule`() {
+    fun `the verdict is the same for every label under every preset and a NO_ISSUER exemption`() {
         val corp = Exemption.hostSuffixIn(listOf("example"))
         val policies =
             listOf(
@@ -182,26 +182,21 @@ class IssuerUnverifiedRelabelTest {
                         .newBuilder()
                         .exempt(Rule.NO_ISSUER, corp)
                         .build(),
-                "STRICT, ISSUER_UNVERIFIED exempt" to
-                    RevoktPolicy.STRICT
-                        .newBuilder()
-                        .exempt(Rule.ISSUER_UNVERIFIED, corp)
-                        .build(),
-                "DEFAULT, both raised by one rule()" to
+                "DEFAULT, NO_ISSUER raised" to
                     RevoktPolicy.DEFAULT
                         .newBuilder()
-                        .rule(Rule.ISSUER_UNVERIFIED, Outcome.REJECT)
+                        .rule(Rule.NO_ISSUER, Outcome.REJECT)
                         .build(),
             )
         for ((name, policy) in policies) {
             val alone = verdict(leafOnly, policy)
             assertEquals(setOf(Rule.NO_ISSUER), alone.rules, name)
             for (relabelled in listOf(verdict(withD, policy), verdict(withJ, policy))) {
-                assertEquals(setOf(Rule.ISSUER_UNVERIFIED), relabelled.rules, name)
-                assertEquals(alone::class, relabelled::class, "$name: one verdict for both labels")
+                assertEquals(setOf(Rule.NO_ISSUER), relabelled.rules, name)
+                assertEquals(alone::class, relabelled::class, "$name: one verdict for every label")
                 if (alone is Verdict.Rejected) {
                     assertEquals(Rule.NO_ISSUER, alone.rule, name)
-                    assertEquals(Rule.ISSUER_UNVERIFIED, assertIs<Verdict.Rejected>(relabelled).rule, name)
+                    assertEquals(Rule.NO_ISSUER, assertIs<Verdict.Rejected>(relabelled).rule, name)
                 }
             }
         }
@@ -210,7 +205,7 @@ class IssuerUnverifiedRelabelTest {
                 .newBuilder()
                 .exempt(Rule.NO_ISSUER, corp)
                 .build()
-        assertEquals(listOf(Rule.ISSUER_UNVERIFIED), exemptedRules(verdict(withD, exempted)))
+        assertEquals(listOf(Rule.NO_ISSUER), exemptedRules(verdict(withD, exempted)))
         assertEquals(listOf(Rule.NO_ISSUER), exemptedRules(verdict(leafOnly, exempted)))
     }
 
@@ -223,7 +218,7 @@ class IssuerUnverifiedRelabelTest {
             assertEquals(f.walk.reason, d.path.walkerReason, "$f: the walker's reason is kept")
             val findings = d.findings.filterIsInstance<Finding.UnsupportedAlgorithm>()
             assertEquals(f.walk.unsupportedOids, findings.map { it.oid }.toSet(), "$f: the OIDs are kept")
-            assertTrue(findings.none { it.outcomeDepended }, "$f: outcomeDepended follows the status")
+            assertTrue(findings.none { it.outcomeDepended }, "$f: outcomeDepended follows the reason")
         }
     }
 
@@ -258,6 +253,12 @@ class IssuerUnverifiedRelabelTest {
                 decide(chain, index, anchors, context)
             },
         ).presented(f.presented, host = "www.example")
+
+    /** [path] is `NO_ISSUER(UNSUPPORTED_ALGORITHM)`: the one rule, with the label a server can steer. */
+    private fun assertUnsupportedLabel(path: Finding.Path) {
+        assertEquals(PathStatus.NO_ISSUER, path.status)
+        assertEquals(NoIssuerReason.UNSUPPORTED_ALGORITHM, path.noIssuerReason)
+    }
 
     private fun exemptedRules(v: Verdict): List<Rule> = v.findings.filterIsInstance<Finding.Exempted>().map { it.rule }
 }

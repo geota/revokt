@@ -55,9 +55,9 @@ internal class PathDecision(
  *   `unsupportedOids()`.
  * - [fallback] is step 6's PKIX builder, called at [nowMillis]; null when the fallback is disabled
  *   (`pkixFallback(false)`, and the walker-only harness's disabled path).
- * - [platformOnly] is step 6's `PLATFORM_ONLY` promotion of a walk `NotFound` whose fallback failed, an
- *   `ISSUER_UNVERIFIED` one included: on for the trust-manager bindings and `Revokt.evaluate`, which run step 1; off
- *   for the walker-only harness and `Evaluator.evaluate`, where the walker's label and reason are reported directly.
+ * - [platformOnly] is step 6's `PLATFORM_ONLY` promotion of a walk `NotFound` whose fallback failed, one that met an
+ *   unsupported algorithm included: on for the trust-manager bindings and `Revokt.evaluate`, which run step 1; off for
+ *   the walker-only harness and `Evaluator.evaluate`, where the walker's reason is reported directly.
  */
 internal class DecideContext(
     val verifier: SignatureVerifier,
@@ -87,8 +87,8 @@ internal class DecideContext(
  *   Exactly one `FallbackNotUsed` is reported when no fallback path was evaluated.
  *
  * Every exit carries `AlgorithmIdMismatch` once per certificate parsed here whose outer and TBS signature algorithms
- * differ, and every walk `UnsupportedAlgorithm(oid, PATH, outcomeDepended = status == ISSUER_UNVERIFIED)` once per
- * OID in `Walk.unsupportedOids`. Nothing here throws except a fatal error and an empty [chain].
+ * differ, and every walk `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` once per OID in `Walk.unsupportedOids`,
+ * `outcomeDepended` true exactly when the path is `NO_ISSUER(UNSUPPORTED_ALGORITHM)`. Nothing here throws except a fatal error and an empty [chain].
  */
 internal fun decide(
     chain: List<ByteArray>,
@@ -251,9 +251,11 @@ private class Decider(
      * Step 6 on a walk `NotFound`: a fallback path is `FOUND`; otherwise a chain over `FALLBACK_MAX_PRESENTED` is
      * `PATH_BUDGET_EXCEEDED` (the fallback skipped or disabled, whether or not step 1 ran). Under
      * [DecideContext.platformOnly] any other is `NO_ISSUER(PLATFORM_ONLY)`: the platform accepted the chain whatever
-     * the walk's label, so a server's relabel cannot change what `platformOnly()` matches; `walkerReason` and the
-     * `UnsupportedAlgorithm` findings keep the detail. Without it, any other is `ISSUER_UNVERIFIED` when the walk
-     * recorded an unsupported own signature OID ([reconstruct]), else `NO_ISSUER` with the walker's reason.
+     * the walk recorded, so a server's unsupported certificate cannot change what `platformOnly()` matches;
+     * `walkerReason` and the `UnsupportedAlgorithm` findings keep the detail. Without it, any other is
+     * `NO_ISSUER(UNSUPPORTED_ALGORITHM)` when the walk recorded an unsupported own signature OID ([reconstruct]),
+     * else `NO_ISSUER` with the walker's reason. Either way it is the one rule `NO_ISSUER`, so the label a server can
+     * steer changes only the diagnostic.
      */
     private fun notFound(
         walk: Walk.NotFound,
@@ -271,19 +273,16 @@ private class Decider(
                 notUsed = null,
             )
         }
-        when {
-            chain.size > RevoktLimits.FALLBACK_MAX_PRESENTED -> {
-                builder.status(PathStatus.PATH_BUDGET_EXCEEDED)
-            }
-
-            !context.platformOnly && walk.unsupportedOids.isNotEmpty() -> {
-                builder.status(PathStatus.ISSUER_UNVERIFIED)
-            }
-
-            else -> {
-                val reason = if (context.platformOnly) NoIssuerReason.PLATFORM_ONLY else walk.reason
-                builder.status(PathStatus.NO_ISSUER).noIssuerReason(reason)
-            }
+        if (chain.size > RevoktLimits.FALLBACK_MAX_PRESENTED) {
+            builder.status(PathStatus.PATH_BUDGET_EXCEEDED)
+        } else {
+            val reason =
+                when {
+                    context.platformOnly -> NoIssuerReason.PLATFORM_ONLY
+                    walk.unsupportedOids.isNotEmpty() -> NoIssuerReason.UNSUPPORTED_ALGORITHM
+                    else -> walk.reason
+                }
+            builder.status(PathStatus.NO_ISSUER).noIssuerReason(reason)
         }
         return walked(walk, builder, emptyList(), emptyList(), leaf, (fallback as Fallback.NotUsed).reason)
     }
@@ -377,14 +376,14 @@ private class Decider(
         notUsed: FallbackReason?,
     ): PathDecision {
         builder.walkStats(walk.stats)
-        val status = builder.status
+        val depended = builder.noIssuerReason == NoIssuerReason.UNSUPPORTED_ALGORITHM
         for (oid in walk.unsupportedOids) {
             findings +=
                 Finding.UnsupportedAlgorithm
                     .Builder()
                     .oid(oid)
                     .where(Layer.PATH)
-                    .outcomeDepended(status == PathStatus.ISSUER_UNVERIFIED)
+                    .outcomeDepended(depended)
                     .build()
         }
         notUsed?.let {
