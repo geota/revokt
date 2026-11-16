@@ -263,8 +263,11 @@ private class Install(
             val cause = IllegalStateException("$directory is live or pointed to, and its meta.json is not readable")
             return fail(SyncOutcome.STORE_FAILED, null, cause)
         }
-        store.reopen(directory)
-        written = directory
+        if (existing is StoreRead.Found) {
+            // A complete orphan: only once reopen accepts it (never a pointed one) is it this install's to delete.
+            store.reopen(directory)
+            written = directory
+        }
         store.completeGeneration(meta, generation.index, generation.deltas, generation.records)
         return null
     }

@@ -121,13 +121,19 @@ internal class StoreLayout(
      * Makes [directory] incomplete again by deleting its `meta.json` alone, so its files stay to be re-hashed and reused
      * by [completeGeneration]: for a directory referenced by nothing that an install completes afresh. Never for one the
      * engine holds live or the pointer names: a directory the pointer names throws [IllegalArgumentException] and stays
-     * as it is, so a caller that mistakes a pointed generation for an orphan fails loudly rather than deleting it.
+     * as it is, so a caller that mistakes a pointed generation for an orphan fails loudly rather than deleting it. It
+     * fails closed: a pointer that is present but malformed may name any directory, so nothing is reopened then either
+     * (a pointer that cannot be read at all throws from the read).
      */
     fun reopen(directory: String) {
-        val pointer = (pointer() as? StoreRead.Found)?.value
-        require(pointer == null || (directory != pointer.live && directory != pointer.previous)) {
-            "$directory is pointed to and is never reopened"
-        }
+        val named =
+            when (val read = pointer()) {
+                StoreRead.Absent -> emptySet()
+                StoreRead.Malformed -> null
+                is StoreRead.Found -> setOfNotNull(read.value.live, read.value.previous)
+            }
+        requireNotNull(named) { "the pointer is malformed, so $directory is never reopened" }
+        require(directory !in named) { "$directory is pointed to and is never reopened" }
         storage.delete(fileKey(directory, META))
     }
 

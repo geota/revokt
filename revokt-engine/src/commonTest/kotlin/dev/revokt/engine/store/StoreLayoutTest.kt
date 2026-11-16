@@ -292,6 +292,12 @@ class StoreLayoutTest {
             assertFailsWith<IllegalArgumentException> { layout.reopen(pointed) }
             assertNotNull(layout.meta(pointed), pointed)
         }
+        // Fail closed: a malformed pointer may name any directory, so not even the orphan is reopened.
+        storage.write("crlite/compat/current", "{".encodeToByteArray())
+        assertEquals(StoreRead.Malformed, layout.pointer())
+        assertFailsWith<IllegalArgumentException> { layout.reopen(orphan) }
+        assertNotNull(layout.meta(orphan))
+        layout.point(Pointer(newer, older))
         layout.reopen(orphan)
         assertNull(layout.meta(orphan))
         assertNotNull(layout.file(orphan, StoreLayout.INDEX))
