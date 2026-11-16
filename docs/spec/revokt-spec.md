@@ -211,9 +211,10 @@ that were open in the first draft were decided by the maintainer in its review (
 
 ### Changes in revision 54 (the x5u chain follows mozilla::pkix, and the ECDSA range check, 2026-11-07)
 - **Added** (§7.1, the maintainer's decision on #126): the x5u chain follows mozilla::pkix at Firefox
-  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki 0.103.15 consulted and its divergences listed
-  (Appendix A). Each failure is `SyncOutcome.FAILED`, and §7.1 names the chain's failure reason for each. The rules,
-  now after §7.1's `CLOCK_SKEW` sentence, cover every link below the terminal:
+  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki consulted and its divergences listed (Appendix A;
+  this entry said 0.103.15, but upki builds paths with 0.104.0-alpha.7, against which the rows were re-read, #217).
+  Each failure is `SyncOutcome.FAILED`, and §7.1 names the chain's failure reason for each. The rules, now after
+  §7.1's `CLOCK_SKEW` sentence, cover every link below the terminal:
   - **DER as mozilla::pkix reads it** (`PARSE`): non-minimal headers, elements the grammar does not place, an
     indefinite-length TBS, a BOOLEAN other than `00` or `FF`, unused bits in the signature BIT STRING, and times
     other than `YYMMDDHHMMSSZ` or `YYYYMMDDHHMMSSZ` (either type for any year, from 1970, notBefore ≤ notAfter) fail.
@@ -3356,7 +3357,8 @@ codeSigning and never `id-kp-OCSPSigning` (`EKU`); leaf SAN exactly `onecrl.cont
 on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stage `X5U`).
 
 **The chain follows mozilla::pkix** (revision 54, the maintainer's decision on #126: mozilla::pkix at Firefox
-`cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki 0.103.15 consulted and its divergences listed in Appendix A). Every failure is
+`cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki consulted: 0.104.0-alpha.7, the version upki builds paths
+with (`upki/Cargo.toml:32` at 9821cce), its divergences listed in Appendix A and `docs/decisions/DIVERGENCES.md`). Every failure is
 `SyncOutcome.FAILED` at stage `SIGNATURE` (revision 57), and the parenthesis names the chain's failure reason. For every link below the terminal:
 - **DER as mozilla::pkix reads it** (`PARSE` for the certificate's outer structure, `EXTENSION` inside an
   extension value; revision 55): in the outer structure, minimal tag and length headers; no indefinite length, the
@@ -3555,27 +3557,30 @@ CRLSet opt-in with CRX3 verification and `crl-set` parsing per Chromium.
 
 `RevoktPolicy` is a map from `Rule` to `Outcome`, per-rule exemptions, `requiredDatasets`, a
 per-dataset staleness map and three time fields. Presets: `DEFAULT`, `STRICT`. **`Enforcement.OBSERVE`
-runs the configured policy, emits events, and never throws.**
+runs the configured policy, emits events, and never throws.** The Firefox, Chrome and upki columns give each
+reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b84c4e2fe3caabdc5` and upki at v1.0.1
+(`9821cce`); "n/a" means the reference has no counterpart, and the sources are in `docs/decisions/DIVERGENCES.md`
+(#217).
 
-| `Rule` | Class | `DEFAULT` | `STRICT` | Firefox / Chrome / upki | Produced by |
-|---|---|---|---|---|---|
-| `REVOKED` | evidence | reject | reject | reject | CRLite, any evaluated key |
-| `PATH_BUDGET_EXCEEDED` | unevaluable | **reject** | reject | n/a; one of goal 3's two stated exceptions | decision steps 3, 5, 6 |
-| `NO_DATA` | unevaluable | **reject** (exemptable) | reject (exemptable) | upki `missing_data = Error` | decision step 7, per required dataset |
-| `ENGINE_ERROR` | unevaluable | allow | reject | upki hard-errors; its caller decides | boundary, engine result, exemption throw |
-| `PARSE_FAILED` | unevaluable | allow | reject | n/a; goal 3 | decision step 3 |
-| `ISSUER_UNVERIFIED` | unevaluable | allow | reject (exemptable; **empty path**; shares its outcome and exemption with `NO_ISSUER`, revision 57) | n/a | decision step 6 |
-| `NO_ISSUER` | unevaluable | allow | reject (exemptable; **empty path**: `anchorIn` never matches; reason on `Finding.Path`, including `PLATFORM_ONLY`; shares its outcome and exemption with `ISSUER_UNVERIFIED`, revision 57) | n/a; goal 3 | decision step 6 |
-| `NOT_ENROLLED` | non-answer | allow | reject (exemptable) | collapsed into not covered | CRLite |
-| `NO_SCTS` | non-answer | allow | reject (exemptable) | allow | CRLite |
-| `NOT_COVERED` | non-answer | allow | allow | Firefox → OCSP; upki allow | CRLite (the coverage gap: a certificate issued after the live filter's coverage `high` is unchecked by every preset; §10) |
-| `STALE` | data quality | allow; never fires (`rejectStaleAfter` null; loud via `DataState.stale` and `RevoktStatus.stale`) | reject at 30 d, after a sync attempt has completed since the seed was installed (persisted gate, bullet below; exemptable) | upki keeps old data; Chrome drops an expired CRLSet; Firefox → OCSP | `DataState`, per dataset |
-| `UNSIGNED_DATA` | data quality | allow; never fires (floor `BUNDLED`) | reject (floor `SIGNED`; M2: `DENYLIST` floor `BUNDLED`; exemptable) | n/a; goal 2 | `DataState`, per dataset: `trustClass` below `minTrustClass` |
-| [M2] `DENYLIST`, `ONECRL`, `CRLSET` | evidence (`ONECRL` exemptable per anchor through `ExemptionContext.path.anchorSha256`, the enterprise-CA case; `CRLSET`, `DENYLIST` not exemptable) | reject | reject | reject | L1/L2 (the 0.4 → 1.0 transition; not subject to the one-minor rule) |
-| [M2] `ISSUER_UNKNOWN_TO_MOZILLA` | non-answer | allow | reject (exemptable) | n/a | preload |
-| [M3] `CT` | evidence | allow | reject (ships `ALLOW` for one minor in `STRICT`) | browsers reject | L4: CT policy verified and not met |
-| [M3] `CT_UNVERIFIED` | non-answer | allow | reject (exemptable; ships `ALLOW` for one minor) | n/a | L4: log list missing, SCTs unverifiable, or the only SCTs delivered outside the certificate (TLS extension, OCSP), which an `X509TrustManager` cannot observe; this is why `CT` ships `ALLOW` in `DEFAULT`. M3 adds `EvaluationRequest.Builder.tlsScts(...)`, a full-SCT type separate from `CrliteSct`, and the path cache keeps the raw extension bytes |
-| [M4] `DISTRUST` | evidence | reject (ships `ALLOW` for one minor in both presets) | reject (same; exemptable per anchor) | reject | L5 |
+| `Rule` | Class | `DEFAULT` | `STRICT` | Firefox | Chrome | upki | Produced by |
+|---|---|---|---|---|---|---|---|
+| `REVOKED` | evidence | reject | reject | reject | reject | reject | CRLite, any evaluated key |
+| `PATH_BUDGET_EXCEEDED` | unevaluable; one of goal 3's two stated exceptions | **reject** | reject | reject: exhaustion is `ERROR_UNKNOWN_ISSUER` | n/a | reject: webpki's budget error is fatal | decision steps 3, 5, 6 |
+| `NO_DATA` | unevaluable | **reject** (exemptable) | reject (exemptable) | allow: no filter is `Success` | n/a | reject: `missing_data = Error` | decision step 7, per required dataset |
+| `ENGINE_ERROR` | unevaluable | allow | reject | reject: `FATAL_ERROR_LIBRARY_FAILURE` | n/a | reject: a hard error, and rustls-upki fails closed | boundary, engine result, exemption throw |
+| `PARSE_FAILED` | unevaluable (goal 3) | allow | reject | n/a | n/a | n/a | decision step 3 |
+| `ISSUER_UNVERIFIED` | unevaluable | allow | reject (exemptable; **empty path**; shares its outcome and exemption with `NO_ISSUER`, revision 57) | n/a | n/a | n/a | decision step 6 |
+| `NO_ISSUER` | unevaluable (goal 3) | allow | reject (exemptable; **empty path**: `anchorIn` never matches; reason on `Finding.Path`, including `PLATFORM_ONLY`; shares its outcome and exemption with `ISSUER_UNVERIFIED`, revision 57) | n/a | n/a | n/a | decision step 6 |
+| `NOT_ENROLLED` | non-answer | allow | reject (exemptable) | not compared | n/a | collapsed into `NOT_COVERED` (allow) | CRLite |
+| `NO_SCTS` | non-answer | allow | reject (exemptable) | → OCSP | n/a | allow | CRLite |
+| `NOT_COVERED` | non-answer | allow | allow | → OCSP | n/a | allow | CRLite (the coverage gap: a certificate issued after the live filter's coverage `high` is unchecked by every preset; §10) |
+| `STALE` | data quality | allow; never fires (`rejectStaleAfter` null; loud via `DataState.stale` and `RevoktStatus.stale`) | reject at 30 d, after a sync attempt has completed since the seed was installed (persisted gate, bullet below; exemptable) | → OCSP | drops an expired CRLSet | keeps old data | `DataState`, per dataset |
+| `UNSIGNED_DATA` | data quality (goal 2) | allow; never fires (floor `BUNDLED`) | reject (floor `SIGNED`; M2: `DENYLIST` floor `BUNDLED`; exemptable) | n/a | n/a | n/a | `DataState`, per dataset: `trustClass` below `minTrustClass` |
+| [M2] `DENYLIST`, `ONECRL`, `CRLSET` | evidence (`ONECRL` exemptable per anchor through `ExemptionContext.path.anchorSha256`, the enterprise-CA case; `CRLSET`, `DENYLIST` not exemptable) | reject | reject | reject (OneCRL) | reject (CRLSet) | n/a | L1/L2 (the 0.4 → 1.0 transition; not subject to the one-minor rule) |
+| [M2] `ISSUER_UNKNOWN_TO_MOZILLA` | non-answer | allow | reject (exemptable) | n/a | n/a | n/a | preload |
+| [M3] `CT` | evidence | allow | reject (ships `ALLOW` for one minor in `STRICT`) | reject | reject | n/a | L4: CT policy verified and not met |
+| [M3] `CT_UNVERIFIED` | non-answer | allow | reject (exemptable; ships `ALLOW` for one minor) | n/a | n/a | n/a | L4: log list missing, SCTs unverifiable, or the only SCTs delivered outside the certificate (TLS extension, OCSP), which an `X509TrustManager` cannot observe; this is why `CT` ships `ALLOW` in `DEFAULT`. M3 adds `EvaluationRequest.Builder.tlsScts(...)`, a full-SCT type separate from `CrliteSct`, and the path cache keeps the raw extension bytes |
+| [M4] `DISTRUST` | evidence | reject (ships `ALLOW` for one minor in both presets) | reject (same; exemptable per anchor) | reject | reject | n/a | L5 |
 
 - **Data rules are per dataset.** `NO_DATA` fires for a dataset in `requiredDatasets` with no
   generation and `DataState.pending == false` (the start task has passed the seed and system-cache steps; `pending` is false at the end of the start task whether or not a fetching source is configured, with `generationEpoch++` when it clears without a generation, so a seed-only configuration can never sit in `pending`); presets' `requiredDatasets` is `{CRLITE}`. `STALE` fires for a dataset present in the staleness map
@@ -5170,8 +5175,10 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
     - BoringSSL: `crypto/fipsmodule/ecdsa/ecdsa.cc.inc` lines 74 to 81 reject a zero r or s (`ec_scalar_is_zero`),
       and `crypto/fipsmodule/ec/scalar.cc.inc` `ec_scalar_from_bytes` (lines 73 to 85) rejects a value ≥ n.
 - **Revision 54, the x5u chain follows mozilla::pkix at Firefox `cac25a6fa321b0051932359b84c4e2fe3caabdc5`**
-  (tag `FIREFOX_BETA_161_BASE`, 2026-11-05), with rustls-webpki 0.103.15 consulted, read 2026-11-07 (Firefox through
-  the GitHub contents API; webpki from the local cargo registry):
+  (tag `FIREFOX_BETA_161_BASE`, 2026-11-05), with rustls-webpki consulted, read 2026-11-07 (Firefox through the
+  GitHub contents API; webpki from the local cargo registry). That reading used 0.103.15; upki at 9821cce builds paths
+  with 0.104.0-alpha.7 (`upki/Cargo.toml:32`), and the rows that depend on webpki were re-read against it on
+  2026-11-16 (#217, `docs/decisions/DIVERGENCES.md`):
   - `pkixcert.cpp` `BackCert::RememberExtension` understands keyUsage, subjectAltName, basicConstraints,
     nameConstraints, certificatePolicies, policyConstraints, extKeyUsage, inhibitAnyPolicy, authorityInfoAccess, the
     TLS feature extension, the embedded SCT list and qcStatements, plus `id-pkix-ocsp-nocheck` (whose value may be
