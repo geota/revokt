@@ -424,10 +424,22 @@ private class Install(
         }
     }
 
-    /** Whether [candidate] is a complete generation of the same or a higher trust class, as a `previous` must be. */
+    /**
+     * Whether [candidate] is a complete generation of the same or a higher trust class, as a `previous` must be; one
+     * whose `meta.json` is missing or malformed counts a store failure.
+     */
     private fun qualifies(candidate: String): Boolean =
-        (store.readMeta(candidate) as? StoreRead.Found)?.value?.let { it.trustClass.rank >= meta.trustClass.rank } ==
-            true
+        when (val read = store.readMeta(candidate)) {
+            is StoreRead.Found -> {
+                read.value.trustClass.rank >= meta.trustClass.rank
+            }
+
+            else -> {
+                // As in the pointer's branch: a candidate whose meta.json is missing or malformed is a store failure.
+                storeFailures++
+                false
+            }
+        }
 
     /**
      * Ends the install as [outcome]: before activation, closes the prepared generation and deletes the directory this

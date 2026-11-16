@@ -3,7 +3,9 @@
 #
 # protected-paths (CONTRIBUTING §5): counts maintainer approvals on protected paths, reading MAINTAINERS.md and
 # .github/protected-paths.txt from the BASE branch. Passes at once when no protected path changed. Honest note: with
-# two maintainers it adds nothing beyond code-owner review; it becomes a boundary at three.
+# two maintainers it adds nothing beyond code-owner review; it becomes a boundary at three. While the base's
+# MAINTAINERS.md lists one maintainer it passes at once, before reading any path (#211); the PR that adds the second
+# maintainer switches it on by itself.
 name: protected-paths
 
 on:
