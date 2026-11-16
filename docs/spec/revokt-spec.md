@@ -30,6 +30,9 @@ and the #192 decisions are written.
 - **§4:** the `c2spMirror` URL is read by §7.3's hop grammar (IP literals allowed), and `build()` throws when it fails;
   the "https with no userinfo" rule names the other source URLs only.
 - **§7.1:** the x5u URL is read by the same shared grammar, DNS host names only; its rules are unchanged.
+- **§7.3 and §4 `SyncStage`, a mirror's stages** (the maintainer's decision for #194, 2026-11-15; #207's code): the
+  manifest fetch, a malformed manifest and an over-cap manifest are stage `CHANGESET`; a file fetch, or a file body
+  whose size or SHA-256 differs from its manifest entry, is stage `ATTACHMENT`, as upki splits them by URL.
 - **§9:** mirror fixtures for an IPv6 hop, `HTTPS://`, differing and equal duplicate `Location`s, a 302 with no
   `Location` at the mirror client and the host `[1.2.3.4::]`. Row (e)'s "the built `index.bin` 1 MiB + 1 byte"
   becomes "over 1 MiB", since a built index is 14 bytes plus multiples of 32, 42 and 18, always an even size (#207,
