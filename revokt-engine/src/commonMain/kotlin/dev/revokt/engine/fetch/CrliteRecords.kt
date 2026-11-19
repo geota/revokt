@@ -18,7 +18,7 @@ internal class CrliteAttachment(
     val filename: String,
     val sha256: ByteString,
     val size: Long,
-    /** Relative to the pinned `attachmentBaseUrl`. */
+    /** Relative to the attachment base (`RemoteSettingsClient.attachmentBase`). */
     val location: String,
 ) {
     override fun toString(): String = "CrliteAttachment($filename, ${sha256.hex()}, $size bytes, $location)"
