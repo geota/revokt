@@ -276,8 +276,8 @@ internal class CrliteSync(
                         }
 
                         first is Fetched.Unverified && first.failure.failure.resets -> {
+                            // Only an x5u fetch failure carries an HTTP status, and it never resets.
                             backoff(first.failure.backoffMillis)
-                            first.failure.httpStatus?.let { lastStatus = it }
                             "it did not verify (${first.failure})"
                         }
 
@@ -357,7 +357,7 @@ internal class CrliteSync(
             val live = reads.liveTimestamp()
             val decision = SyncRules.decide(ts, record.watermarkMillis, live)
             // The live generation's install activated but its flip did not land: retry it, never stop (#190).
-            val reflip = decision == SyncDecision.UNCHANGED && live != null && !reads.pointed(live)
+            val reflip = decision == SyncDecision.UNCHANGED && !reads.pointed()
             if (!reflip) decided(decision, ts)?.let { return it }
             return fetched(verified, crlite, records, placed)
         }
@@ -712,12 +712,11 @@ internal class CrliteSync(
                 return live.sourceTimestampMillis?.let { GenerationNames.directory(it, id) }
             }
 
-            /** Whether the pointer names the live generation's directory, at [liveTimestamp], as `live`. */
-            fun pointed(liveTimestamp: Long): Boolean {
-                val id = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId ?: return false
-                val directory = GenerationNames.directory(liveTimestamp, id)
-                return (stored { store.pointer() } as? StoreRead.Found)?.value?.live == directory
-            }
+            /**
+             * Whether the pointer names the live generation's directory ([liveDirectory]) as `live`. Asked only for an
+             * `UNCHANGED` decision, which needs a live generation, so [liveDirectory] is never null here.
+             */
+            fun pointed(): Boolean = (stored { store.pointer() } as? StoreRead.Found)?.value?.live == liveDirectory()
 
             /**
              * Prunes the store to the directories the pointer names, after the install of [installed]; a failure is a store

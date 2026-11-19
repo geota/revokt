@@ -178,7 +178,7 @@ class RuleGrowabilityTest {
         assertOne(problems(committed.replace("\tbasicReason\t", "\treason\t")), "[rules] columns changed", "added [reason]", "removed [basicReason]")
         val added =
             committed.replace("signedSourceFailingAfterMillis\n", "signedSourceFailingAfterMillis\textra\n")
-                .replace(Regex("(?m)^((?:DEFAULT|STRICT)\tCRLITE\t86400000\t86400000\t86400000)$"), "$1\tx")
+                .replace(Regex("(?m)^((?:DEFAULT|STRICT)\tCRLITE\t86400000)$"), "$1\tx")
         assertOne(problems(added), "[presets] columns changed", "added [extra]")
     }
 

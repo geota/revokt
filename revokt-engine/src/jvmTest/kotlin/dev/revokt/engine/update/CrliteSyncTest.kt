@@ -370,7 +370,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `a coverage end beyond the signed ts installs, as no rule compares the two`() {
+    fun `data-path (b) a coverage end beyond the signed ts installs, as no rule compares the two`() {
         val early = 1_792_000_000_000
         val server = Server(ts = early)
         sync(server).assert(SyncOutcome.INSTALLED)
