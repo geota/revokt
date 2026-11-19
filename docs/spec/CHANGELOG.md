@@ -5,6 +5,11 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 60 (in progress)
+
+- **#246:** §6.5 reads `current` strictly (an unknown or duplicate member is malformed); `previous` must read back as
+  the loader reads it, `records.json` included; a heal flip is not followed by a prune (the lead's decision on r256).
+
 ### Changes in revision 59 (the spec split of #216, and the deltas of #209, #234, #242 and #244, 2026-11-18)
 
 - **The split.** `revokt-spec.md` is the normative core. §9 is now `test-plan.md` (section numbers kept), with the
