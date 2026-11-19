@@ -16,7 +16,6 @@ import dev.revokt.LogLevel
 import dev.revokt.PreparedGeneration
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktLogger
-import dev.revokt.TrustClass
 import dev.revokt.engine.store.GenerationMeta
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.SignedMeta
@@ -80,7 +79,7 @@ internal object UpdateFixtures {
         store: StoreLayout,
         records: List<FilterRecord> = listOf(fullRecord, deltaRecord),
         bodies: Map<String, ByteArray> = this.bodies,
-        trustClass: TrustClass = TrustClass.SIGNED,
+        freshness: Freshness = Freshness.RECORD_LAST_MODIFIED,
         generationId: String = "1792587631204/${records.last().id}",
         sourceTimestampMillis: Long = 1_792_587_631_204,
         format: FilterFormat = FilterFormat.V3,
@@ -99,43 +98,28 @@ internal object UpdateFixtures {
         }
         val directory = GenerationNames.directory(sourceTimestampMillis, generationId)
         if (store.meta(directory) == null) for ((name, bytes) in deltas) store.stageFile(directory, name, bytes)
-        val signed = trustClass == TrustClass.SIGNED
         val meta =
             GenerationMeta(
                 dataset = Dataset.CRLITE,
                 channel = store.channel,
-                trustClass = trustClass,
                 generationId = generationId,
                 format = format,
-                freshness =
-                    if (trustClass ==
-                        TrustClass.BUNDLED
-                    ) {
-                        Freshness.SEED_SIGNED_TIME
-                    } else {
-                        Freshness.RECORD_LAST_MODIFIED
-                    },
+                freshness = freshness,
                 sourceTimestampMillis = sourceTimestampMillis,
                 collection = "security-state/cert-revocations",
                 blobs = blobs,
                 signed =
-                    if (signed) {
-                        SignedMeta(
-                            sourceTimestampMillis,
-                            ByteArray(32) {
-                                7
-                            }.toByteString(),
-                            ByteArray(96) { 9 }.toByteString(),
-                        )
-                    } else {
-                        null
-                    },
+                    SignedMeta(
+                        sourceTimestampMillis,
+                        ByteArray(32) { 7 }.toByteString(),
+                        ByteArray(96) { 9 }.toByteString(),
+                    ),
             )
         return PendingGeneration(
             meta,
             built.index,
             deltas.mapValues { it.value.toByteString().sha256() },
-            if (signed) "{\"data\":[]}".encodeToByteArray() else null,
+            "{\"data\":[]}".encodeToByteArray(),
         )
     }
 

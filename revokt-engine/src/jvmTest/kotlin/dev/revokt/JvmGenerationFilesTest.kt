@@ -65,7 +65,7 @@ class JvmGenerationFilesTest {
     }
 
     private fun read(dir: Path): GenerationFiles =
-        JvmGenerationFiles.fromDirectory(dir, Dataset.CRLITE, TrustClass.SYSTEM, FilterFormat.V3)
+        JvmGenerationFiles.fromDirectory(dir, Dataset.CRLITE, FilterFormat.V3)
 
     /** The id `fromDirectory` derives: the SHA-256 of every file's name and content hash, in name order. */
     private fun expectedId(files: Map<String, ByteArray>): String {
@@ -95,7 +95,6 @@ class JvmGenerationFilesTest {
         assertEquals(filters.keys + "index.bin", g.names, "manifest.json is not part of the generation")
         assertEquals(expectedId(filters + ("index.bin" to index)), g.generationId)
         assertEquals(mtime, g.sourceTimestampMillis)
-        assertEquals(TrustClass.SYSTEM, g.trustClass)
         for ((name, bytes) in filters) {
             assertContentEquals(bytes, g.bytes(name))
             assertContentEquals(bytes.toByteString().sha256().toByteArray(), g.sha256(name))
@@ -122,7 +121,6 @@ class JvmGenerationFilesTest {
             GenerationFiles
                 .Builder()
                 .generationId(expectedId(v3 + ("index.bin" to index)))
-                .trustClass(TrustClass.SYSTEM)
                 .format(FilterFormat.V3)
                 .sourceTimestampMillis(mtime)
                 .file("index.bin", index)

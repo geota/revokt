@@ -14,7 +14,7 @@ internal enum class StrictUrlFailure {
     /** A userinfo (`@`) in the authority. */
     USERINFO,
 
-    /** The host is not one the caller allows: not a DNS host name, or, when IP literals are allowed, not one either. */
+    /** The host is not a DNS host name. */
     HOST,
 }
 
@@ -38,23 +38,17 @@ internal sealed class StrictUrlRead {
 }
 
 /**
- * The one strict URL grammar every URL revokt fetches from an unsigned or configured string is read by: the x5u URL
- * ([X5uUrl], spec §7.1 "The x5u URL grammar") and every URL of a mirror's redirect chain ([HopUrl], #192). It is deliberately narrow, so no
- * URL parser downstream can see another host than the one checked: `https://` (lowercase), an authority with no
- * userinfo that is a host and an optional port, then the rest. The host is a DNS host name ([isHostName]: labels of
- * ASCII letters, digits and `-`, no trailing dot, a last label that is not a number), and, only when the caller allows
- * IP literals, an IPv4 dotted quad ([isIpv4]) or a bracketed IPv6 address ([isIpv6Literal]); never a percent-encoded or
- * non-ASCII host. What is fetched is re-serialised by the caller from the parts, never the string as given.
+ * The strict URL grammar the x5u URL ([X5uUrl], spec §7.1 "The x5u URL grammar") is read by. It is deliberately
+ * narrow, so no URL parser downstream can see another host than the one checked: `https://` (lowercase), an authority
+ * with no userinfo that is a host and an optional port, then the rest. The host is a DNS host name ([isHostName]:
+ * labels of ASCII letters, digits and `-`, no trailing dot, a last label that is not a number); never an IP literal, a
+ * percent-encoded or a non-ASCII host. What is fetched is re-serialised by the caller from the parts, never the string
+ * as given.
  */
 internal object StrictUrl {
     private const val SCHEME = "https://"
     private const val MAX_HOST = 253
     private const val MAX_LABEL = 63
-    private const val IPV4_PARTS = 4
-    private const val MAX_OCTET = 255
-    private const val MAX_OCTET_DIGITS = 3
-    private const val IPV6_GROUPS = 8
-    private const val MAX_GROUP_DIGITS = 4
 
     private val AUTHORITY_ENDS = charArrayOf('/', '?', '#')
 
@@ -63,12 +57,9 @@ internal object StrictUrl {
 
     /**
      * [url] split into an `https` URL's host, port text and rest; refused when the scheme is not `https://` exactly,
-     * the authority holds a `@`, or the host is not a DNS host name (nor, with [ipLiterals], an IP literal).
+     * the authority holds a `@`, or the host is not a DNS host name.
      */
-    fun parse(
-        url: String,
-        ipLiterals: Boolean,
-    ): StrictUrlRead {
+    fun parse(url: String): StrictUrlRead {
         val schemeEnd = url.indexOf("://")
         if (schemeEnd < 0) return StrictUrlRead.Refused(StrictUrlFailure.SYNTAX, "no scheme")
         val scheme = url.substring(0, schemeEnd + 3)
@@ -77,30 +68,12 @@ internal object StrictUrl {
         val end = url.indexOfAny(AUTHORITY_ENDS, start).let { if (it < 0) url.length else it }
         val authority = url.substring(start, end)
         if ('@' in authority) return StrictUrlRead.Refused(StrictUrlFailure.USERINFO, "userinfo")
-        val (host, port) = splitAuthority(authority, ipLiterals)
-        if (!isHostName(host) && !(ipLiterals && isIpLiteral(host))) {
-            val expected = if (ipLiterals) "a DNS host name or an IP literal" else "a DNS host name"
-            return StrictUrlRead.Refused(StrictUrlFailure.HOST, "not $expected")
-        }
+        // The port follows the last `:`; a bracketed IPv6 host splits into no DNS host name, so it is refused.
+        val colon = authority.lastIndexOf(':')
+        val host = if (colon < 0) authority else authority.substring(0, colon)
+        val port = if (colon < 0) null else authority.substring(colon + 1)
+        if (!isHostName(host)) return StrictUrlRead.Refused(StrictUrlFailure.HOST, "not a DNS host name")
         return StrictUrlRead.Parsed(host, port, url.substring(end))
-    }
-
-    /**
-     * [authority] split at the `:` before its port: the last `:`, or, for a bracketed IPv6 host when [ipLiterals]
-     * allows one, the `:` right after the `]`, since the address holds colons of its own. The port is null when there
-     * is no such `:`.
-     */
-    private fun splitAuthority(
-        authority: String,
-        ipLiterals: Boolean,
-    ): Pair<String, String?> {
-        val colon =
-            if (ipLiterals && authority.startsWith('[')) {
-                authority.indexOf("]:").let { if (it < 0) -1 else it + 1 }
-            } else {
-                authority.lastIndexOf(':')
-            }
-        return if (colon < 0) authority to null else authority.substring(0, colon) to authority.substring(colon + 1)
     }
 
     /**
@@ -137,49 +110,6 @@ internal object StrictUrl {
         // `0x7f.1`), so it is no DNS name here and "no IP literal" holds.
         return names && !isNumeric(labels.last())
     }
-
-    private fun isIpLiteral(host: String): Boolean = isIpv4(host) || isIpv6Literal(host)
-
-    /**
-     * An IPv4 address in dotted-quad form (RFC 3986 `IPv4address`): four decimal octets of 0 to 255 with no leading
-     * zero, so no parser can read one as octal (`010`) or as fewer parts (`127.1`).
-     */
-    fun isIpv4(host: String): Boolean {
-        val parts = host.split('.')
-        return parts.size == IPV4_PARTS &&
-            parts.all { part ->
-                part.length in 1..MAX_OCTET_DIGITS &&
-                    part.all { it in '0'..'9' } &&
-                    (part.length == 1 || part[0] != '0') &&
-                    part.toInt() <= MAX_OCTET
-            }
-    }
-
-    /**
-     * A bracketed IPv6 address (RFC 3986 `IP-literal` with `IPv6address`): eight groups of 1 to 4 hex digits, or fewer
-     * around one `::`, the last two groups optionally an [isIpv4] address. No zone identifier and no `IPvFuture`.
-     */
-    fun isIpv6Literal(host: String): Boolean {
-        if (host.length < 4 || host[0] != '[' || host.last() != ']') return false
-        val address = host.substring(1, host.length - 1)
-        val compressed = address.indexOf("::")
-        val head = if (compressed < 0) address else address.substring(0, compressed)
-        val tail = if (compressed < 0) "" else address.substring(compressed + 2)
-        // A second `::` (or a third colon) leaves an empty group, which no hex group matches.
-        val groups = groups(head) + groups(tail)
-        // A trailing dotted quad stands for the last two groups of the address: the tail's last group when there is a
-        // `::` (none when the address ends in `::`), never a head group before it.
-        val last = (if (compressed < 0) groups else groups(tail)).lastOrNull().orEmpty()
-        val ipv4 = '.' in last
-        if (ipv4 && !isIpv4(last)) return false
-        val hex = if (ipv4) groups.dropLast(1) else groups
-        val count = hex.size + if (ipv4) 2 else 0
-        return hex.all(::isHexGroup) && if (compressed < 0) count == IPV6_GROUPS else count < IPV6_GROUPS
-    }
-
-    private fun isHexGroup(group: String): Boolean = group.length in 1..MAX_GROUP_DIGITS && group.all(::isHex)
-
-    private fun groups(part: String): List<String> = if (part.isEmpty()) emptyList() else part.split(':')
 
     private fun isNumeric(label: String): Boolean {
         val hex = label.length > 1 && label[0] == '0' && (label[1] == 'x' || label[1] == 'X')

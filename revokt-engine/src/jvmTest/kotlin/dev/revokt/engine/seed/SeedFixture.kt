@@ -185,7 +185,7 @@ internal open class SeedFixture : CrliteSyncFixture() {
         snapshot.publish(
             GenerationSnapshot(
                 snapshot.snapshot.generationEpoch,
-                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, null, false, null, null, false, false, false)),
+                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false, false)),
                 null,
             ),
         )

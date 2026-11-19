@@ -18,7 +18,6 @@ import dev.revokt.RevoktStorage
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
-import dev.revokt.TrustClass
 import dev.revokt.VerifyResult
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.fetch.FetchLimits
@@ -81,12 +80,12 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         assertContentEquals(payload, store.file(directory, StoreLayout.RECORDS))
         val meta = assertNotNull(store.meta(directory))
         assertEquals(
-            listOf(TrustClass.SIGNED, FilterFormat.V3, ts, "security-state/cert-revocations"),
-            listOf(meta.trustClass, meta.format, meta.sourceTimestampMillis, meta.collection),
+            listOf(FilterFormat.V3, ts, "security-state/cert-revocations"),
+            listOf(meta.format, meta.sourceTimestampMillis, meta.collection),
         )
-        assertEquals(ts, meta.signed?.changesetTimestampMillis)
-        assertEquals(served[0].toByteString().sha256(), meta.signed?.signerLeafSha256)
-        assertEquals(96, meta.signed?.signature?.size)
+        assertEquals(ts, meta.signed.changesetTimestampMillis)
+        assertEquals(served[0].toByteString().sha256(), meta.signed.signerLeafSha256)
+        assertEquals(96, meta.signed.signature.size)
         // The cursor, lastVerified* and the watermark advance after the flip.
         val now = ts + hour
         assertEquals(ts, updater().watermarkMillis)
@@ -99,10 +98,9 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         // The published generation, with the loader's own maximum coverage.
         val published = live()
         assertEquals(
-            listOf(id, TrustClass.SIGNED, ts, false),
+            listOf(id, ts, false),
             listOf(
                 published.generationId,
-                published.trustClass,
                 published.sourceTimestampMillis,
                 published.clockBehind,
             ),

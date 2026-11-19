@@ -8,7 +8,6 @@ import dev.revokt.Enforcement
 import dev.revokt.Exemption
 import dev.revokt.Outcome
 import dev.revokt.Rule
-import dev.revokt.TrustClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -26,22 +25,10 @@ class PolicyFormTest {
             assertTrue(form.exemptions.isEmpty())
             assertEquals(table.requiredDatasets, form.requiredDatasets)
             assertEquals(table.staleness, form.staleness)
-            for (dataset in Dataset.entries) {
-                assertEquals(table.minTrustClass.getValue(dataset), form.minTrustClass(dataset), "$preset $dataset")
-            }
-            assertTrue(form.minTrustClassEntries.isEmpty())
             assertEquals(table.rollbackWindowMillis, form.rollbackWindowMillis)
             assertEquals(table.clockSkewMillis, form.clockSkewMillis)
             assertEquals(table.signedSourceFailingAfterMillis, form.signedSourceFailingAfterMillis)
         }
-    }
-
-    @Test
-    fun `a dataset with no minTrustClass entry takes the preset floor, an entry wins`() {
-        val strict = PolicyForm.of(Preset.STRICT)
-        val form = copy(strict, minTrustClass = mapOf(Dataset.CRLITE to TrustClass.MIRROR))
-        assertEquals(TrustClass.SIGNED, strict.minTrustClass(Dataset.CRLITE))
-        assertEquals(TrustClass.MIRROR, form.minTrustClass(Dataset.CRLITE))
     }
 
     @Test
@@ -61,7 +48,7 @@ class PolicyFormTest {
     @Test
     fun `exemptAnchors covers the exemptable non-evidence rules off the empty path`() {
         assertEquals(
-            listOf(Rule.NO_DATA, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE, Rule.UNSIGNED_DATA),
+            listOf(Rule.NO_DATA, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE),
             Rule.entries.filter { it.anchorExemptable() },
         )
     }
@@ -88,14 +75,12 @@ class PolicyFormTest {
         outcomes: Map<Rule, Outcome> = form.outcomes,
         exemptions: Map<Rule, Exemption> = form.exemptions,
         requiredDatasets: Set<Dataset> = form.requiredDatasets,
-        minTrustClass: Map<Dataset, TrustClass> = form.minTrustClassEntries,
     ) = PolicyForm(
         preset = form.preset,
         outcomes = outcomes,
         exemptions = exemptions,
         requiredDatasets = requiredDatasets,
         staleness = form.staleness,
-        minTrustClass = minTrustClass,
         rollbackWindowMillis = form.rollbackWindowMillis,
         clockSkewMillis = form.clockSkewMillis,
         signedSourceFailingAfterMillis = form.signedSourceFailingAfterMillis,

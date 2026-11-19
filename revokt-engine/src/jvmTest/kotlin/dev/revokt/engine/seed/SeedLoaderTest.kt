@@ -10,7 +10,6 @@ import dev.revokt.Freshness
 import dev.revokt.RevoktLimits
 import dev.revokt.SeedSource
 import dev.revokt.Severity
-import dev.revokt.TrustClass
 import dev.revokt.engine.evaluate.dataStates
 import dev.revokt.engine.policy.PolicyForm
 import dev.revokt.engine.policy.Preset
@@ -51,7 +50,6 @@ internal class SeedLoaderTest : SeedFixture() {
         assertEquals(emptyList(), load.warnings)
         assertEquals(generationId, engine.live)
         val live = live()
-        assertEquals(TrustClass.SIGNED, live.trustClass)
         assertTrue(live.fromSeed)
         assertEquals(1, live.seedFormat)
         assertEquals(Freshness.SEED_SIGNED_TIME, live.freshness)
@@ -64,11 +62,11 @@ internal class SeedLoaderTest : SeedFixture() {
         assertNull(record.datasetLastAttemptAtMillis)
         val meta = checkNotNull(store.meta(directory))
         assertEquals(
-            listOf(TrustClass.SIGNED, Freshness.SEED_SIGNED_TIME, FilterFormat.V3),
-            listOf(meta.trustClass, meta.freshness, meta.format),
+            listOf(Freshness.SEED_SIGNED_TIME, FilterFormat.V3),
+            listOf(meta.freshness, meta.format),
         )
         assertEquals(collection, meta.collection)
-        assertEquals(ts, meta.signed?.changesetTimestampMillis)
+        assertEquals(ts, meta.signed.changesetTimestampMillis)
         assertContentEquals(seed.payload(), store.file(directory, StoreLayout.RECORDS))
         assertContentEquals(seed.index(), store.file(directory, StoreLayout.INDEX))
     }

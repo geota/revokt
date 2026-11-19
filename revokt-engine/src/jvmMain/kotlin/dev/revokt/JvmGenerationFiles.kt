@@ -18,8 +18,8 @@ public object JvmGenerationFiles {
      *
      * Spec §3.2 gives this helper no generation id or timestamp, so both are derived. The id is `files-sha256:` and the
      * hex SHA-256 of every file's name and content hash in name order, so any changed byte changes it; it is not the
-     * loader's MIRROR/SYSTEM id (§4: the manifest hash). The source timestamp is `index.bin`'s last-modified time, which a
-     * fresh git checkout does not reproduce.
+     * loader's generation id. The source timestamp is `index.bin`'s last-modified time, which a fresh git checkout does
+     * not reproduce.
      *
      * @throws java.io.IOException when [dir] has no readable `index.bin` or a named file cannot be read.
      * @throws IllegalArgumentException when `index.bin` is malformed, or a file it names is not a regular file in [dir]
@@ -30,7 +30,6 @@ public object JvmGenerationFiles {
     public fun fromDirectory(
         dir: Path,
         dataset: Dataset,
-        trustClass: TrustClass,
         format: FilterFormat,
     ): GenerationFiles {
         val indexPath = dir.resolve(INDEX)
@@ -47,7 +46,6 @@ public object JvmGenerationFiles {
             .Builder()
             .generationId("files-sha256:" + sha256Hex(digest.encodeToByteArray()))
             .dataset(dataset)
-            .trustClass(trustClass)
             .format(format)
             .sourceTimestampMillis(Files.getLastModifiedTime(indexPath).toMillis())
             .also { b -> files.forEach { (name, bytes) -> b.file(name, bytes) } }

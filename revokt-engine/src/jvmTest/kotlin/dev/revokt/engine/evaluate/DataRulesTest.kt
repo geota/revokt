@@ -8,7 +8,6 @@ import dev.revokt.Finding
 import dev.revokt.RevoktPolicy
 import dev.revokt.Rule
 import dev.revokt.Staleness
-import dev.revokt.TrustClass
 import dev.revokt.engine.policy.PolicyForm
 import dev.revokt.engine.update.DatasetGeneration
 import kotlin.test.Test
@@ -41,7 +40,6 @@ class DataRulesTest {
         val gen = generation(ageMillis = 5_000)
         val s = state(gen)!!
         assertEquals(Dataset.CRLITE, s.dataset)
-        assertEquals(TrustClass.SIGNED, s.trustClass)
         assertEquals(gen.generationId, s.generationId)
         assertEquals(gen.freshness, s.freshness)
         assertEquals(NOW - 5_000, s.sourceTimestampMillis)
@@ -76,7 +74,6 @@ class DataRulesTest {
     fun `a required dataset the snapshot does not hold has no generation, is not pending and fires NO_DATA`() {
         val s = state(crlite = null)!!
         assertNull(s.generationId)
-        assertNull(s.trustClass)
         assertNull(s.ageMillis)
         assertFalse(s.pending)
         assertEquals(setOf(Rule.NO_DATA), s.rules)
@@ -146,27 +143,6 @@ class DataRulesTest {
     }
 
     @Test
-    fun `UNSIGNED_DATA fires exactly when the trust class ranks below the floor`() {
-        for (floor in TrustClass.entries) {
-            val policy =
-                RevoktPolicy.DEFAULT
-                    .newBuilder()
-                    .minTrustClass(Dataset.CRLITE, floor)
-                    .build()
-            for (tc in TrustClass.entries) {
-                val want = if (tc.rank < floor.rank) setOf(Rule.UNSIGNED_DATA) else emptySet()
-                assertEquals(want, state(generation(trustClass = tc), policy)!!.rules, "$tc under $floor")
-            }
-            assertEquals(emptySet(), state(noGeneration(pending = true), policy)!!.rules, "null trustClass, $floor")
-        }
-        assertEquals(
-            setOf(Rule.UNSIGNED_DATA),
-            state(generation(trustClass = TrustClass.SYSTEM), RevoktPolicy.STRICT)!!.rules,
-        )
-        assertEquals(emptySet(), state(generation(trustClass = TrustClass.BUNDLED))!!.rules, "DEFAULT's floor")
-    }
-
-    @Test
     fun `the age is clamped at 0 for a generation from the future`() {
         val s = state(generation(ageMillis = -DAY, clockBehind = true), rejectAt3Days)!!
         assertEquals(0L, s.ageMillis)
@@ -176,23 +152,23 @@ class DataRulesTest {
     }
 
     @Test
-    fun `with no clock read there is no age, so no STALE, while NO_DATA and UNSIGNED_DATA still fire`() {
-        val s = state(generation(400 * DAY, trustClass = TrustClass.SYSTEM), RevoktPolicy.STRICT, now = null)!!
+    fun `with no clock read there is no age, so no STALE, while NO_DATA still fires`() {
+        val s = state(generation(400 * DAY), RevoktPolicy.STRICT, now = null)!!
         assertNull(s.ageMillis)
         assertFalse(s.stale)
-        assertEquals(setOf(Rule.UNSIGNED_DATA), s.rules)
+        assertEquals(emptySet(), s.rules)
         assertEquals(setOf(Rule.NO_DATA), state(noGeneration(), now = null)!!.rules)
     }
 
     @Test
-    fun `the three data rules fire together, in precedence order`() {
+    fun `the data rules are NO_DATA then STALE`() {
         val all =
             dataStates(
-                snapshot(generation(400 * DAY, TrustClass.BUNDLED)),
+                snapshot(generation(400 * DAY)),
                 PolicyForm.of(dev.revokt.engine.policy.Preset.STRICT),
                 NOW,
             )
-        assertEquals(listOf(Rule.STALE, Rule.UNSIGNED_DATA), all.getValue(Dataset.CRLITE).rules.toList())
-        assertEquals(listOf(Rule.NO_DATA, Rule.STALE, Rule.UNSIGNED_DATA), DATA_RULES.map { it.rule })
+        assertEquals(listOf(Rule.STALE), all.getValue(Dataset.CRLITE).rules.toList())
+        assertEquals(listOf(Rule.NO_DATA, Rule.STALE), DATA_RULES.map { it.rule })
     }
 }

@@ -19,7 +19,6 @@ import dev.revokt.Severity
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
-import dev.revokt.TrustClass
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.api.ClubcardFormatException
@@ -453,7 +452,7 @@ internal class SeedLoader(
                 }
             if (!built.index.contentEquals(verified.index)) fail("the shipped index.bin differs from the rebuilt one")
             val clock = SyncClock(now, policy.clockSkewMillis, 0)
-            if (!SyncRules.coverageWithinBound(TrustClass.SIGNED, built.coverageHighs, ts, clock)) {
+            if (!SyncRules.coverageWithinBound(built.coverageHighs, ts, clock)) {
                 fail("a filter's coverage ends beyond $ts + clockSkew")
             }
             bodies.unlisted(placed)?.let { fail("${it.record.id} is in an encoding the engine does not list") }
@@ -661,7 +660,7 @@ internal class SeedLoader(
         ): Boolean {
             val generation = store.readGeneration(directory) ?: return false
             val meta = generation.meta
-            val signed = meta.signed ?: return false
+            val signed = meta.signed
             val bytes = store.file(directory, StoreLayout.RECORDS) ?: return false
             val (records, lastModified) = storedRecords(bytes) ?: return false
             if (lastModified != meta.sourceTimestampMillis ||
@@ -874,7 +873,6 @@ internal class SeedLoader(
             return GenerationMeta(
                 dataset = Dataset.CRLITE,
                 channel = channel,
-                trustClass = TrustClass.SIGNED,
                 generationId = generationId,
                 format = format,
                 freshness = Freshness.SEED_SIGNED_TIME,

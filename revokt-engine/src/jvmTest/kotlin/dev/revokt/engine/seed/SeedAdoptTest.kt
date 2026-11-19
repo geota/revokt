@@ -51,7 +51,6 @@ internal class SeedAdoptTest : SeedFixture() {
                     dev.revokt.Dataset.CRLITE to
                         dev.revokt.engine.update.DatasetGeneration(
                             "${ts + hour}/x",
-                            dev.revokt.TrustClass.SIGNED,
                             dev.revokt.Freshness.RECORD_LAST_MODIFIED,
                             false,
                             ts + hour,

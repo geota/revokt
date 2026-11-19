@@ -60,7 +60,6 @@ class RevoktPolicyTest {
                     s?.let { Staleness.ofMillis(it.staleAfterMillis, it.rejectStaleAfterMillis) },
                     policy.staleness(dataset),
                 )
-                assertEquals(table.minTrustClass.getValue(dataset), policy.minTrustClass(dataset))
             }
             assertEquals(day, policy.rollbackWindowMillis)
             assertEquals(day, policy.clockSkewMillis)
@@ -71,8 +70,6 @@ class RevoktPolicyTest {
         }
         assertEquals(Staleness.ofMillis(3 * day, null), RevoktPolicy.DEFAULT.staleness(Dataset.CRLITE))
         assertEquals(Staleness.ofMillis(3 * day, 30 * day), RevoktPolicy.STRICT.staleness(Dataset.CRLITE))
-        assertEquals(TrustClass.BUNDLED, RevoktPolicy.DEFAULT.minTrustClass(Dataset.CRLITE))
-        assertEquals(TrustClass.SIGNED, RevoktPolicy.STRICT.minTrustClass(Dataset.CRLITE))
     }
 
     @Test
@@ -95,7 +92,7 @@ class RevoktPolicyTest {
                 .rule(Rule.NO_SCTS, Outcome.REJECT)
                 .exemptAnchors(listOf(privateCa))
                 .build()
-        // STALE and UNSIGNED_DATA still allow at the call; REVOKED is evidence; NO_ISSUER is empty-path.
+        // STALE still allows at the call; REVOKED is evidence; NO_ISSUER is empty-path.
         assertEquals(listOf(Rule.NO_DATA, Rule.NO_SCTS), exempted(policy))
         for (rule in exempted(policy)) {
             assertTrue(policy.exemption(rule)!!.isExempt(context(privateCa)), "$rule under the private CA")
@@ -112,7 +109,7 @@ class RevoktPolicyTest {
                 .exemptAnchors(listOf(privateCa))
                 .build()
         assertEquals(
-            listOf(Rule.NO_DATA, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE, Rule.UNSIGNED_DATA),
+            listOf(Rule.NO_DATA, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE),
             exempted(policy),
         )
     }
@@ -311,7 +308,7 @@ class RevoktPolicyTest {
     }
 
     @Test
-    fun `requiredDatasets and minTrustClass`() {
+    fun `requiredDatasets is a read-only copy`() {
         val given = mutableSetOf(Dataset.CRLITE)
         val builder = RevoktPolicy.DEFAULT.newBuilder().requiredDatasets(given)
         given.clear()
@@ -329,13 +326,6 @@ class RevoktPolicyTest {
                 .build()
                 .requiredDatasets,
         )
-        val raised =
-            RevoktPolicy.DEFAULT
-                .newBuilder()
-                .minTrustClass(Dataset.CRLITE, TrustClass.SIGNED)
-                .build()
-        assertEquals(TrustClass.SIGNED, raised.minTrustClass(Dataset.CRLITE))
-        assertEquals(TrustClass.BUNDLED, RevoktPolicy.DEFAULT.minTrustClass(Dataset.CRLITE), "the preset is unchanged")
     }
 
     @Test

@@ -30,7 +30,6 @@ class PolicyVocabularyTest {
                 "NO_SCTS",
                 "NOT_COVERED",
                 "STALE",
-                "UNSIGNED_DATA",
             ),
             Rule.entries.mapTo(HashSet()) { it.name },
         )
@@ -58,7 +57,6 @@ class PolicyVocabularyTest {
                         "UNSUPPORTED_ALGORITHM",
                         "PLATFORM_ONLY",
                     ),
-                "TrustClass" to listOf("SIGNED", "MIRROR", "SYSTEM", "BUNDLED"),
                 "Dataset" to listOf("CRLITE"),
                 "CredentialType" to listOf("X509"),
                 "ChainSource" to listOf("PLATFORM", "RECONSTRUCTED", "PRESENTED"),
@@ -71,7 +69,6 @@ class PolicyVocabularyTest {
                     listOf(
                         "RECORD_LAST_MODIFIED",
                         "LAST_VERIFIED_POLL",
-                        "MANIFEST_LAST_MODIFIED",
                         "SEED_SIGNED_TIME",
                         "SEQUENCE_TIME",
                         "ARTIFACT_DATE",
@@ -94,7 +91,6 @@ class PolicyVocabularyTest {
                 "Layer" to names(Layer.entries),
                 "PathStatus" to names(PathStatus.entries),
                 "NoIssuerReason" to names(NoIssuerReason.entries),
-                "TrustClass" to names(TrustClass.entries),
                 "Dataset" to names(Dataset.entries),
                 "CredentialType" to names(CredentialType.entries),
                 "ChainSource" to names(ChainSource.entries),
