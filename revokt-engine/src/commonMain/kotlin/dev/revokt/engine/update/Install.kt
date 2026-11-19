@@ -392,30 +392,34 @@ private class Install(
         sourceTimestampMillis - publication.clockSkewMillis > publication.nowMillis
 
     /**
-     * The pointer's new `previous`: the first of the old `live` and `previous` that is another complete generation of
-     * the same or a higher trust class that reads back ([qualifies], spec §6.5), else none. A malformed pointer, and a
-     * pointed directory that does not qualify for a reason other than its class, each count a store failure. Beside a
-     * malformed pointer, the candidate is the generation the engine holds live, when it is another that qualifies
-     * (#236): a running loader keeps its fallback, while a fresh one has none, and its heal is not pruned (#256).
+     * The pointer's new `previous`: the first of the generation the engine served before this install, then the old
+     * `live` and `previous`, that is another complete generation of the same or a higher trust class and reads back
+     * ([qualifies], spec §6.5), else none. The served one comes first so that a flip that failed after activation, which left the engine serving a
+     * generation `current` does not name, never loses it to the next install's prune (#249: never delete what is served);
+     * so a running loader keeps its fallback beside an absent or malformed pointer too (#236), while a fresh one has none.
+     * A malformed pointer, and each candidate that does not qualify for a reason other than its class, count a store
+     * failure. A heal (the flip beside a malformed pointer) is not pruned after (#256).
      */
     private fun previous(directory: String): String? {
-        val pointer =
+        val pointed =
             when (val read = store.pointer()) {
                 StoreRead.Absent -> {
-                    return null
+                    emptyList()
                 }
 
                 StoreRead.Malformed -> {
-                    // #236: a running loader keeps the generation its engine held as the fallback; a fresh one has none.
                     storeFailures++
-                    return liveBefore?.takeIf { it != directory && qualifies(it) }
+                    emptyList()
                 }
 
                 is StoreRead.Found -> {
-                    read.value
+                    listOfNotNull(read.value.live, read.value.previous)
                 }
             }
-        return listOfNotNull(pointer.live, pointer.previous).filter { it != directory }.firstOrNull(::qualifies)
+        // Every candidate is read, once, so a pointed directory that does not read counts its store failure even when
+        // an earlier candidate qualifies.
+        val candidates = (listOfNotNull(liveBefore) + pointed).distinct().filter { it != directory }
+        return candidates.filter(::qualifies).firstOrNull()
     }
 
     /**

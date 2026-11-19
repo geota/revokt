@@ -280,7 +280,8 @@ internal class InstallTest : InstallFixture() {
         val g2 = pending("g2", timestamp = 1_792_587_631_205)
         val u = failed(install(g2))
         assertEquals(true, u.activated)
-        assertEquals(StoreRead.Found(Pointer(g2.meta.directory, null)), store.pointer())
+        // g1, which the engine served although no pointer named it, is the fallback (#249).
+        assertEquals(StoreRead.Found(Pointer(g2.meta.directory, p.meta.directory)), store.pointer())
     }
 
     @Test
