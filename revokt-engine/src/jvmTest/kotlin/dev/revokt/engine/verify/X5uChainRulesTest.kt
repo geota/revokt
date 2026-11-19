@@ -230,6 +230,25 @@ internal class X5uChainRulesTest : X5uChainFixture() {
     }
 
     @Test
+    fun `nameConstraints are checked against every one of the leaf's dNSNames`() {
+        // Not only the signer name: mozilla::pkix checks every name of the end entity.
+        val twoNames =
+            leaf(listOf(ku(DIGITAL_SIGNATURE), eku(CODE_SIGNING), san(dns(X5U_LEAF_NAME), dns("other.example"))))
+        for (tree in listOf(
+            constraints(listOf(dnsTree("content-signature.mozilla.org"))),
+            constraints(permitted = null, excluded = listOf(dnsTree("other.example"))),
+        )) {
+            assertFails(
+                NAME_CONSTRAINTS,
+                1,
+                chain(leaf = twoNames, intermediate = intermediate(caExtensions() + nameConstraints(tree))),
+            )
+        }
+        val both = constraints(listOf(dnsTree("content-signature.mozilla.org"), dnsTree("other.example")))
+        assertLoads(chain(leaf = twoNames, intermediate = intermediate(caExtensions() + nameConstraints(both))))
+    }
+
+    @Test
     fun `nameConstraints are enforced on every CA below the terminal, critical or not`() {
         val mozilla =
             constraints(
@@ -396,10 +415,11 @@ internal class X5uChainRulesTest : X5uChainFixture() {
         for (serial in listOf(TestDer.bytes(0x00, 0x01), TestDer.bytes(0xff, 0x80), TestDer.bytes())) {
             assertFails(PARSE, 0, chain(leaf = parts(tweaks = Tweaks(serial = serial)).der))
         }
-        // An empty Extensions SEQUENCE is read (mozilla::pkix allows it): the leaf then has no EKU, the intermediate no
-        // basicConstraints, so neither fails as PARSE; a pinned intermediate with one loads, its bytes never read.
+        // An empty Extensions SEQUENCE is read (mozilla::pkix allows it): the leaf then has no EKU (which passes) and no
+        // SAN, the intermediate no basicConstraints, so neither fails as PARSE; a pinned intermediate with one loads, its
+        // bytes never read.
         val emptyExtensions = Tweaks(wrapper = { TestDer.tlv(0xa3, TestDer.seq()) })
-        assertFails(EKU, 0, placed(At.LEAF, parts(At.LEAF, emptyList(), emptyExtensions).der))
+        assertFails(SAN, 0, placed(At.LEAF, parts(At.LEAF, emptyList(), emptyExtensions).der))
         val emptyIntermediate = parts(At.INTERMEDIATE, emptyList(), emptyExtensions).der
         assertFails(NOT_CA, 1, placed(At.INTERMEDIATE, emptyIntermediate))
         assertLoads(listOf(leaf(), emptyIntermediate), pins = setOf(hash(intermediateKey)), links = 1)

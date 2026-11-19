@@ -144,13 +144,15 @@ class SeedArchiveTest {
     @Test
     fun `the central directory's count, size and offset are checked`() {
         rejects(TestZip().bytes(), "0 entries")
+        // One past the cap, 5 + MAX_CHANGESET_RECORDS, whatever the record cap is.
+        val over = SeedArchive.maxEntries + 1
         rejects(
             fixed()
                 .apply {
-                    totalEntries = { 300 }
-                    diskEntries = { 300 }
+                    totalEntries = { over }
+                    diskEntries = { over }
                 }.bytes(),
-            "300 entries",
+            "$over entries",
         )
         rejects(fixed().apply { directorySize = { (1L shl 20) + 1 } }.bytes(), "central directory")
         rejects(fixed().apply { directoryOffset = { it + 1 } }.bytes(), "does not end at the end record")
