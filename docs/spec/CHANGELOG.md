@@ -7,6 +7,23 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
 
 ### Changes in revision 61 (in progress)
 
+- **#223 (audit A-1), Mozilla constants:**
+  - §7.1 tries the first 4 `metadata.signatures` entries and ignores the rest, where more than 4 failed the changeset.
+  - §5.1 raises `MAX_CHANGESET_RECORDS` from 256 to 1,024.
+  - §4 and §7.1: `allowedDomains` (default `cdn.mozilla.net`, a suffix rule on a label boundary) replaces the exact
+    `x5uHosts`. `attachmentBaseUrl` is nullable and null by default: the base is then the server root's
+    `capabilities.attachments.base_url`, read once per sync before the first attachment fetch, under the x5u URL
+    grammar and `allowedDomains`, and anything else is `FAILED` at `ATTACHMENT` with no fallback.
+  - §7.1: an absent or `null` `mode` is tried, as Firefox does, reversing #163's "`mode` required"; a present
+    `mode` other than `p384ecdsa` is still skipped.
+  - §7.1: the leaf SAN may hold several dNSNames, one equal to the signer name with ASCII case ignored, with no
+    wildcard match and no other name form; nameConstraints are checked against every dNSName. An absent leaf
+    extKeyUsage passes.
+  - §7.1 states why the x5u order is the path (no path search over an unsigned body).
+  - The test plan's content-signature row, (d) and API rows cover each change.
+  - §4: `build()` refuses a single-label `allowedDomains` entry.
+  - §6.5: the 256 MiB seed archive cap is kept, its basis restated for 1,024 records; a larger archive is refused
+    whole, never truncated.
 - **#227 (#254):** §7.1's canonical JSON is integers only: a number outside `u64`/`i64` (a fraction, an exponent,
   or an out-of-range integer) has no canonical form, so its payload is refused (`RECORDS`), in place of citing
   `canonical_json`'s float rules; `deleted` reads such a number as zero lexically. The test plan's differential lists

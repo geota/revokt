@@ -192,6 +192,31 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     }
 
     @Test
+    fun `a server root that fails or names a base outside allowedDomains is FAILED at ATTACHMENT, nothing advanced`() {
+        val roots =
+            listOf<(FetchRequest) -> FetchResponse>(
+                { response(500) },
+                { ok("""{"capabilities":{"attachments":{"base_url":"https://evil.example/"}}}""") },
+                {
+                    ok(
+                        """{"capabilities":{"attachments":{"base_url":"http://firefox-settings-attachments.cdn.mozilla.net/"}}}""",
+                    )
+                },
+                { ok("{}") },
+            )
+        for ((i, root) in roots.withIndex()) {
+            val server = Server()
+            server.overrides["$base/"] = root
+            // Each sync after the last one's failure backoff (at most the 6 h poll interval).
+            val now = ts + hour + i * 7 * hour
+            sync(server, now = now).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed())
+            // No fallback: no attachment is fetched from any base, and the failure counts.
+            assertEquals(emptyList(), server.attachmentRequests())
+            assertNothingAdvanced(now, failures = i + 1)
+        }
+    }
+
+    @Test
     fun `a prune that throws after the flip leaves the sync INSTALLED and its updater json advanced`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
