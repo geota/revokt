@@ -36,7 +36,6 @@ internal object ClubcardCorpus {
         return GenerationFiles
             .Builder()
             .generationId(id)
-            .trustClass(TrustClass.SYSTEM)
             .format(format)
             .sourceTimestampMillis(sourceTimestampMillis)
             .file("index.bin", index)

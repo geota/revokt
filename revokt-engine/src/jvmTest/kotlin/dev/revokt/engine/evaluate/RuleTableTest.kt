@@ -143,24 +143,24 @@ class RuleTableTest {
 
     @Test
     fun `the data rule rows fire on any dataset's rules`() {
-        for (rule in listOf(Rule.NO_DATA, Rule.STALE, Rule.UNSIGNED_DATA)) {
+        for (rule in listOf(Rule.NO_DATA, Rule.STALE)) {
             assertEquals(setOf(rule), fired(facts(dataRules = setOf(rule))), "$rule")
         }
         assertEquals(
-            setOf(Rule.NO_DATA, Rule.STALE, Rule.UNSIGNED_DATA),
-            fired(facts(dataRules = setOf(Rule.NO_DATA, Rule.STALE, Rule.UNSIGNED_DATA))),
+            setOf(Rule.NO_DATA, Rule.STALE),
+            fired(facts(dataRules = setOf(Rule.NO_DATA, Rule.STALE))),
         )
     }
 
     @Test
     fun `fire maps each fired rule to the policy's outcome, in precedence order`() {
-        val f = facts(PathStatus.PARSE_FAILED, emptyList(), dataRules = setOf(Rule.NO_DATA, Rule.UNSIGNED_DATA))
+        val f = facts(PathStatus.PARSE_FAILED, emptyList(), dataRules = setOf(Rule.NO_DATA, Rule.STALE))
         val default = PolicyForm.of(Preset.DEFAULT)
         assertEquals(
             listOf(
                 FiredRule(Rule.NO_DATA, Outcome.REJECT),
                 FiredRule(Rule.PARSE_FAILED, Outcome.ALLOW),
-                FiredRule(Rule.UNSIGNED_DATA, Outcome.ALLOW),
+                FiredRule(Rule.STALE, Outcome.ALLOW),
             ),
             fire(f, default),
         )

@@ -5,7 +5,6 @@ package dev.revokt.engine.update
 
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
-import dev.revokt.TrustClass
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreRead
 import kotlin.test.Test
@@ -84,13 +83,5 @@ internal class InstallMalformedPointerTest : InstallFixture() {
                 logger,
             )
         assertIs<InstallResult.Installed>(r)
-    }
-
-    @Test
-    fun `beside a malformed pointer a live generation of a lower trust class is not kept as previous`() {
-        assertIs<InstallResult.Installed>(install(pending("g1", TrustClass.MIRROR)))
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
-        val g2 = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000))).directory
-        assertEquals(StoreRead.Found(Pointer(g2, null)), store.pointer())
     }
 }

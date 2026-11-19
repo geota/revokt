@@ -92,8 +92,8 @@ class RuleGrowabilityTest {
 
     @Test
     fun `a duplicated rule row is reported once, and never thrown`() {
-        val last = committed.lines().first { it.startsWith("UNSIGNED_DATA\t") }
-        assertOne(problems(committed.replace(last, "$last\n$last")), "[rules] has the row UNSIGNED_DATA more than once")
+        val last = committed.lines().first { it.startsWith("NOT_COVERED\t") }
+        assertOne(problems(committed.replace(last, "$last\n$last")), "[rules] has the row NOT_COVERED more than once")
         val stale = committed.lines().first { it.startsWith("STALE\t") }
         assertOne(problems(committed.replace(stale, "$stale\n$stale")), "[rules] has the row STALE more than once")
     }
@@ -166,10 +166,10 @@ class RuleGrowabilityTest {
     @Test
     fun `preset rows are frozen, and a new dataset's rows are allowed only outside the staleness map`() {
         assertOne(problems(committed.replace("DEFAULT\tCRLITE\t86400000", "DEFAULT\tCRLITE\t43200000")), "[presets] row DEFAULT", "rollbackWindowMillis")
-        assertOne(problems(committed.replace("STRICT\tCRLITE\t259200000\t2592000000\tSIGNED", "STRICT\tCRLITE\t259200000\t2592000000\tMIRROR")), "row STRICT/CRLITE", "minTrustClass")
-        val outside = "$committed\nDEFAULT\tONECRL\t-\t-\tBUNDLED\nSTRICT\tONECRL\t-\t-\tSIGNED\n"
+        assertOne(problems(committed.replace("STRICT\tCRLITE\t259200000\t2592000000", "STRICT\tCRLITE\t259200000\t2592000001")), "row STRICT/CRLITE", "rejectStaleAfterMillis")
+        val outside = "$committed\nDEFAULT\tONECRL\t-\t-\nSTRICT\tONECRL\t-\t-\n"
         assertEquals(emptyList(), problems(outside))
-        val stale = "$committed\nSTRICT\tONECRL\t259200000\t-\tSIGNED\n"
+        val stale = "$committed\nSTRICT\tONECRL\t259200000\t-\n"
         assertOne(problems(stale), "[datasets] row STRICT/ONECRL was added", "set both staleness columns")
     }
 
@@ -186,7 +186,7 @@ class RuleGrowabilityTest {
     fun `malformed rows, duplicated rows and unknown sections are reported, not thrown`() {
         val trailingTab = committed.replace("NOT_COVERED\tNON_ANSWER", "NOT_COVERED\tNON_ANSWER\t")
         assertOne(problems(trailingTab), "remove stray tabs")
-        val duplicated = committed.replace("STRICT\tCRLITE\t259200000\t2592000000\tSIGNED", "STRICT\tCRLITE\t259200000\t2592000000\tSIGNED\nSTRICT\tCRLITE\t259200000\t2592000000\tSIGNED")
+        val duplicated = committed.replace("STRICT\tCRLITE\t259200000\t2592000000", "STRICT\tCRLITE\t259200000\t2592000000\nSTRICT\tCRLITE\t259200000\t2592000000")
         assertOne(problems(duplicated), "[datasets] has the row STRICT/CRLITE more than once")
         assertOne(problems("$committed\n[extra]\na\tb\n1\t2\n"), "unknown section [extra]")
     }

@@ -5,8 +5,8 @@ package dev.revokt.engine.update
 
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
+import dev.revokt.Freshness
 import dev.revokt.RevoktStorage
-import dev.revokt.TrustClass
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
@@ -43,7 +43,7 @@ internal open class InstallFixture {
     protected val empty =
         GenerationSnapshot(
             0,
-            mapOf(Dataset.CRLITE to DatasetGeneration(null, null, null, false, null, null, true, false, false)),
+            mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, true, false, false)),
             null,
         )
     protected val snapshot = SnapshotRef(empty)
@@ -59,9 +59,9 @@ internal open class InstallFixture {
 
     protected fun pending(
         id: String = "g1",
-        trustClass: TrustClass = TrustClass.SIGNED,
         timestamp: Long = 1_792_587_631_204,
-    ) = UpdateFixtures.pending(store, trustClass = trustClass, generationId = id, sourceTimestampMillis = timestamp)
+        freshness: Freshness = Freshness.RECORD_LAST_MODIFIED,
+    ) = UpdateFixtures.pending(store, freshness = freshness, generationId = id, sourceTimestampMillis = timestamp)
 
     protected fun failed(result: InstallResult): InstallResult.Failed = assertIs<InstallResult.Failed>(result)
 

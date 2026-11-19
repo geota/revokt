@@ -88,9 +88,7 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field INDEX_INCONSISTENT Ldev/revokt/DiagnosticCode;
 	public static final field IN_MEMORY_STORE_WITH_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
 	public static final field IO_DISPATCHER_UNCONFINED Ldev/revokt/DiagnosticCode;
-	public static final field LOWER_CLASS_SOURCE_NEVER_INSTALLED Ldev/revokt/DiagnosticCode;
 	public static final field METERED_DEFERRED Ldev/revokt/DiagnosticCode;
-	public static final field MIRROR_WITH_SEED_NEVER_INSTALLED Ldev/revokt/DiagnosticCode;
 	public static final field NO_DATA_AT_FLIP Ldev/revokt/DiagnosticCode;
 	public static final field NO_DATA_REJECTS_WITHOUT_LOCAL_DATA Ldev/revokt/DiagnosticCode;
 	public static final field NO_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
@@ -100,7 +98,6 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field SEED_CHANNEL_MISMATCH Ldev/revokt/DiagnosticCode;
 	public static final field SEED_PAST_REJECT_THRESHOLD Ldev/revokt/DiagnosticCode;
 	public static final field SEED_UNREADABLE Ldev/revokt/DiagnosticCode;
-	public static final field SOURCE_EMPTY Ldev/revokt/DiagnosticCode;
 	public static final field STALENESS_CLEARED_FOR_REQUIRED_DATASET Ldev/revokt/DiagnosticCode;
 	public static final field STALE_REJECTS_WITHOUT_THRESHOLD Ldev/revokt/DiagnosticCode;
 	public static final field STORAGE_UNSET Ldev/revokt/DiagnosticCode;
@@ -285,7 +282,6 @@ public final class dev/revokt/Finding$DataState : dev/revokt/Finding {
 	public final fun getSeedFormat ()Ljava/lang/Integer;
 	public final fun getSourceTimestampMillis ()Ljava/lang/Long;
 	public final fun getStale ()Z
-	public final fun getTrustClass ()Ldev/revokt/TrustClass;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -364,7 +360,6 @@ public final class dev/revokt/Finding$VerifierError : dev/revokt/Finding {
 public final class dev/revokt/Freshness : java/lang/Enum {
 	public static final field ARTIFACT_DATE Ldev/revokt/Freshness;
 	public static final field LAST_VERIFIED_POLL Ldev/revokt/Freshness;
-	public static final field MANIFEST_LAST_MODIFIED Ldev/revokt/Freshness;
 	public static final field RECORD_LAST_MODIFIED Ldev/revokt/Freshness;
 	public static final field SEED_SIGNED_TIME Ldev/revokt/Freshness;
 	public static final field SEQUENCE_TIME Ldev/revokt/Freshness;
@@ -381,7 +376,6 @@ public final class dev/revokt/GenerationFiles {
 	public final fun getGenerationId ()Ljava/lang/String;
 	public final fun getNames ()Ljava/util/Set;
 	public final fun getSourceTimestampMillis ()J
-	public final fun getTrustClass ()Ldev/revokt/TrustClass;
 	public fun hashCode ()I
 	public final fun sha256 (Ljava/lang/String;)[B
 	public fun toString ()Ljava/lang/String;
@@ -644,7 +638,6 @@ public final class dev/revokt/RevoktPolicy {
 	public final fun getRequiredDatasets ()Ljava/util/Set;
 	public final fun getRollbackWindowMillis ()J
 	public final fun getSignedSourceFailingAfterMillis ()J
-	public final fun minTrustClass (Ldev/revokt/Dataset;)Ldev/revokt/TrustClass;
 	public final fun newBuilder ()Ldev/revokt/RevoktPolicy$Builder;
 	public final fun outcome (Ldev/revokt/Rule;)Ldev/revokt/Outcome;
 	public final fun rollbackWindow ()Ljava/time/Duration;
@@ -662,7 +655,6 @@ public final class dev/revokt/RevoktPolicy$Builder {
 	public final fun clockSkewMillis (J)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun exempt (Ldev/revokt/Rule;Ldev/revokt/Exemption;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun exemptAnchors (Ljava/util/Collection;)Ldev/revokt/RevoktPolicy$Builder;
-	public final fun minTrustClass (Ldev/revokt/Dataset;Ldev/revokt/TrustClass;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun rejectStaleAfter (Ldev/revokt/Dataset;Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun rejectStaleAfterMillis (Ldev/revokt/Dataset;Ljava/lang/Long;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun requiredDatasets (Ljava/util/Set;)Ldev/revokt/RevoktPolicy$Builder;
@@ -719,7 +711,6 @@ public final class dev/revokt/Rule : java/lang/Enum {
 	public static final field PRECEDENCE Ljava/util/List;
 	public static final field REVOKED Ldev/revokt/Rule;
 	public static final field STALE Ldev/revokt/Rule;
-	public static final field UNSIGNED_DATA Ldev/revokt/Rule;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public final fun getExemptable ()Z
 	public final fun getLayer ()Ldev/revokt/Layer;
@@ -858,17 +849,6 @@ public final class dev/revokt/TerminalKind : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/TerminalKind;
 	public static fun values ()[Ldev/revokt/TerminalKind;
-}
-
-public final class dev/revokt/TrustClass : java/lang/Enum {
-	public static final field BUNDLED Ldev/revokt/TrustClass;
-	public static final field MIRROR Ldev/revokt/TrustClass;
-	public static final field SIGNED Ldev/revokt/TrustClass;
-	public static final field SYSTEM Ldev/revokt/TrustClass;
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public final fun getRank ()I
-	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/TrustClass;
-	public static fun values ()[Ldev/revokt/TrustClass;
 }
 
 public abstract interface class dev/revokt/Verdict {
