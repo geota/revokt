@@ -48,7 +48,10 @@ tests; **live checks** are informational.
   installed with no generation loaded, then 90 → installs); a stored watermark far ahead and no generation ever
   installed → the changeset installs and the watermark is its `<ts>`; an install with no generation loaded whose
   write of `updater.json` or flip fails → the watermark unchanged; beside a live generation whose pointer is
-  malformed, or absent, an older changeset → `ROLLBACK_REFUSED`, no body fetched and the pointer unchanged; with no generation loaded, an
+  malformed, or absent, an older changeset → `ROLLBACK_REFUSED`, no body fetched and the pointer unchanged; a
+  stored watermark of 100, nothing loadable, a seed at 80 → installs with the watermark at 80, and a sync at 90 then
+  installs; a seed beside a loaded generation (a trusted pointer at a fresh start, or one the engine serves beside a
+  malformed pointer) → the higher watermark kept; with no generation loaded, an
   `updater.json` read that throws → `STORE_FAILED`, the file unchanged and nothing installed; a refused rollback leaves `consecutiveFailures` and `lastVerified*` unchanged;
   `Backoff: 100000000` → next poll ≤ 24 h and `backoffUntilMillis ≤ now + 24 h`; (revision 56, #131) a `CLOCK_SKEW` and
   a `STORE_FAILED` sync each advance `consecutiveFailures`, the first feed failure waiting 15 min, the second 30 min and

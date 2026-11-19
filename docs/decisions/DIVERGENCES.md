@@ -256,7 +256,7 @@ audit. Rows with a follow-up issue change when that issue lands.
 | S11 | No rule compares signed data with the local clock: no changeset `CLOCK_SKEW`, no `clockBehind`, no coverage bound; `CLOCK_SKEW` is the x5u validity at stage `X5U` only | No clock (`revocation/mod.rs:124-139`) | No clock comparison on data; the x5u validity at `Now()` (X8) | none | Both references | maintainer 2026-11-19 (#224) | aligned (#224) |
 | S12 | A far-future `<ts>` (a server bug) installs and advances the watermark; `ageMillis` reads 0 until local time passes it, so `stale` and `STALE` fire late by as much if the feed then stops | No `<ts>`; no data age | Installs too; `ageSeconds` is server time minus `<ts>`, telemetry only (RSC:957-958, 1367-1368) | different | revokt's `STALE` reads data age from the local clock, which neither reference does; the next server `<ts>` passes the far-future one (Kinto's monotonic timestamps; the signer drops `last_modified`, `updater.py:366-368` at 92b74ed), so the feed does not freeze | maintainer 2026-11-19 (#224); spec §10 | kept (residual) |
 | S13 | After an older changeset installs with no generation loaded, the watermark is set to its `<ts>` in the install's own write, so once that generation is live anything newer installs (100, then 80, then 90 installs) | No rollback check | The imported data's timestamp is the local one (RSC:1203) | none | Firefox's rule | maintainer 2026-11-19 (#224) | aligned (#224) |
-| S14 | A seed installed while `updater.json` holds a watermark above the seed's `<ts>` keeps that watermark (`max(watermark, <ts>)`, §6.5), so once the seed is live a changeset between the two is refused until the server passes the watermark | No rollback check | The dump's timestamp is the local one once imported (RSC:756-773) | stricter | The seed path was outside #224's decision; the next real server `<ts>` is at or above the watermark, so only stale data is refused | builder reading on #224 | open: confirm, or set the watermark to the seed's `<ts>` when it installs with no generation loaded |
+| S14 | A seed that installs with no generation loaded (no trusted pointer, nothing the engine serves) sets the watermark to its `<ts>` in its own write; beside a loaded generation it keeps `max(watermark, <ts>)` | No rollback check | The dump's timestamp is the local one once imported (RSC:756-773) | none | Firefox's floor after a dump import, as S13 | maintainer 2026-11-19 (#224) | aligned (#224) |
 
 ### Store and install
 
@@ -284,8 +284,8 @@ audit. Rows with a follow-up issue change when that issue lands.
   deferral, no clock rule on signed data, the watermark set to an install's `<ts>` with no generation loaded); S4
   extended and marked stricter (a loaded generation counts as verified; a read that threw is never no data); S6
   narrowed, with its `NULL_ENTRY` and HTTP-error x5u differences named; S12 (the far-future residual) added; S14
-  (the seed's kept watermark) opened. Checked against `RemoteSettingsClient.sys.mjs` at cac25a6 (lines 744-750,
-  756-773, 862-889, 1102, 1108, 1203-1230, 1367-1368), Kinto 26.6.0 and mozilla/remote-settings at 92b74ed.
+  (a seed that installs with nothing loaded sets the watermark to its `<ts>`) aligned. Checked against
+  `RemoteSettingsClient.sys.mjs` at cac25a6 (lines 744-750, 756-773, 862-889, 1102, 1108, 1203-1230, 1367-1368), Kinto 26.6.0 and mozilla/remote-settings at 92b74ed.
 - 2026-11-19 (#223, the audit's A-1): C1 and X5 aligned with Firefox, X4 narrowed to two stated narrowings, X2
   kept with its reason, S1 and S2 narrowed to `allowedDomains` and the server's `base_url`, C10 and S8 loosened
   (the first 4 signatures, 1,024 records). Checked against the Firefox copies at cac25a6

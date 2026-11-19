@@ -77,7 +77,55 @@ internal class SeedLoaderTest : SeedFixture() {
     }
 
     @Test
-    fun `the watermark becomes the higher of it and the seed's timestamp, and the rest of updater_json stays`() {
+    fun `100, nothing loadable, a seed at 80 sets the watermark to 80, then a sync at 90 installs`() {
+        // ts stands for 80; the stored watermark is 100 and no generation is loadable (an empty store).
+        store.writeUpdater(
+            dev.revokt.engine.store
+                .UpdaterRecord(watermarkMillis = ts + 20 * hour),
+            ts,
+        )
+        val now = ts + hour
+        installed(load(Seed(), now))
+        assertEquals(ts, updater(now).watermarkMillis)
+        // 90 is above the floor, max(80, 80), so it installs, where a kept watermark of 100 would refuse it.
+        val ninety = ts + 10 * hour
+        sync(Server(ts = ninety), now = ninety + hour).assert(dev.revokt.SyncOutcome.INSTALLED)
+        assertEquals(ninety, updater(ninety + hour).watermarkMillis)
+        assertEquals(ninety, live().sourceTimestampMillis)
+    }
+
+    @Test
+    fun `a seed that installs beside a loaded generation keeps the higher watermark`() {
+        val older = ts - hour
+        installed(load(Seed(ts = older)))
+        // The older seed is live and pointed: a loaded generation. A watermark above both is kept.
+        store.writeUpdater(updater().copy(watermarkMillis = ts + day), ts)
+        installed(load(Seed(), ts + 2 * hour))
+        assertEquals(ts + day, updater(ts + 2 * hour).watermarkMillis)
+    }
+
+    @Test
+    fun `a trusted stored generation counts as loaded at a fresh start, so the higher watermark is kept`() {
+        installed(load(Seed(ts = ts - hour)))
+        store.writeUpdater(updater().copy(watermarkMillis = ts + day), ts)
+        // A fresh start: nothing is live in the snapshot, but the pointer and its older generation read.
+        reset(keepStore = true)
+        installed(load(Seed(), ts + 2 * hour))
+        assertEquals(ts + day, updater(ts + 2 * hour).watermarkMillis)
+    }
+
+    @Test
+    fun `a generation the engine serves beside a malformed pointer counts as loaded, keeping the higher watermark`() {
+        installed(load(Seed(ts = ts - hour)))
+        store.writeUpdater(updater().copy(watermarkMillis = ts + day), ts)
+        // No trusted pointer, but the older seed is still live in the engine and the snapshot.
+        storage.inner.write(pointerKey, "{".encodeToByteArray())
+        installed(load(Seed(), ts + 2 * hour))
+        assertEquals(ts + day, updater(ts + 2 * hour).watermarkMillis)
+    }
+
+    @Test
+    fun `with nothing loaded the watermark becomes the seed's timestamp, and the rest of updater_json stays`() {
         val sourceRecord =
             dev.revokt.engine.store.SourceRecord(
                 lastVerifiedLastModified = ts - day,
@@ -94,7 +142,8 @@ internal class SeedLoaderTest : SeedFixture() {
         )
         installed(load(Seed()))
         val record = updater()
-        assertEquals(ts + day, record.watermarkMillis)
+        // §7.1: no generation loaded, so the seed's install sets the watermark to its <ts>, lowered from ts + day.
+        assertEquals(ts, record.watermarkMillis)
         assertEquals(ts - hour, record.datasetLastAttemptAtMillis)
         assertEquals(sourceRecord, record.sources["mozilla-remote-settings"])
         reset()

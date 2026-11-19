@@ -140,7 +140,9 @@ internal sealed interface SeedLoad {
 
     /**
      * The seed is live: activated, published at [generationEpoch] as [generationId], pointed to, and `updater.json`
-     * written with the watermark at `max(watermark, `[timestampMillis]`)` and `seedInstalledAtMillis`. A signed
+     * written with `seedInstalledAtMillis` and the watermark at `max(watermark, `[timestampMillis]`)` beside a loaded
+     * generation, or at [timestampMillis] when none loaded (§7.1, as Firefox's floor after a dump import is the dump's
+     * timestamp). A signed
      * timestamp ahead of the local clock installs like any other (§7.1: no rule on signed data reads local time).
      */
     class Installed(
@@ -242,7 +244,8 @@ internal class SeedLoader(
      * 8. `index.bin` rebuilt ([buildIndex]) and byte-compared with the archive's; every placed filter's encoding listed
      *    by the engine.
      * 9. The install ([install]): `SIGNED`, `fromSeed`, [Freshness.SEED_SIGNED_TIME], generation id `"<ts>/<last placed
-     *    record id>"`, `updater.json` with the watermark at `max(watermark, <ts>)` and `seedInstalledAtMillis` = now;
+     *    record id>"`, `updater.json` with `seedInstalledAtMillis` = now and the watermark at `max(watermark, <ts>)`, or
+     *    at `<ts>` when no generation loaded (§7.1);
      *    then the prune, as after a sync's install, never in a rule (b) load nor past a newer complete directory.
      *
      * Any seed fault is [SeedLoad.Unreadable]; a failed `prepare`, self-check or `activate` is too (§6.5: "the
@@ -446,7 +449,17 @@ internal class SeedLoader(
             bodies.unlisted(placed)?.let { fail("${it.record.id} is in an encoding the engine does not list") }
             val meta = meta(verified, generationId, bodies.format(placed), bodies.blobs)
             val pending = PendingGeneration(meta, built.index, bodies.deltas, verified.recordsJson)
-            return installed(pending, stored.updater, stored.prunable(ts), heal = !stored.trusted)
+            // §7.1: a seed that installs because no generation loaded (no trusted pointer, nothing live in the engine)
+            // sets the watermark to its <ts>, as the sync's install does; beside a loaded generation it keeps the max.
+            val engineLive = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId
+            val noneLoaded = !stored.trusted && engineLive == null
+            return installed(
+                pending,
+                stored.updater,
+                stored.prunable(ts),
+                heal = !stored.trusted,
+                noneLoaded = noneLoaded,
+            )
         }
 
         /**
@@ -871,17 +884,22 @@ internal class SeedLoader(
             )
         }
 
-        /** Step 9: [install] of [pending] over the [read] record, then the prune. */
+        /**
+         * Step 9: [install] of [pending] over the [read] record, then the prune. The watermark, written in the install's
+         * own `updater.json` write, is [pending]'s `<ts>` when [noneLoaded], else the higher of it and the stored one.
+         */
         private fun installed(
             pending: PendingGeneration,
             read: UpdaterRecord,
             prunable: Boolean,
             heal: Boolean,
+            noneLoaded: Boolean,
         ): SeedLoad {
             val ts = pending.meta.sourceTimestampMillis
+            val raised = maxOf(read.watermarkMillis ?: Long.MIN_VALUE, ts)
             val updated =
                 read.copy(
-                    watermarkMillis = maxOf(read.watermarkMillis ?: Long.MIN_VALUE, ts),
+                    watermarkMillis = if (noneLoaded) ts else raised,
                     seedInstalledAtMillis = now,
                 )
             // §8: the gate opens once a sync attempt completes after the seed's install, or at once with no fetching source.

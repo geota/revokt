@@ -78,7 +78,9 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
     install, `DataState.clockBehind`, `CLOCK_BEHIND` and the coverage bound (a sync's and a seed's) are gone, and so
     is `clockSkew` from the policy; `SyncOutcome.CLOCK_SKEW` is the x5u validity at stage `X5U` only. `ageMillis` is
     still clamped at 0.
-  - §6.5's watermark sentence holds while a generation is live.
+  - §6.5's watermark sentence holds while a generation is live. A seed that installs with no generation loaded sets
+    the watermark to its `<ts>` in its own write, as the sync's install does; beside a loaded generation it keeps the
+    higher one.
   - §10 records the far-future `<ts>` residual (`STALE` fires late) and the residual of the unread watermark, with
     the fatal error after `activate` that leaves the snapshot empty;
     Appendix A cites Firefox, upki, Kinto and Mozilla's signer for each rule. The test plan's content-signature row
