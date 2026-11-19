@@ -21,8 +21,8 @@ Output is XML and CSV; `.github/scripts/pitest_summary.py` turns the XML into th
 ## Dependencies
 
 The `pitest` configuration of `revokt-engine` resolves `pitest-entry` and `pitest-junit5-plugin` only (with `pitest`,
-ASM 9.11 and Commons Text and Lang). Its one new PGP key, Henry Coles's, is trusted for exactly those three `org.pitest`
-artifacts (`docs/dev/deps.md`). `pitest-junit5-plugin`'s POM imports the Groovy and Spock BOMs, whose two POMs are
+ASM 9.11 and Commons Text and Lang). Its one new PGP key, Henry Coles's, is trusted for four `org.pitest` artifacts:
+those three and their parent POM, `pitest-parent` (`docs/dev/deps.md`). `pitest-junit5-plugin`'s POM imports the Groovy and Spock BOMs, whose two POMs are
 verified by SHA-256 (cross-checked with Maven Central's SHA-1) rather than by two more keys.
 
 ## The spike (#215, 2026-11-19), what it found
@@ -31,13 +31,15 @@ Local runs, JDK 21, 4 threads, each package against its own tests:
 
 | Package | Mutants | Killed | Survived | No coverage | Test strength | Time |
 |---|---:|---:|---:|---:|---:|---:|
-| `store` | 398 | 87 % | 32 | 20 | 92 % | 20 s |
+| `store` | 475 | 89 % | 33 | 20 | 93 % | 21 s |
 | `update` | 790 | 79 % | 88 | 74 | 88 % | 91 s |
 | `fetch` | 655 | 91 % | 48 | 13 | 93 % | 33 s |
 | `verify` | 627 | 91 % | 28 | 27 | 95 % | 74 s |
 | `walker` | 330 | 87 % | 12 | 30 | 96 % | 197 s |
 
-The task's own run over all five (one Pitest run, the five packages' tests together) generated 2800 mutants, killed 87 % (test strength 92 %) and took 6 min 19 s. "Killed" counts timeouts as killed, as Pitest does. The 208 survivors break down by mutator as follows: changed
+The `store` row is from the current filter (below). The other four rows and the run over all five were measured
+with the spike's first filter, `avoidCallsTo=kotlin.jvm.internal`, which also hid real mutants, so they undercount
+mutants and survivors. The task's own run over all five (one Pitest run, the five packages' tests together) generated 2800 mutants, killed 87 % (test strength 92 %) and took 6 min 19 s. "Killed" counts timeouts as killed, as Pitest does. The 208 survivors break down by mutator as follows: changed
 conditional boundary 59, removed void call 58, negated conditional 39, empty return 26, null return 9, maths 8,
 primitive return 5, `true` return 4. `CrliteSync.kt` holds 62 of them.
 
@@ -53,9 +55,16 @@ primitive return 5, `true` return 4. `CrliteSync.kt` holds 62 of them.
 - **The runner's own traps.** As a single-file program, its launch class path is not one Pitest can read its agent
   from (`Unable to load class content for org.pitest.boot.HotSwapAgent`), so the task lists Pitest's jars in the
   class path too. `ReportOptions` leaves the command line's defaults null, so the runner sets them.
-- **Kotlin bytecode noise.** Without a filter, the largest group of survivors in `store` (11 of 43) were removed calls
-  to `kotlin.jvm.internal.Intrinsics` (the compiler's null checks). `avoidCallsTo=kotlin.jvm.internal` drops them
-  (`store`: 477 mutants to 398). Pitest's Kotlin filtering beyond that is Arcmutate's, a commercial plugin, which is
+- **Kotlin bytecode noise.** Without a filter, the largest group of survivors in `store` (11 of 44) were removed calls
+  to the compiler's null checks in `kotlin.jvm.internal.Intrinsics`. The spike first dropped them with
+  `avoidCallsTo=kotlin.jvm.internal`, but Pitest's `avoidCallsTo` drops every mutant on any line that calls into the
+  package, and Kotlin's `==` is `Intrinsics.areEqual`. On `store` it dropped 89 mutants where only 12 were null
+  checks, and it hid the delete guards of `isPruned` (`StoreLayout.kt:370-372`), with one survivor there (#258
+  review). The runner now adds its own filter instead (`KotlinNullChecks` in `PitestRunner.java`). It drops only a
+  mutant whose instruction is a call to `Intrinsics.checkNotNull*` (`!!`, platform-type values, parameters) or
+  `throwUninitializedPropertyAccessException` (`lateinit`), and keeps everything else on the line. On `store` that
+  is 487 mutants to 475, and `StoreLayout.kt:370-372` is mutated again: the `slash < 0` boundary at 370 survives,
+  the other eight are killed. Pitest's Kotlin filtering beyond that is Arcmutate's, a commercial plugin, which is
   not used. What is left still holds equivalent mutants:
   - the boundary of a `Char` range test (`c in 'a'..'z'`);
   - null and empty returns in lambdas;

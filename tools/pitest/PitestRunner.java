@@ -6,12 +6,25 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Predicate;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.pitest.bytecode.analysis.ClassTree;
+import org.pitest.mutationtest.build.InterceptorParameters;
+import org.pitest.mutationtest.build.InterceptorType;
+import org.pitest.mutationtest.build.MutationInterceptor;
+import org.pitest.mutationtest.build.MutationInterceptorFactory;
 import org.pitest.mutationtest.config.PluginServices;
 import org.pitest.mutationtest.config.ReportOptions;
+import org.pitest.mutationtest.config.Services;
+import org.pitest.mutationtest.engine.Mutater;
+import org.pitest.mutationtest.engine.MutationDetails;
+import org.pitest.plugin.Feature;
 import org.pitest.mutationtest.tooling.AnalysisResult;
 import org.pitest.mutationtest.tooling.EntryPoint;
 import org.pitest.testapi.TestGroupConfig;
@@ -25,7 +38,10 @@ import org.pitest.util.Verbosity;
  *
  * <p>The arguments file holds one {@code key=value} per line, a key repeated for a list: {@code reportDir},
  * {@code threads}, {@code targetClass}, {@code targetTest}, {@code sourceDir}, {@code classPath}, {@code codePath},
- * {@code jvmArg}, {@code avoidCallsTo}. Values are taken whole, so a JVM argument may hold commas.
+ * {@code jvmArg}. Values are taken whole, so a JVM argument may hold commas.
+ *
+ * <p>One filter is added to Pitest's own: {@link KotlinNullChecks}, which drops the mutants that remove a call to one of
+ * the Kotlin compiler's generated null checks, and nothing else on their lines.
  */
 public final class PitestRunner {
     public static void main(String[] args) throws Exception {
@@ -48,8 +64,9 @@ public final class PitestRunner {
         o.setClassPathElements(all(a, "classPath"));
         o.setCodePaths(all(a, "codePath"));
         o.addChildJVMArgs(all(a, "jvmArg"));
-        // Calls to Kotlin's own null checks (Intrinsics) are generated, not written: mutating them is noise.
-        o.setLoggingClasses(all(a, "avoidCallsTo"));
+        // No avoidCallsTo: it drops every mutant on a line calling into kotlin.jvm.internal, `==` (Intrinsics.areEqual)
+        // included, which hid real guards. KotlinNullChecks drops only the generated null checks.
+        o.setLoggingClasses(List.of());
         o.addOutputFormats(List.of("XML", "CSV"));
         o.setShouldCreateTimestampedReports(false);
         o.setVerbosity(Verbosity.DEFAULT);
@@ -67,7 +84,8 @@ public final class PitestRunner {
         o.setExcludedTestClasses(List.of());
         o.setMutators(List.of());
         o.setFeatures(List.of());
-        AnalysisResult r = new EntryPoint().execute(new File("."), o, PluginServices.makeForContextLoader(), Collections.emptyMap());
+        PluginServices plugins = new PluginServices(new WithKotlinNullChecks(Thread.currentThread().getContextClassLoader()));
+        AnalysisResult r = new EntryPoint().execute(new File("."), o, plugins, Collections.emptyMap());
         // EntryPoint has printed the statistics; the XML report is what the summary reads.
         if (r.getError().isPresent()) throw r.getError().get();
     }
@@ -80,5 +98,82 @@ public final class PitestRunner {
         List<String> v = all(a, key);
         if (v.size() != 1) throw new IllegalArgumentException("exactly one " + key + " expected, got " + v);
         return v.get(0);
+    }
+
+    /** The context class loader's plugins, plus {@link KotlinNullChecks}. */
+    private static final class WithKotlinNullChecks implements Services {
+        private final ClassLoader loader;
+
+        WithKotlinNullChecks(ClassLoader loader) {
+            this.loader = loader;
+        }
+
+        @Override
+        public <S> Collection<S> load(Class<S> type) {
+            List<S> found = new ArrayList<>();
+            java.util.ServiceLoader.load(type, loader).forEach(found::add);
+            if (type == MutationInterceptorFactory.class) found.add(type.cast(new KotlinNullChecks()));
+            return found;
+        }
+    }
+
+    /**
+     * Drops a mutant whose instruction is a call to one of the null checks the Kotlin compiler generates:
+     * {@code Intrinsics.checkNotNull*} ({@code !!}, platform-type values, parameters) and
+     * {@code throwUninitializedPropertyAccessException} ({@code lateinit}). Removing such a call is noise, since no
+     * test of Kotlin code can pass the null it guards against. Every other mutant on the same line is kept, so a guard
+     * written with {@code ==} ({@code Intrinsics.areEqual}) is still mutated.
+     */
+    static final class KotlinNullChecks implements MutationInterceptorFactory, MutationInterceptor {
+        private static final String INTRINSICS = "kotlin/jvm/internal/Intrinsics";
+        private ClassTree tree;
+
+        static boolean isNullCheck(AbstractInsnNode insn) {
+            if (!(insn instanceof MethodInsnNode call) || !call.owner.equals(INTRINSICS)) return false;
+            return call.name.startsWith("checkNotNull") || call.name.equals("throwUninitializedPropertyAccessException");
+        }
+
+        @Override
+        public MutationInterceptor createInterceptor(InterceptorParameters params) {
+            return new KotlinNullChecks();
+        }
+
+        @Override
+        public Feature provides() {
+            return Feature.named("FKNULLCHECKS")
+                    .withOnByDefault(true)
+                    .withDescription("Filters mutants that remove a call to a Kotlin-generated null check");
+        }
+
+        @Override
+        public String description() {
+            return "Kotlin generated null-check filter";
+        }
+
+        @Override
+        public InterceptorType type() {
+            return InterceptorType.FILTER;
+        }
+
+        @Override
+        public void begin(ClassTree clazz) {
+            tree = clazz;
+        }
+
+        @Override
+        public Collection<MutationDetails> intercept(Collection<MutationDetails> mutations, Mutater m) {
+            List<MutationDetails> kept = new ArrayList<>();
+            for (MutationDetails d : mutations) {
+                Optional<AbstractInsnNode> insn =
+                        tree.method(d.getId().getLocation()).flatMap(t -> t.instructionForIndex(d.getInstructionIndex()));
+                if (insn.isEmpty() || !isNullCheck(insn.get())) kept.add(d);
+            }
+            return kept;
+        }
+
+        @Override
+        public void end() {
+            tree = null;
+        }
     }
 }

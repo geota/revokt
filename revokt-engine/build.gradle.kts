@@ -286,8 +286,6 @@ val pitestJvm =
             }
             for (d in sources) lines += "sourceDir=" + d.asFile.absolutePath
             lines += "codePath=" + main.get().asFile.absolutePath
-            // Kotlin's generated null checks (kotlin.jvm.internal.Intrinsics) are not code a test can be asked to see.
-            lines += "avoidCallsTo=kotlin.jvm.internal"
             for (f in t.classpath.files + tool.get().files) lines += "classPath=" + f.absolutePath
             for (a in t.allJvmArgs.filter { it.startsWith("-D") }) lines += "jvmArg=$a"
             lines += "jvmArg=-Xmx2g"
