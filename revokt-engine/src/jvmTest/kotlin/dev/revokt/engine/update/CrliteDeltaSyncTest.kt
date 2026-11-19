@@ -96,7 +96,7 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
         )
         // The changes after the cursor only, the x5u, and the one new body: the full's blob is reused.
         assertEquals(
-            listOf(monitor, server.sinceUrl(ts), x5u, attachments + delta2.location),
+            listOf(monitor, server.sinceUrl(ts), x5u, "$base/", attachments + delta2.location),
             server.fetcher.requests.map { it.url },
         )
         val directory = GenerationNames.directory(ts2, id)
@@ -141,7 +141,7 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
         val now = ts2 + hour
         sync(server, now = now).assert(SyncOutcome.INSTALLED)
         assertEquals(
-            listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl, attachments + delta2.location),
+            listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl, "$base/", attachments + delta2.location),
             server.fetcher.requests.map { it.url },
         )
         assertEquals("$ts2/${delta2.id}", live().generationId)
@@ -586,7 +586,7 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
         server.since = { listOf(delta2.json(), """{"last_modified":${ts + 900},"deleted":true}""") }
         sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
         assertEquals(
-            listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl, attachments + delta2.location),
+            listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl, "$base/", attachments + delta2.location),
             server.fetcher.requests.map { it.url },
         )
     }

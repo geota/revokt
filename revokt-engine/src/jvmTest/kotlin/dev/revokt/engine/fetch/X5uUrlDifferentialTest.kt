@@ -14,7 +14,8 @@ import kotlin.test.assertTrue
 /**
  * [StrictUrl]'s narrow grammar against the JDK's URL parsers (spec §7.1 "the parsed URI host" and "The x5u URL
  * grammar", #177; the redirect hops of #192): every x5u URL [X5uUrl] lets through is one `java.net.URI` and `java.net.URL`, which
- * `HttpsURLConnection` connects with, read as https to the allowlisted host on port 443 with no userinfo, and every
+ * `HttpsURLConnection` connects with, read as https to a host under the allowed domains on port 443 with no userinfo (and
+ * the same for every attachment base [AttachmentBase] lets through), and every
  * redirect hop [HopUrl] resolves is read by both as https to the host and port [HopUrl] checked, so no fetcher can be
  * pointed at another host than the one checked.
  */
@@ -73,7 +74,8 @@ class X5uUrlDifferentialTest {
     private fun assertJdkAgrees(fetched: String) {
         val uri = URI(fetched)
         assertEquals("https", uri.scheme, fetched)
-        assertTrue(uri.host == host || uri.host == mirror, "URI host ${uri.host} of $fetched")
+        // The JDK reads a host under the allowed domains: the one X5uUrl checked.
+        assertTrue(AllowedDomains.allows(uri.host, setOf(host, mirror)), "URI host ${uri.host} of $fetched")
         assertTrue(uri.port == -1 || uri.port == 443, "URI port ${uri.port} of $fetched")
         assertNull(uri.rawUserInfo, fetched)
         assertNull(uri.rawFragment, fetched)
@@ -84,7 +86,7 @@ class X5uUrlDifferentialTest {
     }
 
     @Test
-    fun `every URL the x5u rules let through is the allowlisted host on 443 to java_net_URI and java_net_URL`() {
+    fun `every URL the x5u rules let through is an allowed host on 443 to java_net_URI and java_net_URL`() {
         val random = Random(129)
         var allowed = 0
         repeat(200_000) {
@@ -109,6 +111,29 @@ class X5uUrlDifferentialTest {
                     url,
                 )
             }
+        }
+        assertTrue(allowed > 10_000, "the generator reached the accepting grammar: $allowed")
+    }
+
+    @Test
+    fun `every attachment base the rules let through is an allowed host on 443 to java_net_URI and java_net_URL`() {
+        val random = Random(223)
+        var allowed = 0
+        repeat(200_000) {
+            val prefix =
+                when (random.nextInt(3)) {
+                    0 -> ""
+                    1 -> "https://" + (if (random.nextBoolean()) host else mirror)
+                    else -> "https://" + (if (random.nextBoolean()) host else mirror) + "/"
+                }
+            val url = prefix + List(random.nextInt(1, 8)) { pieces[random.nextInt(pieces.size)] }.joinToString("")
+            val base = AttachmentBase.check(url, setOf(host, mirror)) { return@repeat }
+            allowed++
+            assertJdkAgrees(base)
+            assertNull(URI(base).rawQuery, base)
+            // A location joined after it stays on the same host.
+            val joined = URI(joinUrl(base, "security-state/cert-revocations/x.filter"))
+            assertEquals(URI(base).host, joined.host, base)
         }
         assertTrue(allowed > 10_000, "the generator reached the accepting grammar: $allowed")
     }

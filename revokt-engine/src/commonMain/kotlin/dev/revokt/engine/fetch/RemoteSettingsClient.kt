@@ -100,8 +100,8 @@ internal class SignatureEntry(
  * and a 401 or 407 never answered. Every result is a [ClientResult], never a throw: a fetcher's throwable is `FAILED`
  * with it as the cause (§3), and only a fault in revokt's own code here propagates, to the loader's catch (§6.5).
  *
- * URLs join a base and a path with exactly one `/` ([joinUrl]), for [MozillaRemoteSettings.baseUrl] and for
- * [MozillaRemoteSettings.attachmentBaseUrl] with `attachment.location` alike (#177).
+ * URLs join a base and a path with exactly one `/` ([joinUrl]), for [MozillaRemoteSettings.baseUrl] and for the
+ * attachment base ([attachmentBase]) with `attachment.location` alike (#177).
  */
 @OptIn(RevoktTestingApi::class) // FetchRequest has no constructor but its Builder.
 internal class RemoteSettingsClient(
@@ -199,7 +199,7 @@ internal class RemoteSettingsClient(
      * rewrite included, and nothing is fetched when one fails; then the fetch, capped at `MAX_X5U_BYTES`. Stage `X5U`.
      */
     fun fetchX5u(url: String): ClientResult<ByteString> {
-        val checked = X5uUrl.check(url, source.x5uHosts, source.x5uHostRewrites)
+        val checked = X5uUrl.check(url, source.allowedDomains, source.x5uHostRewrites)
         val allowed =
             checked.url
                 ?: return ClientResult.Failed(
@@ -238,13 +238,42 @@ internal class RemoteSettingsClient(
         }
 
     /**
-     * [record]'s attachment from `attachmentBaseUrl` + its relative `location`, capped at `min(attachment.size,
+     * The base every attachment `location` is joined to (spec §7.1): [MozillaRemoteSettings.attachmentBaseUrl] when set,
+     * with no fetch; else the server root's `capabilities.attachments.base_url`, fetched from `<baseUrl>/` under
+     * `MAX_JSON_BYTES` and checked by [AttachmentBase], its host under [MozillaRemoteSettings.allowedDomains]. Anything
+     * else is `FAILED` at stage `ATTACHMENT` ([ClientFailure.ATTACHMENT_BASE]), with no fallback. The caller reads it
+     * once per sync, before the first attachment it fetches, and keeps nothing after the sync.
+     */
+    fun attachmentBase(): ClientResult<String> {
+        source.attachmentBaseUrl?.let { return ClientResult.Ok(it, null, null) }
+        val url = joinUrl(source.baseUrl, "")
+        val body =
+            when (val exchange = exchange(SyncStage.ATTACHMENT, url, limits.maxJsonBytes, cursor = null)) {
+                is Exchange.Ended -> return exchange.result
+                is Exchange.Body -> exchange
+            }
+
+        fun refused(detail: String): ClientResult.Failed =
+            body.failed(SyncStage.ATTACHMENT, ClientFailure.ATTACHMENT_BASE, "$url: $detail")
+        val capabilities = envelope(body.bytes)?.get("capabilities") as? JsonObject
+        val served =
+            string((capabilities?.get("attachments") as? JsonObject)?.get("base_url"))
+                ?: return refused("no string capabilities.attachments.base_url")
+        val base = AttachmentBase.check(served, source.allowedDomains) { return refused("base_url \"$served\": $it") }
+        return ClientResult.Ok(base, body.status, body.backoffMillis, body.size)
+    }
+
+    /**
+     * [record]'s attachment from [base] ([attachmentBase]) + its relative `location`, capped at `min(attachment.size,
      * MAX_FILTER_BYTES)` (spec §5.1). A declared size above `MAX_FILTER_BYTES` is `FAILED` before any fetch
      * (`CAP_NEAR_LIMIT`, #137); the body's size and SHA-256 must equal the signed record's. Stage `ATTACHMENT`.
      * [record] comes from [checkRecords] over a changeset whose signature verified: its size and hash are only as
      * trustworthy as that.
      */
-    fun fetchAttachment(record: CrliteRecord): ClientResult<ByteString> {
+    fun fetchAttachment(
+        record: CrliteRecord,
+        base: String,
+    ): ClientResult<ByteString> {
         val attachment = record.attachment
         if (attachment.size > limits.maxFilterBytes) {
             return ClientResult.Failed(
@@ -253,7 +282,7 @@ internal class RemoteSettingsClient(
                 "${record.id}: ${attachment.size} bytes declared, cap ${limits.maxFilterBytes}",
             )
         }
-        val url = joinUrl(source.attachmentBaseUrl, attachment.location)
+        val url = joinUrl(base, attachment.location)
         val body =
             when (val exchange = exchange(SyncStage.ATTACHMENT, url, attachment.size, cursor = null)) {
                 is Exchange.Ended -> return exchange.result
@@ -396,7 +425,7 @@ internal class RemoteSettingsClient(
 
 /**
  * [base] and [path] with exactly one `/` between them, whatever slashes either brings (#177: one rule for `baseUrl` and
- * for `attachmentBaseUrl` with `attachment.location`).
+ * for the attachment base with `attachment.location`).
  */
 internal fun joinUrl(
     base: String,

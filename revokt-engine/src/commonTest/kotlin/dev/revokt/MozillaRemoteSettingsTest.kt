@@ -17,6 +17,7 @@ import kotlin.test.assertTrue
 /** `MozillaRemoteSettings` as spec §4 and §7.1 declare it (#111): the §7.1 defaults and the two build-time checks. */
 class MozillaRemoteSettingsTest {
     private val mozillaX5u = "content-signature-2.cdn.mozilla.net"
+    private val mozillaCdn = "cdn.mozilla.net"
 
     @Test
     fun `DEFAULT carries the section 7_1 values and pins root-ca-production-amo`() {
@@ -24,8 +25,9 @@ class MozillaRemoteSettingsTest {
         assertEquals("https://firefox.settings.services.mozilla.com/v1", d.baseUrl)
         assertEquals("security-state", d.bucket)
         assertEquals("cert-revocations", d.collection(Dataset.CRLITE))
-        assertEquals("https://firefox-settings-attachments.cdn.mozilla.net/", d.attachmentBaseUrl)
-        assertEquals(setOf(mozillaX5u), d.x5uHosts)
+        // The attachment base is read from the server (spec §7.1), under Mozilla's CDN domain.
+        assertEquals(null, d.attachmentBaseUrl)
+        assertEquals(setOf(mozillaCdn), d.allowedDomains)
         assertEquals(emptyMap(), d.x5uHostRewrites)
         assertEquals("mozilla-remote-settings", d.sourceId)
         assertEquals("revokt", d.userAgent)
@@ -38,33 +40,37 @@ class MozillaRemoteSettingsTest {
     }
 
     @Test
-    fun `a rewrite target outside x5uHosts throws from build`() {
+    fun `a rewrite target outside allowedDomains throws from build`() {
         val e =
             assertFailsWith<IllegalArgumentException> {
                 MozillaRemoteSettings.Builder().x5uHostRewrite(mozillaX5u, "mirror.example").build()
             }
         assertTrue("mirror.example" in e.message.orEmpty(), e.message)
-        // Membership is exact, so a target that differs only in case is outside the set.
-        assertFailsWith<IllegalArgumentException> {
-            MozillaRemoteSettings
-                .Builder()
-                .x5uHosts(setOf("mirror.example"))
-                .x5uHostRewrite(mozillaX5u, "Mirror.example")
-                .build()
+        // The rule is exact, so a target that differs only in case is outside it, and a suffix must be a whole label.
+        for (target in listOf("Mirror.example", "evilmirror.example", "mirror.example.org")) {
+            assertFailsWith<IllegalArgumentException>(target) {
+                MozillaRemoteSettings
+                    .Builder()
+                    .allowedDomains(setOf("mirror.example"))
+                    .x5uHostRewrite(mozillaX5u, target)
+                    .build()
+            }
         }
-        // The check runs at build(), over the final set: replacing x5uHosts after the rewrite drops the target.
+        // The check runs at build(), over the final set: replacing allowedDomains after the rewrite drops the target.
         assertFailsWith<IllegalArgumentException> {
             MozillaRemoteSettings
                 .Builder()
-                .x5uHosts(setOf("mirror.example"))
+                .allowedDomains(setOf("mirror.example"))
                 .x5uHostRewrite(mozillaX5u, "mirror.example")
-                .x5uHosts(setOf(mozillaX5u))
+                .allowedDomains(setOf(mozillaCdn))
                 .build()
         }
+        // A target under an allowed domain, at any depth, builds.
+        MozillaRemoteSettings.Builder().x5uHostRewrite(mozillaX5u, "a.b.cdn.mozilla.net").build()
     }
 
     @Test
-    fun `an x5uHosts entry or a rewrite side that is not a DNS host name throws from build`() {
+    fun `an allowedDomains entry or a rewrite side that is not a DNS host name throws from build`() {
         val label63 = "a".repeat(63)
         val name253 = listOf(label63, label63, label63, "a".repeat(61)).joinToString(".")
         // Spec §4 and §9's API rows (revision 56), then the rest of the x5u URL grammar's host rule (spec §7.1).
@@ -97,12 +103,17 @@ class MozillaRemoteSettingsTest {
                 "mirror.0x",
                 "mirror.443",
             )
-        // Each builder against the reason build() reports first: the x5uHosts entries are checked before the rewrites.
+        // Each builder against the reason build() reports first: the allowedDomains entries are checked before the
+        // rewrites.
         val cases =
             listOf<Pair<String, (String) -> MozillaRemoteSettings.Builder>>(
-                "x5uHosts entry" to { bad -> MozillaRemoteSettings.Builder().x5uHosts(setOf(mozillaX5u, bad)) },
-                "x5uHosts entry" to { bad ->
-                    MozillaRemoteSettings.Builder().x5uHosts(setOf(mozillaX5u, bad)).x5uHostRewrite(mozillaX5u, bad)
+                "allowedDomains entry" to
+                    { bad -> MozillaRemoteSettings.Builder().allowedDomains(setOf(mozillaCdn, bad)) },
+                "allowedDomains entry" to { bad ->
+                    MozillaRemoteSettings
+                        .Builder()
+                        .allowedDomains(setOf(mozillaCdn, bad))
+                        .x5uHostRewrite(mozillaX5u, bad)
                 },
                 "x5uHostRewrite to" to { bad -> MozillaRemoteSettings.Builder().x5uHostRewrite(mozillaX5u, bad) },
                 "x5uHostRewrite from" to { bad -> MozillaRemoteSettings.Builder().x5uHostRewrite(bad, mozillaX5u) },
@@ -122,10 +133,10 @@ class MozillaRemoteSettingsTest {
         val built =
             MozillaRemoteSettings
                 .Builder()
-                .x5uHosts(hostNames)
+                .allowedDomains(hostNames)
                 .apply { for (h in hostNames) x5uHostRewrite(h, h) }
                 .build()
-        assertEquals(hostNames, built.x5uHosts)
+        assertEquals(hostNames, built.allowedDomains)
         // build() and the fetch-time check accept exactly the same hosts.
         for (h in notHostNames + hostNames) {
             assertEquals(h in hostNames, X5uUrl.check("https://$h/x", setOf(h), emptyMap()).url != null, h)
@@ -133,13 +144,13 @@ class MozillaRemoteSettingsTest {
     }
 
     @Test
-    fun `a rewrite target in x5uHosts builds, and a later rewrite of the same host replaces the first`() {
+    fun `a rewrite target under allowedDomains builds, and a later rewrite of the same host replaces the first`() {
         val mirror =
             MozillaRemoteSettings
                 .Builder()
                 .baseUrl("https://mirror.example/v1")
                 .attachmentBaseUrl("https://mirror.example/attachments/")
-                .x5uHosts(setOf("mirror.example", "other.example"))
+                .allowedDomains(setOf("mirror.example", "other.example"))
                 .x5uHostRewrite(mozillaX5u, "other.example")
                 .x5uHostRewrite(mozillaX5u, "mirror.example")
                 .build()
@@ -166,14 +177,24 @@ class MozillaRemoteSettingsTest {
             assertEquals(url, s.baseUrl)
             assertEquals(url, s.attachmentBaseUrl)
         }
-        // An empty allowlist and an empty pin set build too: every x5u fetch, or every chain, then fails closed.
+        // An empty domain set and an empty pin set build too: every x5u fetch and server base, or every chain, then
+        // fails closed.
         assertEquals(
             emptySet(),
             MozillaRemoteSettings
                 .Builder()
-                .x5uHosts(emptySet())
+                .allowedDomains(emptySet())
                 .build()
-                .x5uHosts,
+                .allowedDomains,
+        )
+        // A pinned base is cleared back to the server's with null.
+        assertEquals(
+            MozillaRemoteSettings.DEFAULT,
+            MozillaRemoteSettings
+                .Builder()
+                .attachmentBaseUrl("https://mirror.example/a/")
+                .attachmentBaseUrl(null)
+                .build(),
         )
         assertEquals(
             emptyList(),
@@ -213,11 +234,11 @@ class MozillaRemoteSettingsTest {
     }
 
     @Test
-    fun `the builder copies the host set`() {
-        val hosts = mutableSetOf("mirror.example")
-        val builder = MozillaRemoteSettings.Builder().x5uHosts(hosts)
-        hosts += "other.example"
-        assertEquals(setOf("mirror.example"), builder.build().x5uHosts)
+    fun `the builder copies the domain set`() {
+        val domains = mutableSetOf("mirror.example")
+        val builder = MozillaRemoteSettings.Builder().allowedDomains(domains)
+        domains += "other.example"
+        assertEquals(setOf("mirror.example"), builder.build().allowedDomains)
     }
 
     @Test
@@ -229,7 +250,7 @@ class MozillaRemoteSettingsTest {
                 .bucket("b")
                 .collection(Dataset.CRLITE, "c")
                 .attachmentBaseUrl("https://mirror.example/a/")
-                .x5uHosts(setOf("mirror.example"))
+                .allowedDomains(setOf("mirror.example"))
                 .x5uHostRewrite(mozillaX5u, "mirror.example")
                 .pinnedRootSpkiSha256s(listOf(ByteArray(32) { 3 }))
                 .userAgent("ua")
@@ -247,7 +268,7 @@ class MozillaRemoteSettingsTest {
                 { bucket("main") },
                 { collection(Dataset.CRLITE, "intermediates") },
                 { attachmentBaseUrl("https://firefox-settings-attachments.cdn.mozilla.net") },
-                { x5uHosts(setOf(mozillaX5u, "mirror.example")) },
+                { allowedDomains(setOf(mozillaCdn, "mirror.example")) },
                 { x5uHostRewrite("mirror.example", mozillaX5u) },
                 { pinnedRootSpkiSha256s(listOf(ByteArray(32))) },
                 { userAgent("other") },
@@ -264,8 +285,8 @@ class MozillaRemoteSettingsTest {
             "baseUrl=https://firefox.settings.services.mozilla.com/v1",
             "bucket=security-state",
             "CRLITE=cert-revocations",
-            "attachmentBaseUrl=https://firefox-settings-attachments.cdn.mozilla.net/",
-            "x5uHosts=[$mozillaX5u]",
+            "attachmentBaseUrl=null",
+            "allowedDomains=[$mozillaCdn]",
             "x5uHostRewrites={}",
             "pinnedRootSpkiSha256s=[3317fa45154ac7da55694d3782316056471fc147c04aed3e03ffe99565b1e2e7]",
             "userAgent=revokt",

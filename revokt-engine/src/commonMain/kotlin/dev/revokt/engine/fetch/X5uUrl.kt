@@ -17,7 +17,7 @@ internal enum class X5uUrlFailure {
     /** A port other than 443, or an empty one. */
     PORT,
 
-    /** The host after the rewrite is not in `x5uHosts`. */
+    /** The host after the rewrite is not under `allowedDomains` ([AllowedDomains]). */
     HOST,
 
     /** The rewritten URI's parsed host is not the rewrite target exactly (a target carrying a port, userinfo or path). */
@@ -41,9 +41,9 @@ internal class X5uUrlCheck private constructor(
 }
 
 /**
- * The x5u URL rules of spec §7.1 ("x5u chain": HTTPS from the allowlist, "the parsed URI host after rejecting userinfo,
- * a non-https scheme and a port other than 443"; the private-mirror paragraph: "the rewrite is applied to the parsed
- * x5u URI host before the `x5uHosts` check … the https-only, port-443 and no-userinfo rules apply to the mirror host
+ * The x5u URL rules of spec §7.1 ("x5u chain": HTTPS from a host under the allowed domains, "the parsed URI host after
+ * rejecting userinfo, a non-https scheme and a port other than 443"; the private-mirror paragraph: "the rewrite is
+ * applied to the parsed x5u URI host before the `allowedDomains` check … the https-only, port-443 and no-userinfo rules apply to the mirror host
  * too"), with the #177 review's contract for the rewrite.
  *
  * The URL is read by [StrictUrl], the narrow grammar shared with the redirect hops, DNS host names only, so no URL parser
@@ -54,7 +54,7 @@ internal class X5uUrlCheck private constructor(
  * re-serialised from the parts: `https://`, the checked host, the path; an explicit `:443` is dropped.
  *
  * Hosts are compared exactly, ASCII case included, against [x5uHostRewrites][dev.revokt.MozillaRemoteSettings.x5uHostRewrites]
- * and [x5uHosts][dev.revokt.MozillaRemoteSettings.x5uHosts] (#177). After a rewrite the rewritten URI is re-parsed and
+ * and [allowedDomains][dev.revokt.MozillaRemoteSettings.allowedDomains] ([AllowedDomains], #177). After a rewrite the rewritten URI is re-parsed and
  * every rule re-applied, and its parsed host must equal the target exactly, so a target carrying a port, userinfo or a
  * path cannot get past §7.1.
  */
@@ -63,7 +63,7 @@ internal object X5uUrl {
 
     fun check(
         url: String,
-        hosts: Set<String>,
+        domains: Set<String>,
         rewrites: Map<String, String>,
     ): X5uUrlCheck {
         val parsed =
@@ -94,8 +94,8 @@ internal object X5uUrl {
                     }
                 }
             }
-        if (fetched.host !in hosts) {
-            return X5uUrlCheck.refused(X5uUrlFailure.HOST, "host \"${fetched.host}\" is not in x5uHosts")
+        if (!AllowedDomains.allows(fetched.host, domains)) {
+            return X5uUrlCheck.refused(X5uUrlFailure.HOST, "host \"${fetched.host}\" is not under allowedDomains")
         }
         return X5uUrlCheck.allowed(SCHEME + fetched.host + fetched.path)
     }
@@ -139,6 +139,6 @@ internal object X5uUrl {
             StrictUrlFailure.USERINFO -> X5uUrlFailure.USERINFO
         }
 
-    /** [StrictUrl.isHostName]: the x5u hosts and rewrites are DNS host names (spec §4). */
+    /** [StrictUrl.isHostName]: the allowed domains and the x5u rewrites are DNS host names (spec §4). */
     internal fun isHostName(host: String): Boolean = StrictUrl.isHostName(host)
 }

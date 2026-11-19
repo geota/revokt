@@ -665,7 +665,7 @@ internal class CrliteSync(
                 val sha256 = r.attachment.sha256
                 if (!r.incremental) {
                     if (!reuse) {
-                        val bytes = ok(client.fetchAttachment(r)) { return it }.toByteArray()
+                        val bytes = attachment(r) { return it }
                         if (stored { store.putBlob(bytes) } == BlobWrite.REWRITTEN) storeFailures++
                     }
                     blobs[name] = sha256
@@ -677,7 +677,7 @@ internal class CrliteSync(
                 if (held) return storeFailed("$directory holds another generation: $name does not re-hash")
                 val bytes =
                     stored { pointed.firstNotNullOfOrNull { store.file(it, name, sha256) } }
-                        ?: ok(client.fetchAttachment(r)) { return it }.toByteArray()
+                        ?: attachment(r) { return it }
                 stored { store.stageFile(directory, name, bytes) }
                 return null
             }
@@ -813,6 +813,19 @@ internal class CrliteSync(
         }
 
         /** [result]'s value, its backoff and status kept; on a failure, [failed] with the sync it ends. */
+
+        /** This sync's attachment base, read before its first attachment fetch ([RemoteSettingsClient.attachmentBase]). */
+        private var attachmentBase: String? = null
+
+        /** [r]'s attachment under this sync's base, which is read once; a failure of either ends the sync ([ok]). */
+        private inline fun attachment(
+            r: CrliteRecord,
+            failed: (SyncResult) -> Nothing,
+        ): ByteArray {
+            val base = attachmentBase ?: ok(client.attachmentBase(), failed).also { attachmentBase = it }
+            return ok(client.fetchAttachment(r, base), failed).toByteArray()
+        }
+
         private inline fun <T> ok(
             result: ClientResult<T>,
             failed: (SyncResult) -> Nothing,

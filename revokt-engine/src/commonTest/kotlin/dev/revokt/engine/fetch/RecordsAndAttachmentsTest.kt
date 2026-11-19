@@ -19,6 +19,10 @@ import kotlin.test.assertTrue
  * `MAX_CHANGESET_RECORDS`, §9 `data-path (g)`), and the attachment fetch (§5.1 `MAX_FILTER_BYTES`, `ATTACHMENT`).
  */
 class RecordsAndAttachmentsTest {
+    private companion object {
+        const val BASE = "https://firefox-settings-attachments.cdn.mozilla.net/"
+    }
+
     private val body = "a CRLite filter".encodeToByteArray()
     private val hash = body.toByteString().sha256().hex()
 
@@ -245,19 +249,14 @@ class RecordsAndAttachmentsTest {
         ).assertOk().single()
 
     @Test
-    fun `an attachment is fetched from attachmentBaseUrl and its relative location with exactly one slash`() {
+    fun `an attachment is fetched from the base and its relative location with exactly one slash`() {
         val cdn = "https://firefox-settings-attachments.cdn.mozilla.net"
         val path = "security-state-staging/cert-revocations/x.delta"
         for ((base, location) in listOf("$cdn/" to path, cdn to path, "$cdn//" to "/$path")) {
             val fetcher = ScriptedFetcher { response(200, body) }
-            val source =
-                MozillaRemoteSettings.DEFAULT
-                    .newBuilder()
-                    .attachmentBaseUrl(base)
-                    .build()
             assertEquals(
                 body.toByteString(),
-                client(fetcher, source).fetchAttachment(crlite(location = location)).assertOk(),
+                client(fetcher).fetchAttachment(crlite(location = location), base).assertOk(),
             )
             val request = fetcher.requests.single()
             assertEquals(
@@ -274,17 +273,17 @@ class RecordsAndAttachmentsTest {
     fun `an attachment whose hash or size differs from the signed record is FAILED at ATTACHMENT`() {
         val flipped = body.copyOf().also { it[0] = (it[0] + 1).toByte() }
         client(ScriptedFetcher { response(200, flipped) })
-            .fetchAttachment(crlite())
+            .fetchAttachment(crlite(), BASE)
             .assertFailed(SyncStage.ATTACHMENT, ClientFailure.ATTACHMENT_HASH)
         client(ScriptedFetcher { response(200, body.copyOf(body.size - 1)) })
-            .fetchAttachment(crlite())
+            .fetchAttachment(crlite(), BASE)
             .assertFailed(SyncStage.ATTACHMENT, ClientFailure.ATTACHMENT_SIZE)
         client(ScriptedFetcher { response(200, body + 0) })
-            .fetchAttachment(crlite())
+            .fetchAttachment(crlite(), BASE)
             .assertFailed(SyncStage.ATTACHMENT, ClientFailure.BODY_TOO_LARGE)
         // The right bytes under a wrong signed hash fail too.
         client(ScriptedFetcher { response(200, body) })
-            .fetchAttachment(crlite(sha256 = "0".repeat(64)))
+            .fetchAttachment(crlite(sha256 = "0".repeat(64)), BASE)
             .assertFailed(SyncStage.ATTACHMENT, ClientFailure.ATTACHMENT_HASH)
         // An empty attachment is checked the same way.
         val empty = ByteArray(0).toByteString().sha256().hex()
@@ -294,7 +293,7 @@ class RecordsAndAttachmentsTest {
                 ScriptedFetcher {
                     response(200)
                 },
-            ).fetchAttachment(crlite(size = 0, sha256 = empty)).assertOk().size,
+            ).fetchAttachment(crlite(size = 0, sha256 = empty), BASE).assertOk().size,
         )
     }
 
@@ -303,19 +302,19 @@ class RecordsAndAttachmentsTest {
         val fetcher = ScriptedFetcher { response(200, body) }
         val failed =
             client(fetcher)
-                .fetchAttachment(crlite(size = RevoktLimits.MAX_FILTER_BYTES + 1))
+                .fetchAttachment(crlite(size = RevoktLimits.MAX_FILTER_BYTES + 1), BASE)
                 .assertFailed(SyncStage.ATTACHMENT, ClientFailure.ATTACHMENT_OVER_CAP)
         assertEquals(DiagnosticCode.CAP_NEAR_LIMIT, failed.code)
         assertEquals(0, fetcher.requests.size)
         // At the cap the fetch runs, capped at the signed size.
         client(fetcher)
-            .fetchAttachment(crlite(size = RevoktLimits.MAX_FILTER_BYTES))
+            .fetchAttachment(crlite(size = RevoktLimits.MAX_FILTER_BYTES), BASE)
             .assertFailed(SyncStage.ATTACHMENT, ClientFailure.ATTACHMENT_SIZE)
         assertEquals(RevoktLimits.MAX_FILTER_BYTES, fetcher.requests.single().maxBodyBytes)
         // A raised cap admits it.
         val raised = FetchLimits(maxFilterBytes = RevoktLimits.MAX_FILTER_BYTES + 1)
         client(fetcher, limits = raised)
-            .fetchAttachment(crlite(size = RevoktLimits.MAX_FILTER_BYTES + 1))
+            .fetchAttachment(crlite(size = RevoktLimits.MAX_FILTER_BYTES + 1), BASE)
             .assertFailed(SyncStage.ATTACHMENT, ClientFailure.ATTACHMENT_SIZE)
         assertEquals(2, fetcher.requests.size)
     }
@@ -324,16 +323,16 @@ class RecordsAndAttachmentsTest {
     fun `the attachment fetch carries stage ATTACHMENT, its status and Backoff on every failure`() {
         val failed =
             client(ScriptedFetcher { response(401, headers = arrayOf("Retry-After" to "3")) })
-                .fetchAttachment(crlite())
+                .fetchAttachment(crlite(), BASE)
                 .assertFailed(SyncStage.ATTACHMENT, ClientFailure.HTTP_STATUS)
         assertEquals(401 to 3_000L, failed.httpStatus to failed.backoffMillis)
         client(
             ScriptedFetcher {
                 response(302)
             },
-        ).fetchAttachment(crlite()).assertFailed(SyncStage.ATTACHMENT, ClientFailure.HTTP_STATUS)
+        ).fetchAttachment(crlite(), BASE).assertFailed(SyncStage.ATTACHMENT, ClientFailure.HTTP_STATUS)
         client(ScriptedFetcher { throw IllegalStateException() })
-            .fetchAttachment(crlite())
+            .fetchAttachment(crlite(), BASE)
             .assertFailed(SyncStage.ATTACHMENT, ClientFailure.FETCHER_THREW)
         assertTrue(crlite().toString().contains(hash))
     }

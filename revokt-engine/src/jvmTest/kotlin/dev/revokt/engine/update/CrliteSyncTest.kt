@@ -69,9 +69,17 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         assertEquals(200, run.result.httpStatus)
         assertEquals(source.sourceId, run.result.sourceId)
         assertEquals(0, run.storeFailures)
-        // The wire: the poll, the whole changeset (no _since, no If-None-Match until #141), the x5u, each body once.
+        // The wire: the poll, the whole changeset (no _since, no If-None-Match until #141), the x5u, the server root for
+        // the attachment base (once, before the first body), each body once.
         assertEquals(
-            listOf(monitor, server.changesetUrl, x5u, attachments + full.location, attachments + delta.location),
+            listOf(
+                monitor,
+                server.changesetUrl,
+                x5u,
+                "$base/",
+                attachments + full.location,
+                attachments + delta.location,
+            ),
             server.fetcher.requests.map { it.url },
         )
         assertFalse(server.fetcher.requests.any { "If-None-Match" in it.headers })
