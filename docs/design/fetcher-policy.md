@@ -24,7 +24,7 @@ Not normative. Moved out of the spec's §8 at revision 59 (#216), as it stood at
 
 ## The rest of the fetcher trust model, as it stood at revision 60
 
-Moved out of the spec's §3, §4, §5.1, §6.5 and the limits table at revision 61 (#219), verbatim. Revision 61's spec
+Moved out of the spec's §3, §4, §5.1 and the limits table at revision 61 (#219), verbatim. The §4 `FEED_HOST_REVOKED` bullet, the §6.5 `feedHostBlock` member of `updater.json` and the §10 bullets on the hold were removed rather than moved; revision 60's spec (`git show` of the commit before #219) keeps them. Revision 61's spec
 replaces it with one rule: the `HttpFetcher` the consumer supplies handshakes over the platform's TLS and trust
 manager, or its own client's, and revokt applies no verdict to its own fetches.
 

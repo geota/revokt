@@ -253,6 +253,9 @@ class StoreJsonTest {
                 "\"consecutiveFailures\":3,\"feedHostBlock\":{\"chainSha256s\":[],\"sinceMillis\":1}",
             )
         assertEquals(UpdaterRead(record), UpdaterJson.read(held, now))
+        // A malformed one too: the member is no longer read, so its shape cannot drop the source.
+        val malformed = edited(bytes, "\"consecutiveFailures\":3", "\"consecutiveFailures\":3,\"feedHostBlock\":7")
+        assertEquals(UpdaterRead(record), UpdaterJson.read(malformed, now))
     }
 
     @Test

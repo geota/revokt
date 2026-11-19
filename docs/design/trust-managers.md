@@ -27,7 +27,7 @@ from the thread holding it throws `IllegalStateException("re-entrant trustManage
 to `STARTED` under this same lock, `close()` flips to `CLOSED` under it, and `trustManager(d)` reads
 the lifecycle under it, so every instance is built by exactly one of `start()`, the post-gap builds for
 trust managers created during the sole-seed decode, wiring, the fetcher snapshot's per-sync retry on the
-loader (which takes this lock) and `fetcherTrustManager`'s lazy build, and none falls between (the JVM join of the loader task runs after the lock is released). The `ReferenceQueue` is registered on the **trust-manager** reference
+loader (which takes this lock), and none falls between (the JVM join of the loader task runs after the lock is released). The `ReferenceQueue` is registered on the **trust-manager** reference
 (the trust manager holds its delegate strongly, so the delegate reference can never clear first).
 Loader and refresh tasks hold a `WeakReference` to the trust manager, `get()` it each tick and reach
 the delegate through it. `sslContext(delegate, keyManagers)` is memoised by bucket on identity hashes

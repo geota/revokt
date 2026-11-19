@@ -137,8 +137,7 @@ internal object UpdaterTransitions {
             }
 
             SyncOutcome.STORE_LOCKED -> {
-                // STORE_LOCKED returns before this.
-                throw IllegalArgumentException("no 0.2 transition for $outcome")
+                error("STORE_LOCKED returns before the transition")
             }
         }
 

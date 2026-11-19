@@ -121,8 +121,10 @@ tests; **live checks** are informational.
   the seed's own complete directory → installed as it stands, rotted → completed again with only its
   rotted files re-staged and, when the load fails, left incomplete, never deleted; the directory the engine
   serves never rewritten; a throwing `updater.json` or pointer read → `STORE_FAILED`, nothing written;
-  a seed archive over 256 MiB, or a source that never ends → `SEED_UNREADABLE`, no store failure; (g) fetcher: the feed host's own
-  chain revoked in the stored generation → the fetch proceeds over the platform's trust manager and installs;
+  a seed archive over 256 MiB, or a source that never ends → `SEED_UNREADABLE`, no store failure; (g) fetcher: [0.3] the feed host's own
+  chain revoked in the stored generation → the fetch proceeds over the platform's trust manager and installs; [0.3] an
+  OkHttp base client whose trust manager is revokt's (wired with `.revokt(...)`) → `build()` throws
+  `IllegalArgumentException`;
   a signed `intermediates` changeset served on the `cert-revocations` URL → `FAILED`,
   `SYNC_SCHEMA_REJECTED`, cursor, watermark and `lastVerified*` unchanged; a Remote Settings 3xx → `FAILED`; a gzip
   body inflating past its cap → `FAILED` before the cap is exceeded; a signed attachment whose size

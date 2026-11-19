@@ -211,7 +211,7 @@ class DiagnosticsTest {
                 "warnings",
             )
         for (field in fields) assertTrue("$field=" in text, "$field missing from $text")
-        assertTrue(text.startsWith("SyncResult(outcome="), text)
+        assertTrue(text.startsWith("SyncResult(outcome=FAILED, atMillis=1700000000000, installed="), text)
     }
 
     @Test
