@@ -1244,15 +1244,20 @@ values are names, never ordinals:
   (`STORE_MIGRATED` warning, a planned migration, not a corruption alert, `storeFailures` unchanged; the rebuild writes `store.version` first, then deletes every other key `names()` lists, then runs the start task as on an empty store, so an older co-tenant cannot mistake a half-written new layout for its own empty store and no old-layout `current` or `updater.json` survives), never an error and never `NO_DATA` beyond what an
   empty store already implies; a **higher** version is `STORE_NEWER_LAYOUT` and follows the storage's `NewerLayout` (§3): `IN_MEMORY` (the `JvmStorage` default: a newer co-tenant's store is left untouched, the store lock taken by `start()` is released, the identity deregistered, and the instance runs on the in-memory fallback, `RevoktState.storageFallback`, which for this code is never retried) or `REBUILD` (the `AndroidStorage` default: one package owns its directory and Android kills every process of the package on replace, so a higher version there is a rollback of the binary and is rebuilt exactly as a lower one).
 - `<dataset>/<channel>/current`: a small pointer file `{live, previous}` naming generation
-  directories; `previous` is only ever a complete generation of the same or higher trust class as
-  `live`, so recovery never falls to a lower class than the one being replaced.
+  directories, read strictly: a JSON object of `live` and an optional `previous` and no other member, anything else
+  being malformed. `previous` is only ever a complete generation that reads back as the loader reads one
+  (`records.json` included) and is of the same or higher trust class as `live`, so recovery never falls to a lower
+  class than the one being replaced, nor to a generation that cannot load; a candidate that does not read back counts
+  a store failure.
   **Beside a `current` that is present but malformed**, which may name any directory, a generation directory whose
   `meta.json` is present is held: a complete one is compared, reused when it holds this generation, and never
   reopened, rewritten or deleted; one whose `meta.json` is malformed (a torn write, or another `metaVersion`) is
   kept, and the sync is `STORE_FAILED` at that `<ts>`, which a new `<ts>` heals. Only a directory with no
   `meta.json` (incomplete, or not yet written) is staged. When an install flips beside a malformed pointer, the new
   pointer's `previous` is the generation the running loader's engine held live, if that generation is complete, is
-  another directory, and is of the same or a higher trust class; a fresh loader has no `previous`.
+  another directory, and is of the same or a higher trust class; a fresh loader has no `previous`. A flip that heals a
+  malformed pointer is not followed by a prune, so nothing the damaged pointer named is deleted; the next install over
+  a valid pointer prunes.
 - `<dataset>/<channel>/gen-<timestamp>-<hash16>/` (`timestamp` = `sourceTimestampMillis` zero-padded to
   13 digits so lexical order is chronological; `hash16` = the first 16 lowercase hex characters of
   `SHA-256(generationId)`; `generationId` itself may contain `/`): immutable; `index.bin`, delta files, `records.json` for `SIGNED`, and `meta.json` **written last as
@@ -1288,7 +1293,7 @@ values are names, never ordinals:
   file.
 - **Prune keeps exactly the directories the pointer names** (`live`, `previous`) and deletes every
   other directory, complete or not, and every unreferenced blob; it runs at `start()` and after every `INSTALLED`
-  sync, never after a failed one; on a failed `prepare()`, self-check or `activate()` the loader deletes
+  sync but one whose flip healed a malformed pointer, never after a failed one; on a failed `prepare()`, self-check or `activate()` the loader deletes
   the directory it was given before returning (blobs stay, content-addressed); an interrupted install
   (process death; no `meta.json`) is deleted by prune at the next `start()`; a sync-time `prepare()`/`activate()`
   throw and a self-check mismatch increment `storeFailures` and are `SyncOutcome.FAILED` (stage `PREPARE`, `ACTIVATE` or `SELF_CHECK`; cursor and watermark do not advance, so the same changeset is retried under backoff); a store write or pointer-flip failure during an install is `SyncOutcome.STORE_FAILED` (stage `STORE`, `storeFailures++`); "newest" is pointer order, never directory timestamp.

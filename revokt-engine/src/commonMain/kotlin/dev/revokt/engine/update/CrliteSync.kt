@@ -128,7 +128,8 @@ internal class CrliteSync(
      *    delta staged as a file of the generation directory, copied without a fetch from a pointed generation whose file
      *    of that name re-hashes to it, as Firefox and upki reuse a filter on disk whose hash matches.
      * 10. [buildIndex], then the decision on the coverage ([SyncRules.decide]), then [install] in §6.5's order, which
-     *    writes `updater.json` after the pointer flip; on success the store is pruned to what the pointer names.
+     *    writes `updater.json` after the pointer flip; on success the store is pruned to what the pointer names,
+     *    unless the flip healed a malformed pointer (#256).
      *
      * Every outcome but `INSTALLED` writes `updater.json` itself ([UpdaterTransitions.after]) and deletes any directory
      * this sync staged: the cursor, `lastVerified*` and the watermark advance only through an install. Every throwable is
@@ -471,7 +472,8 @@ internal class CrliteSync(
                     val installed =
                         result(SyncOutcome.INSTALLED, null, warnings, mapOf(Dataset.CRLITE to result.generationId))
                     done = installed
-                    reads.prune(result.directory)
+                    // A heal is never pruned: the malformed pointer it replaced may have named any directory (#256).
+                    if (!result.healed) reads.prune(result.directory)
                     installed
                 }
 
