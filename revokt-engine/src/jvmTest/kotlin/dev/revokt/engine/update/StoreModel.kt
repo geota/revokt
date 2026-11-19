@@ -329,7 +329,6 @@ internal class StoreModel(
             // pointer's live or its previous (#242's fallback beside a malformed pointer included).
             val liveAtStart = liveDirectory()?.takeIf { !storage.hit(it) && store.readGeneration(it) != null }
             val floor = rollbackFloor()
-            pointedAtStart = (store.pointer() as? StoreRead.Found)?.value.let { listOfNotNull(it?.live, it?.previous) }
             storage.arm(throwAt, stopAt)
             engine.onPrepare = { require(!prepareThrows) { "injected prepare fault" } }
             val run =
@@ -383,9 +382,6 @@ internal class StoreModel(
             return listOfNotNull(highWater, live).maxOrNull()
         }
 
-        /** What `current` named when the last sync began (the #249 exemption). */
-        private var pointedAtStart: List<String> = emptyList()
-
         /** I5 after a sync that ended as [result] from [floor], then the high-water mark an install with the clock right raises. */
         private fun rollback(
             result: dev.revokt.SyncResult,
@@ -420,10 +416,6 @@ internal class StoreModel(
                 fail("I4: a clean sync of the unheld $target is STORE_FAILED: ${result.warnings.map { it.message }}")
             }
             if (stopped || liveAtStart == null) return
-            // #249: a flip that failed after activation leaves the engine serving a generation `current` does not name,
-            // and the next install's fallback is taken from `current`, so that generation is pruned. Exempt until #249's
-            // fix merges; then this line goes.
-            if (liveAtStart !in pointedAtStart) return
             // A sync whose write of `current` landed keeps it as the pointer's live or previous, whatever its outcome; one
             // that wrote none (it failed, perhaps after activating a generation whose flip then threw) leaves it on disk.
             val flipped = result.outcome == SyncOutcome.INSTALLED || pointerWritten
