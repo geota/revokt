@@ -3,10 +3,10 @@
 
 package dev.revokt
 
-import dev.revokt.engine.crlite.AtomicInt32
 import dev.revokt.engine.crlite.CrliteGeneration
 import dev.revokt.engine.crlite.awaitDrain
 import kotlinx.coroutines.CompletableDeferred
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.Volatile
 
 /**
@@ -34,10 +34,10 @@ public class KotlinRevocationEngine internal constructor(
      * The number of queries and activations in flight, with [CLOSING] set once close() starts: one word, so nothing
      * slips between the flag and the count.
      */
-    private val gate = AtomicInt32(0)
+    private val gate = AtomicInteger(0)
 
     /** Set by the first close() only, so close() is idempotent. */
-    private val closeOnce = AtomicInt32(0)
+    private val closeOnce = AtomicInteger(0)
 
     @Volatile private var closed = false
     private val drained = CompletableDeferred<Unit>()
@@ -133,7 +133,7 @@ public class KotlinRevocationEngine internal constructor(
         val engine: KotlinRevocationEngine,
         val generation: CrliteGeneration,
     ) : PreparedGeneration {
-        val state = AtomicInt32(READY)
+        val state = AtomicInteger(READY)
 
         override val generationId: String get() = generation.generationId
 
