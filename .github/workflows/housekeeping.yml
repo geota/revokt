@@ -57,8 +57,8 @@ jobs:
   # the committed docs/dev/rulesets/. On a difference it opens, or rewrites, one issue holding the diff, which
   # github.token may do (a PR it may not: "Actions may not create or approve pull requests"), and closes the issue once
   # the files match again; the committed files change in an ordinary PR. The rulesets' bypass list is readable only
-  # with RULESETS_AUDIT_TOKEN (a fine-grained token with Administration: read on this repository); without it the job
-  # compares everything else and says that the bypass list went unchecked.
+  # with RULESETS_AUDIT_TOKEN (a fine-grained token with Administration: read on this repository), and so are some merge
+  # settings; without it the job compares everything else and says what went unchecked.
   rulesets-audit:
     name: rulesets-audit
     if: (github.event_name == 'schedule' && github.event.schedule == '11 5 * * 1') || github.event_name == 'workflow_dispatch'
@@ -88,13 +88,25 @@ jobs:
               jq -S 'if type == "array" then map(del(.bypass_actors)) else del(.bypass_actors) end' "$f" >| "$f.tmp"
               mv "$f.tmp" "$f"
             done
+            # Merge settings github.token cannot read come back null; they are left out of the comparison too.
+            unread=$(jq -c '[to_entries[] | select(.value == null) | .key]' "$live/repository.json")
+            if [ "$unread" != "[]" ]; then
+              echo "::warning::no RULESETS_AUDIT_TOKEN: the merge settings $unread are not compared"
+              for f in "$live/repository.json" "$committed/repository.json"; do
+                jq -S --argjson k "$unread" 'with_entries(select(.key as $x | $k | index($x) | not))' "$f" >| "$f.tmp"
+                mv "$f.tmp" "$f"
+              done
+            fi
           fi
           : >| "$NEWS"
           if ! diff -ru "$committed" "$live" >| "$RUNNER_TEMP/audit.diff"; then
             {
               echo "The live settings differ from \`docs/dev/rulesets/\`. If the change is intended, refresh the files in a PR"
               echo "(\`.github/scripts/rulesets_export.sh docs/dev/rulesets\` with an admin token); otherwise revert the setting."
-              if [ "$ADMIN" != "true" ]; then echo; echo "The rulesets' bypass list was not compared (no RULESETS_AUDIT_TOKEN)."; fi
+              if [ "$ADMIN" != "true" ]; then
+                echo
+                echo "The rulesets' bypass list, and any merge setting github.token cannot read, were not compared (no RULESETS_AUDIT_TOKEN)."
+              fi
               echo
               echo '```diff'
               sed -e 's|'"$RUNNER_TEMP"'/committed|docs/dev/rulesets|; s|'"$RUNNER_TEMP"'/live|live|' "$RUNNER_TEMP/audit.diff" | head -c 50000
