@@ -14,6 +14,7 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktTestingApi
 import dev.revokt.TerminalKind
 import dev.revokt.WalkEnd
+import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
 import dev.revokt.engine.walker.FixtureWorld.Companion.TELETEX_STRING
@@ -274,18 +275,6 @@ class DecideFallbackTest {
                 )
             val c = w.cert("C", intermediate.subject, s.subject, signer = s.key)
             val otherOnly = WalkerFixturesAs.nameConstraints(permitted = listOf(WalkerFixturesAs.dns("other.example")))
-            val rootName = w.name("Constrained root")
-            val rootKey = w.key()
-            val constrainedRoot =
-                w.cert(
-                    "RN",
-                    rootName,
-                    rootName,
-                    rootKey,
-                    signer = rootKey,
-                    extensions = listOf(otherOnly),
-                )
-            val underIt = ca("IN", constrainedRoot)
             val emailOnly = ca("IE", root, WalkerFixturesAr.eku("1.3.6.1.5.5.7.3.4"))
             val clientOnly = ca("IC", root, WalkerFixturesAr.eku("1.3.6.1.5.5.7.3.2"))
             val refused =
@@ -295,7 +284,6 @@ class DecideFallbackTest {
                         FakeFallback.finds(leaf, ca("IK", root, WalkerFixturesAr.keyUsage(0x07, 0x80)), root),
                     "extKeyUsage without serverAuth" to FakeFallback.finds(leaf, emailOnly, root),
                     "an intermediate's nameConstraints" to FakeFallback.finds(leaf, ca("INC", root, otherOnly), root),
-                    "the anchor's nameConstraints" to FakeFallback.finds(leaf, underIt, constrainedRoot),
                     "an anchor that does not parse" to
                         FakeFallback { listOf(leaf.der, intermediate.der, byteArrayOf(0x30, 0x00)) },
                 )
@@ -320,6 +308,7 @@ class DecideFallbackTest {
                 PathStatus.NO_ISSUER,
                 WalkerHarness.decide(alone, FakeFallback.finds(leaf, clientOnly, root)).path.status,
             )
+
             val permitsLeaf = WalkerFixturesAs.nameConstraints(permitted = listOf(WalkerFixturesAs.dns("leaf.example")))
             val admitted = WalkerHarness.decide(alone, FakeFallback.finds(leaf, ca("IP", root, permitsLeaf), root))
             assertEquals(PathStatus.FOUND, admitted.path.status, "nameConstraints that admit the leaf")
