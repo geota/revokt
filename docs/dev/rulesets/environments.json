@@ -1,1 +1,16 @@
-[]
+[
+  {
+    "deployment_branch_policy": {
+      "custom_branch_policies": true,
+      "protected_branches": false
+    },
+    "name": "fuzz-advisory",
+    "protection_rules": [
+      {
+        "prevent_self_review": null,
+        "reviewers": [],
+        "type": "branch_policy"
+      }
+    ]
+  }
+]

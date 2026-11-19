@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 revokt contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# stale drafts (exempt: blocked), /claim on issues, the weekly owner-power audit trail (rulesets and settings
-# exported to docs/dev/rulesets/, PR on diff). CONTRIBUTING §2, §5, §7.
+# stale drafts (exempt: blocked), /claim on issues, the weekly owner-power audit trail (the live rulesets and settings
+# against docs/dev/rulesets/, an issue on a difference). CONTRIBUTING §2, §5, §7.
 name: housekeeping
 
 on:
@@ -11,6 +11,7 @@ on:
     - cron: "11 5 * * 1"
   issue_comment:
     types: [created]
+  workflow_dispatch:   # the rulesets audit on demand
 
 permissions: read-all
 
@@ -52,33 +53,45 @@ jobs:
             }
             await github.rest.issues.addAssignees({ owner, repo, issue_number: issue.number, assignees: [context.payload.comment.user.login] });
 
+  # The owner-power audit trail (CONTRIBUTING §7, #241): the live rulesets, environments and merge settings against
+  # the committed docs/dev/rulesets/. On a difference it opens, or rewrites, one issue holding the diff, which
+  # github.token may do (a PR it may not: "Actions may not create or approve pull requests"), and closes the issue once
+  # the files match again; the committed files change in an ordinary PR. The rulesets' bypass list is readable only
+  # with RULESETS_AUDIT_TOKEN (a fine-grained token with Administration: read on this repository, kept in the audit
+  # environment), and so are seven merge settings. rulesets_compare.sh leaves out only those allow-listed members, only
+  # when they come back absent or null without the token, and names each one; any other absent or null member, a
+  # removed protection included, is a difference, and so is an allow-listed one that is unreadable with the token.
   rulesets-audit:
     name: rulesets-audit
-    if: github.event_name == 'schedule' && github.event.schedule == '11 5 * * 1'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'schedule' && github.event.schedule == '11 5 * * 1') || github.event_name == 'workflow_dispatch')
+    # Where RULESETS_AUDIT_TOKEN lives once the maintainer sets it, with deployments limited to main.
+    environment: audit
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      issues: write   # the one audit issue
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: export rulesets, environments and merge settings
+        with:
+          persist-credentials: false
+      - name: export and compare
         env:
           GH_TOKEN: ${{ secrets.RULESETS_AUDIT_TOKEN || github.token }}
+          ADMIN: ${{ secrets.RULESETS_AUDIT_TOKEN != '' }}
+          NEWS: ${{ runner.temp }}/audit.md
         run: |
-          mkdir -p docs/dev/rulesets
-          gh api "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=false" --jq 'sort_by(.id)' > docs/dev/rulesets/rulesets.json || echo '[]' > docs/dev/rulesets/rulesets.json
-          for id in $(jq -r '.[].id' docs/dev/rulesets/rulesets.json); do gh api "repos/${GITHUB_REPOSITORY}/rulesets/$id" --jq 'del(.updated_at, ._links, .node_id, .current_user_can_bypass)' > "docs/dev/rulesets/ruleset-$id.json"; done
-          gh api "repos/${GITHUB_REPOSITORY}" --jq '{allow_squash_merge, allow_merge_commit, allow_rebase_merge, allow_auto_merge, delete_branch_on_merge, squash_merge_commit_title, squash_merge_commit_message, has_issues, web_commit_signoff_required}' > docs/dev/rulesets/repository.json
-          gh api "repos/${GITHUB_REPOSITORY}/environments" --jq '[.environments[] | {name, protection_rules: [.protection_rules[] | {type, reviewers: [.reviewers[]? | {type, login: .reviewer.login}], prevent_self_review}], deployment_branch_policy}]' > docs/dev/rulesets/environments.json || echo '[]' > docs/dev/rulesets/environments.json
-      # RULESETS_AUDIT_TOKEN is a fine-grained PAT (contents + pull-requests write) so the audit PR's checks run; a PR
-      # created with github.token triggers no workflows. Without the secret the PR is still opened, checks must be re-run by hand.
-      - name: open a PR on any diff
+          set -euo pipefail
+          bash .github/scripts/rulesets_export.sh "$RUNNER_TEMP/live"
+          bash .github/scripts/rulesets_compare.sh docs/dev/rulesets "$RUNNER_TEMP/live" "$NEWS"
+      - name: open, update or close the audit issue
         env:
-          GH_TOKEN: ${{ secrets.RULESETS_AUDIT_TOKEN || github.token }}
-        run: |
-          if git diff --quiet -- docs/dev/rulesets; then echo "no change"; exit 0; fi
-          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          b="chore/rulesets-audit-$(date -u +%Y%m%d)"
-          git switch -c "$b"; git add docs/dev/rulesets; git commit -m "chore(repo): rulesets audit $(date -u +%Y-%m-%d)" -m "Spec: none (audit)"
-          git push -u origin "$b"
-          gh pr create --title "chore(repo): rulesets audit $(date -u +%Y-%m-%d)" --body "$(printf '## What\nWeekly export of rulesets, environments and merge settings changed (CONTRIBUTING §7 owner-power audit trail).\n\n## Why\nRefs: #1\n\n## Spec\nnone (audit)\n\n## Tests\nnone, no behaviour change\n\n## API\nno public API change\n\n## Risk and rollout\nnone\n\n## AI assistance\nnone\n\n## Checklist\n- [x] n/a\n\n## Trailers\nSpec: none (audit)\n')"
+          GH_TOKEN: ${{ github.token }}
+          NEWS: ${{ runner.temp }}/audit.md
+          TITLE: "chore(repo): the live rulesets differ from docs/dev/rulesets"
+          LABELS: area/repo,kind/chore
+          INTRO: "The weekly owner-power audit (`.github/workflows/housekeeping.yml`, CONTRIBUTING §7) found:"
+          OUTRO: "The audit rewrites this issue every Monday while the difference holds and closes it once the files match."
+          CLOSE_NOTE: "The live settings match docs/dev/rulesets again"
+        run: bash .github/scripts/release_watch.sh "$NEWS"
