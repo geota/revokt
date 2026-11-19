@@ -166,7 +166,16 @@ internal class CrliteSync(
         private val channel = store.channel
         private val clock = SyncClock(now, policy.clockSkewMillis, policy.rollbackWindowMillis)
         private var stage = SyncStage.STORE
-        private var record = UpdaterRecord()
+
+        /**
+         * The `updater.json` this sync read; null until the read returns, and while it is null nothing writes
+         * `updater.json`, so a read that throws never has an empty record written over the real file (#209: that would
+         * drop the watermark, `seedInstalledAtMillis` and every source's cursor, `lastVerified*` and backoff).
+         */
+        private var read: UpdaterRecord? = null
+
+        /** The record read, for every step after the read. */
+        private val record: UpdaterRecord get() = checkNotNull(read) { "updater.json is read first" }
         private var storeFailures = 0
         private var backoff: Long? = null
         private var lastStatus: Int? = null
@@ -214,13 +223,13 @@ internal class CrliteSync(
         }
 
         /**
-         * [read] at stage `STORE`, so a store that throws is `STORE_FAILED` ([thrown]); the stage before is restored
+         * [access] at stage `STORE`, so a store that throws is `STORE_FAILED` ([thrown]); the stage before is restored
          * after it returns, never on a throw.
          */
-        private inline fun <T> stored(read: () -> T): T {
+        private inline fun <T> stored(access: () -> T): T {
             val before = stage
             stage = SyncStage.STORE
-            val value = read()
+            val value = access()
             stage = before
             return value
         }
@@ -228,7 +237,7 @@ internal class CrliteSync(
         private fun steps(): SyncResult {
             stage = SyncStage.STORE
             val loaded = LoadedUpdater.of(store.updater(now))
-            record = loaded.record
+            read = loaded.record
             storeFailures += loaded.storeFailures
             val nextAttempt = UpdaterTransitions.nextAttemptAtMillis(record, source.sourceId, now)
             if (nextAttempt != null && nextAttempt > now) return end(Ended(SyncOutcome.BACKOFF, null, null, "backoff"))
@@ -238,8 +247,12 @@ internal class CrliteSync(
             val expected = ok(polled) { return it }
             gates.nearCap(polled, "monitor/changes", RevoktLimits.MAX_JSON_BYTES)
             val cursor = record.sources[source.sourceId]?.lastVerifiedLastModified
+            // The stored records are the merge base of a _since changeset only: the whole collection, fetched when there is
+            // no cursor (a malformed updater.json, a clock-behind install), merges over nothing (#236).
+            val since = cursor?.takeIf { base != null }
+            val merged = if (since != null) base.orEmpty() else emptyList()
             val verified =
-                when (val fetched = Changesets().verified(expected, cursor?.takeIf { base != null }, base.orEmpty())) {
+                when (val fetched = Changesets().verified(expected, since, merged)) {
                     is Fetched.Verified -> fetched.verified
                     is Fetched.Unverified -> return unverified(fetched.failure)
                     is Fetched.Ended -> return fetched.result
@@ -593,33 +606,46 @@ internal class CrliteSync(
             val deltas = LinkedHashMap<String, ByteString>()
             private val encodings = HashMap<String, Encoding?>()
 
-            /** Whether [directory] is a complete generation the engine holds live or the pointer names, read as it stands. */
+            /**
+             * Whether [directory] is held and complete, read as it stands: the engine holds it live, the pointer names it,
+             * or it sits beside a malformed pointer, which may name it (#236).
+             */
             private var held = false
 
             /** The live and pointed generations' directories, which a delta of the same name and hash is copied from. */
             private var pointed: List<String> = emptyList()
 
             /**
-             * Readies [directory]. One the engine holds live or the pointer names is never written: a complete one is read
-             * as it stands ([install] then compares it with this generation), and one that is not complete fails the sync
-             * as [install] would, `STORE_FAILED`. Any other is referenced by nothing, so it is completed afresh: its
-             * `meta.json` is deleted ([StoreLayout.reopen]), each of its files is reused only when it re-hashes to a
-             * placed delta, and [install] deletes the rest, so neither a corrupted delta nor another generation's
-             * `meta.json` or `index.bin` there fails every sync of this `<ts>` (the #205 review). The failure that ends
-             * the sync, or null.
+             * Readies [directory]. A held one is never written. It is held when the engine holds it live or the pointer
+             * names it, or when the pointer is malformed (it may name any directory) and [directory]'s `meta.json` is
+             * present (#236, fail closed). A held directory that is complete is read as it stands, and [install] then
+             * compares it with this generation. One whose `meta.json` is malformed or (when live or pointed) missing
+             * fails the sync as [install] would, `STORE_FAILED`, and a new `<ts>` heals it.
+             *
+             * Any other directory is referenced by nothing. Beside a malformed pointer, that means one with no `meta.json`
+             * at all. It is completed afresh: a complete orphan's `meta.json` is deleted ([StoreLayout.reopen]), each of
+             * its files is reused only when it re-hashes to a placed delta, and [install] deletes the rest. So neither a
+             * corrupted delta nor another generation's `meta.json` or `index.bin` there fails every sync of this `<ts>`
+             * (the #205 review). The failure that ends the sync, or null.
              */
             fun open(): SyncResult? {
-                val pointer = stored { (store.pointer() as? StoreRead.Found)?.value }
+                val pointerRead = stored { store.pointer() }
+                val pointer = (pointerRead as? StoreRead.Found)?.value
                 val live = reads.liveDirectory()
                 val holders = listOfNotNull(live, pointer?.live, pointer?.previous).distinct()
                 pointed = holders.filter { it != directory }
-                if (directory in holders) {
-                    held = stored { store.readMeta(directory) } is StoreRead.Found
+                val metaRead = stored { store.readMeta(directory) }
+                val complete = metaRead is StoreRead.Found
+                // #236, fail closed: a malformed pointer may name a directory whose meta.json is present (complete, or
+                // malformed as a torn write or a newer binary leaves it), so it is held, never reopened, rewritten or
+                // deleted; only one with no meta.json is staged.
+                if (directory in holders || (pointerRead is StoreRead.Malformed && metaRead !is StoreRead.Absent)) {
+                    held = complete
                     if (held) return null
-                    return storeFailed("$directory is live or pointed to, and its meta.json is not readable")
+                    return storeFailed("$directory is held, and its meta.json is not readable")
                 }
                 // A complete orphan is reopened; an incomplete one needs nothing before its deltas are staged.
-                if (stored { store.readMeta(directory) } is StoreRead.Found) stored { store.reopen(directory) }
+                if (complete) stored { store.reopen(directory) }
                 // Only once reopen accepted it: a directory the pointer names is never deleted on a failure.
                 staged = directory
                 return null
@@ -845,7 +871,7 @@ internal class CrliteSync(
         /**
          * Ends the sync as [ended] without an install: deletes the directory this sync staged, then writes
          * `updater.json` ([UpdaterTransitions.after]; a delete or write that fails is a store failure and leaves the
-         * outcome), then the result.
+         * outcome) unless its read never returned (#209), then the result.
          */
         @Suppress("TooGenericExceptionCaught") // §6.5: the failure path catches every throwable too.
         private fun end(ended: Ended): SyncResult {
@@ -860,15 +886,18 @@ internal class CrliteSync(
                 }
             }
             try {
-                val next =
-                    UpdaterTransitions.after(
-                        record,
-                        source.sourceId,
-                        ended.outcome,
-                        now,
-                        serverBackoffMillis = backoff,
-                    )
-                store.writeUpdater(next, now)
+                // #209: a sync whose read of updater.json did not return writes nothing, leaving the file as it is.
+                read?.let {
+                    val next =
+                        UpdaterTransitions.after(
+                            it,
+                            source.sourceId,
+                            ended.outcome,
+                            now,
+                            serverBackoffMillis = backoff,
+                        )
+                    store.writeUpdater(next, now)
+                }
             } catch (t: Throwable) {
                 restoreInterrupt(t)
                 storeFailures++

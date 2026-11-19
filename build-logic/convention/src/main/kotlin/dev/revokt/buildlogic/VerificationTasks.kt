@@ -320,7 +320,7 @@ abstract class VerifyOracleMatrixTask : DefaultTask() {
         if (recorded != upki) out += "upki-index.tsv records rustls/upki ${recorded ?: "(no provenance line)"}, the upki pin is '$upki': re-record the index golden (sh native/revokt-oracle/record-upki-index.sh)"
         val upkiJob = section(nightlyText, Regex("""^  upki-release:\s*$"""), Regex("""^  [A-Za-z0-9_-]+:\s*$"""))
         if (upkiJob.isBlank()) {
-            out += "nightly.yml has no upki-release job: add it (it fails on a rustls/upki release or C2SP upki-revocation tag newer than the pins)"
+            out += "nightly.yml has no upki-release job: add it (it keeps an issue open while a rustls/upki release or C2SP upki-revocation tag is newer than the pins)"
         } else {
             // The pin() definition itself, not a comment or an error message that names the file.
             val reader = Regex("""^\s*pin\(\)\s*\{[^#\n]*\sgradle/oracle-matrix\.properties(?![\w.-])""", RegexOption.MULTILINE)

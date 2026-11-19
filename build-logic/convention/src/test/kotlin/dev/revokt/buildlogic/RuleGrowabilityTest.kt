@@ -228,4 +228,10 @@ class RuleGrowabilityTest {
         assertEquals("1.12", RuleGrowability.minorOf("1.12.3"))
         assertEquals("0.2", RuleGrowability.minorOf("0.2-SNAPSHOT"))
     }
+
+    @Test
+    fun `check enforces the contract from 0 3 on, and on a version it cannot read`() {
+        for (v in listOf("0.1.0-SNAPSHOT", "0.2.0", "0.2-SNAPSHOT")) assertEquals(false, RuleGrowability.enforcedAt(v), v)
+        for (v in listOf("0.3.0-SNAPSHOT", "0.4.1", "1.0.0", "2.0-SNAPSHOT", "x.y", "")) assertEquals(true, RuleGrowability.enforcedAt(v), v)
+    }
 }

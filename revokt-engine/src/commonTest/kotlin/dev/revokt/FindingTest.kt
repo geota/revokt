@@ -90,7 +90,7 @@ class FindingTest {
     @Test
     fun `the enums are the spec's, in its order`() {
         assertEquals(
-            listOf("NO_CANDIDATE", "ALL_CANDIDATES_INVALID", "UNANCHORED", "PLATFORM_ONLY"),
+            listOf("NO_CANDIDATE", "ALL_CANDIDATES_INVALID", "UNANCHORED", "UNSUPPORTED_ALGORITHM", "PLATFORM_ONLY"),
             NoIssuerReason.entries.map { it.name },
         )
         assertEquals(listOf("SKIPPED", "DISABLED", "FAILED"), FallbackReason.entries.map { it.name })
