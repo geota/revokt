@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.update
 
+import dev.revokt.Dataset
 import dev.revokt.DiagnosticCode
 import dev.revokt.RevoktLimits
 import dev.revokt.SyncOutcome
@@ -11,7 +12,9 @@ import dev.revokt.engine.fetch.json
 import dev.revokt.engine.fetch.ok
 import dev.revokt.engine.fetch.response
 import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
+import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.update.UpdateFixtures.log
 import dev.revokt.engine.verify.ContentSignature
 import dev.revokt.engine.verify.ContentSignatureFailure
@@ -30,55 +33,7 @@ import kotlin.test.assertTrue
  * with a tombstone merged vs not merged"), and #201's re-hash of a stored delta before it is reused. The scripted
  * Remote Settings of [CrliteSyncFixture] answers `_since` with the records modified after the cursor and its tombstones.
  */
-internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
-    private val ts2 = ts + 1_000
-
-    /** A second delta, after the cursor, in another encoding (each filter is read in its own, #137). */
-    private val delta2 =
-        Rec(
-            "e7d1f0a2-0000-4000-8000-000000000002",
-            true,
-            ts + 500,
-            "20261022-1-compat.filter.delta",
-            UpdateFixtures.v4(listOf(log(2) to (1_000L to 2_000L))),
-            parent = full.id,
-        )
-
-    /** The first delta's tombstone, after the cursor. */
-    private val tombstone = """{"id":"${delta.id}","last_modified":${ts + 600},"deleted":true}"""
-
-    /** A full that re-parents the channel: another body, so no stored blob holds it. */
-    private val full2 =
-        Rec(
-            "a3c9e1b4-0000-4000-8000-000000000003",
-            false,
-            ts + 700,
-            "20261101-1-compat.filter",
-            UpdateFixtures.v4(listOf(log(3) to (1_000L to 2_000L))),
-        )
-
-    private val directory1 = GenerationNames.directory(ts, "$ts/${delta.id}")
-
-    /** [server] after the first generation installed, moved to `ts2` with [records] and [tombstones]. */
-    private fun next(
-        server: Server,
-        records: List<Rec>,
-        tombstones: List<String> = emptyList(),
-    ) {
-        server.ts = ts2
-        server.records = records.map { it.json() }
-        server.bodies = (listOf(full, delta) + records).associate { it.location to it.body }
-        server.tombstones = tombstones
-        server.fetcher.requests.clear()
-    }
-
-    private fun installedFirst(): Server {
-        val server = Server()
-        sync(server).assert(SyncOutcome.INSTALLED)
-        assertEquals(directory1, liveDirectory())
-        return server
-    }
-
+internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     @Test
     fun `incremental fixture - a delta changeset with a tombstone installs from the cursor, records json signed`() {
         val server = installedFirst()
@@ -265,17 +220,6 @@ internal class CrliteDeltaSyncTest : CrliteSyncFixture() {
         assertEquals(emptyList(), server.attachmentRequests())
         assertNull(liveDirectory())
         assertNotNull(store.meta(directory1))
-    }
-
-    @Test
-    fun `a pointed records json that does not read is a store failure, and the sync fetches in full`() {
-        val server = installedFirst()
-        storage.inner.write("crlite/compat/$directory1/records.json", "{".encodeToByteArray())
-        next(server, listOf(full, delta, delta2))
-        val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
-        assertEquals(1, run.storeFailures)
-        assertEquals(server.changesetUrl, server.fetcher.requests[1].url)
-        assertFalse("If-None-Match" in server.fetcher.requests[1].headers)
     }
 
     @Test

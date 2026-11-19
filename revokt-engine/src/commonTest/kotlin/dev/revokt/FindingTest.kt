@@ -90,7 +90,7 @@ class FindingTest {
     @Test
     fun `the enums are the spec's, in its order`() {
         assertEquals(
-            listOf("NO_CANDIDATE", "ALL_CANDIDATES_INVALID", "UNANCHORED", "PLATFORM_ONLY"),
+            listOf("NO_CANDIDATE", "ALL_CANDIDATES_INVALID", "UNANCHORED", "UNSUPPORTED_ALGORITHM", "PLATFORM_ONLY"),
             NoIssuerReason.entries.map { it.name },
         )
         assertEquals(listOf("SKIPPED", "DISABLED", "FAILED"), FallbackReason.entries.map { it.name })
@@ -106,7 +106,6 @@ class FindingTest {
             listOf(
                 "RECORD_LAST_MODIFIED",
                 "LAST_VERIFIED_POLL",
-                "MANIFEST_LAST_MODIFIED",
                 "SEED_SIGNED_TIME",
                 "SEQUENCE_TIME",
                 "ARTIFACT_DATE",

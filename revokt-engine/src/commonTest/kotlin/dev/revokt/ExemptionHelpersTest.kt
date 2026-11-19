@@ -270,7 +270,7 @@ class ExemptionHelpersTest {
 
     @Test
     fun `the enterprise recipe combines hostSuffixIn and platformOnly`() {
-        // §8: NO_ISSUER and ISSUER_UNVERIFIED under STRICT, exempted only for the corporate domains.
+        // §8: NO_ISSUER under STRICT, exempted only for the corporate domains.
         val recipe = Exemption.hostSuffixIn(listOf("corp.example")) and Exemption.platformOnly()
         assertTrue(recipe.isExempt(context("git.corp.example", NoIssuerReason.PLATFORM_ONLY)))
         assertFalse(recipe.isExempt(context("public.example", NoIssuerReason.PLATFORM_ONLY)))

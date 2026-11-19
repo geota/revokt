@@ -40,8 +40,7 @@ internal class CrliteRecord(
 
 /**
  * Spec §6.3 "Hardening": a filename matches `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` and is never a reserved name, compared
- * exactly (only a C2SP mirror's manifest names are compared ignoring case, §7.3). `index.bin` is reserved since
- * revision 48.
+ * exactly. `index.bin` is reserved since revision 48.
  */
 internal object AttachmentName {
     private const val MAX_LENGTH = 64

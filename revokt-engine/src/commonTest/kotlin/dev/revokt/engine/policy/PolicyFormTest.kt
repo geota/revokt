@@ -8,7 +8,6 @@ import dev.revokt.Enforcement
 import dev.revokt.Exemption
 import dev.revokt.Outcome
 import dev.revokt.Rule
-import dev.revokt.TrustClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -26,22 +25,10 @@ class PolicyFormTest {
             assertTrue(form.exemptions.isEmpty())
             assertEquals(table.requiredDatasets, form.requiredDatasets)
             assertEquals(table.staleness, form.staleness)
-            for (dataset in Dataset.entries) {
-                assertEquals(table.minTrustClass.getValue(dataset), form.minTrustClass(dataset), "$preset $dataset")
-            }
-            assertTrue(form.minTrustClassEntries.isEmpty())
             assertEquals(table.rollbackWindowMillis, form.rollbackWindowMillis)
             assertEquals(table.clockSkewMillis, form.clockSkewMillis)
             assertEquals(table.signedSourceFailingAfterMillis, form.signedSourceFailingAfterMillis)
         }
-    }
-
-    @Test
-    fun `a dataset with no minTrustClass entry takes the preset floor, an entry wins`() {
-        val strict = PolicyForm.of(Preset.STRICT)
-        val form = copy(strict, minTrustClass = mapOf(Dataset.CRLITE to TrustClass.MIRROR))
-        assertEquals(TrustClass.SIGNED, strict.minTrustClass(Dataset.CRLITE))
-        assertEquals(TrustClass.MIRROR, form.minTrustClass(Dataset.CRLITE))
     }
 
     @Test
@@ -61,7 +48,7 @@ class PolicyFormTest {
     @Test
     fun `exemptAnchors covers the exemptable non-evidence rules off the empty path`() {
         assertEquals(
-            listOf(Rule.NO_DATA, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE, Rule.UNSIGNED_DATA),
+            listOf(Rule.NO_DATA, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE),
             Rule.entries.filter { it.anchorExemptable() },
         )
     }
@@ -73,26 +60,6 @@ class PolicyFormTest {
                 assertEquals(emptyList(), validatePolicy(PolicyForm.of(preset), enforcement), "$preset $enforcement")
             }
         }
-    }
-
-    @Test
-    fun `NO_ISSUER and ISSUER_UNVERIFIED share one outcome and one exemption, and a split pair is refused`() {
-        assertEquals(setOf(Rule.NO_ISSUER, Rule.ISSUER_UNVERIFIED), PolicyTable.shared(Rule.NO_ISSUER))
-        assertEquals(setOf(Rule.NO_ISSUER, Rule.ISSUER_UNVERIFIED), PolicyTable.shared(Rule.ISSUER_UNVERIFIED))
-        for (rule in Rule.entries - setOf(Rule.NO_ISSUER, Rule.ISSUER_UNVERIFIED)) {
-            assertEquals(setOf(rule), PolicyTable.shared(rule))
-        }
-        val strict = PolicyForm.of(Preset.STRICT)
-        assertFailsWith<IllegalArgumentException> {
-            copy(strict, outcomes = strict.outcomes + (Rule.ISSUER_UNVERIFIED to Outcome.ALLOW))
-        }
-        val exemption = Exemption { true }
-        assertFailsWith<IllegalArgumentException> { copy(strict, exemptions = mapOf(Rule.NO_ISSUER to exemption)) }
-        assertFailsWith<IllegalArgumentException> {
-            copy(strict, exemptions = mapOf(Rule.NO_ISSUER to exemption, Rule.ISSUER_UNVERIFIED to Exemption { true }))
-        }
-        val both = copy(strict, exemptions = mapOf(Rule.NO_ISSUER to exemption, Rule.ISSUER_UNVERIFIED to exemption))
-        assertEquals(exemption, both.exemption(Rule.ISSUER_UNVERIFIED))
     }
 
     @Test
@@ -108,14 +75,12 @@ class PolicyFormTest {
         outcomes: Map<Rule, Outcome> = form.outcomes,
         exemptions: Map<Rule, Exemption> = form.exemptions,
         requiredDatasets: Set<Dataset> = form.requiredDatasets,
-        minTrustClass: Map<Dataset, TrustClass> = form.minTrustClassEntries,
     ) = PolicyForm(
         preset = form.preset,
         outcomes = outcomes,
         exemptions = exemptions,
         requiredDatasets = requiredDatasets,
         staleness = form.staleness,
-        minTrustClass = minTrustClass,
         rollbackWindowMillis = form.rollbackWindowMillis,
         clockSkewMillis = form.clockSkewMillis,
         signedSourceFailingAfterMillis = form.signedSourceFailingAfterMillis,

@@ -36,6 +36,13 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    // Tests that read the root project's files (SpecStatusTaskTest, RuleGrowabilityTest): declared, so a change to one
+    // re-runs them instead of leaving the task up to date.
+    inputs.files(
+        rootDir.resolve("../docs/spec/revokt-spec.md"),
+        rootDir.resolve("../docs/spec/test-plan.md"),
+        rootDir.resolve("../revokt-engine/src/jvmTest/resources/dev/revokt/engine/policy/rule-growability.tsv"),
+    ).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("rootProjectFiles")
 }
 
 gradlePlugin {

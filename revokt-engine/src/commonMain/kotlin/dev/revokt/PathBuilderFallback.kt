@@ -13,6 +13,10 @@ public interface PathBuilderFallback {
      * DERs, leaf first, with the trust anchor's certificate appended last; null when no path is found. A throw counts
      * as a failed build, `Finding.FallbackNotUsed(FAILED)`, and its outcome is cached in neither the path nor the
      * verdict cache; every `VirtualMachineError` except `StackOverflowError` is rethrown (§5.1 decision step 6).
+     *
+     * Every certificate of a returned path between the leaf and the anchor must be a CA under RFC 5280 basicConstraints
+     * (`cA = TRUE`), as `CertPathBuilder("PKIX")` requires. Decision step 6 checks it again (#225): a path with an
+     * intermediate that does not parse or is not a CA is a failed build, `FallbackNotUsed(FAILED)`.
      */
     public fun build(
         chainDer: List<ByteArray>,
