@@ -59,6 +59,10 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
     differences from Firefox; a refusal is `NO_ISSUER`, allowed unchecked under `DEFAULT`; what was checked.
   - Test plan: fixtures (ar) and (as), the `NameConstraintsFuzzTest` target, the reference walker's scope. References:
     the #237 entry. Divergences W11 to W15.
+- **#227 (#254):** §7.1's canonical JSON is integers only: a number outside `u64`/`i64` (a fraction, an exponent,
+  or an out-of-range integer) has no canonical form, so its payload is refused (`RECORDS`), in place of citing
+  `canonical_json`'s float rules; `deleted` reads such a number as zero lexically. The test plan's differential lists
+  the refusal and the out-of-range rejections as declared differences, and the `1e-400` tombstone.
 - **The nightly fuzzing tier** is `fuzz.yml`, every target for 300 s, one job per target, with each night's corpus
   added to the private corpus repository, in place of ClusterFuzzLite (#119, superseded), until OSS-Fuzz (test plan
   §9.1 "Tiers", §9.2 "Tiers and matrix").

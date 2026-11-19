@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -64,29 +65,34 @@ class JsonTest {
     }
 
     @Test
-    fun `integers keep serde_json's u64 and i64 ranges, everything else is a double`() {
+    fun `integers keep serde_json's u64 and i64 ranges, everything else is a decimal that knows if it is zero`() {
         assertEquals(JsonInteger(false, ULong.MAX_VALUE), parse("18446744073709551615"))
-        assertEquals(JsonDouble(1.8446744073709552E19), parse("18446744073709551616"))
         assertEquals(int(Long.MIN_VALUE), parse("-9223372036854775808"))
-        assertEquals(JsonDouble(-9.223372036854775809E18), parse("-9223372036854775809"))
-        assertEquals(JsonDouble(-1.8446744073709552E19), parse("-18446744073709551615"))
-        assertEquals(JsonDouble(1.2345678901234568E29), parse("123456789012345678901234567890"))
-        assertEquals(JsonDouble(-0.0), parse("-0"))
-        assertEquals(JsonDouble(0.0), parse("0.0"))
-        assertEquals(JsonDouble(100.0), parse("1E2"))
-        assertEquals(JsonDouble(1.0), parse("1.0"))
-        assertEquals(JsonDouble(-0.5), parse("-5e-1"))
-        assertEquals(JsonDouble(0.0), parse("1e-400"))
-        assertEquals(JsonDouble(-0.0), parse("-1e-400"))
-        assertEquals(JsonDouble(0.0), parse("0e99999999999999999999"))
-        assertEquals(JsonDouble(Double.MAX_VALUE), parse("1.7976931348623157e308"))
-        assertEquals(JsonDouble(Double.MIN_VALUE), parse("4.9e-324"))
+        for (text in listOf(
+            "18446744073709551616",
+            "-9223372036854775809",
+            "-18446744073709551615",
+            "123456789012345678901234567890",
+            "1E2",
+            "1.0",
+            "-5e-1",
+            "1e-400",
+            "1.7976931348623157e308",
+            "4.9e-324",
+            "1e400",
+            "-1.8e308",
+            "1e99999999999999999999",
+        )) {
+            assertSame(JsonDecimal.NONZERO, parse(text), text)
+        }
+        for (text in listOf("-0", "0.0", "-0.000", "0e5", "-0E-7", "0e99999999999999999999", "0.0e+400")) {
+            assertSame(JsonDecimal.ZERO, parse(text), text)
+        }
+        assertEquals("JsonDecimal(zero)", JsonDecimal.ZERO.toString())
+        assertEquals("JsonDecimal(non-zero)", JsonDecimal.NONZERO.toString())
         assertEquals(Long.MIN_VALUE, int(Long.MIN_VALUE).toLongOrNull())
         assertEquals(Long.MAX_VALUE, int(Long.MAX_VALUE).toLongOrNull())
         assertNull(JsonInteger(false, ULong.MAX_VALUE).toLongOrNull())
-        rejects(JsonError.NUMBER_OUT_OF_RANGE, "1e400")
-        rejects(JsonError.NUMBER_OUT_OF_RANGE, "-1.8e308")
-        rejects(JsonError.NUMBER_OUT_OF_RANGE, "[1e99999999999999999999]")
     }
 
     @Test
@@ -222,7 +228,6 @@ class JsonTest {
     fun `tree constructors check their invariants`() {
         assertFailsWith<IllegalArgumentException> { JsonInteger(true, 0u) }
         assertFailsWith<IllegalArgumentException> { JsonInteger(true, (1uL shl 63) + 1uL) }
-        assertFailsWith<IllegalArgumentException> { JsonDouble(Double.NaN) }
         assertFailsWith<IllegalArgumentException> { JsonObject.of("a" to JsonNull, "a" to JsonNull) }
         assertEquals(JsonObject.of("b" to JsonNull, "a" to JsonNull), JsonObject.of("a" to JsonNull, "b" to JsonNull))
         assertEquals(JsonObject.EMPTY.hashCode(), JsonObject.of().hashCode())

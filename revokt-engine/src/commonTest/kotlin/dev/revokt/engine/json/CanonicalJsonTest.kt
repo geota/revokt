@@ -9,7 +9,8 @@ import kotlin.test.assertFailsWith
 
 /**
  * Canonical JSON (spec §7.1): `canonical_json` 0.7.0's own `test_to_string` cases (its `src/ser.rs`, inputs written as
- * the JSON text its `json!` literals denote), and the corner cases of its number and escape rules. The differential
+ * the JSON text its `json!` literals denote) but its non-integer numbers, which revokt refuses (#227), and the corner
+ * cases of its integer and escape rules. The differential
  * against the crate itself is `CanonicalJsonOracleTest`.
  */
 class CanonicalJsonTest {
@@ -29,26 +30,8 @@ class CanonicalJsonTest {
         check("0", "0")
         check("123", "123")
         check("-123", "-123")
-        check("23.1", "2.31E1")
         check("23", "23")
-        check("1.0", "1E0")
-        check("0.0", "0E0")
-        check("23.0", "2.3E1")
-        check("-23.0", "-2.3E1")
         check("2300", "2300")
-        check("0.00099", "9.9E-4")
-        check("0.000011", "1.1E-5")
-        check("0.0000011", "1.1E-6")
-        check("0.000001", "1E-6")
-        check("5.6", "5.6E0")
-        check("0.00000099", "9.9E-7")
-        check("0.0000001", "1E-7")
-        check("0.000000930258908", "9.30258908E-7")
-        check("0.00000000000068272", "6.8272E-13")
-        check("1e21", "1E21")
-        check("1e20", "1E20")
-        check("1000000000000000.1", "1.0000000000000001E15")
-        check("11000000000000000.0", "1.1E16")
         check("\"\"", "\"\"")
         check("\" Preserve single quotes'in string\"", "\" Preserve single quotes'in string\"")
         check("\" Escapes quotes \\\" \"", "\" Escapes quotes \\\" \"")
@@ -80,11 +63,6 @@ class CanonicalJsonTest {
             "{\"a\":[\"zero\",\"one\"],\"b\":[\"two\",\"three\"]}",
         )
         check("{\"é\": \"check\"}", "{\"\\u00e9\":\"check\"}")
-        check(
-            "{\"def\": \"bar\", \"abc\": 0.000000930258908, \"ghi\": 1000000000000000000000.0, \"rust\": \"❤\", " +
-                "\"zoo\": [\"zorilla\", \"anteater\"]}",
-            "{\"abc\":9.30258908E-7,\"def\":\"bar\",\"ghi\":1E21,\"rust\":\"\\u2764\",\"zoo\":[\"zorilla\",\"anteater\"]}",
-        )
         check("[]", "[]")
         check("[\"one\", \"two\", \"three\"]", "[\"one\",\"two\",\"three\"]")
         check("[{\"key\": \"✓\"}]", "[{\"key\":\"\\u2713\"}]")
@@ -136,31 +114,27 @@ class CanonicalJsonTest {
     private fun String.hex(c: Int): String = replace("%04x", c.toString(16).padStart(4, '0'))
 
     @Test
-    fun `integers are exact, every other number is Rust's shortest exponential form`() {
+    fun `integers are exact, and every other number is refused, never printed (#227)`() {
         check("18446744073709551615", "18446744073709551615")
         check("-9223372036854775808", "-9223372036854775808")
-        check("18446744073709551616", "1.8446744073709552E19")
-        check("-9223372036854775809", "-9.223372036854776E18")
-        check("-0", "-0E0")
-        check("-0.0", "-0E0")
-        check("0e5", "0E0")
-        check("1e-400", "0E0")
-        check("100e-2", "1E0")
-        check("123456789012345678901234567890", "1.2345678901234568E29")
-        check("1.7976931348623157e308", "1.7976931348623157E308")
-        check("2.2250738585072014e-308", "2.2250738585072014E-308")
-        check("2.2250738585072009e-308", "2.225073858507201E-308")
-        check("4.9e-324", "5E-324")
-        check("1e23", "1E23")
-        check("9007199254740993.0", "9.007199254740992E15")
-        check("0.1", "1E-1")
-        check("0.30000000000000004", "3.0000000000000004E-1")
-        check("-1.5", "-1.5E0")
-        check("12345e-1", "1.2345E3")
-        check("[1.0,-2,3E2]", "[1E0,-2,3E2]")
-        // A tie between two shortest candidates: Rust's Dragon rounds up, where JDK 19+ Double.toString rounds to even.
-        check("1497898211722073.25", "1.4978982117220733E15")
-        check("1125899906842624.75", "1.1258999068426248E15")
+        check("0", "0")
+        check("2300", "2300")
+        // canonical_json would print each of these in Rust's shortest exponential form; no signed payload holds one.
+        for (text in listOf(
+            "23.1",
+            "1.0",
+            "0.0",
+            "-0",
+            "1e21",
+            "0.000000930258908",
+            "18446744073709551616",
+            "-9223372036854775809",
+            "1e-400",
+            "[1.0,-2,3E2]",
+            "{\"def\": \"bar\", \"abc\": 0.000000930258908}",
+        )) {
+            assertFailsWith<NonIntegerNumberException>(text) { canonical(text) }
+        }
     }
 
     @Test
@@ -168,10 +142,9 @@ class CanonicalJsonTest {
         val obj =
             JsonObject.of(
                 "\uD83D\uDE00" to JsonInteger.of(1),
-                "\uE000" to JsonDouble(0.5),
+                "\uE000" to JsonString("x"),
                 "a" to JsonArray.EMPTY,
             )
-        assertEquals("{\"a\":[],\"\\ue000\":5E-1,\"\\ud83d\\ude00\":1}", CanonicalJson.write(obj).decodeToString())
-        assertFailsWith<IllegalArgumentException> { ShortestDouble.exponential(Double.POSITIVE_INFINITY) }
+        assertEquals("{\"a\":[],\"\\ue000\":\"x\",\"\\ud83d\\ude00\":1}", CanonicalJson.write(obj).decodeToString())
     }
 }

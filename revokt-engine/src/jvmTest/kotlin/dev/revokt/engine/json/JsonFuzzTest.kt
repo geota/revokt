@@ -4,12 +4,15 @@
 package dev.revokt.engine.json
 
 import com.code_intelligence.jazzer.junit.FuzzTest
+import java.math.BigDecimal
 
 /**
  * Spec §9.1 target "JSON and canonical JSON" (#92): the only declared result of a parse is a tree or a
- * [JsonParseException]; anything else is a finding. A tree's canonical JSON is printable ASCII, reads back to the same
- * tree, and canonicalises to the same bytes again (`canonicalise(parse(canonicalise(parse(x)))) ==
- * canonicalise(parse(x))`). The parse stays within spec §6.5's 20·len + 64 KiB ([JsonBudget]): checked in replay,
+ * [JsonParseException]; anything else is a finding. A tree with no non-integer number has a canonical JSON that is
+ * printable ASCII, reads back to the same tree, and canonicalises to the same bytes again
+ * (`canonicalise(parse(canonicalise(parse(x)))) == canonicalise(parse(x))`); a tree with one has no canonical form
+ * (#227, [NonIntegerNumberException]). An input that is one non-integer number reads as zero exactly when
+ * `BigDecimal` reads it as zero, the one property a record's `deleted` takes from it. The parse stays within spec §6.5's 20·len + 64 KiB ([JsonBudget]): checked in replay,
  * not under Jazzer's instrumentation (see `instrumented`) or where the JVM has no allocation counter.
  * `-max_len=4194305`, `RevoktLimits.MAX_JSON_BYTES` + 1, so the over-cap rejection is reached. With `JAZZER_FUZZ`
  * unset JUnit replays the committed inputs in `JsonFuzzTestInputs/`.
@@ -47,12 +50,35 @@ class JsonFuzzTest {
                 check(bytes <= JsonBudget.bound(20, data.size)) { "the parse allocated $bytes bytes for ${data.size}" }
             }
             if (tree == null) return
-            val once = CanonicalJson.write(tree)
+            if (tree is JsonDecimal) checkZero(data, tree)
+            val once =
+                try {
+                    CanonicalJson.write(tree)
+                } catch (_: NonIntegerNumberException) {
+                    // #227: a tree with a non-integer number has no canonical form; the parse still had to hold.
+                    return
+                }
             check(once.all { it in 0x20..0x7E }) { "the canonical JSON is not printable ASCII" }
             // Escapes can triple a string's length, so the read-back is not held to the input cap.
             val again = Json.parse(once, maxBytes = Long.MAX_VALUE)
             check(again == tree) { "the canonical JSON reads back to a different tree" }
             check(CanonicalJson.write(again).contentEquals(once)) { "canonicalisation is not idempotent" }
+        }
+
+        /** [tree]'s zero, the lexical reading, against `BigDecimal`'s for the number [data] holds. */
+        private fun checkZero(
+            data: ByteArray,
+            tree: JsonDecimal,
+        ) {
+            val text = data.decodeToString().trim(' ', '\t', '\n', '\r')
+            // An exponent beyond Int is out of BigDecimal's range; its mantissa is still read lexically.
+            val exact =
+                try {
+                    BigDecimal(text).signum() == 0
+                } catch (_: NumberFormatException) {
+                    return
+                }
+            check(tree.zero == exact) { "$text reads as zero=${tree.zero}, BigDecimal says $exact" }
         }
 
         private fun measuredParse(data: ByteArray): Pair<JsonValue?, Long> =
