@@ -37,9 +37,15 @@ tests; **live checks** are informational.
   whose x5u is not PEM or whose chain fails → `FAILED`, stage `SIGNATURE`, and whose x5u is outside its validity →
   `CLOCK_SKEW`, stage `X5U`, each with the whole collection never fetched and nothing advanced; a whole collection
   that does not verify → fetched once; a
+  `_since` changeset that fails the content signature, or has an empty `signatures`, every entry skipped or a `null`
+  entry → the whole collection fetched once, which installs; one with a change that has no `id` → the whole
+  collection fetched once, with no x5u fetched for the `_since` one; one whose x5u fetch fails → `FAILED`, stage `X5U`,
+  whose x5u is not PEM or whose chain fails → `FAILED`, stage `SIGNATURE`, and whose x5u is outside its validity →
+  `CLOCK_SKEW`, stage `X5U`, each with the whole collection never fetched and nothing advanced; a whole collection
+  that does not verify → fetched once; a
   v3 filter with `approx_m` of 2^32, or a rank of 256 → `FAILED`; signature
   over records with a tombstone merged vs not merged.
-- **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (e), (f), (h) need the store, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) beside a live generation, a changeset older than the
+- **Data-path fixtures** ((a), (b), (d) and (g) less its fetcher items tagged [0.3] are 0.2 gates; those items and (e), (f), (h) need the store, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) beside a live generation, a changeset older than the
   higher of the watermark and the live `<ts>`, by 1 ms or more → `ROLLBACK_REFUSED` before any body, whatever its
   coverage; equal to a watermark above the live `<ts>` → installs; **newer timestamp with lower coverage → installs
   and advances the watermark**; with no generation loaded (a fresh loader beside a stored generation, an absent or
@@ -129,13 +135,14 @@ tests; **live checks** are informational.
   the seed's own complete directory → installed as it stands, rotted → completed again with only its
   rotted files re-staged and, when the load fails, left incomplete, never deleted; the directory the engine
   serves never rewritten; a throwing `updater.json` or pointer read → `STORE_FAILED`, nothing written;
-  a seed archive over 256 MiB, or a source that never ends → `SEED_UNREADABLE`, no store failure; (g) fetcher: the feed host's own
-  chain revoked in the stored generation → `BLOCKED_BY_SELF` within the 24 h hold, `blockedSource`, `blockedChainSha256` and `blockedLeafSerial` set,
-  `updateBlockedBySelf = true` (after the hold see below);
+  a seed archive over 256 MiB, or a source that never ends → `SEED_UNREADABLE`, no store failure; (g) fetcher: [0.3] the feed host's own
+  chain revoked in the stored generation → the fetch proceeds over the platform's trust manager and installs; [0.3] an
+  OkHttp base client whose trust manager is revokt's (wired with `.revokt(...)`) → `build()` throws
+  `IllegalArgumentException`;
   a signed `intermediates` changeset served on the `cert-revocations` URL → `FAILED`,
   `SYNC_SCHEMA_REJECTED`, cursor, watermark and `lastVerified*` unchanged; a Remote Settings 3xx → `FAILED`; a gzip
   body inflating past its cap → `FAILED` before the cap is exceeded; a signed attachment whose size
-  exceeds `MAX_FILTER_BYTES` → `FAILED` with `CAP_NEAR_LIMIT`, nothing advanced, not fetched; a signed revocation of the Remote Settings host → `BLOCKED_BY_SELF`; the same hit chain delivered to the public `fetcherTrustManager` by a consumer client → rejected, `feedHostBlock` not written, `updateBlockedBySelf` unchanged, while the same chain on the source's internal instance during its fetch → `BLOCKED_BY_SELF`; two sources with a factory that returns one client built over the first source's `tls` for both → the second source's hit chain, handshaking outside any fetch of the first source, writes nothing; a sync 23 h after the first block (across a process restart) is still `BLOCKED_BY_SELF`; one at 25 h installs with `feedHostRevoked = true` and `FEED_HOST_REVOKED` on `RevoktState.warnings`; a test engine whose `formats` is `{V4}` with the v3 seed and no fetching source → `start()` throws `SEED_UNREADABLE` in the sole-seed `ENFORCE` configuration (V `FORMAT_UNSUPPORTED` cannot fire first, there is no fetching source); a fetch answered 401 or 407 → `FAILED` with `httpStatus` set, on the JDK fetcher; [0.3] the same on the Android and OkHttp fetchers; the JDK fetcher against a server whose certificate lacks the host's SAN → `FAILED` (endpoint identification); [0.3] the same on the Android fetcher;
+  exceeds `MAX_FILTER_BYTES` → `FAILED` with `CAP_NEAR_LIMIT`, nothing advanced, not fetched; a test engine whose `formats` is `{V4}` with the v3 seed and no fetching source → `start()` throws `SEED_UNREADABLE` in the sole-seed `ENFORCE` configuration (V `FORMAT_UNSUPPORTED` cannot fire first, there is no fetching source); a fetch answered 401 or 407 → `FAILED` with `httpStatus` set, on the JDK fetcher; [0.3] the same on the Android and OkHttp fetchers; the JDK fetcher against a server whose certificate lacks the host's SAN → `FAILED` (endpoint identification); [0.3] the same on the Android fetcher;
   (h) lifecycle: `close()` with a live client under `STRICT` → subsequent handshakes succeed on the
   platform verdict, `evaluations` frozen, no events; `close()` before ready → `readyFuture()` fails with
   `IllegalStateException`; `ready` is false in `CREATED` even with `requiredDatasets` empty; a
@@ -150,9 +157,7 @@ tests; **live checks** are informational.
   not held and a second `Revokt` on the same directory starts as owner; `start()` over three
   pre-start instances whose second delegate throws once → the first `start()` throws, the second
   succeeds and all three report a snapshot; `trustManager(d)` racing `start()` → built by exactly
-  one of the two, never left without a snapshot; a read-only instance (lock held by another
-  process) has `fetcherTrustManager.status().anchorCount > 0` when a fetching source is configured
-  (the build precedes the lock); a seed-only configuration with an empty default trust store →
+  one of the two, never left without a snapshot; a seed-only configuration with an empty default trust store →
   `start()` succeeds, and the same configuration after `revokt.trustManager` was read before `start()` → `start()` throws `IllegalStateException`; `revokt.evaluator.evaluate(...)` in `CREATED` and after `close()` → `IllegalStateException`; Android instrumented on API 26: `close()` with a pending `readyFuture()`, a pending `syncAsync()` and a `resetStateAsync()` → every future completes exceptionally, no `NoSuchMethodError`; `limits { maxTrustManagers = 2 }` → the third distinct delegate throws, and after the second client is dropped and collected the third succeeds without waiting for the `ReferenceQueue`; the `STARTING` racers: a second `start()` entering during the sole-seed decode returns after the first completes and throws iff the first threw, with one `prepare` call on the engine; `close()` entering during the decode → the prepared generation is closed, never activated, the store lock released, lifecycle `CLOSED`, `engine.close()` called once after the decode thread returned; a gap trust manager whose delegate throws → `start()` throws after `activate`, the stored generation is complete, and the retry loads it on the loader without a second seed verification; `refreshAnchors()` succeeds → `anchorSnapshotId` advances on that trust
   manager and the next handshake for a previously cached chain misses both caches, `pathCacheHits`
   unchanged; `resetState()` → `anchorSnapshotId` unchanged on every live trust manager, the next
@@ -289,7 +294,7 @@ tests; **live checks** are informational.
   OkHttp (the chain cleaner runs lazily, §5.1 flow step 1); at most two platform validations per 3-arg call, the second only the null-host retry; a direct 3-arg call for a chain and host no socket or engine overload accepted gets no retry; a plain delegate on the JVM throws `IllegalArgumentException` at wiring; an empty or throwing anchor set throws `IllegalStateException`
   at wiring (`STARTED`) or from `start()` (instances created in `CREATED`) on both platforms and
   consumes no cap slot; the cap throws at `maxTrustManagers + 1` live instances and instances are collected when their
-  client is dropped; a trust manager that can go past flow step 1 has a snapshot (`fetcherTrustManager` without one never goes past flow step 1); `enforcement = ENFORCE` after the start task found the sole seed unreadable → `IllegalStateException` `NO_DATA_AT_FLIP`, enforcement unchanged; two concurrent
+  client is dropped; a trust manager that can go past flow step 1 has a snapshot; `enforcement = ENFORCE` after the start task found the sole seed unreadable → `IllegalStateException` `NO_DATA_AT_FLIP`, enforcement unchanged; two concurrent
   `trustManager(d)` calls return the same instance.
 - **API rows** (revision 56; 0.2 gates unless tagged): `Exemptions.and`/`or` as CEL: `broken or true`, `true or
   broken` → exempt, no finding; `false and broken`, `broken and false` → not exempt, no finding; `broken and true` →

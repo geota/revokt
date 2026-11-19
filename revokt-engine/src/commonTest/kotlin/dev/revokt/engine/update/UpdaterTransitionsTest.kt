@@ -276,7 +276,6 @@ class UpdaterTransitionsTest {
         assertFailsWith<IllegalArgumentException> { after(SyncOutcome.INSTALLED) }
         assertFailsWith<IllegalArgumentException> { after(SyncOutcome.UNCHANGED, ts = now) }
         assertFailsWith<IllegalArgumentException> { after(SyncOutcome.FAILED, server = -1) }
-        assertFailsWith<IllegalArgumentException> { after(SyncOutcome.BLOCKED_BY_SELF) }
     }
 
     @Test

@@ -20,7 +20,7 @@ as before.
 **Redirects** (revision 56, the maintainer's decision; the grammar and the rules below revision 58, the decisions on
 #192; code `RedirectingFetcher`, #204): followed in the fetch layer by one shared internal `RedirectingFetcher` that
 wraps a C2SP mirror source's `HttpFetcher`; neither the loader nor any client follows one, and the underlying client
-never does (§3). Every hop is a new request through the wrapped fetcher, so it goes through the source's `FetcherTls`
+never does (§3). Every hop is a new request through the wrapped fetcher, so it goes through the source's TLS (`FetcherTls` until #219 cut it)
 and the §8 host checks. **The hop grammar** (revision 58, the maintainer's decisions Q2 and Q3): every URL of the
 chain, the request's own included, is read by the one strict grammar the x5u URL is read by too (§7.1), with IP
 literals allowed: `https://` in lowercase, so `HTTPS://` is refused; an authority with no userinfo; a host that is a

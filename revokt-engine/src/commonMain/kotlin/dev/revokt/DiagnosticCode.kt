@@ -38,12 +38,6 @@ public enum class DiagnosticCode {
     /** sync: the §6.5 self-check mismatched, with [SyncOutcome.FAILED]. */
     ENGINE_SELF_CHECK_FAILED,
 
-    /** sync: the signed source's feed-host hold expired and fetches proceed (§8). */
-    FEED_HOST_REVOKED,
-
-    /** S: the fetcher trust manager's snapshot build failed. */
-    FETCHER_TRUST_UNAVAILABLE,
-
     /** V: `RevoktStorage.inMemory()` with a fetching source. */
     IN_MEMORY_STORE_WITH_FETCHING_SOURCE,
 
