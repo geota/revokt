@@ -51,10 +51,10 @@ internal class PendingGeneration(
 
 /**
  * What an install publishes beside the generation's own fields (spec §4 `DataState`, §5.1): whether it is the seed and
- * the seed's `seedFormat`, the seed `STALE` gate ([DatasetGeneration.staleGateOpen]), and the clock reading and
- * `clockSkew` that `clockBehind` is recomputed from at the publish. [pointerCounted] when the caller has already counted
- * a malformed pointer and each pointed `meta.json` that does not read (the seed load, which reads them first, #138), so
- * the install's own read of them for the new `previous` does not count them again: each store fault is counted once.
+ * the seed's `seedFormat`, the seed `STALE` gate ([DatasetGeneration.staleGateOpen]), and the clock reading
+ * `updater.json` is written at. [pointerCounted] when the caller has already counted a malformed pointer and each
+ * pointed `meta.json` that does not read (the seed load, which reads them first, #138), so the install's own read of
+ * them for the new `previous` does not count them again: each store fault is counted once.
  * [heal] when the caller found no trustworthy pointer (rule (b) of the seed-load rule, lead 2026-11-16): a complete
  * directory of this generation's name is then held and installed as it stands when it is this generation, and one whose
  * `meta.json` is absent or does not read is this install's to complete, pointed or not, and never deleted by it on a
@@ -65,13 +65,11 @@ internal class Publication(
     val seedFormat: Int?,
     val staleGateOpen: Boolean,
     val nowMillis: Long,
-    val clockSkewMillis: Long,
     val pointerCounted: Boolean = false,
     val heal: Boolean = false,
 ) {
     init {
         require(fromSeed == (seedFormat != null)) { "seedFormat is set exactly for a seed" }
-        require(clockSkewMillis >= 0) { "clockSkew is negative" }
     }
 }
 
@@ -217,7 +215,7 @@ private class Install(
         stage = SyncStage.ACTIVATE
         engine.activate(p)
         activated = true
-        val epoch = publish(maxCoverageMillis(index))
+        val epoch = publish()
         stage = SyncStage.STORE
         store.point(Pointer(directory, previous(directory)))
         updater?.let { store.writeUpdater(it, publication.nowMillis) }
@@ -345,12 +343,11 @@ private class Install(
         }
 
     /**
-     * Publishes the snapshot with this generation for its dataset, carrying [maxCoverage], the maximum coverage the
-     * loader decoded from its `index.bin`; `clockBehind` recomputed for every dataset, the engine's coverage end (null
-     * when the engine cannot tell, or throws), and the next epoch, which it returns.
+     * Publishes the snapshot with this generation for its dataset, the engine's coverage end (null when the engine
+     * cannot tell, or throws), and the next epoch, which it returns.
      */
     @Suppress("TooGenericExceptionCaught") // An injected engine's getter that throws means it cannot tell (§3.2).
-    private fun publish(maxCoverage: Long?): Long {
+    private fun publish(): Long {
         val current = snapshot.snapshot
         val installed =
             DatasetGeneration(
@@ -361,13 +358,8 @@ private class Install(
                 seedFormat = publication.seedFormat,
                 pending = false,
                 staleGateOpen = publication.staleGateOpen,
-                clockBehind = false,
-                maxCoverageMillis = maxCoverage,
             )
-        val datasets =
-            (current.datasets + (meta.dataset to installed)).mapValues { (_, d) ->
-                d.copy(clockBehind = d.sourceTimestampMillis?.let(::clockBehind) ?: false)
-            }
+        val datasets = current.datasets + (meta.dataset to installed)
         val coverageEnd =
             try {
                 engine.coverageEndMillis
@@ -379,10 +371,6 @@ private class Install(
         snapshot.publish(GenerationSnapshot(epoch, datasets, coverageEnd))
         return epoch
     }
-
-    /** §6.3: `sourceTimestampMillis > now + clockSkew`, at this publish. */
-    private fun clockBehind(sourceTimestampMillis: Long): Boolean =
-        sourceTimestampMillis - publication.clockSkewMillis > publication.nowMillis
 
     /**
      * The pointer's new `previous`: the first of the generation the engine served before this install, then the old

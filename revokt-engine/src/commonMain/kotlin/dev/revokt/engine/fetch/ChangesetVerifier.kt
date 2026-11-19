@@ -17,31 +17,40 @@ import dev.revokt.engine.verify.checkValidity
 import dev.revokt.engine.verify.validateX5uChain
 import okio.ByteString
 
-/** Why a changeset's signature did not verify (spec §7.1); [ChangesetVerification.Failed.stage] says where. */
-internal enum class SignatureFailure {
+/**
+ * Why a changeset's signature did not verify (spec §7.1); [ChangesetVerification.Failed.stage] says where. [resets] when
+ * a `_since` changeset that fails this way is fetched once more as the whole collection (§7.1 "reset-and-retry once"):
+ * the failures Firefox's `RemoteSettingsClient.sys.mjs` (`cac25a6`, lines 861 to 888) retries as an
+ * `InvalidSignatureError` (a mismatch, and its `MissingSignatureError`), whose whole collection carries its own metadata
+ * and is verified afresh. An x5u failure never resets: the sync's verifier holds one x5u result per URL (§7.1), so the
+ * retry would fail the same way.
+ */
+internal enum class SignatureFailure(
+    val resets: Boolean,
+) {
     /** `metadata.signatures` is absent, not an array, or empty. */
-    NO_SIGNATURES,
+    NO_SIGNATURES(true),
 
     /** Every entry was skipped: none has a non-empty `signature`, a non-empty `x5u` and a `mode` absent or `p384ecdsa`. */
-    NONE_TRIED,
+    NONE_TRIED(true),
 
     /** An element reached in the loop is JSON `null`, which Firefox's `const { x5u, signature, mode } = sig` throws on. */
-    NULL_ENTRY,
+    NULL_ENTRY(true),
 
     /** The x5u fetch failed ([ChangesetVerification.Failed.clientFailure] says how), at stage `X5U`. */
-    X5U_FETCH,
+    X5U_FETCH(false),
 
     /** The x5u body is not a PEM chain as [X5uPem] reads it. */
-    X5U_PEM,
+    X5U_PEM(false),
 
     /** The x5u chain failed a check of [validateX5uChain]. */
-    X5U_CHAIN,
+    X5U_CHAIN(false),
 
     /** A link of the x5u path is outside its validity window at the local clock: `CLOCK_SKEW`, stage `X5U`. */
-    X5U_VALIDITY,
+    X5U_VALIDITY(false),
 
     /** The content signature did not verify under the x5u leaf ([ContentSignature]). */
-    CONTENT_SIGNATURE,
+    CONTENT_SIGNATURE(true),
 }
 
 /**

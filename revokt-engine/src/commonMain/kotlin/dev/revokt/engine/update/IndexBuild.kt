@@ -10,7 +10,6 @@ import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.api.ClubcardFormatException
 import dev.revokt.engine.c2sp.C2spIndex
-import dev.revokt.engine.c2sp.IndexFile
 import dev.revokt.engine.c2sp.Window
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.StoreLayout
@@ -73,15 +72,10 @@ internal sealed interface Placement {
 
 /** What [buildIndex] produced. */
 internal sealed interface IndexBuild {
-    /**
-     * [index] is the generation's `index.bin`; [filters] are the placed records in its filename order; [coverageHighs]
-     * is the latest coverage `high` of each placed filter that covers a log ([coverageHighs] of the index), the input
-     * of the §6.3 coverage rules ([SyncRules.decide]).
-     */
+    /** [index] is the generation's `index.bin`; [filters] are the placed records in its filename order. */
     class Built(
         val index: ByteArray,
         val filters: List<PlacedFilter>,
-        val coverageHighs: List<ULong>,
     ) : IndexBuild
 
     /**
@@ -175,29 +169,8 @@ internal fun buildIndex(
     if (size > C2spIndex.MAX_BYTES) {
         return IndexBuild.Refused(IndexRefusal.OVER_CAP, "index.bin would be $size bytes, over ${C2spIndex.MAX_BYTES}")
     }
-    return IndexBuild.Built(C2spIndex.write(index), placed, coverageHighs(index))
+    return IndexBuild.Built(C2spIndex.write(index), placed)
 }
-
-/**
- * The latest coverage `high` of each filter of [index] that covers a log, in filter order, unsigned as decoded (spec
- * §6.3's coverage rules); a filter with no entry contributes none.
- */
-internal fun coverageHighs(index: IndexFile): List<ULong> {
-    val highs = arrayOfNulls<ULong>(index.filenames.size)
-    for (entry in index.logs.values.flatten()) {
-        val high = highs[entry.filterIndex]
-        if (high == null || entry.window.high > high) highs[entry.filterIndex] = entry.window.high
-    }
-    return highs.filterNotNull()
-}
-
-/**
- * The maximum coverage `high` of [index], clamped to [Long.MAX_VALUE], or null when it covers no log: what the loader
- * publishes as a generation's maximum coverage ([DatasetGeneration.maxCoverageMillis]), decoded by the loader itself
- * rather than read from the engine (spec §3.2, §6.5; #137's review note on #190).
- */
-internal fun maxCoverageMillis(index: IndexFile): Long? =
-    coverageHighs(index).maxOrNull()?.let { minOf(it, Long.MAX_VALUE.toULong()).toLong() }
 
 /** The names a generation directory holds beside its filters. */
 private val DIRECTORY_FILES = setOf(StoreLayout.INDEX, StoreLayout.META, StoreLayout.RECORDS)

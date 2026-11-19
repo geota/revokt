@@ -25,8 +25,6 @@ class PolicyFormTest {
             assertTrue(form.exemptions.isEmpty())
             assertEquals(table.requiredDatasets, form.requiredDatasets)
             assertEquals(table.staleness, form.staleness)
-            assertEquals(table.rollbackWindowMillis, form.rollbackWindowMillis)
-            assertEquals(table.clockSkewMillis, form.clockSkewMillis)
             assertEquals(table.signedSourceFailingAfterMillis, form.signedSourceFailingAfterMillis)
         }
     }
@@ -81,8 +79,6 @@ class PolicyFormTest {
         exemptions = exemptions,
         requiredDatasets = requiredDatasets,
         staleness = form.staleness,
-        rollbackWindowMillis = form.rollbackWindowMillis,
-        clockSkewMillis = form.clockSkewMillis,
         signedSourceFailingAfterMillis = form.signedSourceFailingAfterMillis,
     )
 }

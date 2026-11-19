@@ -12,7 +12,7 @@ public enum class SyncStage {
     /** The §5.1 fetcher trust manager build retry failed; nothing was fetched. */
     FETCHER_TRUST,
 
-    /** The changeset fetch, or its `last_modified` `CLOCK_SKEW`. */
+    /** The changeset fetch. */
     CHANGESET,
 
     /** The x5u fetch, or a validity `CLOCK_SKEW`. */

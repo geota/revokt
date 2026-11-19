@@ -46,7 +46,6 @@ internal class SeedLoaderTest : SeedFixture() {
             listOf(generationId, directory, ts),
             listOf(load.generationId, load.directory, load.timestampMillis),
         )
-        assertFalse(load.clockBehind)
         assertEquals(emptyList(), load.warnings)
         assertEquals(generationId, engine.live)
         val live = live()
@@ -138,16 +137,13 @@ internal class SeedLoaderTest : SeedFixture() {
     }
 
     @Test
-    fun `a seed 25 h ahead loads with clockBehind, ageMillis 0, CLOCK_BEHIND and the watermark at its timestamp`() {
+    fun `a seed 25 h ahead loads like any other, with ageMillis 0, no warning and the watermark at its timestamp`() {
         val now = ts - 25 * hour
         val load = installed(load(Seed(), now))
-        assertTrue(load.clockBehind)
-        assertEquals(DiagnosticCode.CLOCK_BEHIND, load.warnings.single().code)
-        assertTrue(live().clockBehind)
+        assertEquals(emptyList(), load.warnings)
         assertEquals(ts, updater(now).watermarkMillis)
         val state = dataStates(snapshot.snapshot, PolicyForm.of(Preset.DEFAULT), now).getValue(Dataset.CRLITE)
         assertEquals(0, state.ageMillis)
-        assertTrue(state.clockBehind)
         assertTrue(state.fromSeed)
     }
 
@@ -381,9 +377,9 @@ internal class SeedLoaderTest : SeedFixture() {
     }
 
     @Test
-    fun `a coverage end beyond the signed timestamp plus clockSkew is unreadable`() {
+    fun `a coverage end beyond the signed timestamp installs, as no rule compares the two`() {
         val early = ts - 400 * day
-        assertUnreadable(load(Seed(ts = early)), "coverage ends beyond")
+        assertEquals(early, installed(load(Seed(ts = early))).timestampMillis)
     }
 
     @Test

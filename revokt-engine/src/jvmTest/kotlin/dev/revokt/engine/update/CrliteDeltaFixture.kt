@@ -81,7 +81,7 @@ internal open class CrliteDeltaFixture : CrliteSyncFixture() {
         snapshot.publish(
             GenerationSnapshot(
                 0,
-                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false, false)),
+                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false)),
                 null,
             ),
         )

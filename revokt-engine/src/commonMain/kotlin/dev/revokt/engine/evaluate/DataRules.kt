@@ -64,7 +64,7 @@ internal val DATA_RULES: List<DataRuleRow> =
  * read, null when the clock threw: then no age is known, so nothing is stale and `STALE` cannot fire, while `NO_DATA`
  * which needs no time, still does.
  *
- * `ageMillis = now − sourceTimestampMillis`, clamped at 0 (the clock-behind case, §4 `DataState.clockBehind`);
+ * `ageMillis = now − sourceTimestampMillis`, clamped at 0 (a signed timestamp ahead of the local clock, §4);
  * `stale` is `ageMillis > staleAfter` for a dataset with a staleness entry, the loud flag that fires no rule; `rules` is
  * what [DATA_RULES] fire. A required dataset the snapshot does not hold has no generation and is not pending.
  */
@@ -94,7 +94,6 @@ internal fun dataStates(
                     .sourceTimestampMillis(timestamp)
                     .ageMillis(age)
                     .pending(facts.pending)
-                    .clockBehind(generation?.clockBehind == true)
                     .seedFormat(generation?.seedFormat)
                     .stale(staleness != null && age != null && age > staleness.staleAfterMillis)
                     .rules(DATA_RULES.filter { it.fires(facts) }.mapTo(HashSet()) { it.rule })

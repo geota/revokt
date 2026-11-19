@@ -50,11 +50,10 @@ class UpdaterTransitionsTest {
     private fun after(
         outcome: SyncOutcome,
         ts: Long? = null,
-        clockBehind: Boolean = false,
         server: Long? = null,
         from: UpdaterRecord = record,
         at: Long = now,
-    ) = UpdaterTransitions.after(from, RS, outcome, at, ts, clockBehind, server)
+    ) = UpdaterTransitions.after(from, RS, outcome, at, ts, server)
 
     private fun UpdaterRecord.rs(): SourceRecord = sources.getValue(RS)
 
@@ -63,13 +62,12 @@ class UpdaterTransitionsTest {
         val cases =
             listOf(
                 after(SyncOutcome.INSTALLED, ts = now - hour),
-                after(SyncOutcome.INSTALLED, ts = now + 2 * day, clockBehind = true),
+                after(SyncOutcome.INSTALLED, ts = now + 2 * day),
                 after(SyncOutcome.UNCHANGED),
                 after(SyncOutcome.FAILED),
                 after(SyncOutcome.CLOCK_SKEW),
                 after(SyncOutcome.STORE_FAILED),
                 after(SyncOutcome.ROLLBACK_REFUSED),
-                after(SyncOutcome.DEFERRED),
                 after(SyncOutcome.BACKOFF),
             )
         for (r in cases) {
@@ -97,10 +95,11 @@ class UpdaterTransitionsTest {
         assertEquals(now, r.rs().lastVerifiedAtMillis)
         assertEquals(0, r.rs().consecutiveFailures)
         assertNull(r.rs().backoffUntilMillis)
-        // The watermark is a high-water mark: an install inside the window keeps it, and the cursor follows the install.
-        val inWindow = after(SyncOutcome.INSTALLED, ts = now - 3 * hour)
-        assertEquals(record.watermarkMillis, inWindow.watermarkMillis)
-        assertEquals(now - 3 * hour, inWindow.rs().lastVerifiedLastModified)
+        // The watermark is a high-water mark: an older install (no generation loaded, §7.1) keeps it, and the cursor
+        // follows the install.
+        val older = after(SyncOutcome.INSTALLED, ts = now - 3 * hour)
+        assertEquals(record.watermarkMillis, older.watermarkMillis)
+        assertEquals(now - 3 * hour, older.rs().lastVerifiedLastModified)
         assertEquals(record.watermarkMillis, after(SyncOutcome.INSTALLED, ts = now - 2 * hour).watermarkMillis)
         assertEquals(now - 2 * hour + 1, after(SyncOutcome.INSTALLED, ts = now - 2 * hour + 1).watermarkMillis)
         // The first install of a dataset sets it.
@@ -109,10 +108,10 @@ class UpdaterTransitionsTest {
     }
 
     @Test
-    fun `the clock-behind install advances lastVerifiedAtMillis only, never the watermark or the cursor`() {
-        val r = after(SyncOutcome.INSTALLED, ts = now + 2 * day, clockBehind = true)
-        assertEquals(record.watermarkMillis, r.watermarkMillis)
-        assertEquals(verified.lastVerifiedLastModified, r.rs().lastVerifiedLastModified)
+    fun `a far-future install advances the cursor and the watermark like any other`() {
+        val r = after(SyncOutcome.INSTALLED, ts = now + 2 * day)
+        assertEquals(now + 2 * day, r.watermarkMillis)
+        assertEquals(now + 2 * day, r.rs().lastVerifiedLastModified)
         assertEquals(now, r.rs().lastVerifiedAtMillis)
         assertEquals(0, r.rs().consecutiveFailures)
         assertFalse(UpdaterTransitions.signedSourceFailing(r, RS, now, day))
@@ -143,12 +142,10 @@ class UpdaterTransitionsTest {
     }
 
     @Test
-    fun `ROLLBACK_REFUSED is not a feed failure and DEFERRED leaves the count too`() {
-        for (outcome in listOf(SyncOutcome.ROLLBACK_REFUSED, SyncOutcome.DEFERRED)) {
-            val r = after(outcome)
-            assertEquals(verified.copy(lastAttemptAtMillis = now), r.rs(), "$outcome")
-            assertEquals(record.watermarkMillis, r.watermarkMillis, "$outcome")
-        }
+    fun `ROLLBACK_REFUSED is not a feed failure`() {
+        val r = after(SyncOutcome.ROLLBACK_REFUSED)
+        assertEquals(verified.copy(lastAttemptAtMillis = now), r.rs())
+        assertEquals(record.watermarkMillis, r.watermarkMillis)
     }
 
     @Test
@@ -195,7 +192,7 @@ class UpdaterTransitionsTest {
         assertEquals(now, after(SyncOutcome.FAILED, server = 0).rs().backoffUntilMillis)
         assertEquals(now + 7_000, after(SyncOutcome.INSTALLED, ts = now, server = 7_000).rs().backoffUntilMillis)
         val waiting = record.copy(sources = mapOf(RS to verified.copy(backoffUntilMillis = now + hour)))
-        for (outcome in listOf(SyncOutcome.UNCHANGED, SyncOutcome.ROLLBACK_REFUSED, SyncOutcome.DEFERRED)) {
+        for (outcome in listOf(SyncOutcome.UNCHANGED, SyncOutcome.ROLLBACK_REFUSED)) {
             assertNull(after(outcome, from = waiting).rs().backoffUntilMillis, "$outcome")
         }
         assertNull(after(SyncOutcome.INSTALLED, ts = now, from = waiting).rs().backoffUntilMillis)
@@ -278,7 +275,6 @@ class UpdaterTransitionsTest {
     fun `the inputs are checked`() {
         assertFailsWith<IllegalArgumentException> { after(SyncOutcome.INSTALLED) }
         assertFailsWith<IllegalArgumentException> { after(SyncOutcome.UNCHANGED, ts = now) }
-        assertFailsWith<IllegalArgumentException> { after(SyncOutcome.FAILED, clockBehind = true) }
         assertFailsWith<IllegalArgumentException> { after(SyncOutcome.FAILED, server = -1) }
         assertFailsWith<IllegalArgumentException> { after(SyncOutcome.BLOCKED_BY_SELF) }
     }

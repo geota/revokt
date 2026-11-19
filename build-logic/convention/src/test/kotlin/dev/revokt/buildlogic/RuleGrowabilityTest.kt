@@ -165,7 +165,7 @@ class RuleGrowabilityTest {
 
     @Test
     fun `preset rows are frozen, and a new dataset's rows are allowed only outside the staleness map`() {
-        assertOne(problems(committed.replace("DEFAULT\tCRLITE\t86400000", "DEFAULT\tCRLITE\t43200000")), "[presets] row DEFAULT", "rollbackWindowMillis")
+        assertOne(problems(committed.replace("DEFAULT\tCRLITE\t86400000", "DEFAULT\tCRLITE\t43200000")), "[presets] row DEFAULT", "signedSourceFailingAfterMillis")
         assertOne(problems(committed.replace("STRICT\tCRLITE\t259200000\t2592000000", "STRICT\tCRLITE\t259200000\t2592000001")), "row STRICT/CRLITE", "rejectStaleAfterMillis")
         val outside = "$committed\nDEFAULT\tONECRL\t-\t-\nSTRICT\tONECRL\t-\t-\n"
         assertEquals(emptyList(), problems(outside))

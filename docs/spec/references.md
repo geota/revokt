@@ -564,6 +564,28 @@ Appendix A of the spec: what was verified against live sources and reference cod
     is the same `FetchError::HttpFetch`, carrying the file's URL (lines 290 to 310), and a body whose SHA-256 differs
     is `FetchError::HashMismatch` with the local path (lines 317 to 319). upki has no stage, so only the URL in the
     error tells a manifest fetch from a file fetch; revokt's `CHANGESET` and `ATTACHMENT` make that split explicit.
+- **Revision 61 sources** (the sync rules of §7.1, §7.2 and §6.3, read 2026-11-19 through the GitHub contents API):
+  - **The rollback guard**: Firefox's `RemoteSettingsClient.sys.mjs` at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`,
+    when the remote timestamp is below the local one (line 1203), verifies the local data (lines 1206 to 1214); when it
+    verifies, the changeset is ignored ("CDN served staled data, ignore", line 1216), and when it does not, or the check
+    throws, the older data is imported ("we prefer stale data over corrupt/tempered", lines 1227 to 1230). There is no
+    window, and an equal timestamp is not refused. upki v1.0.1 (`9821cce`, `upki/src/revocation/fetch.rs`) has no
+    rollback check: the manifest's `generated_at` is never compared and a 200 replaces the cache.
+  - **Reset-and-retry**: the same file retries the import from scratch (`{ retry: true }`, no `_since`) only when the
+    error is an `InvalidSignatureError` (lines 862 to 889), the class of a failed verification, of
+    `MissingSignatureError` and of `CorruptedDataError`; a rejected x5u fetch is another error and fails the sync
+    with no retry. Firefox's x5u chain and validity failures count as invalid signatures, and its retry fetches the
+    x5u again; revokt holds one x5u result per URL per sync, so it never retries an x5u failure. upki never retries.
+  - **No clock rule on signed data**: Firefox's only local-time inputs are the x5u validity (`Now()`, X8 in
+    `docs/decisions/DIVERGENCES.md`) and `ageSeconds`, server time minus the changeset timestamp, used for telemetry
+    only. upki has no `<ts>`. Neither defers a download on a metered network.
+  - **Kinto's monotonic timestamps**: Kinto 26.6.0 (`kinto/core/storage/postgresql/schema.sql`, lines 73 to 126)
+    bumps a collection's timestamp to the previous one + 1 whenever the new one would not exceed it, so the next
+    changeset after a far-future `<ts>` passes it. A record written with an explicit `last_modified` keeps it (lines
+    116 to 120), but Mozilla's signer never writes one: mozilla/remote-settings at
+    `92b74ed9bcbd6774c4d1c2af87a5a93c79faa66a`, `kinto-remote-settings/src/kinto_remote_settings/signer/updater.py`,
+    `push_records_to_destination` drops `last_modified` from every record before it writes the destination
+    collection ("Timestamp should be bumped in destination", lines 366 to 368).
 - Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
   2026-10-30: `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` reads the SCT extension's
   `extnValue` with `der::ExpectTagAndGetValueAtEnd(extnValue, der::OCTET_STRING, …)`, which requires the tag `0x04`

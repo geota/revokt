@@ -24,6 +24,22 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
   - §4: `build()` refuses a single-label `allowedDomains` entry.
   - §6.5: the 256 MiB seed archive cap is kept, its basis restated for 1,024 records; a larger archive is refused
     whole, never truncated.
+- **#224, the sync rules aligned with Firefox:**
+  - §7.1's rollback guard: a changeset older than the floor, the higher of the stored watermark and the live
+    `<ts>`, is `ROLLBACK_REFUSED` however little older, and one equal to it installs. With no generation loaded the
+    stored watermark is not read, as Firefox imports when its local data does not verify. `rollbackWindow`, the
+    in-window coverage-monotonic rule and their policy, golden-fixture and form rows are gone.
+  - §7.1's reset-and-retry runs once, as the whole collection, on a content-signature mismatch, on no usable
+    signature entry (`NO_SIGNATURES`, `NONE_TRIED`, `NULL_ENTRY`) and on an unmergeable change list, which is a
+    trigger of its own; never on an x5u fetch, PEM, chain or validity failure.
+  - §7.2: no metered deferral. The `meteredNetwork` seam, `SyncOutcome.DEFERRED` and `METERED_DEFERRED` are gone.
+  - §6.3, §6.5, §4 and §8: no clock rule on signed data. The changeset `CLOCK_SKEW` at `CHANGESET`, the clock-behind
+    install, `DataState.clockBehind`, `CLOCK_BEHIND` and the coverage bound (a sync's and a seed's) are gone, and so
+    is `clockSkew` from the policy; `SyncOutcome.CLOCK_SKEW` is the x5u validity at stage `X5U` only. `ageMillis` is
+    still clamped at 0.
+  - §10 records the far-future `<ts>` residual (`STALE` fires late) and the residual of the unread watermark;
+    Appendix A cites Firefox, upki, Kinto and Mozilla's signer for each rule. The test plan's content-signature row
+    and data-path (a) and (b) follow.
 
 ### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 

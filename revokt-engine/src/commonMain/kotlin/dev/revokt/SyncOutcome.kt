@@ -7,10 +7,9 @@ package dev.revokt
 public enum class SyncOutcome {
     INSTALLED,
     UNCHANGED,
-
-    /** A metered-deferred full download (§7.2); not [UNCHANGED], which reads as healthy. */
-    DEFERRED,
     FAILED,
+
+    /** An x5u link outside its validity window at the local clock, at stage [SyncStage.X5U] (§7.1). */
     CLOCK_SKEW,
     ROLLBACK_REFUSED,
     BACKOFF,

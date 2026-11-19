@@ -103,19 +103,9 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
             listOf(s.lastVerifiedLastModified, s.lastVerifiedAtMillis, s.lastAttemptAtMillis, s.consecutiveFailures),
         )
         assertNull(s.backoffUntilMillis)
-        // The published generation, with the loader's own maximum coverage.
+        // The published generation.
         val published = live()
-        assertEquals(
-            listOf(id, ts, false),
-            listOf(
-                published.generationId,
-                published.sourceTimestampMillis,
-                published.clockBehind,
-            ),
-        )
-        val index = C2spIndex.read(assertNotNull(store.file(directory, StoreLayout.INDEX)))
-        assertEquals(maxCoverageMillis(index), published.maxCoverageMillis)
-        assertNotNull(published.maxCoverageMillis)
+        assertEquals(listOf<Any?>(id, ts), listOf(published.generationId, published.sourceTimestampMillis))
     }
 
     @Test
@@ -226,35 +216,27 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `content-signature sequence, no seed - 25 h ahead installs clock-behind, then UNCHANGED, then normally`() {
+    fun `content-signature sequence, no seed - 25 h ahead installs like any other, then the 304 is UNCHANGED`() {
         val server = Server()
         val behind = ts - 25 * hour
-        sync(server, now = behind).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CLOCK_BEHIND)
-        assertTrue(live().clockBehind)
+        sync(server, now = behind).assert(SyncOutcome.INSTALLED)
         assertEquals(ts, live().sourceTimestampMillis)
-        // lastVerifiedAtMillis advanced; the watermark and the cursor did not.
-        assertNull(updater(behind).watermarkMillis)
+        // No rule reads local time: the watermark, the cursor and lastVerifiedAtMillis all advance.
+        assertEquals(ts, updater(behind).watermarkMillis)
         val s = sourceRecord(behind)
         assertEquals(
-            listOf<Any?>(null, behind, 0),
+            listOf<Any?>(ts, behind, 0),
             listOf(s.lastVerifiedLastModified, s.lastVerifiedAtMillis, s.consecutiveFailures),
         )
-        // The next poll of the same changeset is UNCHANGED, the clock still behind.
+        // The next poll sends the cursor and is a 304, the clock still behind; then the next changeset installs.
         server.fetcher.requests.clear()
         sync(server, now = behind + hour).assert(SyncOutcome.UNCHANGED)
         assertEquals(emptyList(), server.attachmentRequests())
-        assertTrue(live().clockBehind)
-        // The clock corrected: the next changeset installs normally and advances everything. With no cursor it is the
-        // whole collection; the full's blob and the delta's file are reused, so no body is fetched.
         server.ts = ts + 1_000
-        server.fetcher.requests.clear()
         val now = server.ts + hour
         sync(server, now = now).assert(SyncOutcome.INSTALLED)
-        assertFalse(live().clockBehind)
         assertEquals(server.ts, updater(now).watermarkMillis)
         assertEquals(server.ts, sourceRecord(now).lastVerifiedLastModified)
-        assertEquals(server.changesetUrl, server.fetcher.requests[1].url)
-        assertEquals(emptyList(), server.attachmentRequests())
     }
 
     @Test
@@ -388,47 +370,24 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `a watermark past the window is ROLLBACK_REFUSED before any body, and not a failure`() {
-        store.writeUpdater(UpdaterRecord(watermarkMillis = ts + 2 * day), ts)
-        val server = Server()
-        sync(server).assert(SyncOutcome.ROLLBACK_REFUSED)
-        assertEquals(emptyList(), server.attachmentRequests())
-        val s = sourceRecord()
-        assertEquals(
-            listOf<Any?>(null, null, 0),
-            listOf(s.lastVerifiedLastModified, s.lastVerifiedAtMillis, s.consecutiveFailures),
-        )
-        assertEquals(ts + 2 * day, updater().watermarkMillis)
-    }
-
-    @Test
-    fun `a changeset beyond now + clockSkew beside a sane live generation is CLOCK_SKEW at CHANGESET`() {
-        val server = Server()
-        sync(server).assert(SyncOutcome.INSTALLED)
-        val now = ts + 2 * hour
-        server.ts = now + 2 * day
-        sync(server, now = now).assert(SyncOutcome.CLOCK_SKEW, SyncStage.CHANGESET, *failed())
-        assertEquals(ts, updater(now).watermarkMillis)
-        assertEquals("$ts/${delta.id}", live().generationId)
-    }
-
-    @Test
-    fun `a coverage end beyond the signed ts + clockSkew is FAILED at INDEX and leaves the generation out`() {
+    fun `a coverage end beyond the signed ts installs, as no rule compares the two`() {
         val early = 1_792_000_000_000
         val server = Server(ts = early)
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.INDEX, *failed())
-        assertNothingAdvanced(early + hour)
+        sync(server).assert(SyncOutcome.INSTALLED)
+        assertEquals(early, live().sourceTimestampMillis)
     }
 
     @Test
-    fun `inside the rollback window a lower maximum coverage is ROLLBACK_REFUSED`() {
+    fun `an older changeset is ROLLBACK_REFUSED whatever its coverage, with no window`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        // An older changeset (inside the window) of the full alone covers less than the live full and delta.
-        server.ts = ts - hour
-        server.records = listOf(full.json())
-        sync(server, now = ts + 2 * hour).assert(SyncOutcome.ROLLBACK_REFUSED)
-        assertEquals("$ts/${delta.id}", live().generationId)
+        // One millisecond older, with the full alone (less coverage) or the same records (as much): both refused.
+        for (records in listOf(listOf(full.json()), listOf(full.json(), delta.json()))) {
+            server.ts = ts - 1
+            server.records = records
+            sync(server, now = ts + 2 * hour).assert(SyncOutcome.ROLLBACK_REFUSED)
+            assertEquals("$ts/${delta.id}", live().generationId)
+        }
     }
 
     @Test
@@ -517,12 +476,14 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
 
     @Test
     fun `the placement refusal precedes the rollback decision, as the issue orders them`() {
-        store.writeUpdater(UpdaterRecord(watermarkMillis = ts + 2 * day), ts)
+        sync(Server()).assert(SyncOutcome.INSTALLED)
         val long = "c".repeat(40) + ".delta"
         val f = Rec(full.id, false, full.effectiveTimestamp, GenerationNames.derive(long), full.body)
         val d = Rec(delta.id, true, delta.effectiveTimestamp, long, delta.body, parent = full.id)
-        val server = Server(records = listOf(f.json(), d.json()))
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.INDEX, *failed(DiagnosticCode.INDEX_INCONSISTENT))
+        // Older than the live generation, so the rollback guard would refuse it after the placement.
+        val server = Server(ts = ts - 1, records = listOf(f.json(), d.json()))
+        sync(server, now = ts + 2 * hour)
+            .assert(SyncOutcome.FAILED, SyncStage.INDEX, *failed(DiagnosticCode.INDEX_INCONSISTENT))
     }
 
     @Test
@@ -532,6 +493,17 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         sync(server).assert(SyncOutcome.INSTALLED)
         val payload = checkNotNull(ContentSignature.recordsJson(listOf(full.json(), delta.json()).map(::json), ts))
         assertContentEquals(payload, store.file(assertNotNull(liveDirectory()), StoreLayout.RECORDS))
+    }
+
+    @Test
+    fun `a whole collection that does not merge is verified as served, and never fetched again`() {
+        // A change with no id: the merge over nothing is null, so the changes are verified as they are, and fail.
+        val server = Server()
+        server.signature = Server(records = listOf(full.json())).sign()
+        server.records = listOf(full.json(), delta.json(), """{"last_modified":$ts,"deleted":true}""")
+        sync(server).assert(SyncOutcome.FAILED, SyncStage.SIGNATURE, *failed())
+        assertEquals(listOf(monitor, server.changesetUrl, x5u), server.fetcher.requests.map { it.url })
+        assertNothingAdvanced()
     }
 
     @Test

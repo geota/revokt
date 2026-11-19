@@ -53,12 +53,9 @@ import dev.revokt.engine.update.PlacedFilter
 import dev.revokt.engine.update.Placement
 import dev.revokt.engine.update.Publication
 import dev.revokt.engine.update.SnapshotRef
-import dev.revokt.engine.update.SyncClock
-import dev.revokt.engine.update.SyncRules
 import dev.revokt.engine.update.buildIndex
 import dev.revokt.engine.update.install
 import dev.revokt.engine.update.placeFilters
-import dev.revokt.engine.update.saturatingAdd
 import dev.revokt.engine.verify.ContentSignature
 import dev.revokt.engine.verify.RawSignature
 import dev.revokt.engine.verify.X5uChainResult
@@ -75,7 +72,7 @@ import okio.ByteString.Companion.toByteString
 /**
  * How one seed load ended (spec §6.5 "Seed archive", §4 S bullet, §5.1): typed, so the start task (#143, #147) maps it
  * to its diagnostics and lifecycle. [storeFailures] is what the load adds to `storeFailures`; [warnings] are the
- * diagnostics it raised (`SEED_UNREADABLE`, `SEED_CHANNEL_MISMATCH`, `CLOCK_BEHIND`).
+ * diagnostics it raised (`SEED_UNREADABLE`, `SEED_CHANNEL_MISMATCH`).
  */
 internal sealed interface SeedLoad {
     val storeFailures: Int
@@ -143,19 +140,19 @@ internal sealed interface SeedLoad {
 
     /**
      * The seed is live: activated, published at [generationEpoch] as [generationId], pointed to, and `updater.json`
-     * written with the watermark at `max(watermark, `[timestampMillis]`)` and `seedInstalledAtMillis`. [clockBehind]
-     * when its signed timestamp is beyond local now + `clockSkew` (§6.5: it installs, loudly).
+     * written with the watermark at `max(watermark, `[timestampMillis]`)` and `seedInstalledAtMillis`. A signed
+     * timestamp ahead of the local clock installs like any other (§7.1: no rule on signed data reads local time).
      */
     class Installed(
         val directory: String,
         val generationId: String,
         val generationEpoch: Long,
         val timestampMillis: Long,
-        val clockBehind: Boolean,
         override val storeFailures: Int,
-        override val warnings: List<PolicyDiagnostic>,
     ) : SeedLoad {
-        override fun toString(): String = "Installed($generationId at epoch $generationEpoch, clockBehind=$clockBehind)"
+        override val warnings: List<PolicyDiagnostic> get() = emptyList()
+
+        override fun toString(): String = "Installed($generationId at epoch $generationEpoch)"
     }
 
     /**
@@ -179,19 +176,14 @@ internal sealed interface SeedLoad {
 
 /**
  * The inputs of a [SeedLoader] beside its collaborators: the pinned content-signature root SPKI SHA-256s the x5u chain
- * must end in, the Remote Settings [collection] `meta.json` records, `clockSkew`, and whether a fetching source is
- * configured, which opens the §8 `STALE` gate at once when none is.
+ * must end in, the Remote Settings [collection] `meta.json` records, and whether a fetching source is configured, which
+ * opens the §8 `STALE` gate at once when none is.
  */
 internal class SeedPolicy(
     val pinnedRootSpkis: Set<ByteString>,
     val collection: String?,
-    val clockSkewMillis: Long,
     val fetchingSource: Boolean,
-) {
-    init {
-        require(clockSkewMillis >= 0) { "clockSkew is negative" }
-    }
-}
+)
 
 /**
  * Reads, verifies and installs the seed archive [source] opens, for the dataset and channel of [store] (spec §6.5 "Seed
@@ -247,8 +239,8 @@ internal class SeedLoader(
      *    trusted pointer, a newer complete directory that re-verifies is adopted, else the seed installs.
      * 7. Each attachment inflated under `min(signed size, MAX_FILTER_BYTES)`, checked against its signed size and
      *    SHA-256, and written as the sync writes it: a full as its blob, a delta staged in the generation directory.
-     * 8. `index.bin` rebuilt ([buildIndex]) and byte-compared with the archive's; the `SIGNED` coverage bound
-     *    ([SyncRules.coverageWithinBound]) at `<ts>`; every placed filter's encoding listed by the engine.
+     * 8. `index.bin` rebuilt ([buildIndex]) and byte-compared with the archive's; every placed filter's encoding listed
+     *    by the engine.
      * 9. The install ([install]): `SIGNED`, `fromSeed`, [Freshness.SEED_SIGNED_TIME], generation id `"<ts>/<last placed
      *    record id>"`, `updater.json` with the watermark at `max(watermark, <ts>)` and `seedInstalledAtMillis` = now;
      *    then the prune, as after a sync's install, never in a rule (b) load nor past a newer complete directory.
@@ -451,10 +443,6 @@ internal class SeedLoader(
                     is IndexBuild.Refused -> fail("index.bin cannot be rebuilt: $build")
                 }
             if (!built.index.contentEquals(verified.index)) fail("the shipped index.bin differs from the rebuilt one")
-            val clock = SyncClock(now, policy.clockSkewMillis, 0)
-            if (!SyncRules.coverageWithinBound(built.coverageHighs, ts, clock)) {
-                fail("a filter's coverage ends beyond $ts + clockSkew")
-            }
             bodies.unlisted(placed)?.let { fail("${it.record.id} is in an encoding the engine does not list") }
             val meta = meta(verified, generationId, bodies.format(placed), bodies.blobs)
             val pending = PendingGeneration(meta, built.index, bodies.deltas, verified.recordsJson)
@@ -904,7 +892,6 @@ internal class SeedLoader(
                     SEED_FORMAT.toInt(),
                     gateOpen,
                     now,
-                    policy.clockSkewMillis,
                     pointerCounted = true,
                     heal = heal,
                 )
@@ -919,27 +906,7 @@ internal class SeedLoader(
                     // In a rule (b) load the flip heals the pointer and nothing is pruned: the next install over a
                     // valid pointer prunes.
                     if (prunable) prune(result.directory)
-                    val clockBehind = ts > saturatingAdd(now, policy.clockSkewMillis)
-                    val warnings =
-                        if (clockBehind) {
-                            listOf(
-                                diagnostic(
-                                    DiagnosticCode.CLOCK_BEHIND,
-                                    "the seed's $ts is beyond now $now + clockSkew",
-                                ),
-                            )
-                        } else {
-                            emptyList()
-                        }
-                    SeedLoad.Installed(
-                        result.directory,
-                        result.generationId,
-                        result.generationEpoch,
-                        ts,
-                        clockBehind,
-                        storeFailures,
-                        warnings,
-                    )
+                    SeedLoad.Installed(result.directory, result.generationId, result.generationEpoch, ts, storeFailures)
                 }
 
                 is InstallResult.Failed -> {

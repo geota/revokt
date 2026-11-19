@@ -13,8 +13,8 @@ import java.time.Duration
 
 /**
  * The policy (spec §4, §8): an [outcome] for every [Rule], per-rule exemptions, [requiredDatasets], a per-dataset
- * staleness map and three time fields, stored as milliseconds with
- * `java.time.Duration` accessors. There are two presets, [DEFAULT] and [STRICT], and no from-scratch builder:
+ * staleness map and the `signedSourceFailingAfter` duration, stored as milliseconds with a
+ * `java.time.Duration` accessor. There are two presets, [DEFAULT] and [STRICT], and no from-scratch builder:
  * [newBuilder] starts from this policy's values and keeps the preset it derives from (§4 "Growability contract"), so a
  * rule added in a minor takes that preset's row. Compiles to the internal commonMain form decide and evaluate read.
  * Immutable; equality is identity, since an [Exemption] has none.
@@ -23,10 +23,6 @@ public class RevoktPolicy private constructor(
     internal val form: PolicyForm,
 ) {
     public val requiredDatasets: Set<Dataset> = form.requiredDatasets
-
-    public val rollbackWindowMillis: Long = form.rollbackWindowMillis
-
-    public val clockSkewMillis: Long = form.clockSkewMillis
 
     public val signedSourceFailingAfterMillis: Long = form.signedSourceFailingAfterMillis
 
@@ -37,11 +33,6 @@ public class RevoktPolicy private constructor(
 
     /** [dataset]'s staleness thresholds, or null when the dataset has no entry (then `STALE` never fires for it). */
     public fun staleness(dataset: Dataset): Staleness? = form.staleness(dataset)?.let(Staleness::of)
-
-    public fun rollbackWindow(): Duration = Duration.ofMillis(rollbackWindowMillis)
-
-    /** Also every coverage future bound (§8). */
-    public fun clockSkew(): Duration = Duration.ofMillis(clockSkewMillis)
 
     public fun signedSourceFailingAfter(): Duration = Duration.ofMillis(signedSourceFailingAfterMillis)
 
@@ -73,8 +64,6 @@ public class RevoktPolicy private constructor(
         private val exemptions = LinkedHashMap(from.exemptions)
         private var requiredDatasets: Set<Dataset> = from.requiredDatasets
         private val staleness = LinkedHashMap(from.staleness)
-        private var rollbackWindowMillis = from.rollbackWindowMillis
-        private var clockSkewMillis = from.clockSkewMillis
         private var signedSourceFailingAfterMillis = from.signedSourceFailingAfterMillis
 
         /** Sets [rule]'s outcome (spec §4, §8). */
@@ -140,15 +129,6 @@ public class RevoktPolicy private constructor(
                 }
             }
 
-        public fun rollbackWindow(d: Duration): Builder = rollbackWindowMillis(durationMillis("rollbackWindow", d))
-
-        public fun rollbackWindowMillis(millis: Long): Builder =
-            apply { rollbackWindowMillis = nonNegative("rollbackWindow", millis) }
-
-        public fun clockSkew(d: Duration): Builder = clockSkewMillis(durationMillis("clockSkew", d))
-
-        public fun clockSkewMillis(millis: Long): Builder = apply { clockSkewMillis = nonNegative("clockSkew", millis) }
-
         public fun signedSourceFailingAfter(d: Duration): Builder =
             signedSourceFailingAfterMillis(durationMillis("signedSourceFailingAfter", d))
 
@@ -172,8 +152,6 @@ public class RevoktPolicy private constructor(
                     exemptions = exemptions,
                     requiredDatasets = requiredDatasets,
                     staleness = staleness,
-                    rollbackWindowMillis = rollbackWindowMillis,
-                    clockSkewMillis = clockSkewMillis,
                     signedSourceFailingAfterMillis = signedSourceFailingAfterMillis,
                 ),
             )
@@ -206,16 +184,6 @@ public fun RevoktPolicy.Builder.rejectStaleAfter(
     dataset: Dataset,
     d: kotlin.time.Duration?,
 ): RevoktPolicy.Builder = rejectStaleAfterMillis(dataset, d?.inWholeMilliseconds)
-
-/** [RevoktPolicy.Builder.rollbackWindow] over a `kotlin.time.Duration`, in whole milliseconds. */
-@JvmSynthetic
-public fun RevoktPolicy.Builder.rollbackWindow(d: kotlin.time.Duration): RevoktPolicy.Builder =
-    rollbackWindowMillis(d.inWholeMilliseconds)
-
-/** [RevoktPolicy.Builder.clockSkew] over a `kotlin.time.Duration`, in whole milliseconds. */
-@JvmSynthetic
-public fun RevoktPolicy.Builder.clockSkew(d: kotlin.time.Duration): RevoktPolicy.Builder =
-    clockSkewMillis(d.inWholeMilliseconds)
 
 /** [RevoktPolicy.Builder.signedSourceFailingAfter] over a `kotlin.time.Duration`, in whole milliseconds. */
 @JvmSynthetic

@@ -46,7 +46,6 @@ class DataRulesTest {
         assertEquals(5_000L, s.ageMillis)
         assertFalse(s.fromSeed)
         assertFalse(s.pending)
-        assertFalse(s.clockBehind)
         assertNull(s.seedFormat)
         assertFalse(s.stale)
         assertEquals(emptySet(), s.rules)
@@ -144,9 +143,8 @@ class DataRulesTest {
 
     @Test
     fun `the age is clamped at 0 for a generation from the future`() {
-        val s = state(generation(ageMillis = -DAY, clockBehind = true), rejectAt3Days)!!
+        val s = state(generation(ageMillis = -DAY), rejectAt3Days)!!
         assertEquals(0L, s.ageMillis)
-        assertTrue(s.clockBehind)
         assertFalse(s.stale)
         assertEquals(emptySet(), s.rules)
     }

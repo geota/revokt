@@ -27,6 +27,7 @@ import dev.revokt.engine.fetch.ChangesetVerifier
 import dev.revokt.engine.fetch.ClientResult
 import dev.revokt.engine.fetch.CrliteRecord
 import dev.revokt.engine.fetch.RemoteSettingsClient
+import dev.revokt.engine.fetch.SignatureFailure
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonObject
@@ -41,7 +42,6 @@ import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
 import dev.revokt.engine.verify.ContentSignature
 import dev.revokt.engine.verify.RawSignature
-import dev.revokt.engine.walker.absorb
 import dev.revokt.engine.walker.isFatal
 import dev.revokt.engine.walker.restoreInterrupt
 import dev.revokt.safeLog
@@ -57,32 +57,14 @@ internal class SyncRun(
 }
 
 /**
- * The policy inputs of one [CrliteSync] (`RevoktPolicy`, §4): `clockSkew` and `rollbackWindow`, and CRLite's
- * `staleAfter`, null when the policy has no staleness entry for it (§7.2's metered deferral lasts until the live data is
- * past it).
- */
-internal class SyncPolicy(
-    val clockSkewMillis: Long,
-    val rollbackWindowMillis: Long,
-    val staleAfterMillis: Long?,
-) {
-    init {
-        require(clockSkewMillis >= 0) { "clockSkew is negative" }
-        require(rollbackWindowMillis >= 0) { "rollbackWindow is negative" }
-        require(staleAfterMillis == null || staleAfterMillis >= 0) { "staleAfter is negative" }
-    }
-}
-
-/**
  * The CRLite updater for one Remote Settings source, dataset and channel (spec §11's 0.2 row: "CRLite updater and the
  * updater record over `RevoktStorage.inMemory()`"): [syncOnce] syncs one generation, from the cursor when the store holds
  * one (#141) and the whole collection otherwise (#137). The schedule is the loader's (#147), which runs [syncOnce] on its
  * dispatcher, never two at once.
  *
  * [client] is the source's client for `CRLITE`, [store] the dataset and channel's layout over the store, [snapshot] the
- * published snapshot this sync reads the live generation from and publishes to, [verifier] the content-signature and
- * x5u-chain verifier, [policy] the policy's inputs, and [meteredNetwork] the builder's seam (§4: sampled once per sync
- * before a full download; a throw reads as false).
+ * published snapshot this sync reads the live generation from and publishes to, and [verifier] the content-signature
+ * and x5u-chain verifier. No step reads a policy value: the sync rules compare signed timestamps only (§7.1).
  */
 internal class CrliteSync(
     private val client: RemoteSettingsClient,
@@ -90,9 +72,7 @@ internal class CrliteSync(
     private val engine: RevocationEngine,
     private val snapshot: SnapshotRef,
     private val verifier: SignatureVerifier,
-    private val policy: SyncPolicy,
     private val logger: RevoktLogger,
-    private val meteredNetwork: () -> Boolean = { false },
 ) {
     init {
         require(store.dataset == Dataset.CRLITE) { "the CRLite updater syncs CRLITE, not ${store.dataset}" }
@@ -110,25 +90,23 @@ internal class CrliteSync(
      *    `records.json` reads, else the whole collection. A 304 is `UNCHANGED`.
      * 3. Verify it ([ChangesetVerifier]) over the stored records with its changes merged, tombstones first
      *    ([ContentSignature.merge]); everything after reads only the verified records and `<ts>`
-     *    ([ChangesetVerification.Verified]), never the changeset's `changes`. A `_since` changeset that does not verify is
-     *    fetched once more as the whole collection, which must verify (§7.1 "reset-and-retry once").
+     *    ([ChangesetVerification.Verified]), never the changeset's `changes`. A `_since` changeset whose changes do not
+     *    merge, or whose signature fails as Firefox's `InvalidSignatureError` does ([SignatureFailure.resets]), is
+     *    fetched once more as the whole collection, which must verify (§7.1 "reset-and-retry once"); any other failure
+     *    ends the sync.
      * 4. The schema check and the channel filter ([RemoteSettingsClient.checkRecords]): `SYNC_SCHEMA_REJECTED`.
      * 5. The generation's records and names ([placeFilters]): not exactly one full, or two attachments that map to one
      *    name, is `FAILED` with `INDEX_INCONSISTENT` at `INDEX` before any body is fetched.
-     * 6. The decision before any body ([SyncRules.admit]): `UNCHANGED`, `ROLLBACK_REFUSED`, `CLOCK_SKEW`, or on.
+     * 6. The rollback guard before any body ([SyncRules.decide]): `UNCHANGED`, `ROLLBACK_REFUSED`, or on.
      * 7. The cap before any body: a signed record over `MAX_FILTER_BYTES` is `FAILED` with `CAP_NEAR_LIMIT` at
      *    `ATTACHMENT`, and nothing is fetched. There is no per-sync total, as neither Firefox nor upki has one (the
      *    maintainer's decision on #137; `MAX_SYNC_BYTES` is dropped).
-     * 8. The metered deferral (§7.2): when the full must be downloaded (no stored blob re-hashes to it), the dataset has
-     *    data, and that data is not past `staleAfter`, a metered network defers the sync: `DEFERRED` with
-     *    `METERED_DEFERRED`.
-     * 9. Each body, one at a time, checked against its signed size and hash and written: a full as a blob, reused without
+     * 8. Each body, one at a time, checked against its signed size and hash and written: a full as a blob, reused without
      *    a fetch when its blob is stored and re-hashes (§6.5; a mismatch is fetched and rewritten, `storeFailures++`); a
      *    delta staged as a file of the generation directory, copied without a fetch from a pointed generation whose file
      *    of that name re-hashes to it, as Firefox and upki reuse a filter on disk whose hash matches.
-     * 10. [buildIndex], then the decision on the coverage ([SyncRules.decide]), then [install] in §6.5's order, which
-     *    writes `updater.json` after the pointer flip; on success the store is pruned to what the pointer names,
-     *    unless the flip healed a malformed pointer (#256).
+     * 9. [buildIndex], then [install] in §6.5's order, which writes `updater.json` after the pointer flip; on success
+     *    the store is pruned to what the pointer names, unless the flip healed a malformed pointer (#256).
      *
      * Every outcome but `INSTALLED` writes `updater.json` itself ([UpdaterTransitions.after]) and deletes any directory
      * this sync staged: the cursor, `lastVerified*` and the watermark advance only through an install. Every throwable is
@@ -152,6 +130,9 @@ internal class CrliteSync(
             val failure: ChangesetVerification.Failed,
         ) : Fetched
 
+        /** A `_since` changeset whose changes do not merge with the stored records ([ContentSignature.merge] is null). */
+        object Unmergeable : Fetched
+
         class Ended(
             val result: SyncResult,
         ) : Fetched
@@ -164,7 +145,6 @@ internal class CrliteSync(
     ) {
         private val source = client.source
         private val channel = store.channel
-        private val clock = SyncClock(now, policy.clockSkewMillis, policy.rollbackWindowMillis)
         private var stage = SyncStage.STORE
 
         /**
@@ -256,6 +236,7 @@ internal class CrliteSync(
                     is Fetched.Verified -> fetched.verified
                     is Fetched.Unverified -> return unverified(fetched.failure)
                     is Fetched.Ended -> return fetched.result
+                    Fetched.Unmergeable -> error("only a _since changeset is unmergeable, and it is fetched again")
                 }
             stage = SyncStage.SCHEMA
             val crlite = ok(client.checkRecords(verified.records, channel)) { return it }
@@ -272,8 +253,10 @@ internal class CrliteSync(
         private inner class Changesets {
             /**
              * The changeset at [expected], verified: from [since] over [base] (the pointed generation's records) when
-             * [since] is set, and once more as the whole collection when that does not verify ([ChangesetVerifier] shared,
-             * so an x5u URL is fetched once per sync, §7.1); the whole collection when [since] is null.
+             * [since] is set, and the whole collection when it is null. A `_since` changeset is fetched once more as the
+             * whole collection when its changes do not merge with [base] or its signature fails with a failure that
+             * [SignatureFailure.resets] (§7.1, Firefox's retry of an `InvalidSignatureError`); never on an x5u failure,
+             * which the shared [ChangesetVerifier] would reuse (one x5u result per URL per sync, §7.1).
              */
             fun verified(
                 expected: Long,
@@ -282,27 +265,38 @@ internal class CrliteSync(
             ): Fetched {
                 val signatures = ChangesetVerifier(client, verifier, now)
                 val first = changeset(signatures, expected, since, base)
-                // Every verification failure resets, as Firefox retries every InvalidSignatureError of an import from scratch.
-                if (first !is Fetched.Unverified || since == null) return first
-                backoff(first.failure.backoffMillis)
-                first.failure.httpStatus?.let { lastStatus = it }
+                val why =
+                    when {
+                        since == null -> {
+                            return first
+                        }
+
+                        first == Fetched.Unmergeable -> {
+                            "its changes do not merge with the stored records"
+                        }
+
+                        first is Fetched.Unverified && first.failure.failure.resets -> {
+                            backoff(first.failure.backoffMillis)
+                            first.failure.httpStatus?.let { lastStatus = it }
+                            "it did not verify (${first.failure})"
+                        }
+
+                        else -> {
+                            return first
+                        }
+                    }
                 logger.safeLog(
                     LogLevel.WARN,
-                    "${source.sourceId} ${store.root}: the changeset since $since did not verify (${first.failure}); " +
-                        "fetching the whole collection",
+                    "${source.sourceId} ${store.root}: the changeset since $since: $why; fetching the whole collection",
                 )
-                if (first.failure.stage == SyncStage.X5U) {
-                    // §7.1: an x5u URL is fetched and validated once per sync, so the retry reuses this failure.
-                    logger.safeLog(
-                        LogLevel.WARN,
-                        "${source.sourceId} ${store.root}: the retry reuses this sync's failed x5u result; it fails " +
-                            "the same way when the whole collection names the same x5u",
-                    )
-                }
                 return changeset(signatures, expected, null, emptyList())
             }
 
-            /** One changeset at [expected] from [since] (null: the whole collection), verified over [base] merged with it. */
+            /**
+             * One changeset at [expected] from [since] (null: the whole collection), verified over [base] merged with it;
+             * [Fetched.Unmergeable] when [since] is set and its changes do not merge. The whole collection merges over
+             * nothing, and when even that is null (a record with no string `id`), its changes are verified as served.
+             */
             private fun changeset(
                 signatures: ChangesetVerifier,
                 expected: Long,
@@ -321,8 +315,9 @@ internal class CrliteSync(
                 val changeset = ok(fetched) { return Fetched.Ended(it) }
                 gates.nearCap(fetched, "the changeset", RevoktLimits.MAX_JSON_BYTES)
                 stage = SyncStage.SIGNATURE
-                val merged = ContentSignature.merge(base, changeset.changes) ?: changeset.changes
-                return when (val verification = signatures.verify(changeset, merged)) {
+                val merged = ContentSignature.merge(base, changeset.changes)
+                if (merged == null && since != null) return Fetched.Unmergeable
+                return when (val verification = signatures.verify(changeset, merged ?: changeset.changes)) {
                     is ChangesetVerification.Verified -> {
                         backoff(verification.backoffMillis)
                         val x5u = verification.x5uBody.size.toLong()
@@ -359,28 +354,20 @@ internal class CrliteSync(
                     is Placement.Placed -> placement.filters
                     is IndexBuild.Refused -> return refused(placement)
                 }
-            val live = reads.liveGeneration()
-            var ruled = live
-            var admitted = SyncRules.admit(ts, record.watermarkMillis, ruled, clock)
-            if (admitted == SyncDecision.UNCHANGED && live != null && !reads.pointed(live)) {
-                // The live generation's install activated but its flip did not land: retry it, never stop (#190).
-                ruled = null
-                admitted = SyncRules.admit(ts, record.watermarkMillis, null, clock)
-            }
-            decided(admitted, ts)?.let { return it }
-            return fetched(verified, crlite, records, placed, ruled)
+            val live = reads.liveTimestamp()
+            val decision = SyncRules.decide(ts, record.watermarkMillis, live)
+            // The live generation's install activated but its flip did not land: retry it, never stop (#190).
+            val reflip = decision == SyncDecision.UNCHANGED && live != null && !reads.pointed(live)
+            if (!reflip) decided(decision, ts)?.let { return it }
+            return fetched(verified, crlite, records, placed)
         }
 
-        /**
-         * Steps 7 to 10 for the [placed] filters of [records] (the channel's [crlite] records), decided against
-         * [ruled], the live generation the rules compare with.
-         */
+        /** Steps 7 to 9 for the [placed] filters of [records] (the channel's [crlite] records). */
         private fun fetched(
             verified: ChangesetVerification.Verified,
             crlite: List<CrliteRecord>,
             records: List<FilterRecord>,
             placed: List<PlacedFilter>,
-            ruled: LiveGeneration?,
         ): SyncResult {
             val ts = verified.timestamp
             stage = SyncStage.ATTACHMENT
@@ -389,7 +376,6 @@ internal class CrliteSync(
             val full = attachments.single { !it.incremental }
             val reuse = stored { store.blob(full.attachment.sha256) } == BlobState.MATCH
             gates.cap(attachments)?.let { return it }
-            if (!reuse) gates.deferred()?.let { return it }
             installing = true
             val generationId = "$ts/${placed.last().record.id}"
             val bodies = Bodies(GenerationNames.directory(ts, generationId))
@@ -401,15 +387,13 @@ internal class CrliteSync(
                     is IndexBuild.Built -> build
                     is IndexBuild.Refused -> return refused(build)
                 }
-            val decision = SyncRules.decide(ts, record.watermarkMillis, ruled, built.coverageHighs, clock)
-            decided(decision, ts)?.let { return it }
             stage = SyncStage.PREPARE
             bodies.unlisted(placed)?.let { filter ->
                 val detail = "${filter.record.id} is in an encoding the engine does not list (${engine.formats})"
                 return end(Ended(SyncOutcome.FAILED, SyncStage.PREPARE, DiagnosticCode.FORMAT_UNSUPPORTED, detail))
             }
             val pending = pending(verified, generationId, built, bodies, bodies.format(placed))
-            return installed(pending, decision == SyncDecision.INSTALL_CLOCK_BEHIND)
+            return installed(pending)
         }
 
         /**
@@ -442,33 +426,24 @@ internal class CrliteSync(
         }
 
         /** Runs [install] for [pending] and ends the sync with its outcome; a successful install is then pruned to. */
-        private fun installed(
-            pending: PendingGeneration,
-            clockBehind: Boolean,
-        ): SyncResult {
+        private fun installed(pending: PendingGeneration): SyncResult {
             val ts = pending.meta.sourceTimestampMillis
             val updated =
-                UpdaterTransitions.after(record, source.sourceId, SyncOutcome.INSTALLED, now, ts, clockBehind, backoff)
-            val publication =
-                Publication(
-                    fromSeed = false,
-                    seedFormat = null,
-                    staleGateOpen = true,
-                    nowMillis = now,
-                    clockSkewMillis = policy.clockSkewMillis,
+                UpdaterTransitions.after(
+                    record,
+                    source.sourceId,
+                    SyncOutcome.INSTALLED,
+                    now,
+                    ts,
+                    serverBackoffMillis = backoff,
                 )
+            val publication = Publication(fromSeed = false, seedFormat = null, staleGateOpen = true, nowMillis = now)
             return when (val result = install(pending, engine, store, snapshot, publication, updated, logger)) {
                 is InstallResult.Installed -> {
                     staged = null
                     storeFailures += result.storeFailures
-                    val warnings =
-                        if (clockBehind) {
-                            listOf(warning(DiagnosticCode.CLOCK_BEHIND, "installed $ts, beyond now $now + clockSkew"))
-                        } else {
-                            emptyList()
-                        }
                     val installed =
-                        result(SyncOutcome.INSTALLED, null, warnings, mapOf(Dataset.CRLITE to result.generationId))
+                        result(SyncOutcome.INSTALLED, null, emptyList(), mapOf(Dataset.CRLITE to result.generationId))
                     done = installed
                     // A heal is never pruned: the malformed pointer it replaced may have named any directory (#256).
                     if (!result.healed) reads.prune(result.directory)
@@ -484,37 +459,18 @@ internal class CrliteSync(
             }
         }
 
-        /** The sync for an [admitted] or decided changeset at [ts] that does not go on to install, or null. */
+        /** The sync for a changeset at [ts] that [decision] does not install, or null. */
         private fun decided(
             decision: SyncDecision,
             ts: Long,
         ): SyncResult? =
             when (decision) {
-                SyncDecision.INSTALL, SyncDecision.INSTALL_CLOCK_BEHIND -> {
-                    null
-                }
-
-                SyncDecision.UNCHANGED -> {
-                    end(Ended(SyncOutcome.UNCHANGED, null, null, "$ts is live"))
-                }
-
-                SyncDecision.ROLLBACK_REFUSED -> {
-                    end(Ended(SyncOutcome.ROLLBACK_REFUSED, null, null, "$ts rolls back"))
-                }
-
-                SyncDecision.CLOCK_SKEW -> {
-                    end(Ended(SyncOutcome.CLOCK_SKEW, decision.stage, null, "$ts is beyond now $now + clockSkew"))
-                }
-
-                SyncDecision.FAILED -> {
-                    end(Ended(SyncOutcome.FAILED, decision.stage, null, "a coverage end is beyond $ts + clockSkew"))
-                }
+                SyncDecision.INSTALL -> null
+                SyncDecision.UNCHANGED -> end(Ended(SyncOutcome.UNCHANGED, null, null, "$ts is live"))
+                SyncDecision.ROLLBACK_REFUSED -> end(Ended(SyncOutcome.ROLLBACK_REFUSED, null, null, "$ts rolls back"))
             }
 
-        /**
-         * The checks on sizes and the network before and around the bodies: the cap and the half-cap warnings (§4, §5.1
-         * limits) and the metered deferral (§7.2).
-         */
+        /** The checks on sizes before and around the bodies: the cap and the half-cap warnings (§4, §5.1 limits). */
         private inner class Gates {
             /** The `CAP_NEAR_LIMIT` warnings of this sync (§4), on whatever result it ends with. */
             val nearCaps = ArrayList<PolicyDiagnostic>()
@@ -543,31 +499,6 @@ internal class CrliteSync(
                 }
                 return null
             }
-
-            /**
-             * §7.2's metered deferral of a full download, or null: `DEFERRED` with `METERED_DEFERRED` while the dataset's
-             * live generation is not past `staleAfter` and [meteredNetwork], sampled here once, reports true. A dataset with
-             * no data always downloads ("missing data always downloads"), and so does one whose policy has no
-             * `staleAfter`.
-             */
-            fun deferred(): SyncResult? {
-                val live = reads.liveGeneration() ?: return null
-                val staleAfter = policy.staleAfterMillis ?: return null
-                if (now > saturatingAdd(live.sourceTimestampMillis, staleAfter) || !metered()) return null
-                val detail = "a full download on a metered network, while ${live.sourceTimestampMillis} is fresh"
-                return end(Ended(SyncOutcome.DEFERRED, null, DiagnosticCode.METERED_DEFERRED, detail))
-            }
-
-            /** [meteredNetwork], a throw read as false (§4); a fatal error is rethrown, to [run]'s catch. */
-            @Suppress("TooGenericExceptionCaught") // §4: a throwing meteredNetwork reads as false.
-            private fun metered(): Boolean =
-                try {
-                    meteredNetwork()
-                } catch (t: Throwable) {
-                    absorb(t)
-                    logger.safeLog(LogLevel.WARN, "${source.sourceId}: meteredNetwork threw; read as false", t)
-                    false
-                }
 
             /** A `CAP_NEAR_LIMIT` warning for [what]'s body when [result] read one above half of [cap] (§4). */
             fun nearCap(
@@ -764,12 +695,14 @@ internal class CrliteSync(
                 return (root?.get("data") as? JsonArray)?.items?.map { it as? JsonObject ?: return null }
             }
 
-            /** The dataset's live generation as the snapshot publishes it, for [SyncRules]; null when it has none. */
-            fun liveGeneration(): LiveGeneration? {
+            /**
+             * The `sourceTimestampMillis` of the dataset's live generation as the snapshot publishes it, for [SyncRules];
+             * null when it has none (no generation loaded, §7.1: the stored watermark is then not read).
+             */
+            fun liveTimestamp(): Long? {
                 val live = snapshot.snapshot.datasets[Dataset.CRLITE] ?: return null
                 live.generationId ?: return null
-                val timestamp = live.sourceTimestampMillis ?: return null
-                return LiveGeneration(timestamp, live.maxCoverageMillis)
+                return live.sourceTimestampMillis
             }
 
             /** The directory of the generation the snapshot publishes live, or null. */
@@ -779,10 +712,10 @@ internal class CrliteSync(
                 return live.sourceTimestampMillis?.let { GenerationNames.directory(it, id) }
             }
 
-            /** Whether the pointer names [live]'s directory as `live`. */
-            fun pointed(live: LiveGeneration): Boolean {
+            /** Whether the pointer names the live generation's directory, at [liveTimestamp], as `live`. */
+            fun pointed(liveTimestamp: Long): Boolean {
                 val id = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId ?: return false
-                val directory = GenerationNames.directory(live.sourceTimestampMillis, id)
+                val directory = GenerationNames.directory(liveTimestamp, id)
                 return (stored { store.pointer() } as? StoreRead.Found)?.value?.live == directory
             }
 
@@ -915,6 +848,7 @@ internal class CrliteSync(
                 logger.safeLog(LogLevel.WARN, "writing ${store.root}/updater.json failed", t)
             }
             val warnings = ArrayList<PolicyDiagnostic>()
+            // CLOCK_SKEW is an x5u link outside its validity window at stage X5U (§7.1), the one clock check.
             val failure =
                 ended.outcome == SyncOutcome.FAILED || ended.outcome == SyncOutcome.STORE_FAILED ||
                     ended.outcome == SyncOutcome.CLOCK_SKEW

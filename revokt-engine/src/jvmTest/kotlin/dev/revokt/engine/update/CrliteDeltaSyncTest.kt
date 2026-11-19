@@ -28,8 +28,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * #141's acceptance test: deltas from the cursor, the `_since` merge, reset-and-retry once, the metered deferral and the
- * half-cap warnings (spec §7.1, §7.2, §6.5, §4 sync diagnostics, §9 "incremental fixtures" and "signature over records
+ * #141's acceptance test: deltas from the cursor, the `_since` merge, reset-and-retry once (on Firefox's
+ * `InvalidSignatureError` family and an unmergeable change list, never on an x5u failure) and the half-cap warnings (spec §7.1, §7.2, §6.5, §4 sync diagnostics, §9 "incremental fixtures" and "signature over records
  * with a tombstone merged vs not merged"), and #201's re-hash of a stored delta before it is reused. The scripted
  * Remote Settings of [CrliteSyncFixture] answers `_since` with the records modified after the cursor and its tombstones.
  */
@@ -223,96 +223,25 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `metered - a re-parented full is DEFERRED with METERED_DEFERRED while fresh, and installs past staleAfter`() {
+    fun `a re-parented full downloads at once while the live data is fresh, as there is no metered deferral`() {
         val server = installedFirst()
         next(
             server,
             listOf(full2),
             listOf(tombstone, """{"id":"${full.id}","last_modified":${ts + 650},"deleted":true}"""),
         )
-        var sampled = 0
-        val metered = {
-            sampled++
-            true
-        }
-        val now = ts2 + hour
-        val run =
-            sync(
-                server,
-                now = now,
-                metered = metered,
-            ).assert(SyncOutcome.DEFERRED, null, DiagnosticCode.METERED_DEFERRED)
-        assertEquals(1, sampled)
-        assertNull(run.result.stage)
-        assertEquals(emptyList(), server.attachmentRequests())
-        // DEFERRED is neither an install nor a feed failure (§7.1).
-        val s = sourceRecord(now)
-        assertEquals(
-            listOf<Any?>(ts, 0, now),
-            listOf(s.lastVerifiedLastModified, s.consecutiveFailures, s.lastAttemptAtMillis),
-        )
-        assertEquals(directory1, liveDirectory())
-        // Past staleAfter (3 d after the live data's <ts>), the full downloads on the metered network.
-        server.fetcher.requests.clear()
-        val stale = ts + 3 * day + 1
-        sync(server, now = stale, metered = metered).assert(SyncOutcome.INSTALLED)
+        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
         assertEquals(listOf(attachments + full2.location), server.attachmentRequests())
         assertEquals("$ts2/${full2.id}", live().generationId)
     }
 
     @Test
-    fun `metered - exactly at staleAfter the full is still deferred`() {
-        val server = installedFirst()
-        next(server, listOf(full2))
-        sync(server, now = ts + 3 * day, metered = { true })
-            .assert(SyncOutcome.DEFERRED, null, DiagnosticCode.METERED_DEFERRED)
-    }
-
-    @Test
-    fun `metered - with no data the full downloads at once, and meteredNetwork is not asked`() {
-        var sampled = 0
-        sync(Server(), metered = {
-            sampled++
-            true
-        }).assert(SyncOutcome.INSTALLED)
-        assertEquals(0, sampled)
-    }
-
-    @Test
-    fun `metered - a delta-only sync on a metered network installs without asking`() {
-        val server = installedFirst()
-        next(server, listOf(full, delta, delta2))
-        var sampled = 0
-        sync(server, now = ts2 + hour, metered = {
-            sampled++
-            true
-        }).assert(SyncOutcome.INSTALLED)
-        assertEquals(0, sampled)
-    }
-
-    @Test
-    fun `metered - a throwing meteredNetwork reads as false`() {
-        val server = installedFirst()
-        next(server, listOf(full2))
-        sync(server, now = ts2 + hour, metered = { error("no connectivity service") }).assert(SyncOutcome.INSTALLED)
-        assertTrue(recording.messages.any { "meteredNetwork threw" in it.second })
-    }
-
-    @Test
-    fun `metered - a bit-rotted full on the delta path is fetched again, subject to the metered rule`() {
+    fun `a bit-rotted full on the delta path is fetched again and installs`() {
         val server = installedFirst()
         storage.inner.write(store.blobKey(full.body.toByteString().sha256()), byteArrayOf(1))
         next(server, listOf(full, delta, delta2))
-        sync(server, now = ts2 + hour, metered = { true })
-            .assert(SyncOutcome.DEFERRED, null, DiagnosticCode.METERED_DEFERRED)
-        assertEquals(emptyList(), server.attachmentRequests())
-    }
-
-    @Test
-    fun `metered - a policy with no CRLite staleAfter downloads the full`() {
-        val server = installedFirst()
-        next(server, listOf(full2))
-        sync(server, now = ts2 + hour, staleAfter = null, metered = { true }).assert(SyncOutcome.INSTALLED)
+        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(listOf(attachments + full.location, attachments + delta2.location), server.attachmentRequests())
     }
 
     @Test
@@ -387,28 +316,93 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `a _since change with no id does not merge, fails verification and resets once`() {
+    fun `a _since change with no id does not merge, and the whole collection is fetched without verifying it`() {
         val server = installedFirst()
         next(server, listOf(full, delta, delta2))
         server.since = { listOf(delta2.json(), """{"last_modified":${ts + 900},"deleted":true}""") }
         sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+        // An unmergeable change list is a trigger of its own: no x5u is fetched for it.
         assertEquals(
-            listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl, "$base/", attachments + delta2.location),
+            listOf(monitor, server.sinceUrl(ts), server.changesetUrl, x5u, "$base/", attachments + delta2.location),
             server.fetcher.requests.map { it.url },
         )
+        assertTrue(recording.messages.any { "do not merge with the stored records" in it.second })
     }
 
     @Test
-    fun `a _since changeset whose x5u fetch fails resets once, reusing the failed x5u, and logs it`() {
+    fun `a _since changeset with no signatures resets once, as Firefox's MissingSignatureError does`() =
+        resetsOnce("NO_SIGNATURES", "[]")
+
+    @Test
+    fun `a _since changeset whose every entry is skipped resets once`() =
+        resetsOnce("NONE_TRIED", """[{"x5u":"$x5u","signature":"","mode":"p384ecdsa"}]""")
+
+    @Test
+    fun `a _since changeset with a null signature entry resets once`() = resetsOnce("NULL_ENTRY", "[null]")
+
+    @Test
+    fun `a _since changeset whose x5u fetch fails is FAILED at X5U without a reset`() =
+        neverResets("X5U_FETCH", SyncOutcome.FAILED, SyncStage.X5U) { it.overrides[x5u] = { response(500) } }
+
+    @Test
+    fun `a _since changeset whose x5u is not PEM is FAILED at SIGNATURE without a reset`() =
+        neverResets("X5U_PEM", SyncOutcome.FAILED, SyncStage.SIGNATURE) { it.pem = "not a PEM chain" }
+
+    @Test
+    fun `a _since changeset whose x5u chain fails is FAILED at SIGNATURE without a reset`() =
+        neverResets("X5U_CHAIN", SyncOutcome.FAILED, SyncStage.SIGNATURE) { it.pem = pem(served.take(2)) }
+
+    @Test
+    fun `a _since changeset whose x5u is outside its validity is CLOCK_SKEW at X5U without a reset`() =
+        neverResets("X5U_VALIDITY", SyncOutcome.CLOCK_SKEW, SyncStage.X5U, millis("2051-01-01T00:00:00Z")) {}
+
+    /**
+     * A `_since` changeset signed with [signatures] as its `metadata.signatures` fails with [failure], and the sync
+     * fetches the whole collection once, which verifies and installs.
+     */
+    private fun resetsOnce(
+        failure: String,
+        signatures: String,
+    ) {
         val server = installedFirst()
         next(server, listOf(full, delta, delta2))
-        server.overrides[x5u] = { response(500) }
-        sync(server, now = ts2 + hour).assert(SyncOutcome.FAILED, SyncStage.X5U, *failed())
+        server.overrides[server.sinceUrl(ts)] = {
+            ok(
+                """{"changes":[${server.changes(ts).joinToString(",")}],"timestamp":$ts2,""" +
+                    """"metadata":{"signatures":$signatures}}""",
+            )
+        }
+        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
         assertEquals(
-            listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl),
+            listOf(monitor, server.sinceUrl(ts), server.changesetUrl, x5u, "$base/", attachments + delta2.location),
             server.fetcher.requests.map { it.url },
         )
-        assertTrue(recording.messages.any { "reuses this sync's failed x5u" in it.second })
+        assertTrue(recording.messages.any { failure in it.second && "did not verify" in it.second })
+        assertEquals("$ts2/${delta2.id}", live().generationId)
+    }
+
+    /**
+     * A `_since` changeset whose x5u fails with [failure] after [arm] ends the sync as [outcome] at [stage]: the whole
+     * collection is never fetched (the sync's verifier would reuse the failed x5u, §7.1), and nothing advances.
+     */
+    private fun neverResets(
+        failure: String,
+        outcome: SyncOutcome,
+        stage: SyncStage,
+        now: Long = ts2 + hour,
+        arm: (Server) -> Unit,
+    ) {
+        val server = installedFirst()
+        next(server, listOf(full, delta, delta2))
+        arm(server)
+        val run = sync(server, now = now)
+        assertEquals(outcome to stage, run.result.outcome to run.result.stage, "${run.result}")
+        assertTrue(run.result.warnings.any { "$failure:" in it.message }, "${run.result.warnings}")
+        assertEquals(listOf(monitor, server.sinceUrl(ts), x5u), server.fetcher.requests.map { it.url })
+        assertFalse(recording.messages.any { "fetching the whole collection" in it.second })
+        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
+        assertEquals(1, sourceRecord(now).consecutiveFailures)
+        assertEquals(directory1, liveDirectory())
     }
 
     @Test
