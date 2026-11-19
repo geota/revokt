@@ -95,8 +95,8 @@ and the public history are the record that the process below was followed.
   issue text, a reviewer comment): pick the reading closest to the spec, state it, continue; the coordinator
   accepts it or sends it back.
 - Any change to rulesets, workflows, CODEOWNERS, `protected-paths.txt` or the dependency ingress files that
-  the issue does not explicitly cover (registering a new fuzz target in the ClusterFuzzLite matrix is part of
-  the parser issue; everything else is its own `kind/ci` issue).
+  the issue does not explicitly cover (a new fuzz target needs none: `./gradlew fuzzTargets` discovers it;
+  everything else is its own `kind/ci` issue).
 - Adding a dependency, a licence outside the allow-list, or any asset or corpus entry.
 - Deleting a test, lowering a floor, or touching anything under `docs/spec/` (that is a `spec` PR).
 - Anything that would spend money, publish, or leave the repository (a release, a seed publish, an external service).

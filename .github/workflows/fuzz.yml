@@ -1,20 +1,22 @@
 # SPDX-FileCopyrightText: 2026 revokt contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Ad-hoc fuzzing (spec §9.1, CONTRIBUTING §6; decision CI1, #115): one matrix entry per Jazzer @FuzzTest method, as
-# `./gradlew fuzzTargets` discovers them, for the chosen time each, on GitHub-hosted runners. Runs only when a
-# maintainer dispatches it; never on pull_request or pull_request_target. The fuzz job holds no secret: a finding is
+# Fuzzing (spec §9.1, CONTRIBUTING §6; #115, #213): one matrix entry per Jazzer @FuzzTest method, as `./gradlew
+# fuzzTargets` discovers them, for the chosen time each, on GitHub-hosted runners: nightly for 300 s a target (the
+# nightly fuzzing tier, in place of ClusterFuzzLite until OSS-Fuzz, #119), and when a maintainer dispatches it; never
+# on pull_request or pull_request_target. The fuzz job holds no secret: a finding is
 # minimised, sealed with age (ASCII armour) to the FUZZ_AGE_RECIPIENT repository variable, and uploaded with a manifest
 # as a 7-day artifact. The advisory job, on a fresh runner with FUZZ_ADVISORY_TOKEN and none of the fuzzed tree, checks
 # that artifact as hostile data and files one private draft security advisory per new finding, the ciphertext inline
-# (CONTRIBUTING §6). No reproducer, stack trace or fuzzer log reaches a job log, artifact or advisory in the clear. No
-# ClusterFuzzLite; the nightly tier and release gate are #119's.
+# (CONTRIBUTING §6). No reproducer, stack trace or fuzzer log reaches a job log, artifact or advisory in the clear. The
+# corpus job, on another fresh runner with CFL_CORPUS_TOKEN and none of the fuzzed tree, takes each target's generated
+# corpus as data, validates it and adds it to the private geota/revokt-fuzz-corpus repository.
 name: fuzz
 
 on:
-  # Off: this workflow is for dispatched runs (#119 is the nightly). Uncommenting it adds a nightly run of every target.
-  # schedule:
-  #   - cron: "47 3 * * *"
+  # The nightly fuzzing tier (#213): every target for 300 s, with the generated corpus pushed to the corpus repository.
+  schedule:
+    - cron: "47 3 * * *"
   workflow_dispatch:
     inputs:
       target:
@@ -157,7 +159,7 @@ jobs:
           for value in "$NAME" "$SOURCE"; do
             case $value in ''|*[!A-Za-z0-9._/-]*) echo "::error::the target's name or source has a character outside [A-Za-z0-9._/-]"; exit 1 ;; esac
           done
-          # Empty only without a dispatch (the commented-out schedule); a dispatched 0 is rejected below.
+          # Empty only without a dispatch (the nightly schedule); a dispatched 0 is rejected below.
           FUZZ_SECONDS=${FUZZ_SECONDS:-300}
           case $FUZZ_SECONDS in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1 ;; esac
           if [ "$FUZZ_SECONDS" -lt 1 ] || [ "$FUZZ_SECONDS" -gt 3600 ]; then echo "::error::seconds must be 1 to 3600"; exit 1; fi
@@ -308,16 +310,18 @@ jobs:
           path: ${{ steps.seal.outputs.dir }}/
           if-no-files-found: error
           retention-days: 7
-      # Jazzer's generated corpus, on request and only from a run without a finding; merging it into the committed
-      # inputs stays a manual PR.
+      # Jazzer's generated corpus, nightly or on request, and only from a run without a finding: the corpus job's input.
+      # Merging it into the committed inputs stays a manual PR. An upload the account's storage quota refuses does not
+      # fail the run (continue-on-error); the corpus job then finds no artifact and pushes nothing.
       - name: corpus
-        if: inputs.upload_corpus && steps.fuzz.outcome == 'success'
+        if: (github.event_name == 'schedule' || inputs.upload_corpus) && steps.fuzz.outcome == 'success'
+        continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-corpus-${{ matrix.target.name }}
           path: ${{ matrix.target.module }}/.cifuzz-corpus/${{ matrix.target.class }}/${{ matrix.target.method }}/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 1
 
   # A fresh runner that holds the advisory token and nothing of the fuzzed tree: no checkout of it, no Gradle, nothing
   # the fuzz job could have changed except the artifacts. It downloads the fuzz-finding-* artifacts, fetches only
@@ -367,3 +371,103 @@ jobs:
           fi
           /usr/bin/env -i PATH=/usr/bin:/bin GH_TOKEN="$GH_TOKEN" REPO="$REPO" RUN_URL="$RUN_URL" RUN_ID="$RUN_ID" \
             /usr/bin/python3 -I "$SCRIPT" "$FINDINGS"
+
+  # The corpus push (#213), on a fresh runner that never checks out, builds or runs anything of the repository: it
+  # downloads the fuzz-corpus-* artifacts, checks them as data (a directory per known target, regular files only, each
+  # named as libFuzzer names a corpus unit, a SHA-1 in hex, and no larger than its target's -max_len, at most 5,000
+  # files a target and 512 MiB in all), and adds them, never removing a unit, under corpus/<Class>-<method>/ in the
+  # private geota/revokt-fuzz-corpus repository. Only this job holds CFL_CORPUS_TOKEN (contents write on that repository
+  # only), through a credential helper that reads it from the environment, so it is in no command's arguments. It runs
+  # for main only, and after a fuzz job that failed too: the targets that passed still uploaded their corpora.
+  corpus:
+    name: corpus (push to the private corpus repository)
+    needs: [targets, fuzz]
+    if: >-
+      always() && needs.targets.result == 'success' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || inputs.upload_corpus)
+    environment: fuzz-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      # No match, or an artifact service that refuses (the storage quota), leaves nothing to push.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          pattern: fuzz-corpus-*
+          path: ${{ runner.temp }}/corpus
+      - name: check the corpus as data
+        id: check
+        env:
+          TARGETS: ${{ needs.targets.outputs.targets }}
+          CORPUS: ${{ runner.temp }}/corpus
+          STAGED: ${{ runner.temp }}/staged
+        run: |
+          set -euo pipefail
+          max_files=5000
+          max_total=$((512 * 1024 * 1024))
+          fail() { echo "::error::the corpus artifacts are malformed ($1); nothing is pushed"; exit 1; }
+          mkdir -p "$STAGED/corpus"
+          if [ ! -d "$CORPUS" ] || [ -z "$(ls -A "$CORPUS")" ]; then
+            echo "::notice::no corpus artifact (no target passed, or the artifact storage refused the uploads)"
+            echo "files=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=0
+          total=0
+          for dir in "$CORPUS"/* "$CORPUS"/.[!.]*; do
+            [ -e "$dir" ] || continue
+            [ -d "$dir" ] && [ ! -L "$dir" ] || fail "an entry that is not a directory"
+            base=${dir##*/}
+            name=${base#fuzz-corpus-}
+            [[ $base == fuzz-corpus-* && $name =~ ^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$ ]] || fail "an artifact name"
+            maxlen=$(jq -r --arg n "$name" '[.[] | select(.name == $n) | .maxLen // 16777217] | first // empty' <<< "$TARGETS")
+            [[ $maxlen =~ ^[0-9]+$ ]] || fail "an artifact of no known target"
+            if [ -n "$(find "$dir" -mindepth 1 ! -type f -print -quit)" ]; then fail "a nested directory or a link"; fi
+            count=$(find "$dir" -mindepth 1 -type f | wc -l)
+            [ "$count" -le "$max_files" ] || fail "more than $max_files units for one target"
+            dest=$STAGED/corpus/${name/./-}
+            mkdir -p "$dest"
+            while IFS= read -r -d '' f; do
+              unit=${f##*/}
+              [[ $unit =~ ^[0-9a-f]{40}$ ]] || fail "a unit name"
+              size=$(stat -c %s -- "$f")
+              [ "$size" -le "$maxlen" ] || fail "a unit over its target's -max_len"
+              total=$((total + size))
+              [ "$total" -le "$max_total" ] || fail "more than 512 MiB"
+              cp -- "$f" "$dest/$unit"
+              files=$((files + 1))
+            done < <(find "$dir" -mindepth 1 -type f -print0)
+          done
+          echo "checked $files units, $total bytes"
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+      - name: push to geota/revokt-fuzz-corpus
+        if: steps.check.outputs.files != '0'
+        env:
+          CFL_CORPUS_TOKEN: ${{ secrets.CFL_CORPUS_TOKEN }}
+          STAGED: ${{ runner.temp }}/staged
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CFL_CORPUS_TOKEN" ]; then
+            echo "::error::no CFL_CORPUS_TOKEN secret; the corpus is not pushed"
+            exit 1
+          fi
+          # The helper prints the token from the environment; the token itself is in no argument.
+          # shellcheck disable=SC2016 # expanded by the helper's shell, not here
+          helper='!f() { echo username=x-access-token; echo "password=$CFL_CORPUS_TOKEN"; }; f'
+          repo=$RUNNER_TEMP/corpus-repo
+          git -c credential.helper="$helper" clone --quiet --depth 1 https://github.com/geota/revokt-fuzz-corpus.git "$repo"
+          mkdir -p "$repo/corpus"
+          cp -R "$STAGED/corpus/." "$repo/corpus/"
+          git -C "$repo" add corpus
+          if git -C "$repo" diff --cached --quiet; then echo "no new corpus units"; exit 0; fi
+          added=$(git -C "$repo" diff --cached --name-only | wc -l)
+          git -C "$repo" -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -m "corpus: $added new units from fuzz run $RUN_ID"
+          git -C "$repo" -c credential.helper="$helper" push --quiet origin HEAD:main
+          echo "pushed $added new corpus units"
