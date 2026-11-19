@@ -86,6 +86,9 @@ internal class X5uChainTest : X5uChainFixture() {
             san(dns("*.content-signature.mozilla.org")),
             san(dns("$X5U_LEAF_NAME.")),
             san(dns(".$X5U_LEAF_NAME")),
+            // A name that merely ends with the signer name is another name, on a label boundary or not.
+            san(dns("x.$X5U_LEAF_NAME")),
+            san(dns("x$X5U_LEAF_NAME")),
             // Beside the signer name, a wildcard, an empty or a malformed dNSName, or a name of another form, fails.
             san(dns(X5U_LEAF_NAME), dns("*.content-signature.mozilla.org")),
             san(dns(X5U_LEAF_NAME), dns("")),

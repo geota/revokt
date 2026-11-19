@@ -21,6 +21,7 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
     extKeyUsage passes.
   - §7.1 states why the x5u order is the path (no path search over an unsigned body).
   - The test plan's content-signature row, (d) and API rows cover each change.
+  - §4: `build()` refuses a single-label `allowedDomains` entry.
   - §6.5: the 256 MiB seed archive cap is kept, its basis restated for 1,024 records; a larger archive is refused
     whole, never truncated.
 

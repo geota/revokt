@@ -77,7 +77,13 @@ public class MozillaRemoteSettings private constructor(
     public val sourceId: String = builder.sourceId
 
     init {
-        for (domain in allowedDomains) requireBareHost("allowedDomains entry", domain)
+        for (domain in allowedDomains) {
+            requireBareHost("allowedDomains entry", domain)
+            require('.' in domain) {
+                "allowedDomains entry \"$domain\" is a single label, which would allow a whole top-level domain " +
+                    "(spec §4, §7.1)"
+            }
+        }
         for ((from, to) in x5uHostRewrites) {
             requireBareHost("x5uHostRewrite from", from)
             requireBareHost("x5uHostRewrite to", to)

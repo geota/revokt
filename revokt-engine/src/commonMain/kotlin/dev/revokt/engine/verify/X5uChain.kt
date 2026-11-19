@@ -297,11 +297,9 @@ private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
     val san = ExtensionValues.subjectAltName(c).valueOr(0, "subjectAltName") { return it }
     if (!sctListIsOctetString(c)) return failed(X5uChainFailure.EXTENSION, 0, "SCT list not one OCTET STRING")
     if (bc?.ca == true) return failed(X5uChainFailure.LEAF_CA, 0, "the leaf has cA TRUE")
-    if (eku != null &&
-        !eku.contains(CODE_SIGNING)
-    ) {
-        return failed(X5uChainFailure.EKU, 0, "no codeSigning in extKeyUsage")
-    }
+    // An absent extKeyUsage passes (requiredEKUIfPresent); a present one must hold codeSigning.
+    val noCodeSigning = eku != null && !eku.contains(CODE_SIGNING)
+    if (noCodeSigning) return failed(X5uChainFailure.EKU, 0, "no codeSigning in extKeyUsage")
     if (eku?.contains(OCSP_SIGNING) == true) return failed(X5uChainFailure.EKU, 0, "OCSPSigning in extKeyUsage")
     val names = leafNames(san) ?: return failed(X5uChainFailure.SAN, 0, "a SAN name that is not a plain dNSName")
     if (names.none { it.equals(X5U_LEAF_NAME, ignoreCase = true) }) {
@@ -379,11 +377,8 @@ private fun issuer(
     if (subtrees != null) {
         val names = leafNames(ExtensionValues.subjectAltName(certs[0]).valueOr(0, "subjectAltName") { return it })
         val outside = names.orEmpty().firstOrNull { !subtrees.permits(it) }
-        if (outside !=
-            null
-        ) {
-            return failed(X5uChainFailure.NAME_CONSTRAINTS, i, "the leaf's $outside is outside nameConstraints")
-        }
+        val detail = "the leaf's $outside is outside nameConstraints"
+        if (outside != null) return failed(X5uChainFailure.NAME_CONSTRAINTS, i, detail)
     }
     return null
 }

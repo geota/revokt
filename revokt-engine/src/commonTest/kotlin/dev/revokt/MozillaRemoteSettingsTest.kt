@@ -128,19 +128,38 @@ class MozillaRemoteSettingsTest {
         assertEquals(MozillaRemoteSettings.DEFAULT, MozillaRemoteSettings.DEFAULT.newBuilder().build())
         assertEquals(MozillaRemoteSettings.DEFAULT, MozillaRemoteSettings.Builder().build())
         // At the edges of the grammar: upper case (hosts are compared exactly), a 63-character label, a 253-character
-        // name, a single label, and numeric labels that are not last.
-        val hostNames = setOf("Mirror.Example", "$label63.example", name253, "mirror", "1a.2b.3c", "x.0xg", "1.2.3.a-b")
+        // name, and numeric labels that are not last. A single label is a host name too, but not a domain to allow.
+        val domains = setOf("Mirror.Example", "$label63.example", name253, "1a.2b.3c", "x.0xg", "1.2.3.a-b")
         val built =
             MozillaRemoteSettings
                 .Builder()
-                .allowedDomains(hostNames)
-                .apply { for (h in hostNames) x5uHostRewrite(h, h) }
+                .allowedDomains(domains)
+                .apply { for (h in domains) x5uHostRewrite(h, h) }
+                .x5uHostRewrite("mirror", "Mirror.Example")
                 .build()
-        assertEquals(hostNames, built.allowedDomains)
-        // build() and the fetch-time check accept exactly the same hosts.
+        assertEquals(domains, built.allowedDomains)
+        // build() and the fetch-time check accept exactly the same host names.
+        val hostNames = domains + "mirror"
         for (h in notHostNames + hostNames) {
             assertEquals(h in hostNames, X5uUrl.check("https://$h/x", setOf(h), emptyMap()).url != null, h)
         }
+    }
+
+    @Test
+    fun `a single-label allowedDomains entry throws from build, since it would allow a whole TLD`() {
+        for (label in listOf("net", "org", "mirror", "Example")) {
+            val e =
+                assertFailsWith<IllegalArgumentException>(label) {
+                    MozillaRemoteSettings.Builder().allowedDomains(setOf(mozillaCdn, label)).build()
+                }
+            assertEquals(
+                "allowedDomains entry \"$label\" is a single label, which would allow a whole top-level domain " +
+                    "(spec §4, §7.1)",
+                e.message,
+            )
+        }
+        // Two labels build, a public suffix included: the rule is the operator's, and only the single label is refused.
+        MozillaRemoteSettings.Builder().allowedDomains(setOf("mozilla.net", "co.uk")).build()
     }
 
     @Test
