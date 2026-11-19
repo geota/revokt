@@ -12,7 +12,7 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
   `canonical_json`'s float rules; `deleted` reads such a number as zero lexically. The test plan's differential lists
   the refusal and the out-of-range rejections as declared differences, and the `1e-400` tombstone.
 
-### Changes in revision 60 (the trust-class cut of #218, and #246)
+### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 
 - **#218, the trust-class cut:**
   - No MIRROR or SYSTEM source. `TrustClass`, `UNSIGNED_DATA`, `minTrustClass`, the bootstrap-only rule,
@@ -33,6 +33,7 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
   - The test plan: data-path fixture (c) and the MIRROR, SYSTEM and `UNSIGNED_DATA` items.
 - **#246:** §6.5 reads `current` strictly (an unknown or duplicate member is malformed); `previous` must read back as
   the loader reads it, `records.json` included; a heal flip is not followed by a prune (the lead's decision on r256).
+- **#138 (#235):** §6.5 states the seed-load rule (a)/(b) with adopt, never-prune and never-delete, the `seed.json` encoding, the zip the loader reads, the `signature` cap of 64 KiB and the 256 MiB archive cap, the canonical `records.json` and the seed's generation id; §5.1's loader task cites the rule; the test plan's (f) replaces the `MIRROR` eviction rows with the rule's rows.
 
 ### Changes in revision 59 (the spec split of #216, and the deltas of #209, #234, #242 and #244, 2026-11-18)
 

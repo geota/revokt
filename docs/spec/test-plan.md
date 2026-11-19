@@ -113,8 +113,15 @@ tests; **live checks** are informational.
   body fetch; a channel whose
   coverage would make the built `index.bin` over 1 MiB → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no
   generation directory written (a built index is always an even size, so not 1 MiB + 1 byte); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
-  `start()` throws on both platforms; a stored generation newer than the seed
-  → seed skipped; a mutated shipped `index.bin` → `SEED_UNREADABLE`; (g) fetcher: the feed host's own
+  `start()` throws on both platforms; a stored generation not older than the seed beside a valid pointer
+  → seed skipped, nothing written; a mutated shipped `index.bin` → `SEED_UNREADABLE`; the seed-load
+  rule's (b) (§6.5): a malformed or absent pointer beside a newer complete generation that re-verifies →
+  adopted, `updater.json` written first, the pointer healed; one that does not re-verify → not adopted,
+  counted once, kept, and the seed installed; never adopted below the generation the engine serves;
+  the seed's own complete directory → installed as it stands, rotted → completed again with only its
+  rotted files re-staged and, when the load fails, left incomplete, never deleted; the directory the engine
+  serves never rewritten; a throwing `updater.json` or pointer read → `STORE_FAILED`, nothing written;
+  a seed archive over 256 MiB, or a source that never ends → `SEED_UNREADABLE`, no store failure; (g) fetcher: the feed host's own
   chain revoked in the stored generation → `BLOCKED_BY_SELF` within the 24 h hold, `blockedSource`, `blockedChainSha256` and `blockedLeafSerial` set,
   `updateBlockedBySelf = true` (after the hold see below);
   a signed `intermediates` changeset served on the `cert-revocations` URL → `FAILED`,
