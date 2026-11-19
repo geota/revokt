@@ -10,6 +10,7 @@ import org.gradle.api.Project
 import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.dependencies
@@ -46,6 +47,8 @@ class JvmLibraryPlugin : Plugin<Project> {
                 allWarningsAsErrors.set(true)
             }
         }
+        // The Java side targets the same release, or KGP's JVM-target validation fails the first Kotlin compile (21 vs 17).
+        tasks.withType<JavaCompile>().configureEach { options.release.set(Conventions.JDK_RELEASE) }
 
         extensions.configure<KtlintExtension> {
             version.set(VersionCatalog.ktlint(project))

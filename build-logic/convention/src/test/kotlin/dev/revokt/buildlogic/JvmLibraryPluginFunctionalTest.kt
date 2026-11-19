@@ -33,6 +33,8 @@ class JvmLibraryPluginFunctionalTest {
             """
             plugins { `java-library` }
             group = "dev.revokt"
+            // JDK 17 bytecode, as the real revokt-engine-jvm variant (the jvm-library side resolves for 17).
+            tasks.withType<JavaCompile>().configureEach { options.release.set(17) }
             """.trimIndent(),
         )
         File(dir, "revokt-jsse").mkdirs()
