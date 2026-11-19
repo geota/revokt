@@ -5,6 +5,29 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 59 (the spec split of #216, and the deltas of #209, #234, #242 and #244, 2026-11-18)
+
+- **The split.** `revokt-spec.md` is the normative core. §9 is now `test-plan.md` (section numbers kept), with the
+  upki adapter and the cross-engine equivalence classes of §3.2 as its new §9.3; Appendix A is `references.md`; the
+  revision blocks are this file. Moved to `docs/design/`, not normative: §5.1's trust managers per delegate, caches,
+  readiness, read-only mode, storage fallback, listeners and HTTP/2 coalescing; §5.2 Android; §5.4 Ktor; the
+  `reconstruct` pseudocode; §7.3 mirrors and the system cache (cut by #218); §8's fetcher policy (cut by #219);
+  §7.4 and §7.5 (M2); §12. The core keeps a stub where a section moved. `specStatus` reads the fixture lists from
+  `test-plan.md`.
+- **Present tense.** The core drops every revision number, issue number and attribution of a decision; this file
+  and `docs/decisions/` keep them. Text that #141 retired ("until #141 every sync fetches the whole changeset")
+  states the delta poll as it runs.
+- **#234 (#225):** every non-anchor path member must be a CA (`cA = TRUE`); `ISSUER_UNVERIFIED` folds into
+  `NO_ISSUER(UNSUPPORTED_ALGORITHM)` (§2, §4, §5.1 step 6, "Findings", the PKIX fallback contract, §8, the test
+  plan's (j), (ak), (al), (an), the §9.1 generator, reference walker and P8); fixture (aq); §10 drops the relabelling
+  residual (14) and adds residual 15, "constrained sub-CA"; a verification-log entry on issuer basicConstraints.
+- **#242:** a `_since` changeset merges over the pointed `records.json`; beside a malformed pointer, a directory with a
+  `meta.json` is held, and only one without is staged; a failing storage read throws; the healed pointer's
+  `previous`.
+- **#209 (#231):** a sync whose `updater.json` read throws writes nothing: no attempt, no `consecutiveFailures`, no
+  backoff, and it is not an attempt for the §8 `STALE` gate; `storeFailures` is the only signal.
+- **#244:** its corrections of fact (the webpki pin, the reference columns) are recorded here.
+
 ### Changes in revision 58 (the redirect and URL grammar of #192, 2026-11-15)
 The maintainer approved this revision on 2026-11-15. It writes in only the redirect and URL grammar decided on #192
 (the maintainer's Q2 and Q3, the lead's Q1, Q4 and Q5 and the readings the lead accepted) and built in #204's

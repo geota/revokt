@@ -77,7 +77,7 @@ verifier; non-JVM targets in 1.0.
 | `revokt-testing` | jvm | `FakeRevokt` (a builder preset, `object FakeRevokt { @JvmStatic fun builder(): Revokt.Builder }`, since `Revokt` is final), `SymVerifier`, the reference walker (takes `List<ByteArray>`, returns `Set<String>` of lowercase-hex leaf-issuer SPKI hashes, so P2's equality is by value), recorded fixtures, the §9.1 chain generator; from 0.1 to 0.3 these live in `revokt-engine`'s test source set and move here in 0.3. Built from public API only (output-type builders are on the production types under `@RevoktTestingApi`). | `revokt-engine`, `revokt-jsse` |
 | `revokt-bom` | — | Code artifacts only, including both `revokt-engine` (KMP root) and `revokt-engine-jvm`; the Maven consumer test references both | — |
 | `revokt-seed-compat`, `revokt-seed-default`, `revokt-denylist` *(M2)* | data | Date-versioned, weekly, not in the BOM (§7.2) | — |
-| `revokt-engine-upki` *(CI-only, unpublished)* | jvm 22+ | `RevocationEngine` over `revokt-upki-shim` via Panama (§3.2) | `revokt-engine`, `revokt-upki-shim` |
+| `revokt-engine-upki` *(CI-only, unpublished)* | jvm 22+ | `RevocationEngine` over `revokt-upki-shim` via Panama (test-plan.md §9.3) | `revokt-engine`, `revokt-upki-shim` |
 | `revokt-upki-shim` *(CI-only, unpublished)* | — | Rust cdylib (~40 lines) statically linking the `upki` crate; exposes `revokt_upki_config_new/free` (thin wrappers over `Config`/`Store`) and `revokt_upki_check(handle, serial, serial_len, spki_hash[32], scts, n)` over `RevocationCheckInput::new` + `Store::check`; returns ffi.rs's result codes; `catch_unwind` | Rust |
 | `revokt-oracle` *(test-only)* | — | Rust cdylib (Panama) and CLI over `clubcard-crlite`, `upki`, `rust-query-crlite`, `x509-parser`, the §9.2 TLV locator, `canonical_json`, with a `catch_unwind` shim; plus a Go CLI over Mozilla's `crlite/go/types` (the producer oracle, §9.2; out of process, batched over a pipe) with a `recover` shim | Rust, Go |
 
@@ -316,60 +316,10 @@ from connection threads and must observe either the previous or the new generati
 `Revokt` owns the engine whether defaulted or injected and closes it last (§5.1 lifecycle). `NO_SCTS` means
 no SCT extension, or none whose list parses under §9.2 (for example an empty list, a first item that fails, an inner identifier other than `0x04`; §9.2 states every case;
 §10 item 7); revokt's parser passes an empty `scts` list in each case before the engine is called; the Kotlin engine answers
-`NO_SCTS` on it, the upki engine `NOT_COVERED` (one equivalence class, below).
+`NO_SCTS` on it, the upki engine `NOT_COVERED` (one equivalence class, test-plan.md §9.3).
 
-**upki adapter (`revokt-engine-upki`, Panama, JDK 22+; CI-only until the §12 trigger).**
-Verified against upki at tag v1.0.1 (crates.io: 1.0.0; the shim's `Cargo.lock` pins the git tag) `ffi.rs`, `revocation/mod.rs` and `rustls-upki` (Appendix A).
-- *Name*: `"upki"`, the `engineName` of its `ENGINE_ERROR` findings.
-- *Formats*: `{V3, V4}`. upki's `clubcard-crlite` dependency (`bincode` feature) decodes both version bytes (`Encoding::read` accepts 3 and 4), so Mozilla's v3 filters are read as served; the C2SP spec says v4 and the crate is laxer than the spec. The engine never transcodes.
-- *Lifecycle*: `prepare` writes the files verbatim into a fresh directory, writes a TOML config whose
-  `cache_dir` is that directory and calls `revokt_upki_config_new`; the returned `PreparedGeneration`
-  owns that handle and directory and its `query` runs `revokt_upki_check` against the handle, so the
-  §6.5 self-check exercises the real native path; `activate` publishes the handle with a `@Volatile`
-  swap and frees the previous handle with `revokt_upki_config_free` once in-flight queries on it drain
-  (per-handle in-flight counter), deleting its directory; `PreparedGeneration.close()` without
-  `activate` frees the handle and deletes its directory. `Store::from_config` re-opens `index.bin` on
-  every check, so a handle has no state to invalidate. `close()` frees the live handle and deletes the directories.
-  `coverageEndMillis` is read from `index.bin` by revokt's own reader.
-- *Query*: **not** the stock `upki_check_revocation`, which parses the leaf with webpki and
-  resolves the issuer by byte-equal subject name and would make the verdict depend on webpki's
-  profile. The adapter loads exactly one native artifact, `revokt-upki-shim` (§3 module table), a
-  cdylib of ours that statically links the `upki` crate and is built by the native CI job; it
-  exposes `revokt_upki_config_new/free` and `revokt_upki_check(handle, serial, serial_len,
-  spki_hash[32], scts, n)` over upki's public library API, `RevocationCheckInput::new(CertSerial,
-  IssuerSpkiHash, Vec<CtTimestamp>)` + `Store::check` (verified in upki 1.0.1 `revocation/mod.rs`),
-  and returns ffi.rs's result codes, mapping `Store::check`'s `Result` exactly as
-  `upki_check_revocation` does, so the table below is unchanged; upstreaming the check function to
-  rustls/upki is attempted but not required. upki takes no time. Panics surface as
-  `UPKI_ERR_PANICKED` through `catch_unwind` in the shim.
-- *Result mapping* (fixed; the suite asserts the table):
-
-| upki result | `CrliteQueryResult` | Suite treatment |
-|---|---|---|
-| `UPKI_REVOCATION_NOT_REVOKED` / `_REVOKED` | `NOT_REVOKED` / `REVOKED` | compare, exact |
-| `UPKI_REVOCATION_NOT_COVERED` | `NOT_COVERED` | compare by class (below) |
-| `UPKI_ERR_REVOCATION_NO_DATA` (76; `Error::NoData`, outside the `UPKI_REVOCATION_*` range) | `NO_DATA` | compare, exact |
-| `UPKI_ERR_PANICKED`, any other code (76 excepted) | `ENGINE_ERROR`, `engineName = "upki"` | failure |
-
-(No abstain rows: with the extracted triple as input, upki parses nothing and resolves no issuer.)
-
-**Cross-engine equivalence classes.** Through the shim the class
-`{NOT_COVERED, NOT_ENROLLED, NO_SCTS}` is one value, `UPKI_REVOCATION_NOT_COVERED`: `Store::check`
-applies no `cert_has_no_scts` policy (that is `rustls-upki`'s verifier), and with no SCT timestamps
-no filter covers the certificate.
-`REVOKED`, `NOT_REVOKED` and `NO_DATA` compare exactly; any `REVOKED`/`NOT_REVOKED` disagreement
-between the two engines is a release blocker (no input is abstained). The finer split of that
-class is compared against `revokt-oracle`'s `clubcard-crlite` binding instead. What an engine swap
-can still change is therefore only the lookup itself and the data decoding, both pinned by this
-suite. Documented, out of scope: the `rustls-upki` verifier, a different product, fails the
-handshake on a malformed SCT list and on a leaf webpki cannot parse; revokt yields `NO_SCTS` when no
-list parses under §9.2 (otherwise it queries the items §9.2 keeps) and `PARSE_FAILED`, both allowing in
-`DEFAULT`. Generations: (i) Mozilla `SIGNED` v3 generations as served, both engines directly (no transcoder
-in the oracle path); (ii) `MIRROR` v4 generations as fetched from `upki.rustls.dev`; (iii) the v3
-generations re-encoded as v4 by `revokt-oracle`, a bare `clubcard-crlite` `to_bytes(V4)` (upki-mirror
-v1.0.1 does not transcode; upki main added one in `c2ba5e3`, which also sorts the coverage, so the bytes may differ
-from the live mirror's, while verdicts cannot), a third leg; every generation whose `index.bin` revokt did not write passes the `index.bin` consistency check above before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
-engine-side type above is public from 0.1.
+The upki adapter (`revokt-engine-upki`) and the cross-engine equivalence classes are CI-only test infrastructure:
+[test-plan.md §9.3](test-plan.md#93-the-upki-backed-engine-and-the-cross-engine-suite-ci-only).
 
 ## 4. Public API (sketch, M1 surface)
 
@@ -1123,6 +1073,12 @@ fetcher policy (§8), never waits, and runs step 2 from M1 against `SIGNED`/`BUN
 
 `checkClientTrusted` and `getAcceptedIssuers` delegate to the platform unchanged.
 
+**Moved to design notes** (not normative before 0.3): "Trust managers per delegate" and "Caches"
+([trust-managers.md](../design/trust-managers.md)); "Readiness", "Read-only mode" and "Storage fallback"
+([readiness-and-store-modes.md](../design/readiness-and-store-modes.md)); "Listeners"
+([listeners.md](../design/listeners.md)); "HTTP/2 coalescing" ([okhttp-and-ktor.md](../design/okhttp-and-ktor.md)).
+A reference in this file to one of these names that note.
+
 ### 5.2 Android (`AndroidPlatformTrust`)
 Not normative before 0.3: [docs/design/android.md](../design/android.md).
 
@@ -1350,7 +1306,7 @@ of the first coverage entry of the filter under test in `index.bin` order; the o
 (`logId`, `high + 1` unsigned, or `low − 1` when `high` is the maximum); filters are iterated in
 `index.bin` order and index entries by ascending issuer hash, so "some block" is reproducible. The absent
 issuer hash with the inside SCT must answer in the `NOT_ENROLLED` class (`{NOT_COVERED, NOT_ENROLLED,
-NO_SCTS}`, the §3.2 equivalence class, so the upki engine passes); the outside SCT must answer
+NO_SCTS}`, the equivalence class of test-plan.md §9.3, so the upki engine passes); the outside SCT must answer
 `NOT_COVERED` or its class; and the `REVOKED` probe uses a serial the loader's own `revokt-clubcard`
 reference evaluator (§6.2) calls `Revoked`, chosen deterministically and first-match (one branch is
 exercised per generation, the first that yields): the first of the serials
@@ -1682,7 +1638,7 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      embedded SCTs, or whose every SCT list fails under §9.2 (for example an empty list, a first item that fails, an inner identifier other than `0x04`; §9.2 states every case), yields `NO_SCTS`, which allows in `DEFAULT`: an issuance-time
      opt-out from checking. Firefox skips CRLite without usable SCT timestamps and falls to OCSP, which
      revokt does not do. Firefox rejects the certificate outright where the SCT extension's `extnValue` is not exactly
-     one DER OCTET STRING, as with an inner identifier other than `0x04`. `STRICT` rejects; the `rustls-upki` verifier rejects a malformed list (§3.2
+     one DER OCTET STRING, as with an inner identifier other than `0x04`. `STRICT` rejects; the `rustls-upki` verifier rejects a malformed list (test-plan.md §9.3
      divergence). A list §9.2 accepts in part, which Firefox and webpki fail whole, is queried, so `STRICT`
      then sees the CRLite answer, not `NO_SCTS`. A list in an inner OCTET STRING with a non-minimal length, or followed
      by bytes in `extnValue`, is also queried, and so are two SCT extensions; Firefox rejects such a certificate

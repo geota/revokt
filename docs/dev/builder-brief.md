@@ -32,8 +32,9 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
 - **Land every assumption.** Each item under "Assumptions made" lands in a spec revision or is dropped; the
   coordinator carries them to the next revision.
 - **Keep the public surface small.** New types are `internal` unless a caller of the public API needs them now.
-- **Spec text.** Until #216 (the spec split) lands, behaviour PRs don't edit `docs/spec/`. Put a "Spec delta"
-  section in the PR body instead, before Trailers.
+- **Spec text.** Keep the `## Spec` section, which pr-lint requires, and cite the sections there. When the PR changes
+  behaviour the spec states, or states behaviour the spec does not, add the exact text the spec needs below it
+  under `### Spec delta`. The coordinator lands it in the next spec revision; builders do not edit `docs/spec/`.
 
 ## Worktree and git
 

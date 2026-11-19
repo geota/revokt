@@ -18,7 +18,8 @@ reuse lint && actionlint          # headers and workflows
 
 ## Read next
 
-- `docs/spec/revokt-spec.md` (normative; cite sections), `docs/adr/` (decisions), `docs/dev/status.md` (what is next)
+- `docs/spec/revokt-spec.md` and `docs/spec/test-plan.md` (normative; cite sections), `docs/adr/` (decisions),
+  `docs/decisions/` (the decision log), `docs/dev/status.md` (what is next); `docs/design/` is not normative
 - `CONTRIBUTING.md` (every rule and every gate), `docs/dev/local.md`, `docs/dev/fixtures.md`, `docs/dev/corpus.md`
 - Module files where a module's rules differ: `revokt-clubcard/AGENTS.md` (the MPL port), `native/AGENTS.md`
 

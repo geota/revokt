@@ -946,3 +946,60 @@ coverage of the parser package ≥ 90 % measured over the committed replay (fuzz
 gate: the same replay on the platform Conscrypt tier (API 26, 31, 34, 36) at zero tolerance. Continuous: no open D1,
 D2 or D8 finding at any release; the divergence, D1-dom and D8-gap records reviewed at each release with every entry
 justified in writing.
+
+### 9.3 The upki-backed engine and the cross-engine suite (CI only)
+
+Moved here from the spec's §3.2 at revision 59 (#216), verbatim; references to §3.2 for the adapter mean this section.
+
+**upki adapter (`revokt-engine-upki`, Panama, JDK 22+; CI-only until the §12 trigger).**
+Verified against upki at tag v1.0.1 (crates.io: 1.0.0; the shim's `Cargo.lock` pins the git tag) `ffi.rs`, `revocation/mod.rs` and `rustls-upki` (Appendix A).
+- *Name*: `"upki"`, the `engineName` of its `ENGINE_ERROR` findings.
+- *Formats*: `{V3, V4}`. upki's `clubcard-crlite` dependency (`bincode` feature) decodes both version bytes (`Encoding::read` accepts 3 and 4), so Mozilla's v3 filters are read as served; the C2SP spec says v4 and the crate is laxer than the spec. The engine never transcodes.
+- *Lifecycle*: `prepare` writes the files verbatim into a fresh directory, writes a TOML config whose
+  `cache_dir` is that directory and calls `revokt_upki_config_new`; the returned `PreparedGeneration`
+  owns that handle and directory and its `query` runs `revokt_upki_check` against the handle, so the
+  §6.5 self-check exercises the real native path; `activate` publishes the handle with a `@Volatile`
+  swap and frees the previous handle with `revokt_upki_config_free` once in-flight queries on it drain
+  (per-handle in-flight counter), deleting its directory; `PreparedGeneration.close()` without
+  `activate` frees the handle and deletes its directory. `Store::from_config` re-opens `index.bin` on
+  every check, so a handle has no state to invalidate. `close()` frees the live handle and deletes the directories.
+  `coverageEndMillis` is read from `index.bin` by revokt's own reader.
+- *Query*: **not** the stock `upki_check_revocation`, which parses the leaf with webpki and
+  resolves the issuer by byte-equal subject name and would make the verdict depend on webpki's
+  profile. The adapter loads exactly one native artifact, `revokt-upki-shim` (§3 module table), a
+  cdylib of ours that statically links the `upki` crate and is built by the native CI job; it
+  exposes `revokt_upki_config_new/free` and `revokt_upki_check(handle, serial, serial_len,
+  spki_hash[32], scts, n)` over upki's public library API, `RevocationCheckInput::new(CertSerial,
+  IssuerSpkiHash, Vec<CtTimestamp>)` + `Store::check` (verified in upki 1.0.1 `revocation/mod.rs`),
+  and returns ffi.rs's result codes, mapping `Store::check`'s `Result` exactly as
+  `upki_check_revocation` does, so the table below is unchanged; upstreaming the check function to
+  rustls/upki is attempted but not required. upki takes no time. Panics surface as
+  `UPKI_ERR_PANICKED` through `catch_unwind` in the shim.
+- *Result mapping* (fixed; the suite asserts the table):
+
+| upki result | `CrliteQueryResult` | Suite treatment |
+|---|---|---|
+| `UPKI_REVOCATION_NOT_REVOKED` / `_REVOKED` | `NOT_REVOKED` / `REVOKED` | compare, exact |
+| `UPKI_REVOCATION_NOT_COVERED` | `NOT_COVERED` | compare by class (below) |
+| `UPKI_ERR_REVOCATION_NO_DATA` (76; `Error::NoData`, outside the `UPKI_REVOCATION_*` range) | `NO_DATA` | compare, exact |
+| `UPKI_ERR_PANICKED`, any other code (76 excepted) | `ENGINE_ERROR`, `engineName = "upki"` | failure |
+
+(No abstain rows: with the extracted triple as input, upki parses nothing and resolves no issuer.)
+
+**Cross-engine equivalence classes.** Through the shim the class
+`{NOT_COVERED, NOT_ENROLLED, NO_SCTS}` is one value, `UPKI_REVOCATION_NOT_COVERED`: `Store::check`
+applies no `cert_has_no_scts` policy (that is `rustls-upki`'s verifier), and with no SCT timestamps
+no filter covers the certificate.
+`REVOKED`, `NOT_REVOKED` and `NO_DATA` compare exactly; any `REVOKED`/`NOT_REVOKED` disagreement
+between the two engines is a release blocker (no input is abstained). The finer split of that
+class is compared against `revokt-oracle`'s `clubcard-crlite` binding instead. What an engine swap
+can still change is therefore only the lookup itself and the data decoding, both pinned by this
+suite. Documented, out of scope: the `rustls-upki` verifier, a different product, fails the
+handshake on a malformed SCT list and on a leaf webpki cannot parse; revokt yields `NO_SCTS` when no
+list parses under §9.2 (otherwise it queries the items §9.2 keeps) and `PARSE_FAILED`, both allowing in
+`DEFAULT`. Generations: (i) Mozilla `SIGNED` v3 generations as served, both engines directly (no transcoder
+in the oracle path); (ii) `MIRROR` v4 generations as fetched from `upki.rustls.dev`; (iii) the v3
+generations re-encoded as v4 by `revokt-oracle`, a bare `clubcard-crlite` `to_bytes(V4)` (upki-mirror
+v1.0.1 does not transcode; upki main added one in `c2ba5e3`, which also sorts the coverage, so the bytes may differ
+from the live mirror's, while verdicts cannot), a third leg; every generation whose `index.bin` revokt did not write passes the `index.bin` consistency check above before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
+engine-side type above is public from 0.1.
