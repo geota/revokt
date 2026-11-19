@@ -1722,8 +1722,7 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      comparison bound. What was checked: the walker test chains of github.com, letsencrypt.org, www.google.com and
      www.mozilla.org stay `Found` under the JDK verifier (`HonestCorpusWalkTest`); no root in the JDK 21 `cacerts`
      (118) or macOS `SystemRootCertificates` (158) carries nameConstraints; live Web PKI sub-CAs were not surveyed for
-     directoryName or rfc822Name subtrees. Whether to evaluate directoryName as mozilla::pkix does (an RDN prefix
-     match) is with the maintainer. On the bindings the platform validates the chain first (step 1).
+     directoryName or rfc822Name subtrees. On the bindings the platform validates the chain first (step 1).
 - Feed authenticity: every generation is verified against Mozilla's content-signature roots, from the feed or from a
   seed (§7.1); there is no unsigned source. The M2 denylist is project-attested and availability-only.
 - Rollback and freeze: a persisted non-decreasing watermark with a 24 h tolerance and a
