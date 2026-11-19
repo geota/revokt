@@ -5,7 +5,9 @@ package dev.revokt.buildlogic
 
 import org.gradle.testfixtures.ProjectBuilder
 import kotlin.test.Test
+import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class SpecStatusTaskTest {
     private fun task(): SpecStatusTask {
@@ -33,5 +35,16 @@ class SpecStatusTaskTest {
             not a row
         """.trimIndent()
         assertEquals(listOf("0.1" to "engine scaffold", "0.2" to "walker"), task().milestoneRows(spec))
+    }
+
+    @Test
+    fun `the committed test plan holds both fixture lists and the core holds the milestone table (#216)`() {
+        // The test's working directory is build-logic/convention.
+        val plan = File("../../docs/spec/test-plan.md").readText()
+        val core = File("../../docs/spec/revokt-spec.md").readText()
+        assertTrue(task().fixtureIds(plan, "- **Data-path fixtures**").isNotEmpty())
+        assertTrue(task().fixtureIds(plan, "- **Walker fixtures**").size >= 40)
+        assertEquals(emptyList(), task().fixtureIds(core, "- **Walker fixtures**"))
+        assertEquals(listOf("0.1", "0.2", "0.3"), task().milestoneRows(core).map { it.first }.take(3))
     }
 }

@@ -22,16 +22,22 @@ import java.io.File
 import java.util.Locale
 
 /**
- * `./gradlew specStatus` (CONTRIBUTING §2): the spec's §9 fixture inventory and §11 deliverables against the test
- * tree, written to docs/dev/status.md. In check mode the committed file must be current and the implemented-fixture
+ * `./gradlew specStatus` (CONTRIBUTING §2): the test plan's §9 fixture inventory (docs/spec/test-plan.md) and the
+ * spec's §11 deliverables (docs/spec/revokt-spec.md) against the test tree, written to docs/dev/status.md. In check mode the committed file must be current and the implemented-fixture
  * count may not decrease (a ratchet, CONTRIBUTING §3).
  *
  * Test names carry `<list> (<id>)`, e.g. `walker (k) same-key decoy with garbage signature` (CONTRIBUTING §6).
  */
 abstract class SpecStatusTask : DefaultTask() {
+    /** The normative core: the §11 milestone table. */
     @get:InputFile
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val spec: RegularFileProperty
+
+    /** The test plan: the §9 fixture lists (#216). */
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val testPlan: RegularFileProperty
 
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -70,8 +76,9 @@ abstract class SpecStatusTask : DefaultTask() {
     @TaskAction
     fun run() {
         val specText = spec.get().asFile.readText()
+        val planText = testPlan.get().asFile.readText()
         val implementedNames = collectTestNames()
-        val sections = lists.map { list -> list to fixtureIds(specText, list.bulletPrefix) }
+        val sections = lists.map { list -> list to fixtureIds(planText, list.bulletPrefix) }
         val deliverables = milestoneRows(specText)
 
         val sb = StringBuilder()
