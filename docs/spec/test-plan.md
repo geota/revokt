@@ -23,8 +23,8 @@ tests; **live checks** are informational.
   the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
   disagreement fails the job.
-- **Content-signature fixtures** (0.2 gates, except the three items tagged [0.3], which need the §6.5 store or a `SYSTEM` source; revision 49, the source revision 53) with mutations; incremental fixtures; a seed with an expired signer
-  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); [0.3] at `start()`, a system cache whose `index.bin` names a log window absent from the filter's coverage → not installed, `STORE_UNREADABLE`; [0.3] at `start()`, a system-cache `index.bin` of 1 MiB + 1 byte → not installed, `STORE_UNREADABLE`, before it is parsed (revision 48; a system cache since revision 53, which leaves a mirror no `index.bin` to fetch); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; (revision 56) a channel with two full filters, or none → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, the previous generation still live, and `SEED_UNREADABLE` for a seed; a delta whose `parent` names no record → placed by its time and installed; a full record without `parent` → loads, and a delta without one → `SYNC_SCHEMA_REJECTED`; a changeset signed by a P-256 leaf (a 64-byte raw pair) → verifies; a changeset whose first `signatures` entry fails and whose second verifies → installs; one with 5 entries, or
+- **Content-signature fixtures** (0.2 gates, except the item tagged [0.3], which needs the §6.5 store; revision 49) with mutations; incremental fixtures; a seed with an expired signer
+  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; (revision 56) a channel with two full filters, or none → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, the previous generation still live, and `SEED_UNREADABLE` for a seed; a delta whose `parent` names no record → placed by its time and installed; a full record without `parent` → loads, and a delta without one → `SYNC_SCHEMA_REJECTED`; a changeset signed by a P-256 leaf (a 64-byte raw pair) → verifies; a changeset whose first `signatures` entry fails and whose second verifies → installs; one with 5 entries, or
   whose every entry lacks `mode` → `FAILED`, stage `SIGNATURE`; two entries sharing one `x5u` URL → that URL fetched once; one whose `metadata` holds only `signature`, or an empty `signatures` → `FAILED`, stage `SIGNATURE`; an entry with no `mode` is skipped; (revision 57, #198) an entry whose `x5u` or `signature` is `""` is skipped like a missing one;
   `signatures` of `[null, a valid entry]` → `FAILED`, stage `SIGNATURE`, and `[a valid entry, null]` → installs; a first entry whose
   `x5u` fetch fails (404) and a second that verifies → installs; a lone entry whose `x5u` fetch fails → `FAILED`, stage
@@ -33,7 +33,7 @@ tests; **live checks** are informational.
   merged records → verifies over the merge, which is what installs, and fails over the delta's `changes` alone; a
   v3 filter with `approx_m` of 2^32, or a rank of 256 → `FAILED`; signature
   over records with a tombstone merged vs not merged.
-- **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (c), (e), (f), (h) need the store, mirror, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
+- **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (e), (f), (h) need the store, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
   `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
   with equal coverage → installs; **newer timestamp with lower coverage → installs and advances the
   watermark**; a refused rollback leaves `consecutiveFailures` and `lastVerified*` unchanged;
@@ -43,20 +43,11 @@ tests; **live checks** are informational.
   failures an `INSTALLED` poll, a clock-behind install, a 304 and a timestamp-match `UNCHANGED` each reset it to 0; a
   200 with `Backoff: 600` → `backoffUntilMillis = now + 600 s`; a success without the header clears `backoffUntilMillis`; a
   `FAILED` with `Retry-After: 60` waits 60 s although its computed backoff is 15 min; (revision 56, #190) an absent or
-  malformed `updater.json` beside a live `SIGNED` generation, then a changeset older than that generation by more than
+  malformed `updater.json` beside a live generation, then a changeset older than that generation by more than
   `rollbackWindow` → `ROLLBACK_REFUSED`;
-  a live `SIGNED` generation that is `clockBehind` far in the future, then a changeset newer than the stored watermark
+  a live generation that is `clockBehind` far in the future, then a changeset newer than the stored watermark
   but older than that generation → installs (the feed does not freeze); (b)
-  `SIGNED` coverage `high` beyond `last_modified + clockSkew` → `FAILED`, stage `INDEX`; `MIRROR` coverage beyond
-  now + `clockSkew` → `FAILED`; (c) mirror precedence: healthy signed source → mirror never installed;
-  signed source failing for 48 h with a stored `SIGNED` generation → mirror still not installed,
-  `signedSourceFailing = true`; no generation at all → mirror installs as `MIRROR`; next `SIGNED` →
-  evicted; an attacker-style mirror with an inverted index against a stored `SIGNED` generation →
-  not installed; (revision 56) a mirror manifest with no files, or whose every filter has an empty coverage → `FAILED`,
-  stage `INDEX`, nothing installed, `NO_DATA` still fires, `SOURCE_EMPTY` naming the source on `SyncResult.warnings`; a
-  system cache likewise → not installed at `start()`, S `SOURCE_EMPTY`; a `MIRROR` generation whose newest
-  coverage end is 3 h ago → `freshness = MANIFEST_LAST_MODIFIED`, `ageMillis` 3 h, and one 1 h ahead → installs,
-  `ageMillis = 0`, `clockBehind = false`; (d) x5u mutations: wrong leaf SAN, missing codeSigning EKU, root not pinned, non-CA
+  coverage `high` beyond `last_modified + clockSkew` → `FAILED`, stage `INDEX`; (d) x5u mutations: wrong leaf SAN, missing codeSigning EKU, root not pinned, non-CA
   certificate as intermediate, name-chaining break, `pathLenConstraint` violation, keyUsage without
   `keyCertSign`, an x5u URL on a non-allowlisted host, an x5u over 64 KiB, expired intermediate or
   leaf at live fetch → `CLOCK_SKEW` (stage `X5U`), expired leaf in seed → loads (revision 57: each `FAILED` x5u mutation in this row is at stage
@@ -106,7 +97,7 @@ tests; **live checks** are informational.
   subtree → `EXTENSION`; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
   falls to `previous`, `storeFailures = 1`; a crash before `meta.json` leaves an incomplete directory
   that prune deletes; a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → migrates within one `READONLY_POLL_INTERVAL`, `storageFallback = false`, the in-memory generation on disk; an empty
-  directory → `storeFailures = 0`; a `MIRROR` `meta.json` reloads as `MIRROR`; a `meta.json` with the
+  directory → `storeFailures = 0`; a `meta.json` without its signed members, or without `records.json` beside it → no generation; a `meta.json` with the
   other channel → no generation; a `current` with an unknown or a duplicate member → malformed, so the generation its
   damaged `previous` member named is held, and a fresh loader's heal flip beside it prunes nothing, while the next
   install over the healed pointer prunes; a pointed generation without `records.json` → no `previous`, counted; two instances on one directory in one process → the second throws;
@@ -118,42 +109,18 @@ tests; **live checks** are informational.
   starts as owner; a directory owned by another uid or group-writable on POSIX → `STORE_UNREADABLE`
   and no file written for the session; two consecutive syncs whose `engine.prepare()` throws → `live`
   and `previous` still load, `storeFailures = 2` (sync-time `prepare()` throws count), both syncs `FAILED` with stage `PREPARE`, the two failed directories deleted; stored
-  generation equal to the seed → no verification, `names()` unchanged; a manifest with 257 entries (revision 56; 33 before) or a 17 MiB declared filter → rejected before any
-  body fetch; a manifest naming `.`, `..`, `../x`, `/x`, `a/b`, `META.JSON` or `meta.json.`, or two files whose names
-  are equal ignoring ASCII case (`a.filter`, `A.FILTER`), or a file whose `hash` is 63 or 65 hex characters or holds a
-  non-hex character → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched and nothing written (revision
-  52); a `c2spMirror` URL without a trailing `/` → `manifest.json` and each body fetched from the URL, `/` and the
-  name; a `c2spMirror` URL with a query or a fragment → `build()` throws `IllegalArgumentException`; (revision 56) a
-  manifest without `comment`, or with `filters` for `files` → `FAILED` and installs respectively; a manifest reached
-  through 10 `https` redirects → fetched, through 11 → `FAILED`, a redirect to `http`, to a URL with userinfo, or back to a URL already in the
-  chain → `FAILED`, a hop carrying a query → followed, a fragment → dropped, a 300 or a 305 → `FAILED`, a relative `Location` → resolved against the request URL, a 304 or 200 at
-  the end → the body cap applied to it, and a chain that outlasts 30 s in total → `FAILED`; (revision 58) a hop to an
-  IPv6 literal (`https://[2001:db8::1]/revocation/manifest.json`) → followed, a `Location` of
-  `HTTPS://mirror.example/revocation/manifest.json` → `FAILED`, a redirect carrying two differing `Location` values →
-  `FAILED` and two equal ones → followed, a 302 with no `Location` → `FAILED` with `httpStatus` 302 at the mirror
-  client, and a `Location` whose host is `[1.2.3.4::]` → `FAILED`; a 302 whose body is over the request's cap →
-  `FAILED`; a configured `c2spMirror("https://M.example:443/a/../revocation/")` → the first request is
-  `https://m.example/revocation/manifest.json`; a `Location` with port 0 or 65536 → `FAILED`; a `c2spMirror` URL the
-  hop grammar refuses (`HTTPS://mirror.example/revocation/`) → `build()` throws `IllegalArgumentException`; the
-  manifest request after a
-  live `MIRROR` install carries `If-Modified-Since` as an IMF-fixdate of the time that generation's manifest was stored,
-  and no filter request carries one; a system cache
-  whose `index.bin` starts `upkiidx0` → not installed, `STORE_UNREADABLE`; a manifest name
-  of 33 bytes → installs under its derived name, its body fetched from the base followed by the manifest name, no
-  `index.bin` fetched, and the locally built `index.bin` naming the derived name (revision 53); a mirror whose
+  generation equal to the seed → no verification, `names()` unchanged; a changeset of 257 records after channel filtering or a 17 MiB declared filter → rejected before any
+  body fetch; a channel whose
   coverage would make the built `index.bin` over 1 MiB → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no
-  generation directory written (revision 53; revision 58: a built index is always an even size, so not 1 MiB + 1 byte); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
-  `start()` throws on both platforms; stored `MIRROR` with coverage newer than the seed → seed
-  installed, `trustClass = SIGNED`, the `MIRROR` directory pruned; stored `SIGNED` newer than the seed
-  → seed skipped; corrupt `live` with an evicted `MIRROR` still on disk → recovery goes to seed, never
-  to the `MIRROR`; a mutated shipped `index.bin` → `SEED_UNREADABLE`; (g) fetcher: the feed host's own
-  chain revoked in the stored `SIGNED` generation → `BLOCKED_BY_SELF` within the 24 h hold, `blockedSource`, `blockedChainSha256` and `blockedLeafSerial` set,
-  `updateBlockedBySelf = true`, no mirror install while the signed generation exists (after the hold see below); a bootstrap-state
-  `MIRROR` generation whose index marks the feed host revoked → sync proceeds, no `BLOCKED_BY_SELF`;
+  generation directory written (a built index is always an even size, so not 1 MiB + 1 byte); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
+  `start()` throws on both platforms; a stored generation newer than the seed
+  → seed skipped; a mutated shipped `index.bin` → `SEED_UNREADABLE`; (g) fetcher: the feed host's own
+  chain revoked in the stored generation → `BLOCKED_BY_SELF` within the 24 h hold, `blockedSource`, `blockedChainSha256` and `blockedLeafSerial` set,
+  `updateBlockedBySelf = true` (after the hold see below);
   a signed `intermediates` changeset served on the `cert-revocations` URL → `FAILED`,
   `SYNC_SCHEMA_REJECTED`, cursor, watermark and `lastVerified*` unchanged; a Remote Settings 3xx → `FAILED`; a gzip
   body inflating past its cap → `FAILED` before the cap is exceeded; a signed attachment whose size
-  exceeds `MAX_FILTER_BYTES` → `FAILED` with `CAP_NEAR_LIMIT`, nothing advanced, not fetched; a signed revocation of the Remote Settings host → `BLOCKED_BY_SELF`; the same hit chain delivered to the public `fetcherTrustManager` by a consumer client → rejected, `feedHostBlock` not written, `updateBlockedBySelf` unchanged, while the same chain on the source's internal instance during its fetch → `BLOCKED_BY_SELF`; two sources with a factory that returns one client built over the first source's `tls` for both → the second source's hit chain, handshaking outside any fetch of the first source, writes nothing; a sync 23 h after the first block (across a process restart) is still `BLOCKED_BY_SELF`; one at 25 h installs with `feedHostRevoked = true` and `FEED_HOST_REVOKED` on `RevoktState.warnings`; the same on a `c2spMirror` host → `BLOCKED_BY_SELF` while its chain is hit (fetcher-trust-manager unit fixture: in M1 a mirror is fetched only with no `SIGNED` generation and evidence comes from `SIGNED`/`BUNDLED` data, so the end-to-end case is M2's denylist); a test engine whose `formats` is `{V4}` with the v3 seed and no fetching source → `start()` throws `SEED_UNREADABLE` in the sole-seed `ENFORCE` configuration (V `FORMAT_UNSUPPORTED` cannot fire first, there is no fetching source); a fetch answered 401 or 407 → `FAILED` with `httpStatus` set, on the JDK fetcher; [0.3] the same on the Android and OkHttp fetchers; the JDK fetcher against a server whose certificate lacks the host's SAN → `FAILED` (endpoint identification); [0.3] the same on the Android fetcher;
+  exceeds `MAX_FILTER_BYTES` → `FAILED` with `CAP_NEAR_LIMIT`, nothing advanced, not fetched; a signed revocation of the Remote Settings host → `BLOCKED_BY_SELF`; the same hit chain delivered to the public `fetcherTrustManager` by a consumer client → rejected, `feedHostBlock` not written, `updateBlockedBySelf` unchanged, while the same chain on the source's internal instance during its fetch → `BLOCKED_BY_SELF`; two sources with a factory that returns one client built over the first source's `tls` for both → the second source's hit chain, handshaking outside any fetch of the first source, writes nothing; a sync 23 h after the first block (across a process restart) is still `BLOCKED_BY_SELF`; one at 25 h installs with `feedHostRevoked = true` and `FEED_HOST_REVOKED` on `RevoktState.warnings`; a test engine whose `formats` is `{V4}` with the v3 seed and no fetching source → `start()` throws `SEED_UNREADABLE` in the sole-seed `ENFORCE` configuration (V `FORMAT_UNSUPPORTED` cannot fire first, there is no fetching source); a fetch answered 401 or 407 → `FAILED` with `httpStatus` set, on the JDK fetcher; [0.3] the same on the Android and OkHttp fetchers; the JDK fetcher against a server whose certificate lacks the host's SAN → `FAILED` (endpoint identification); [0.3] the same on the Android fetcher;
   (h) lifecycle: `close()` with a live client under `STRICT` → subsequent handshakes succeed on the
   platform verdict, `evaluations` frozen, no events; `close()` before ready → `readyFuture()` fails with
   `IllegalStateException`; `ready` is false in `CREATED` even with `requiredDatasets` empty; a
@@ -340,7 +307,7 @@ tests; **live checks** are informational.
   `ENGINE_ERROR(BOUNDARY)`, `NOT_WALKED`, `ageMillis` null, no `STALE`, `NO_DATA` still computed, no exemption; an
   engine whose `query` throws on the second key → `ENGINE_ERROR(BOUNDARY)` with `engineName` null, the first key's
   finding kept and no third query.
-- **`Rule` model tests** (tagged by milestone: **0.1** the enum, preset tables, golden fixture, the `revokt-engine` jvmMain `Rule → BasicReason` map and precedence; **0.2** everything that needs `evaluate` alone; **0.3** exceptions, caches, counters, the shadow policy, the system cache, listeners and the Java compile; revision 49 moved the parts of [0.2] items that need 0.3 machinery to [0.3]): [0.1] both preset tables are total over `Rule.entries`, the two status-map ranges are subsets of it, the `Rule → BasicReason` map is total, and the `RevoktStatus` and `RevoktEvent` rule-keyed maps are zero-filled over `Rule.entries`; `entries == entries.sortedBy { ruleClass }`; the golden growability fixture diff is
+- **`Rule` model tests** (tagged by milestone: **0.1** the enum, preset tables, golden fixture, the `revokt-engine` jvmMain `Rule → BasicReason` map and precedence; **0.2** everything that needs `evaluate` alone; **0.3** exceptions, caches, counters, the shadow policy, listeners and the Java compile; revision 49 moved the parts of [0.2] items that need 0.3 machinery to [0.3]): [0.1] both preset tables are total over `Rule.entries`, the two status-map ranges are subsets of it, the `Rule → BasicReason` map is total, and the `RevoktStatus` and `RevoktEvent` rule-keyed maps are zero-filled over `Rule.entries`; `entries == entries.sortedBy { ruleClass }`; the golden growability fixture diff is
   additive; the `PathStatus → Rule` and `CrliteQueryResult → Rule` tables; `parseFailed` zero-filled over `ParseReason.entries`; [0.2] `Verdict.rule` is the
   first fired non-exempted `REJECT` rule; a leaf failing K6 →
   `PARSE_FAILED(PRODUCER_UNKEYABLE)` with `keyabilityClause = TIME` and `crlite == null`, and an issuer candidate
@@ -349,22 +316,13 @@ tests; **live checks** are informational.
   `DEFAULT.newBuilder().rule(STALE, REJECT)` with 4-day-old data → `Accepted`, `DataState.stale`,
   `rules` empty; the same with `rejectStaleAfter(CRLITE, 3 d)` on a generation that is not `fromSeed` (or, when `fromSeed`, after a sync attempt has completed since the seed install: persisted `datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`) → `Rejected(STALE)`, and with `exempt(STALE, anchorIn(privateCa))` a chain under that anchor → `Accepted` with `Finding.Exempted(STALE)`;
   `dataStates[CRLITE].rules == {STALE}`; a `NO_SCTS` chain under `DEFAULT` → `Accepted`;
-  `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)` over a `SYSTEM` generation (in 0.2 the test hands the evaluator
-  that generation; the system cache is 0.3) and a chain it does not list as revoked → `Accepted` with `UNSIGNED_DATA`
-  in `Verdict.rules` and `dataStates[CRLITE].rules == {UNSIGNED_DATA}` (revision 47); `STRICT` over a `SYSTEM`
-  generation → `Rejected(UNSIGNED_DATA)`;
   `requiredDatasets = {CRLITE}`, no generation after the start task completed (`pending == false`), and a walker that throws → `Rejected(NO_DATA)` with
   `rules == {ENGINE_ERROR, NO_DATA}`; the golden fixture accepts the `ALLOW → REJECT` flip exactly
   once per rule and preset and rejects a second; [0.3] the parts of former [0.2] items that need 0.3
   machinery (revision 49): `parseFailed.values.sum() == fired[PARSE_FAILED]`; `rejects` sums equal rejection counts; the K6 leaf
   above on a path-cache hit → the same `PARSE_FAILED(PRODUCER_UNKEYABLE)` clause; a `shadowPolicy = STRICT` under
   `DEFAULT`/`ENFORCE` with a `NO_SCTS` chain → `Accepted`, `shadowVerdict` is `Rejected(NO_SCTS)`,
-  `shadowWouldRejects[NO_SCTS] == 1`, `rejects` unchanged, one event; `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)`
-  with `SeedSource.none()`, an empty store and a `c2spCache` as the only source → the loader installs the `SYSTEM`
-  generation, and a chain it does not list as revoked gets the [0.2] verdict above with `fired[UNSIGNED_DATA]`
-  advanced; `STRICT` with a `SYSTEM` generation reached through a runtime `policy` flip from `DEFAULT` (§7.3 never
-  installs one under `STRICT`) → `Rejected(UNSIGNED_DATA)` and, through the loader, the generation is not installed
-  while a `SIGNED` one exists; `RevoktCertificateException.cause.reason` equals
+  `shadowWouldRejects[NO_SCTS] == 1`, `rejects` unchanged, one event; `RevoktCertificateException.cause.reason` equals
   the declared reason for every rule (`REVOKED` for `REVOKED`, `UNDETERMINED_REVOCATION_STATUS` for `NO_DATA`, …); `Rejected.getRule()`
   is non-null from Java; every preset passes `validate(ENFORCE)` with no `ERROR` at every release
   (including the M3/M4 one-minor `ALLOW` rows); ENFORCE with a revoked chain twice within the
@@ -999,9 +957,9 @@ can still change is therefore only the lookup itself and the data decoding, both
 suite. Documented, out of scope: the `rustls-upki` verifier, a different product, fails the
 handshake on a malformed SCT list and on a leaf webpki cannot parse; revokt yields `NO_SCTS` when no
 list parses under §9.2 (otherwise it queries the items §9.2 keeps) and `PARSE_FAILED`, both allowing in
-`DEFAULT`. Generations: (i) Mozilla `SIGNED` v3 generations as served, both engines directly (no transcoder
-in the oracle path); (ii) `MIRROR` v4 generations as fetched from `upki.rustls.dev`; (iii) the v3
+`DEFAULT`. Generations: (i) Mozilla's v3 generations as served, both engines directly (no transcoder
+in the oracle path); (ii) the v4 generations `upki.rustls.dev` serves, fetched by the oracle job; (iii) the v3
 generations re-encoded as v4 by `revokt-oracle`, a bare `clubcard-crlite` `to_bytes(V4)` (upki-mirror
 v1.0.1 does not transcode; upki main added one in `c2ba5e3`, which also sorts the coverage, so the bytes may differ
-from the live mirror's, while verdicts cannot), a third leg; every generation whose `index.bin` revokt did not write passes the `index.bin` consistency check of the spec's §3.2 before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
+from the live mirror's, while verdicts cannot), a third leg; every generation whose `index.bin` revokt did not write passes the spec's §3.2 selection-equivalence check (`C2spIndex.inconsistencies`) before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
 engine-side type above is public from 0.1.

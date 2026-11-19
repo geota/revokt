@@ -6,7 +6,6 @@ package dev.revokt.engine.store
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.RevoktStorage
-import dev.revokt.TrustClass
 import okio.ByteString
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -32,7 +31,6 @@ class StoreLayoutTest {
 
     /** Stores a generation with one full filter and one delta; returns its directory. */
     private fun install(
-        trustClass: TrustClass = TrustClass.SIGNED,
         generationId: String = "g1",
         sourceTimestampMillis: Long = 1_762_430_400_000,
         full: ByteArray = fullBytes,
@@ -40,12 +38,11 @@ class StoreLayoutTest {
         layout.putBlob(full)
         val meta =
             StoreFixtures.meta(
-                trustClass,
                 generationId,
                 sourceTimestampMillis,
                 mapOf(fullName to StoreFixtures.sha256(full)),
             )
-        val records = if (trustClass == TrustClass.SIGNED) "{\"data\":[]}".encodeToByteArray() else null
+        val records = "{\"data\":[]}".encodeToByteArray()
         return layout.writeGeneration(
             meta,
             StoreFixtures.index(fullName, deltaName),
@@ -125,18 +122,8 @@ class StoreLayoutTest {
         assertContentEquals(fullBytes, stored.files.bytes(fullName))
         assertContentEquals(deltaBytes, stored.files.bytes(deltaName))
         assertEquals("g1", stored.files.generationId)
-        assertEquals(TrustClass.SIGNED, stored.files.trustClass)
         assertEquals(1_762_430_400_000, stored.files.sourceTimestampMillis)
         assertContentEquals("{\"data\":[]}".encodeToByteArray(), layout.file(directory, StoreLayout.RECORDS))
-    }
-
-    @Test
-    fun `layout unit for data-path (e) (not the fixture) - a MIRROR generation reloads as MIRROR`() {
-        val directory = install(TrustClass.MIRROR)
-        val stored = assertNotNull(layout.readGeneration(directory))
-        assertEquals(TrustClass.MIRROR, stored.meta.trustClass)
-        assertEquals(TrustClass.MIRROR, stored.files.trustClass)
-        assertNull(layout.file(directory, StoreLayout.RECORDS))
     }
 
     @Test
@@ -208,10 +195,6 @@ class StoreLayoutTest {
         val records = byteArrayOf()
         val index = StoreFixtures.index(fullName, deltaName)
         val deltas = mapOf(deltaName to deltaBytes)
-        assertFailsWith<IllegalArgumentException> { layout.writeGeneration(meta, index, deltas, null) }
-        assertFailsWith<IllegalArgumentException> {
-            layout.writeGeneration(StoreFixtures.meta(TrustClass.MIRROR, blobs = meta.blobs), index, deltas, records)
-        }
         assertFailsWith<IllegalArgumentException> { layout.writeGeneration(meta, index, emptyMap(), records) }
         assertFailsWith<IllegalArgumentException> {
             layout.writeGeneration(meta, index, deltas + ("x" to byteArrayOf()), records)
@@ -320,14 +303,11 @@ class StoreLayoutTest {
     }
 
     @Test
-    fun `previous is only ever a complete generation of the same or a higher trust class`() {
-        val signed = install(TrustClass.SIGNED, "s", 1)
-        val mirror = install(TrustClass.MIRROR, "m", 2)
-        layout.point(Pointer(mirror, signed))
+    fun `the pointer names only complete generations`() {
+        val signed = install("s", 1)
         layout.point(Pointer(signed, null))
-        layout.point(Pointer(install(TrustClass.SIGNED, "s2", 3), signed))
+        layout.point(Pointer(install("s2", 3), signed))
         val writes = storage.writes.size
-        assertFailsWith<IllegalArgumentException> { layout.point(Pointer(signed, mirror)) }
         val incomplete = GenerationNames.directory(4, "partial")
         storage.write("crlite/compat/$incomplete/index.bin", StoreFixtures.index(deltaName))
         assertFailsWith<IllegalArgumentException> { layout.point(Pointer(signed, incomplete)) }
@@ -358,10 +338,10 @@ class StoreLayoutTest {
 
     @Test
     fun `prune leaves exactly live, previous and their blobs`() {
-        val previous = install(TrustClass.SIGNED, "p", 1, byteArrayOf(3, 0, 1))
-        val live = install(TrustClass.SIGNED, "l", 2, byteArrayOf(3, 0, 2))
-        val old = install(TrustClass.SIGNED, "o", 0, byteArrayOf(3, 0, 3))
-        val shared = install(TrustClass.MIRROR, "shared", 3, byteArrayOf(3, 0, 1))
+        val previous = install("p", 1, byteArrayOf(3, 0, 1))
+        val live = install("l", 2, byteArrayOf(3, 0, 2))
+        val old = install("o", 0, byteArrayOf(3, 0, 3))
+        val shared = install("shared", 3, byteArrayOf(3, 0, 1))
         val partial = GenerationNames.directory(5, "interrupted")
         storage.write("crlite/compat/$partial/index.bin", StoreFixtures.index(deltaName))
         storage.write("crlite/compat/stray/file", byteArrayOf(1))
@@ -418,9 +398,9 @@ class StoreLayoutTest {
 
     @Test
     fun `prune keeps every blob and the directory when a pointed meta json is present but malformed`() {
-        val live = install(TrustClass.SIGNED, "l", 2, byteArrayOf(3, 0, 2))
-        val previous = install(TrustClass.SIGNED, "p", 1, byteArrayOf(3, 0, 1))
-        val old = install(TrustClass.SIGNED, "o", 0, byteArrayOf(3, 0, 3))
+        val live = install("l", 2, byteArrayOf(3, 0, 2))
+        val previous = install("p", 1, byteArrayOf(3, 0, 1))
+        val old = install("o", 0, byteArrayOf(3, 0, 3))
         layout.point(Pointer(live, previous))
         val metaKey = "crlite/compat/$previous/meta.json"
         val good = assertNotNull(storage.read(metaKey))
@@ -449,8 +429,8 @@ class StoreLayoutTest {
 
     @Test
     fun `prune keeps a pointed directory with no meta json, but references no blob for it`() {
-        val live = install(TrustClass.SIGNED, "l", 2, byteArrayOf(3, 0, 2))
-        val previous = install(TrustClass.SIGNED, "p", 1, byteArrayOf(3, 0, 1))
+        val live = install("l", 2, byteArrayOf(3, 0, 2))
+        val previous = install("p", 1, byteArrayOf(3, 0, 1))
         layout.point(Pointer(live, previous))
         storage.delete("crlite/compat/$previous/meta.json")
         layout.prune()
@@ -508,12 +488,11 @@ class StoreLayoutTest {
         plain.putBlob(fullBytes)
         val meta =
             StoreFixtures.meta(
-                TrustClass.BUNDLED,
                 channel = CrliteChannel.DEFAULT,
                 blobs =
                     mapOf(fullName to StoreFixtures.sha256(fullBytes)),
             )
-        val directory = plain.writeGeneration(meta, StoreFixtures.index(fullName), emptyMap(), null)
+        val directory = plain.writeGeneration(meta, StoreFixtures.index(fullName), emptyMap(), byteArrayOf())
         assertEquals(meta, plain.readGeneration(directory)?.meta)
     }
 }

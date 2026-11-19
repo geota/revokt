@@ -43,7 +43,6 @@ class DataFindingTest {
         Finding.DataState
             .Builder()
             .dataset(Dataset.CRLITE)
-            .trustClass(TrustClass.BUNDLED)
             .generationId("seed-2026-11-01")
             .freshness(Freshness.SEED_SIGNED_TIME)
             .fromSeed(true)
@@ -53,7 +52,7 @@ class DataFindingTest {
             .clockBehind(true)
             .seedFormat(1)
             .stale(true)
-            .rules(setOf(Rule.STALE, Rule.UNSIGNED_DATA))
+            .rules(setOf(Rule.STALE))
             .build()
 
     private fun engineError() =
@@ -117,7 +116,6 @@ class DataFindingTest {
         val base = dataState()
         val changed =
             mapOf<String, Finding.DataState.Builder.() -> Finding.DataState.Builder>(
-                "trustClass" to { trustClass(TrustClass.SIGNED) },
                 "generationId" to { generationId("other") },
                 "freshness" to { freshness(Freshness.RECORD_LAST_MODIFIED) },
                 "fromSeed" to { fromSeed(false) },
@@ -127,7 +125,7 @@ class DataFindingTest {
                 "clockBehind" to { clockBehind(false) },
                 "seedFormat" to { seedFormat(null) },
                 "stale" to { stale(false) },
-                "rules" to { rules(setOf(Rule.STALE)) },
+                "rules" to { rules(setOf(Rule.NO_DATA, Rule.STALE)) },
                 // dataset has one value in M1 (CRLITE), so no second value to differ by.
             )
         for ((field, change) in changed) {
@@ -135,32 +133,31 @@ class DataFindingTest {
         }
         val text = base.toString()
         for (field in listOf("dataset") + changed.keys) assertTrue("$field=" in text, "$field missing from $text")
-        assertTrue(text.startsWith("DataState(dataset=CRLITE, trustClass=BUNDLED, generationId=seed-2026-11-01"), text)
+        assertTrue(text.startsWith("DataState(dataset=CRLITE, generationId=seed-2026-11-01"), text)
     }
 
     @Test
     fun `data state rules are a read-only copy in precedence order`() {
-        val given = linkedSetOf(Rule.UNSIGNED_DATA, Rule.NO_DATA, Rule.STALE)
+        val given = linkedSetOf(Rule.STALE, Rule.NO_DATA)
         val d =
             dataState()
                 .newBuilder()
                 .rules(given)
                 .build()
         given.clear()
-        assertEquals(listOf(Rule.NO_DATA, Rule.STALE, Rule.UNSIGNED_DATA), d.rules.toList())
-        assertTrue("rules=[NO_DATA, STALE, UNSIGNED_DATA]" in d.toString(), d.toString())
+        assertEquals(listOf(Rule.NO_DATA, Rule.STALE), d.rules.toList())
+        assertTrue("rules=[NO_DATA, STALE]" in d.toString(), d.toString())
         @Suppress("UNCHECKED_CAST") // The check is that the read-only view cannot be cast back and changed.
         assertFailsWith<UnsupportedOperationException> { (d.rules as MutableSet<Rule>).add(Rule.REVOKED) }
     }
 
     @Test
-    fun `the data state builder defaults, its required field and its invariant`() {
+    fun `the data state builder defaults and its required field`() {
         val d =
             Finding.DataState
                 .Builder()
                 .dataset(Dataset.CRLITE)
                 .build()
-        assertNull(d.trustClass)
         assertNull(d.generationId)
         assertNull(d.freshness)
         assertNull(d.sourceTimestampMillis)
@@ -172,16 +169,10 @@ class DataFindingTest {
         assertEquals(false, d.stale)
         assertEquals(emptySet(), d.rules)
         assertEquals("dataset is not set", message { Finding.DataState.Builder().build() })
-        // trustClass == null ⇔ generationId == null, broken in both directions.
-        val noClass = message { dataState().newBuilder().trustClass(null).build() }
-        assertTrue("trustClass is null exactly when generationId is" in noClass, noClass)
-        val noId = message { dataState().newBuilder().generationId(null).build() }
-        assertTrue("trustClass is null exactly when generationId is" in noId, noId)
         assertEquals(
             d,
             dataState()
                 .newBuilder()
-                .trustClass(null)
                 .generationId(null)
                 .freshness(null)
                 .fromSeed(false)

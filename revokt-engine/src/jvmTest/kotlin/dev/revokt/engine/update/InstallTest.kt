@@ -10,7 +10,6 @@ import dev.revokt.FilterFormat
 import dev.revokt.Freshness
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
-import dev.revokt.TrustClass
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.Window
 import dev.revokt.engine.store.GenerationMeta
@@ -65,7 +64,6 @@ internal class InstallTest : InstallFixture() {
         assertEquals(
             DatasetGeneration(
                 "g1",
-                TrustClass.SIGNED,
                 Freshness.RECORD_LAST_MODIFIED,
                 fromSeed = false,
                 sourceTimestampMillis = 1_792_587_631_204,
@@ -229,9 +227,6 @@ internal class InstallTest : InstallFixture() {
         assertEquals(0, f.storeFailures)
         assertEquals(emptyList(), storage.writes)
         assertEquals(emptyList(), engine.prepared)
-        val system = pending(trustClass = TrustClass.SYSTEM)
-        val read = PendingGeneration(system.meta, over.index, system.deltas, null)
-        assertEquals(DiagnosticCode.STORE_UNREADABLE, failed(install(read)).code)
         // C2SP's reader allows trailing bytes, so zero padding makes a valid index of exactly the cap. The failures
         // deleted the staged delta, so it is staged again.
         val again = pending()
@@ -541,26 +536,13 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
-    fun `previous is the old live or previous generation of the same or a higher trust class`() {
+    fun `previous is the old live generation`() {
         fun dir(r: InstallResult) = assertIs<InstallResult.Installed>(r).directory
         val g1 = dir(install(pending("g1")))
         val g2 = dir(install(pending("g2", timestamp = 2_000_000_000_000)))
         assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
-        val g3 = dir(install(pending("g3", TrustClass.MIRROR, 2_000_000_000_001)))
+        val g3 = dir(install(pending("g3", timestamp = 2_000_000_000_001)))
         assertEquals(StoreRead.Found(Pointer(g3, g2)), store.pointer())
-        // The live MIRROR generation ranks below SIGNED, so the SIGNED previous stays previous.
-        val g4 = dir(install(pending("g4", timestamp = 2_000_000_000_002)))
-        assertEquals(StoreRead.Found(Pointer(g4, g2)), store.pointer())
-    }
-
-    @Test
-    fun `a lower-class pointed generation is passed over on its class, before it is read, so it counts nothing`() {
-        val g1 = assertIs<InstallResult.Installed>(install(pending("g1", TrustClass.MIRROR))).directory
-        // g1 would not read back either; its class rules it out first, so that is never asked.
-        storage.inner.delete("crlite/compat/$g1/index.bin")
-        val r = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000)))
-        assertEquals(0, r.storeFailures)
-        assertEquals(StoreRead.Found(Pointer(r.directory, null)), store.pointer())
     }
 
     @Test
@@ -591,29 +573,12 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
-    fun `a SYSTEM generation whose index is not selection-equivalent to its filters is STORE_UNREADABLE`() {
-        val p = pending(trustClass = TrustClass.SYSTEM)
-        val wrong =
-            C2spIndex.write(
-                C2spIndex.index(
-                    C2spIndex.read(p.index).filenames.map { it to mapOf(log(1) to Window(1u, 2u)) },
-                ),
-            )
-        val f = failed(install(PendingGeneration(p.meta, wrong, p.deltas, null)))
-        assertEquals(SyncStage.INDEX, f.stage)
-        assertEquals(DiagnosticCode.STORE_UNREADABLE, f.code)
-        assertEquals(emptyList(), engine.prepared)
-        assertUntouched(p.meta.directory)
-        assertIs<InstallResult.Installed>(install(pending(trustClass = TrustClass.SYSTEM)))
-    }
-
-    @Test
     fun `a filter the loader cannot decode fails at PREPARE before the engine sees it`() {
-        val p = pending(trustClass = TrustClass.SYSTEM)
+        val p = pending()
         val garbage = byteArrayOf(4, 0, 0)
         for (name in p.deltas.keys) store.stageFile(p.meta.directory, name, garbage)
         val hashes = p.deltas.mapValues { garbage.toByteString().sha256() }
-        val f = failed(install(PendingGeneration(p.meta, p.index, hashes, null)))
+        val f = failed(install(PendingGeneration(p.meta, p.index, hashes, p.records)))
         assertEquals(SyncOutcome.FAILED, f.outcome)
         assertEquals(SyncStage.PREPARE, f.stage)
         assertEquals(1, f.storeFailures)
@@ -644,7 +609,7 @@ internal class InstallTest : InstallFixture() {
     fun `a seed install publishes fromSeed, its seedFormat and the STALE gate`() {
         val seed = Publication(true, 1, true, now, 0)
         assertIs<InstallResult.Installed>(
-            install(pending("seed", TrustClass.BUNDLED), publication = seed, updater = null),
+            install(pending("seed", freshness = Freshness.SEED_SIGNED_TIME), publication = seed, updater = null),
         )
         val d = snapshot.snapshot.datasets.getValue(Dataset.CRLITE)
         assertEquals(true, d.fromSeed)
