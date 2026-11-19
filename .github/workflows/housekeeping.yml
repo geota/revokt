@@ -11,6 +11,7 @@ on:
     - cron: "11 5 * * 1"
   issue_comment:
     types: [created]
+  workflow_dispatch:   # the rulesets audit on demand
 
 permissions: read-all
 
@@ -60,7 +61,7 @@ jobs:
   # compares everything else and says that the bypass list went unchecked.
   rulesets-audit:
     name: rulesets-audit
-    if: github.event_name == 'schedule' && github.event.schedule == '11 5 * * 1'
+    if: (github.event_name == 'schedule' && github.event.schedule == '11 5 * * 1') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
