@@ -70,9 +70,10 @@ if (jazzerFuzz == "1" || jazzerFuzz == "true" || jazzerFuzz == "yes") {
 
 // Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of each parser package of at least 90 % over
 // the committed tests (jvmTest), part of `check`: the certificate parser, the C2SP index reader (#86), the CRLite
-// generation (#90), the JSON tokenizer and canonical JSON (#92) and the content-signature payload and raw-to-DER
-// conversion (#125). The path walker and the store have floors a little under their measured branch coverage (#161:
-// walker 98.96 %, store 94.26 % at f2c54fc). The floors may only be raised.
+// generation (#90), the JSON tokenizer and canonical JSON (#92), the content-signature payload and raw-to-DER
+// conversion (#125) and, under the parser's floor, the seed archive reader (#138). The path walker and the store have
+// floors a little under their measured branch coverage (#161: walker 98.96 %, store 94.26 % at f2c54fc). The floors may
+// only be raised.
 kover {
     currentProject {
         createVariant("parser") { add("jvm") }
@@ -85,7 +86,7 @@ kover {
     }
     reports {
         variant("parser") {
-            filters { includes { packages("dev.revokt.engine.parse") } }
+            filters { includes { packages("dev.revokt.engine.parse", "dev.revokt.engine.seed.parse") } }
             verify { rule("parser package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
         }
         variant("c2sp") {
