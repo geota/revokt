@@ -71,7 +71,8 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         x5u: String? = a,
         signature: String? = good,
         mode: String? = ContentSignature.MODE,
-    ) = SignatureEntry(signature, x5u, mode)
+        modeGiven: Boolean = mode != null,
+    ) = SignatureEntry(signature, x5u, mode, modeGiven)
 
     /** A fetcher serving [bodies] by URL, anything else 404, each response with [headers]. */
     private fun served(
@@ -153,10 +154,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
     }
 
     @Test
-    fun `5 entries is FAILED at SIGNATURE with nothing fetched, and the 4th of 4 is tried`() {
-        val fetcher = served()
-        verify(*Array(5) { entry() }, fetcher = fetcher).assertFailed(SignatureFailure.TOO_MANY_SIGNATURES, null)
-        assertEquals(0, fetcher.requests.size)
+    fun `only the first 4 entries are tried, and the 4th of them is`() {
         // At the cap every entry is tried: three that fail, then one that verifies.
         val fourth =
             verify(
@@ -167,14 +165,23 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
             ).assertVerified(3)
         assertEquals(good, fourth.entry.signature)
         assertEquals(4, ChangesetVerifier.MAX_SIGNATURES)
+        // A 5th entry is never read: one that would verify is not tried, so the 4th's failure is the outcome, and a
+        // null 5th is not NULL_ENTRY.
+        verify(*Array(4) { entry(signature = bad) }, entry()).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 3)
+        verify(*Array(4) { entry(signature = bad) }, null).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 3)
+        // Within the 4 a verifying entry is accepted whatever follows.
+        val fetcher = served()
+        verify(entry(), *Array(5) { entry(x5u = "$host/other-$it.chain") }, fetcher = fetcher).assertVerified(0)
+        assertEquals(1, fetcher.requests.size)
     }
 
     @Test
-    fun `entries all lacking mode, signature or x5u, or of another mode, are FAILED at SIGNATURE, unfetched`() {
+    fun `entries all lacking signature or x5u, or of another mode, are FAILED at SIGNATURE, unfetched`() {
         val fetcher = served()
+        // A mode that is "" or not a string (modeGiven with no string) is one revokt cannot verify.
         verify(
-            entry(mode = null),
-            entry(mode = null),
+            entry(mode = ""),
+            entry(mode = null, modeGiven = true),
             fetcher = fetcher,
         ).assertFailed(SignatureFailure.NONE_TRIED, null)
         verify(
@@ -188,10 +195,11 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
     }
 
     @Test
-    fun `an entry with no mode is skipped`() {
+    fun `an entry with no mode is tried as p384ecdsa, and one of another mode is skipped`() {
+        verify(entry(mode = null)).assertVerified(0)
         val fetcher = served()
         // The skipped entry names b; only a is fetched.
-        verify(entry(x5u = b, mode = null), entry(), fetcher = fetcher).assertVerified(1)
+        verify(entry(x5u = b, mode = "p256ecdsa"), entry(mode = null), fetcher = fetcher).assertVerified(1)
         assertEquals(listOf(a), fetcher.requests.map { it.url })
     }
 
@@ -282,7 +290,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
     fun `when none verifies the last tried entry's failure is the outcome`() {
         val bodies = mapOf(b to goodPem)
         // a is missing (X5U_FETCH, stage X5U), b's signature is bad (CONTENT_SIGNATURE); a skipped entry comes last.
-        verify(entry(x5u = a), entry(x5u = b, signature = bad), entry(mode = null), fetcher = served(bodies))
+        verify(entry(x5u = a), entry(x5u = b, signature = bad), entry(mode = "p256ecdsa"), fetcher = served(bodies))
             .assertFailed(SignatureFailure.CONTENT_SIGNATURE, 1)
         verify(entry(x5u = b, signature = bad), entry(x5u = a), fetcher = served(bodies))
             .assertFailed(SignatureFailure.X5U_FETCH, 1, SyncStage.X5U)
