@@ -7,9 +7,20 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
 
 ### Changes in revision 60 (in progress)
 
-- **#223 (audit A-1), Mozilla constants:** §7.1 tries the first 4 `metadata.signatures` entries and ignores the rest,
-  where more than 4 failed the changeset; §5.1 raises `MAX_CHANGESET_RECORDS` from 256 to 1,024; the test plan's
-  content-signature row gains both.
+- **#223 (audit A-1), Mozilla constants:**
+  - §7.1 tries the first 4 `metadata.signatures` entries and ignores the rest, where more than 4 failed the changeset.
+  - §5.1 raises `MAX_CHANGESET_RECORDS` from 256 to 1,024.
+  - §4 and §7.1: `allowedDomains` (default `cdn.mozilla.net`, a suffix rule on a label boundary) replaces the exact
+    `x5uHosts`. `attachmentBaseUrl` is nullable and null by default: the base is then the server root's
+    `capabilities.attachments.base_url`, read once per sync before the first attachment fetch, under the x5u URL
+    grammar and `allowedDomains`, and anything else is `FAILED` at `ATTACHMENT` with no fallback.
+  - §7.1: an absent or `null` `mode` is tried, as Firefox does, reversing #163's "`mode` required"; a present
+    `mode` other than `p384ecdsa` is still skipped.
+  - §7.1: the leaf SAN may hold several dNSNames, one equal to the signer name with ASCII case ignored, with no
+    wildcard match and no other name form; nameConstraints are checked against every dNSName. An absent leaf
+    extKeyUsage passes.
+  - §7.1 states why the x5u order is the path (no path search over an unsigned body).
+  - The test plan's content-signature row, (d) and API rows cover each change.
 
 ### Changes in revision 59 (the spec split of #216, and the deltas of #209, #234, #242 and #244, 2026-11-18)
 

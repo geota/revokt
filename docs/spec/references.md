@@ -424,7 +424,7 @@ Appendix A of the spec: what was verified against live sources and reference cod
     (Firefox matches the root's DER and checks it), so the terminal's nameConstraints are never read, and neither is its
     TLS feature, which Firefox also checks against the anchor's child; the path is the
     x5u order with no depth cap (both references build by name, at most six sub-CAs); name chaining also accepts the
-    canonical form; the leaf SAN is exactly one dNSName and its EKU must be present; RSA size counts significant bits
+    canonical form; the leaf SAN holds dNSNames only and never matches a wildcard; RSA size counts significant bits
     (Firefox rounds to bytes); a seed's chain validity is checked at its signed time; links are not checked against
     OneCRL; nameConstraints are checked against the leaf's name only, where mozilla::pkix and webpki check every
     descendant.
@@ -441,8 +441,11 @@ Appendix A of the spec: what was verified against live sources and reference cod
   in the cargo git checkout of tag `v1.0.1` (`9821cce`), and the crates below from the local cargo registry):
   - **The attachments base URL:** `https://firefox-settings-attachments.cdn.mozilla.net/` is
     `capabilities.attachments.base_url` of `https://firefox.settings.services.mozilla.com/v1/`, with its trailing
-    `/`, read 2026-11-06/07 in the review of #177 and again on 2026-11-12 (kinto-attachment 9.0.1). §7.1 makes it the
-    default.
+    `/`, read 2026-11-06/07 in the review of #177 and again on 2026-11-12 (kinto-attachment 9.0.1). §7.1 reads it from
+    the server root, as Firefox does: `Utils.sys.mjs` at `cac25a6fa321b0051932359b84c4e2fe3caabdc5` (lines 335 to 387)
+    fetches `${SERVER_URL}/`, takes `capabilities.attachments.base_url` with no host check, and caches it in the
+    `services.settings.base_attachments_url` pref keyed by the server URL. revokt checks the host against
+    `allowedDomains` and keeps nothing after the sync.
   - **`buildIndex` against Firefox and upki-mirror:** Firefox's `RemoteSecuritySettings.sys.mjs` at
     `cac25a6fa321b0051932359b84c4e2fe3caabdc5` (lines 645 to 659) takes the records' full filters, refuses unless
     there is exactly one ("expected 1"), and takes every incremental record beside it, reading no `parent`; revokt's
@@ -459,7 +462,7 @@ Appendix A of the spec: what was verified against live sources and reference cod
     `_since` bare (`params._since = lastEtag`, line 518). Each entry gives `x5u`, `signature` and `mode`; an entry
     missing `x5u` or `signature`, or with a `mode` other than `p384ecdsa`, is skipped with a warning (line 1103), and
     when none verifies the first error is thrown (line 1132). revokt reads `signatures[]` the same way (§7.1),
-    with four differences: it also skips an entry with no `mode` (a deliberate narrowing); it tries only the first 4
+    with four differences: it skips an entry whose `mode` is `""` or not a string, where Firefox tries a falsy one; it tries only the first 4
     entries and ignores the rest, where Firefox tries them all; it reuses an `x5u` already fetched and validated in
     the same sync, and does not retry one that failed; and when none verifies it reports the last entry's error, where
     Firefox throws the first.
