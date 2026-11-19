@@ -317,6 +317,27 @@ class DecideFallbackTest {
                 PathStatus.NO_ISSUER,
                 WalkerHarness.decide(alone, FakeFallback.finds(leaf, clientOnly, root)).path.status,
             )
+            val permitsLeaf = WalkerFixturesAs.nameConstraints(permitted = listOf(WalkerFixturesAs.dns("leaf.example")))
+            val admitted = WalkerHarness.decide(alone, FakeFallback.finds(leaf, ca("IP", root, permitsLeaf), root))
+            assertEquals(PathStatus.FOUND, admitted.path.status, "nameConstraints that admit the leaf")
+        }
+    }
+
+    @Test
+    fun `a fallback path that spends the name-constraint budget is a failed fallback`() {
+        // (as)'s budget case on the fallback path: 500 leaf names against 501 subtrees, each name inside the last.
+        val names = List(500) { WalkerFixturesAs.dns("n$it.leaf.example") }
+        val subtrees = List(500) { WalkerFixturesAs.dns("s$it.leaf.example") } + WalkerFixturesAs.dns("leaf.example")
+        with(
+            Honest(
+                leafExtensions = listOf(WalkerFixturesAs.san(*names.toTypedArray())),
+                intermediateExtensions = listOf(WalkerFixturesAs.nameConstraints(permitted = subtrees)),
+            ),
+        ) {
+            val alone = fixture("fb-budget", presented = listOf(leaf), walk = notFound(NoIssuerReason.NO_CANDIDATE))
+            val d = WalkerHarness.decide(alone, FakeFallback.finds(leaf, intermediate, root))
+            assertEquals(PathStatus.NO_ISSUER, d.path.status)
+            assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings)
         }
     }
 

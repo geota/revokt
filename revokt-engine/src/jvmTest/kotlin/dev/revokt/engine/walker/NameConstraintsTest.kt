@@ -4,6 +4,7 @@
 package dev.revokt.engine.walker
 
 import dev.revokt.engine.parse.Span
+import dev.revokt.engine.parse.TestCert
 import dev.revokt.engine.parse.TestDer
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -167,6 +168,138 @@ class NameConstraintsTest {
             NameConstraints.Result.VIOLATION,
             assertNotNull(nc(excluded = listOf(dnsName("x")))).check(null, unlimited),
             "unreadable SAN",
+        )
+    }
+
+    @Test
+    fun `walker the dNSName grammar at its edges`() {
+        assertEquals(false, dns("a.example", "a.example.com"), "a presented ID shorter than the constraint")
+        assertEquals(false, dns("*.b.c", "abcde", excluded = true), "a wildcard expansion that runs off the constraint")
+        assertEquals(true, dns("My-Host_1.Example", "example"), "hyphens, underscores and capitals")
+        assertNull(dns("a".repeat(250) + ".com", "com"), "over 253 octets")
+        assertNull(dns("*x.example.com", "example.com"), "a wildcard label is * alone")
+        assertNull(dns("*", "example.com"))
+        assertNull(dns("a" + "1".repeat(63) + ".example", "example"), "a label over 63 octets of digits")
+        assertNull(dns("a".repeat(63) + "-b.example", "example"), "a label over 63 octets at a hyphen")
+        assertNull(dns("a..example", "example"), "an empty label")
+        assertNull(dns("a.example", "a..example"), "an empty label in a constraint")
+        assertNull(dns("a-.example", "example"), "a label ending in a hyphen")
+        assertNull(dns("example.a-", "a-"), "a last label ending in a hyphen")
+    }
+
+    @Test
+    fun `walker every GeneralName form maps as webpki's GeneralName does`() {
+        for ((tag, number) in listOf(0xa0 to 0, 0x81 to 1, 0xa3 to 3, 0xa5 to 5, 0x88 to 8)) {
+            assertEquals(PresentedName.Unsupported(number), PresentedName.general(tag, ByteArray(0)))
+        }
+        assertEquals(PresentedName.Directory, PresentedName.general(0xa4, ByteArray(0)))
+        assertEquals(PresentedName.Uri, PresentedName.general(0x86, ByteArray(0)))
+        assertNull(PresentedName.general(0x89, ByteArray(0)))
+    }
+
+    @Test
+    fun `walker comparison errors and spent budgets in either list`() {
+        val badPresented = PresentedName.dns("bad..name")
+        val permitted = assertNotNull(nc(permitted = listOf(dnsName("example.com"))))
+        assertEquals(
+            NameConstraints.Result.VIOLATION,
+            permitted.check(names(badPresented), unlimited),
+            "an error in a permitted list",
+        )
+        val excluded = assertNotNull(nc(excluded = listOf(dnsName("example.com"))))
+        assertEquals(
+            NameConstraints.Result.VIOLATION,
+            excluded.check(names(badPresented), unlimited),
+            "an error in an excluded list",
+        )
+        assertEquals(
+            NameConstraints.Result.EXHAUSTED,
+            excluded.check(
+                names(
+                    PresentedName.dns("a.x"),
+                ),
+                ComparisonBudget {
+                    false
+                },
+            ),
+        )
+        val uriOnly = assertNotNull(nc(permitted = listOf(dnsName("example.com"))))
+        assertEquals(
+            NameConstraints.Result.CONFORMS,
+            uriOnly.check(names(PresentedName.Uri), unlimited),
+            "a URI skips dNSName subtrees",
+        )
+    }
+
+    @Test
+    fun `walker iPAddress families, lengths and whole-octet masks`() {
+        val v6 = ip(*IntArray(16) { if (it == 0) 0x20 else 0 }, *IntArray(16) { if (it < 2) 0xff else 0 })
+        val c = assertNotNull(nc(permitted = listOf(v6)))
+        assertEquals(
+            NameConstraints.Result.CONFORMS,
+            c.check(
+                names(
+                    PresentedName.Ip(
+                        ByteArray(16) {
+                            if (it ==
+                                0
+                            ) {
+                                0x20
+                            } else if (it == 1) {
+                                0
+                            } else {
+                                7
+                            }
+                        },
+                    ),
+                ),
+                unlimited,
+            ),
+        )
+        assertEquals(
+            NameConstraints.Result.VIOLATION,
+            c.check(names(PresentedName.Ip(ByteArray(4))), unlimited),
+            "IPv4 against IPv6",
+        )
+        assertEquals(
+            NameConstraints.Result.VIOLATION,
+            c.check(names(PresentedName.Ip(ByteArray(5))), unlimited),
+            "a 5-octet address",
+        )
+        val odd = assertNotNull(nc(permitted = listOf(ip(10, 0, 0, 0, 255, 0, 0, 0, 0))))
+        assertEquals(
+            NameConstraints.Result.VIOLATION,
+            odd.check(names(PresentedName.Ip(byteArrayOf(10, 1, 2, 3))), unlimited),
+            "9 octets",
+        )
+        val slash8 = assertNotNull(nc(permitted = listOf(ip(10, 0, 0, 0, 255, 0, 0, 0))))
+        assertEquals(
+            NameConstraints.Result.CONFORMS,
+            slash8.check(names(PresentedName.Ip(byteArrayOf(10, 1, 2, 3))), unlimited),
+        )
+    }
+
+    @Test
+    fun `walker a certificate's nameConstraints, one, two, a non-minimal OID arc or an unreadable list`() {
+        fun parsed(vararg extensions: ByteArray) = WalkerCerts.parse(TestCert(extensions = extensions.toList()).der)
+        val one = WalkerFixturesAs.nameConstraints(permitted = listOf(dnsName("example.com")))
+        assertNotNull(NameConstraints.of(parsed(one))).let { assertEquals(false, it === NameConstraints.UNREADABLE) }
+        assertEquals(NameConstraints.UNREADABLE, NameConstraints.of(parsed(one, one)))
+        val nonMinimal =
+            TestDer.seq(
+                TestDer.tlv(0x06, TestDer.bytes(0x55, 0x1d, 0x80, 0x1e)),
+                TestDer.tlv(0x04, TestDer.seq()),
+            )
+        val read = NameConstraints.of(parsed(nonMinimal))
+        assertEquals(true, read == null || read === NameConstraints.UNREADABLE, "never read as a constraint")
+        val emptyExcluded = TestDer.seq(TestDer.tlv(0xa1, TestDer.bytes()))
+        assertNull(NameConstraints.read(emptyExcluded, Span(0, emptyExcluded.size)))
+        val inner = TestDer.tlv(0xa0, TestDer.seq(dnsName("x.example")))
+        val longForm = byteArrayOf(0x30, 0x81.toByte(), inner.size.toByte()) + inner
+        assertNull(NameConstraints.read(longForm, Span(0, longForm.size)), "a non-minimal length")
+        assertEquals(
+            NameConstraints.UNREADABLE,
+            NameConstraints.of(parsed(TestDer.extension("2.5.29.30", TestDer.seq()))),
         )
     }
 

@@ -49,7 +49,8 @@ internal sealed interface PresentedName {
                     is ExtensionRead.Value -> r.value.names
                     is ExtensionRead.Failed -> return null
                 }
-            return san.map { general(it.tag, it.content.toByteArray()) ?: return null } + Directory
+            // ExtensionValues admits exactly webpki's forms, so every entry maps and none is dropped.
+            return san.mapNotNull { general(it.tag, it.content.toByteArray()) } + Directory
         }
 
         /** webpki's `GeneralName::from_der` over identifier octet [tag]; null for a form it does not read. */
@@ -130,9 +131,11 @@ internal class NameConstraints private constructor(
         name: PresentedName,
         budget: ComparisonBudget,
     ): Result {
-        val permittedResult = permitted?.let { within(name, it, budget) } ?: Result.CONFORMS
-        if (permittedResult != Result.CONFORMS) return permittedResult
-        return excluded?.let { outside(name, it, budget) } ?: Result.CONFORMS
+        if (permitted != null) {
+            val r = within(name, permitted, budget)
+            if (r != Result.CONFORMS) return r
+        }
+        return if (excluded == null) Result.CONFORMS else outside(name, excluded, budget)
     }
 
     /** One permitted list: a subtree of [name]'s form must match when the list holds any. */
@@ -355,7 +358,7 @@ internal class NameConstraints private constructor(
 
 /**
  * webpki's dNSName matching in the name-constraint role (`dns_name.rs` 238–360) and its `is_valid_dns_id`
- * (400–531), ported line for line. A presented ID may hold a wildcard label (`*` alone, followed by at least two
+ * (400–531), ported line for line less the branches these two roles cannot reach. A presented ID may hold a wildcard label (`*` alone, followed by at least two
  * labels); a constraint may not, may be empty (it covers every name) and may start with a dot (subdomains only).
  */
 internal object DnsNameConstraint {
@@ -387,7 +390,8 @@ internal object DnsNameConstraint {
                 if (presented[p++] != DOT) return false
             }
         }
-        if (excluded && p < presented.size && presented[p] == STAR) {
+        // p < presented.size here: a prefix skip leaves at least the constraint's length.
+        if (excluded && presented[p] == STAR) {
             p++
             while (true) {
                 if (r >= constraint.size) return false
@@ -400,10 +404,8 @@ internal object DnsNameConstraint {
             val pb = presented[p++]
             val rb = constraint[r++]
             if (lower(pb) != lower(rb)) return false
-            if (p == presented.size) {
-                if (pb == DOT) return null
-                break
-            }
+            // webpki's "presented IDs may not be absolute" error cannot arise: [valid] refused a trailing dot.
+            if (p == presented.size) break
         }
         return r == constraint.size
     }
@@ -478,10 +480,8 @@ internal object DnsNameConstraint {
         }
         if (labelLength == 0) return false
         if (endsWithHyphen || allNumeric) return false
-        if (isWildcard) {
-            val labels = if (labelLength == 0) dots else dots + 1
-            if (labels < MIN_WILDCARD_LABELS) return false
-        }
+        // labelLength is not 0 here, so the label count is dots + 1 (webpki's absolute-ID case is refused above).
+        if (isWildcard && dots + 1 < MIN_WILDCARD_LABELS) return false
         return true
     }
 
