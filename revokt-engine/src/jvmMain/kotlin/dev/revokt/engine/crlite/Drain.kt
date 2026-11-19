@@ -7,7 +7,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
-internal actual fun awaitDrain(
+/**
+ * Blocks until [drained] completes or [timeoutMillis] passes, for `RevocationEngine.close()` (spec §3.2). Never throws:
+ * an interrupt ends the wait early and the thread's interrupt status is restored.
+ */
+internal fun awaitDrain(
     drained: CompletableDeferred<Unit>,
     timeoutMillis: Long,
 ) {
