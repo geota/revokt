@@ -57,11 +57,16 @@ jobs:
   # the committed docs/dev/rulesets/. On a difference it opens, or rewrites, one issue holding the diff, which
   # github.token may do (a PR it may not: "Actions may not create or approve pull requests"), and closes the issue once
   # the files match again; the committed files change in an ordinary PR. The rulesets' bypass list is readable only
-  # with RULESETS_AUDIT_TOKEN (a fine-grained token with Administration: read on this repository), and so are some merge
-  # settings; without it the job compares everything else and says what went unchecked.
+  # with RULESETS_AUDIT_TOKEN (a fine-grained token with Administration: read on this repository, kept in the audit
+  # environment), and so are most merge settings. rulesets_compare.sh leaves a member out only where the live export
+  # lacks it or holds null, and names each one, so a member the token can read is always compared.
   rulesets-audit:
     name: rulesets-audit
-    if: (github.event_name == 'schedule' && github.event.schedule == '11 5 * * 1') || github.event_name == 'workflow_dispatch'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'schedule' && github.event.schedule == '11 5 * * 1') || github.event_name == 'workflow_dispatch')
+    # Where RULESETS_AUDIT_TOKEN lives once the maintainer sets it, with deployments limited to main.
+    environment: audit
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -73,50 +78,11 @@ jobs:
       - name: export and compare
         env:
           GH_TOKEN: ${{ secrets.RULESETS_AUDIT_TOKEN || github.token }}
-          ADMIN: ${{ secrets.RULESETS_AUDIT_TOKEN != '' }}
           NEWS: ${{ runner.temp }}/audit.md
         run: |
           set -euo pipefail
-          live=$RUNNER_TEMP/live
-          committed=$RUNNER_TEMP/committed
-          bash .github/scripts/rulesets_export.sh "$live"
-          cp -R docs/dev/rulesets "$committed"
-          if [ "$ADMIN" != "true" ]; then
-            echo "::warning::no RULESETS_AUDIT_TOKEN: the rulesets' bypass list is not compared"
-            for f in "$live"/ruleset*.json "$committed"/ruleset*.json; do
-              [ -f "$f" ] || continue
-              jq -S 'if type == "array" then map(del(.bypass_actors)) else del(.bypass_actors) end' "$f" >| "$f.tmp"
-              mv "$f.tmp" "$f"
-            done
-            # Merge settings github.token cannot read come back null; they are left out of the comparison too.
-            unread=$(jq -c '[to_entries[] | select(.value == null) | .key]' "$live/repository.json")
-            if [ "$unread" != "[]" ]; then
-              echo "::warning::no RULESETS_AUDIT_TOKEN: the merge settings $unread are not compared"
-              for f in "$live/repository.json" "$committed/repository.json"; do
-                jq -S --argjson k "$unread" 'with_entries(select(.key as $x | $k | index($x) | not))' "$f" >| "$f.tmp"
-                mv "$f.tmp" "$f"
-              done
-            fi
-          fi
-          : >| "$NEWS"
-          if ! diff -ru "$committed" "$live" >| "$RUNNER_TEMP/audit.diff"; then
-            {
-              echo "The live settings differ from \`docs/dev/rulesets/\`. If the change is intended, refresh the files in a PR"
-              echo "(\`.github/scripts/rulesets_export.sh docs/dev/rulesets\` with an admin token); otherwise revert the setting."
-              if [ "$ADMIN" != "true" ]; then
-                echo
-                echo "The rulesets' bypass list, and any merge setting github.token cannot read, were not compared (no RULESETS_AUDIT_TOKEN)."
-              fi
-              echo
-              echo '```diff'
-              sed -e 's|'"$RUNNER_TEMP"'/committed|docs/dev/rulesets|; s|'"$RUNNER_TEMP"'/live|live|' "$RUNNER_TEMP/audit.diff" | head -c 50000
-              echo
-              echo '```'
-            } >| "$NEWS"
-            echo "the settings differ from docs/dev/rulesets"
-          else
-            echo "no change"
-          fi
+          bash .github/scripts/rulesets_export.sh "$RUNNER_TEMP/live"
+          bash .github/scripts/rulesets_compare.sh docs/dev/rulesets "$RUNNER_TEMP/live" "$NEWS"
       - name: open, update or close the audit issue
         env:
           GH_TOKEN: ${{ github.token }}
