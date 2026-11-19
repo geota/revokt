@@ -52,7 +52,13 @@ internal class PendingGeneration(
 /**
  * What an install publishes beside the generation's own fields (spec §4 `DataState`, §5.1): whether it is the seed and
  * the seed's `seedFormat`, the seed `STALE` gate ([DatasetGeneration.staleGateOpen]), and the clock reading and
- * `clockSkew` that `clockBehind` is recomputed from at the publish.
+ * `clockSkew` that `clockBehind` is recomputed from at the publish. [pointerCounted] when the caller has already counted
+ * a malformed pointer and each pointed `meta.json` that does not read (the seed load, which reads them first, #138), so
+ * the install's own read of them for the new `previous` does not count them again: each store fault is counted once.
+ * [heal] when the caller found no trustworthy pointer (rule (b) of the seed-load rule, lead 2026-11-16): a complete
+ * directory of this generation's name is then held and installed as it stands when it is this generation, and one whose
+ * `meta.json` is absent or does not read is this install's to complete, pointed or not, and never deleted by it on a
+ * failure: the caller deletes only a directory it staged afresh.
  */
 internal class Publication(
     val fromSeed: Boolean,
@@ -60,6 +66,8 @@ internal class Publication(
     val staleGateOpen: Boolean,
     val nowMillis: Long,
     val clockSkewMillis: Long,
+    val pointerCounted: Boolean = false,
+    val heal: Boolean = false,
 ) {
     init {
         require(fromSeed == (seedFormat != null)) { "seedFormat is set exactly for a seed" }
@@ -221,7 +229,9 @@ private class Install(
      * one the pointer names, or when the pointer is malformed (it may name any directory) and [directory]'s `meta.json`
      * is present, complete or malformed (#236, fail closed). A directory nothing holds is this install's: it is
      * completed over its staged deltas, or deleted on a failure before activation. A complete one becomes this install's
-     * only once [StoreLayout.reopen] accepts it.
+     * only once [StoreLayout.reopen] accepts it. Under [Publication.heal] (the seed's rule (b), #138) it is held when it is
+     * complete or is the engine's live generation: an incomplete one the engine does not serve is this install's, pointed
+     * or not, a complete one is never reopened, and the live one is never rewritten whatever its `meta.json` says.
      */
     private fun claim(directory: String): Pair<Boolean, StoreRead<GenerationMeta>> {
         liveBefore = liveDirectory()
@@ -231,8 +241,15 @@ private class Install(
         // reads. Only a directory with no meta.json is staged.
         healing = store.pointer() is StoreRead.Malformed
         val unknown = healing && existing !is StoreRead.Absent
-        val held = directory == liveDirectory() || directory in pointed() || unknown
-        if (!held && existing !is StoreRead.Found) written = directory
+        val held =
+            if (publication.heal) {
+                // The engine's live directory is held whatever its meta.json says: it is never rewritten while served.
+                existing is StoreRead.Found || directory == liveDirectory()
+            } else {
+                directory == liveDirectory() || directory in pointed() || unknown
+            }
+        // Under heal the caller owns its directory's cleanup: it never deletes one it reopened (#235's review).
+        if (!held && existing !is StoreRead.Found && !publication.heal) written = directory
         return held to existing
     }
 
@@ -282,13 +299,15 @@ private class Install(
      * `isFilterOnDisk` and upki's `Plan::construct` re-hash theirs; the full filters' blobs are re-hashed when the
      * directory is read). A collection re-signed under the same `<ts>` is the same signed records, so a retried flip over
      * it installs rather than failing every sync until the next `<ts>` (the maintainer's decision on #200; Firefox treats
-     * an equal timestamp as up to date, `RemoteSettingsClient.sys.mjs:778` at `cac25a6`).
+     * an equal timestamp as up to date, `RemoteSettingsClient.sys.mjs:778` at `cac25a6`). Under [Publication.heal] the
+     * `freshness` is not compared either: a seed and a sync of one `<ts>` are one generation (#138, the seed-load rule).
      */
     private fun sameGeneration(
         stored: GenerationMeta,
         directory: String,
     ): Boolean =
-        stored.copy(signed = meta.signed) == meta &&
+        stored.copy(signed = meta.signed, freshness = if (publication.heal) meta.freshness else stored.freshness) ==
+            meta &&
             store.file(directory, StoreLayout.INDEX).contentEquals(generation.index) &&
             store.file(directory, StoreLayout.RECORDS).contentEquals(generation.records) &&
             generation.deltas.all { (name, sha256) -> store.file(directory, name, sha256) != null }
@@ -372,7 +391,9 @@ private class Install(
      * generation `current` does not name, never loses it to the next install's prune (#249: never delete what is
      * served); so a running loader keeps its fallback beside an absent or malformed pointer too (#236), while a fresh one
      * has none. A malformed pointer, and each candidate that does not qualify, count a store failure. A heal (the flip
-     * beside a malformed pointer) is not pruned after (#256).
+     * beside a malformed pointer) is not pruned after (#256). A caller that read the pointer and its directories first
+     * and counted their faults ([Publication.pointerCounted]) has them not counted again: the malformed pointer, and a
+     * pointed candidate whose `meta.json` does not read.
      */
     private fun previous(directory: String): String? {
         val pointed =
@@ -382,7 +403,7 @@ private class Install(
                 }
 
                 StoreRead.Malformed -> {
-                    storeFailures++
+                    if (!publication.pointerCounted) storeFailures++
                     emptyList()
                 }
 
@@ -393,7 +414,9 @@ private class Install(
         // Every candidate is read, once, so a pointed directory that does not read counts its store failure even when
         // an earlier candidate qualifies.
         val candidates = (listOfNotNull(liveBefore) + pointed).distinct().filter { it != directory }
-        return candidates.filter(::qualifies).firstOrNull()
+        return candidates
+            .filter { qualifies(it, callerCounted = publication.pointerCounted && it in pointed) }
+            .firstOrNull()
     }
 
     /**
@@ -402,8 +425,16 @@ private class Install(
      * re-hashed), so the fallback is always one that can load (#246, the #247 review). One whose `meta.json` is missing
      * or malformed, or that does not read back, counts a store failure.
      */
-    private fun qualifies(candidate: String): Boolean {
-        if (store.readMeta(candidate) !is StoreRead.Found || store.readGeneration(candidate) == null) {
+    private fun qualifies(
+        candidate: String,
+        callerCounted: Boolean = false,
+    ): Boolean {
+        if (store.readMeta(candidate) !is StoreRead.Found) {
+            // The seed loader counted a pointed directory whose meta.json does not read ([Publication.pointerCounted]).
+            if (!callerCounted) storeFailures++
+            return false
+        }
+        if (store.readGeneration(candidate) == null) {
             storeFailures++
             return false
         }

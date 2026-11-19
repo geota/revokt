@@ -78,9 +78,10 @@ if (jazzerFuzz == "1" || jazzerFuzz == "true" || jazzerFuzz == "yes") {
 
 // Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of each parser package of at least 90 % over
 // the committed tests (jvmTest), part of `check`: the certificate parser, the C2SP index reader (#86), the CRLite
-// generation (#90), the JSON tokenizer and canonical JSON (#92) and the content-signature payload and raw-to-DER
-// conversion (#125). The path walker and the store have floors a little under their measured branch coverage (#161:
-// walker 98.96 %, store 94.26 % at f2c54fc). The floors may only be raised.
+// generation (#90), the JSON tokenizer and canonical JSON (#92), the content-signature payload and raw-to-DER
+// conversion (#125) and, under the parser's floor, the seed archive reader (#138). The path walker and the store have
+// floors a little under their measured branch coverage (#161: walker 98.96 %, store 94.26 % at f2c54fc). The floors may
+// only be raised.
 kover {
     currentProject {
         createVariant("parser") { add("jvm") }
@@ -93,7 +94,7 @@ kover {
     }
     reports {
         variant("parser") {
-            filters { includes { packages("dev.revokt.engine.parse") } }
+            filters { includes { packages("dev.revokt.engine.parse", "dev.revokt.engine.seed.parse") } }
             verify { rule("parser package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
         }
         variant("c2sp") {
@@ -242,3 +243,69 @@ tasks.withType<Test>().configureEach {
     // The policy's current minor must be this build's (RevoktPolicyTest; spec §4 flippedIn grace rules).
     systemProperty("revokt.version", projectVersion)
 }
+
+// Mutation testing (#215, docs/dev/mutation-testing.md): Pitest over the JVM classes of the critical packages, run by
+// `./gradlew :revokt-engine:pitestJvm` and the pitest workflow (dispatch or weekly), never by `check` or a PR. The Gradle
+// Pitest plugin does not support Kotlin Multiplatform (it configures only under the `java` plugin), so the task runs
+// tools/pitest/PitestRunner.java, a single-file program over pitest-entry's API, on the jvmTest classpath and JVM.
+// `-Prevokt.pitest.packages=a,b` narrows it; the report is build/reports/pitest/mutations.xml (and .csv).
+val pitest =
+    configurations.register("pitest") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+    }
+dependencies {
+    add("pitest", libs.pitest.entry)
+    add("pitest", libs.pitest.junit5.plugin)
+}
+
+val pitestPackages =
+    providers
+        .gradleProperty("revokt.pitest.packages")
+        .orElse("update,store,fetch,verify,walker")
+        .map { list -> list.split(',').map { it.trim() }.filter { it.isNotEmpty() } }
+
+val pitestJvm =
+    tasks.register<Exec>("pitestJvm") {
+        description = "Pitest over the JVM classes of the critical packages (#215); never part of check."
+        group = "verification"
+        val test = tasks.named<Test>("jvmTest")
+        dependsOn("jvmTestClasses")
+        val tool = pitest
+        val runner = rootProject.file("tools/pitest/PitestRunner.java")
+        val reportDir = layout.buildDirectory.dir("reports/pitest")
+        val argsFile = layout.buildDirectory.file("pitest/args.txt")
+        val main = layout.buildDirectory.dir("classes/kotlin/jvm/main")
+        val sources = listOf("src/commonMain/kotlin", "src/jvmMain/kotlin").map { layout.projectDirectory.dir(it) }
+        inputs.files(tool)
+        inputs.file(runner)
+        outputs.dir(reportDir)
+        // A mutation run is asked for, never cached: its inputs are every class and test of the packages.
+        outputs.upToDateWhen { false }
+        notCompatibleWithConfigurationCache("assembles its arguments from the jvmTest task at execution")
+        doFirst {
+            val t = test.get()
+            val packages = pitestPackages.get()
+            val lines = ArrayList<String>()
+            lines += "reportDir=" + reportDir.get().asFile.absolutePath
+            lines += "threads=" + (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+            for (p in packages) {
+                lines += "targetClass=dev.revokt.engine.$p.*"
+                lines += "targetTest=dev.revokt.engine.$p.*"
+            }
+            for (d in sources) lines += "sourceDir=" + d.asFile.absolutePath
+            lines += "codePath=" + main.get().asFile.absolutePath
+            for (f in t.classpath.files + tool.get().files) lines += "classPath=" + f.absolutePath
+            for (a in t.allJvmArgs.filter { it.startsWith("-D") }) lines += "jvmArg=$a"
+            lines += "jvmArg=-Xmx2g"
+            argsFile.get().asFile.apply {
+                parentFile.mkdirs()
+                writeText(lines.joinToString("\n", postfix = "\n"))
+            }
+            executable =
+                t.javaLauncher
+                    .get()
+                    .executablePath.asFile.absolutePath
+            args("-cp", tool.get().asPath, runner.absolutePath, argsFile.get().asFile.absolutePath)
+        }
+    }
