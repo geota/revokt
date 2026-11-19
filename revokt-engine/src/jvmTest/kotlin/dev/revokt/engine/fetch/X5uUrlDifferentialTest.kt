@@ -20,8 +20,6 @@ import kotlin.test.assertTrue
 class X5uUrlDifferentialTest {
     private val host = X5uUrlFuzzTest.HOST
 
-    private val pieces = X5uUrlFuzzTest.PIECES
-
     /** The fuzz target's generator and oracle (`X5uUrlFuzzTest`), over 200,000 URLs from the fixed seed. */
     @Test
     fun `every URL the x5u rules let through is the allowlisted host on 443 to java_net_URI and java_net_URL`() {
