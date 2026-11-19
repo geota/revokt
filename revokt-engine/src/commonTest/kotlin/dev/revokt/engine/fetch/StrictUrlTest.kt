@@ -9,7 +9,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/** [StrictUrl], the grammar shared by the x5u URL (spec §7.1) and the redirect hops (§7.3; #192). */
+/** [StrictUrl], the grammar of the x5u URL (spec §7.1 "The x5u URL grammar"), also used by the redirect hops (#192). */
 class StrictUrlTest {
     @Test
     fun `IP literals are hosts only when the caller allows them`() {

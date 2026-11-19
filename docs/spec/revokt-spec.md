@@ -1,1693 +1,23 @@
-# Approach 2 — **revokt**: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
-
-Status: **draft spec / project proposal, revision 58** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-15
-
-> **Name decided (revision 11): `revokt`.** Maven group `dev.revokt`, GitHub repository under the
-> maintainer's own account, domain `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub
-> handle `Revokt` is taken; see §13 for the disambiguation rules that follow from that.
-
-### Changes in revision 58 (the redirect and URL grammar of #192, 2026-11-15)
-The maintainer approved this revision on 2026-11-15. It writes in only the redirect and URL grammar decided on #192
-(the maintainer's Q2 and Q3, the lead's Q1, Q4 and Q5 and the readings the lead accepted) and built in #204's
-`StrictUrl`, `HopUrl` and `RedirectingFetcher`; where #204's drafted spec lines and the merged code differ, the code
-and the #192 decisions are written.
-- **§7.3 "Redirects", the hop grammar** (Q2, Q3): every URL of a mirror's chain, the request's own included, is read by
-  the one strict grammar the x5u URL is read by, with IP literals allowed: `https://` in lowercase, no userinfo, a DNS
-  host name, an IPv4 dotted quad with no leading zeros or a bracketed IPv6 address with no zone identifier (a dotted
-  quad only as its last 32 bits), a port of 1 to 65535, a path and query of RFC 3986 `pchar`s, `/` and `?` with valid
-  `%` escapes. Anything else is `FAILED`, never repaired. This replaces "`https` with no userinfo … no port rule".
-- **§7.3, the fetched URL:** each hop, the first included, is fetched as revokt re-serialises it (the host lowercased,
-  `:443` dropped, dot segments removed, an empty path `/`), never as the configured string or the `Location` value.
-- **§7.3, `Location`** (Q1, Q4): a 301, 302, 303, 307 or 308 with no `Location` is returned as the final response, as
-  reqwest and Necko return it, and the mirror client fails it with its `httpStatus` (#194); distinct `Location` values
-  on a redirect response are `FAILED`, as Necko's are, and equal ones collapse.
-- **§7.3, the loop key** (Q5): the re-serialised URL without its fragment, the initial URL counted; it is RFC 3986's
-  simple string comparison, so `%2e` is not a dot segment (a loop spelled with it ends at the hop limit, `FAILED`
-  either way).
-- **§7.3, the accepted readings:** the five credential headers are stripped on a host or port change from the
-  previous hop and stay stripped for every later hop, which is stricter than reqwest (it rebuilds each hop's headers
-  from the original request, so it re-sends them on a later same-host hop); `If-Modified-Since` is kept and no
-  `Referer` is sent, where reqwest, and so upki, sends one on every hop; the body cap and the time left apply to each
-  hop, not only to the final response.
-- **§7.3, the mirror client's 3xx rule** (a reading the lead accepted, from #204's review mapping for #194): the mirror
-  client fails any 3xx the wrapper returns except the manifest's 304, with that `httpStatus`; this is revision 56's
-  "any other 3xx is `FAILED`" moved to the caller, and it covers a 304 to a filter request.
-- **§4:** the `c2spMirror` URL is read by §7.3's hop grammar (IP literals allowed), and `build()` throws when it fails;
-  the "https with no userinfo" rule names the other source URLs only.
-- **§7.1:** the x5u URL is read by the same shared grammar, DNS host names only; its rules are unchanged.
-- **§7.3 and §4 `SyncStage`, a mirror's stages** (the maintainer's decision for #194, 2026-11-15; #207's code): the
-  manifest fetch, a malformed manifest and an over-cap manifest are stage `CHANGESET`; a file fetch, or a file body
-  whose size or SHA-256 differs from its manifest entry, is stage `ATTACHMENT`, as upki splits them by URL.
-- **§9:** mirror fixtures for an IPv6 hop, `HTTPS://`, differing and equal duplicate `Location`s, a 302 with no
-  `Location` at the mirror client and the host `[1.2.3.4::]`. Row (e)'s "the built `index.bin` 1 MiB + 1 byte"
-  becomes "over 1 MiB", since a built index is 14 bytes plus multiples of 32, 42 and 18, always an even size (#207,
-  #194's reading 10); the system-cache row keeps 1 MiB + 1 byte, since that file is read, not built.
-- **§10:** the TLS-only mirror item names the shared grammar, the re-serialised fetch and the headers that stay
-  stripped.
-- **Appendix A:** reqwest 0.13.0 with tower-http 0.6.11 (upki v1.0.1's pins) and Firefox's Necko at
-  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, for the statuses followed, a 3xx with no `Location` and duplicate
-  `Location` values; reqwest alone for IP literal hosts, the redirect limit, the headers it re-sends and its
-  `Referer`; the revision 56 entry's "does the same" is narrowed to the per-hop strip; upki v1.0.1's `fetch.rs`, for how it tells a manifest failure from
-  a file failure.
-
-### Changes in revision 57 (the items queued on #160 after revision 56, 2026-11-14)
-The maintainer approved writing in every item queued on #160 since revision 56 as one revision (2026-11-14). Each is a
-maintainer decision, a lead decision under one, or matches merged code (#195, #197, #198, and #186's evaluator);
-none is open.
-- **§4 and §5.1, `EvaluationRequest.verifiedPath`** (the maintainer's decisions on #195, like upki's single webpki
-  `VerifiedPath`): `verifiedPaths(List<List<ByteArray>>)` becomes `verifiedPath(List<ByteArray>)`, capped at
-  `MAX_DEPTH + 1` certificates; `build()` throws when `presented` is set and `presented[0]` is not the verified leaf, and
-  with both set the verified path wins; a one-certificate path skips the keyability check only when its leaf is an anchor
-  by bytes in the snapshot read at entry, whose id it then reports; `ChainSource.PLATFORM` names both routes; a
-  `FOUND` decision with no leaf-issuer key is the boundary's `ENGINE_ERROR` (#186's code).
-- **§5.1 decision step 6, the walker and §8, issuer labels** (the maintainer's decisions on #196, revised after the
-  comparison with Firefox, and on #197):
-  - `ISSUER_UNVERIFIED` follows mozilla::pkix's order: an explored related non-anchor counts its own unsupported
-    signature OID whether or not it verifies, so does a node the unrelated loop reached, and the leaf's own OID counts
-    only once it has a related candidate. A candidate's key or curve OID still never counts.
-  - `NO_ISSUER` and `ISSUER_UNVERIFIED` share one outcome and one exemption: `rule`, `exempt` and `clearExemption` on
-    either apply to both, and a policy cannot hold a split pair. A relabel between them changes only the diagnostic.
-  - On a trust-manager binding and `Revokt.evaluate` every walk `NotFound` whose fallback failed or is disabled is `NO_ISSUER(PLATFORM_ONLY)`,
-    whatever the label, so `platformOnly()` matches either way; `ISSUER_UNVERIFIED` appears only off the bindings.
-  - `outcomeDepended` is `status == ISSUER_UNVERIFIED` in §8 too; §10 item 14 is rewritten, with the note that a
-    consumer's own exemption can still tell the labels apart off the bindings.
-- **§5.1, candidate order** (the maintainer's decision on #196, Firefox's order): at every depth the store's anchors,
-  then the presented certificates by index, then (M2) the preload; `related()` loses `belowLeaf`; a byte-duplicate is
-  yielded at its earliest position, an anchor's in the store; `anchorIn` matches the anchor of the first path found in that order. §10 item 4 notes
-  that 64 same-name store anchors can now fill a node's cap.
-- **§3, §5.1 and §5.5** (#196 F5 and F6, the #160 issue text): the verifier must not modify its arguments; a caught
-  `InterruptedException` restores the interrupt flag at every catch of consumer code and at the boundary; only
-  `VerifierError` rides on the `Walk`, and its `oid` is `""` when the TBS AlgorithmIdentifier does not decode; "Cost"
-  states the root-issued leaf with a presented cross-certificate.
-- **§4 and §7.1, `signatures[]`** (#198, and #191's verifier queued on #160): an empty `x5u` or `signature` is skipped
-  like a missing one; a `null` element the loop reaches is `FAILED` at `SIGNATURE`; every x5u PEM or chain failure
-  but validity, and a content-signature failure, is `FAILED` at stage `SIGNATURE`, a failed x5u fetch `FAILED` at `X5U`; any failed entry,
-  a failed fetch included, moves on to the next; the installed records are the verified ones. Appendix A records
-  Firefox's loop, including that it leaves the loop on a rejected fetch.
-- **§7.1, `Backoff` and `Retry-After`** (the 2026-11-13 decision audit): revokt's behaviour stays, but "as Firefox and
-  Kinto do" was false. Firefox keeps `Backoff` only from a `/changes` response that is not a server error and carries
-  the expected JSON, and never reads `Retry-After`, so revokt is stricter; Appendix A cites the lines.
-- **§9:** walker rows (ak) to (ap) for the labels, the leaf deferral, anchors that never count, the unrelated-loop node,
-  the candidate order and the 64 same-name anchors; row (j) on the bindings; API rows for `verifiedPath` and the shared
-  slot; content-signature rows for the `signatures[]` stages; P5 holds only as `endDepth == 1 ⇒ relatedExploredAtLeaf
-  == 64`.
-- **§3.2, §4, §6.4, §6.5, §7.1 and §10, the sync** (the maintainer's decisions on #137, 2026-11-14, after the
-  upki/Firefox comparison): `MAX_SYNC_BYTES` is removed, leaving the per-file and count caps (about 4 GiB from a
-  malicious mirror, accepted); prune runs after every `INSTALLED`, never after a failure; a channel may mix filter
-  encodings, with `meta.json`'s `format` the full's, and the format check covers every placed filter, a full or delta
-  the engine cannot read failing the install with `FORMAT_UNSUPPORTED`; until #141 a sync never sends `_since` or `If-None-Match`; a
-  `SIGNED` `generationId`'s last applied record is the last filter in `buildIndex` placement order; `meta.json`'s
-  signature is any non-empty even length.
-- **§10:** residual 9 adds the PKIX fallback's unbudgeted build (the #134 review record, F4); the rollback item says that after `resetState()` the
-  watermark floor holds the old live generation's timestamp until the start task swaps it (from the #190 review).
-
-### Changes in revision 56 (the items queued on #160, 2026-11-12)
-The maintainer approved writing in every item queued on #160 as one revision (2026-11-08). Items marked decided there
-or in the decisions log are written as decided; where merged code is the source, the spec now matches it; the items
-that were open in the first draft were decided by the maintainer in its review (last bullet).
-- **§3 and §4, the surface** (from the reviews of #177, #179, #180, #182 and #183, matching the merged code):
-  - `RevoktLoggers.jul()` maps `DEBUG` → `FINE`, `INFO` → `INFO`, `WARN` → `WARNING`, `ERROR` → `SEVERE`, so `DEBUG` is
-    hidden under JUL's default level.
-  - "Timing fields" are measured durations such as `Verdict.elapsedNanos`; timestamps take part in equality.
-    `PolicyDiagnostic` and `SyncResult` join the output types whose builders are `@RevoktTestingApi`.
-  - `SyncResult.installed` holds the installed generation's id; `SyncResult.cause` is "not persisted; null when read
-    back" and outside equality.
-  - `Verdict.generationEpoch` stays `@RevoktInternalApi` and is outside equality, hashing and `toString`.
-  - `PresentedChain` (the maintainer's decision, #180): every presented certificate in presented order, so index i is
-    `AlgorithmIdMismatch.certIndex`'s; an unparsed entry keeps its DER, `parsed(i)` is false and its other fields
-    are empty.
-  - `EvaluationRequest.Builder.build()` (the maintainer's decision, #182) rejects an empty `presented`, an empty
-    `verifiedPaths` and an empty path.
-  - `RevoktPolicy` (#183): `newBuilder()` works on any policy and keeps its preset (the growability contract says so
-    too); every duration and millis argument is ≥ 0, a `Duration` overflow included; under `Enforcement.OFF` every V
-    diagnostic is a `WARNING`.
-  - `Exemptions.and`/`or` follow CEL's `&&`/`||` (the maintainer's decision, #182): commutative, the deciding side
-    wins whatever the other did, an absorbed error is not recorded, fatal errors propagate.
-  - host' (§5.1, §4 `hostIn`): ASCII-only case folding, one trailing dot stripped, applied once; an entry that is
-    non-ASCII, empty after normalisation, starts with `.` or holds `*` throws; an empty host never matches.
-  - `ioDispatcher`/`ioExecutor` must not run tasks inline (from the review of #181).
-  - `MozillaRemoteSettings`: the `attachmentBaseUrl` default is written; hosts and rewrite targets are compared
-    exactly; `build()` also throws for an `x5uHosts` entry, or either side of a rewrite, outside X5uUrl's fetch-time host grammar
-    (LDH labels of 1 to 63, at most 253, no trailing dot, no all-numeric or hex last label; upper case allowed), so
-    both checks accept the same set (the maintainer's decision; its code is a follow-up in `MozillaRemoteSettings`).
-  - `c2spCache` takes the directory holding `index.bin` (`…/revocation`); the §4 example is fixed and upki's per-OS
-    roots are listed.
-  - `Freshness.MANIFEST_LAST_MODIFIED` is the newest coverage end (§7.2): an end up to `clockSkew` ahead installs
-    with age 0 and no `clockBehind`, one beyond is rejected (§6.3); `MAX_MANIFEST_ENTRIES` is 256.
-- **§3.2** (the upki audit, Q12 to Q24, and #184): `buildIndex` places the channel's one full filter and every delta
-  by time, without `parent`; the index reader rejects `upkiidx0`; the oracle leg is a bare `to_bytes(V4)`, not
-  upki-mirror's transcoder; the overlapping-windows verification is closed (one entry per (log, filter)).
-- **§5.1** (the maintainer's decisions on #124 and #133):
-  - the path finding: `reportedPathSha256s` on a `Budget` walk with a fallback path and no partial path is the
-    fallback path; `endDepth` is null on a completed walk and set only on `Budget` (0 at the step-3 cut);
-    `walkerReason` is set on every walk `NotFound`; `AlgorithmIdMismatch` is once per certificate step 3 parsed;
-  - steps 7 and 8, R1 to R5: engine results in `Finding.Crlite`, no exemption after a boundary catch, the consulted
-    datasets, a throwing clock, and a throwing `engine.query`.
-- **§6.3 to §6.5:** v3 filters are held to v4's ranges; the memory table is recomputed for 8 deltas and for the 52
-  deltas measured in the live changeset of 2026-11-12, and the
-  delta count is stated as observed, not "about four days"; `buildIndex`'s selection, with its refusal codes; the
-  install order gains the format check before the directory is written, as #184 does; in 0.2 `UNCHANGED` writes only
-  the attempt fields (#131 R4).
-- **§7.1** (from the reviews of #163, #164, #177 and #181, and #131's R1 to R3):
-  - the content signature's leaf may be on any EC curve the floor admits, and the raw signature length follows the
-    key; `mode == p384ecdsa` is recorded as a deliberate narrowing from Firefox;
-  - `metadata.signatures[]` is read as Firefox reads it, the first entry that verifies under the pinned chain
-    accepted, and `metadata.signature` no longer (the maintainer's decision; code follow-up #191);
-  - `<ts>` is the value the verified payload was built from (the envelope `timestamp` for a live sync, which is then
-    signed), not "never the envelope `timestamp`"; the unsigned value is `monitor/changes`' `last_modified`;
-  - `parent` is required on deltas only; `_since` is sent bare;
-  - the x5u body is read as `rustls-pki-types` reads it: text outside blocks skipped, known labels decoded (a bad one
-    fails the body) and only `CERTIFICATE` kept, unknown labels skipped, whitespace-tolerant base64 without padding;
-  - feed failures and backoff: which outcomes count, the reset on every successful poll, `Backoff`/`Retry-After`
-    on every response, and the failure backoff 15 min × 2^(n − 1), capped at the 6 h poll interval.
-- **§7.3** (the upki audit): the manifest grammar, the file URL and the 30 s timeout; redirects, followed only by the shared
-  `RedirectingFetcher` in the fetch layer, with per-hop rules (301/302/303/307/308 on `GET`, a relative `Location`
-  resolved, https with no userinfo, a query allowed, a fragment dropped and no port rule, `FetcherTls` and the §8
-  host checks on every hop, any other 3xx `FAILED`, at most 10 and no loops, one
-  deadline for the chain, credentials dropped across hosts, the body cap on the final response; §3's fetcher contract
-  and §10 say the same); a `MIRROR` or
-  `SYSTEM` generation with no filters or no coverage (every filter's universe empty) is refused: a mirror's sync is
-  `FAILED` at `INDEX` with `SOURCE_EMPTY`, a system cache is not installed at `start()`, S `SOURCE_EMPTY`.
-- **§9:** rows for the behaviour above (data-path (a), (c), (e), the content-signature fixtures and a new "API rows"
-  list); the verifier row drops the brainpool cases (the maintainer's decision with #175); the walker rows (e) with
-  63 junk, (s1) and (y2) join the harness-only list; row (ac) moves the encoding difference to the issuer
-  certificate's subject and gives the leaf a non-matching keyIdentifier AKI; the rule "a row's leaf stays within K1
-  to K8 unless it tests `PRODUCER_UNKEYABLE`" is added.
-- **§10:** the TLS-only mirror item names the `https`-only redirects and the refusal of empty mirror data.
-- **Appendix A:** the attachments base URL with its read dates, `buildIndex` against Firefox and upki-mirror, the
-  changeset `<ts>`/`_since`/`signatures` reading of Firefox, CEL's logical operators, the mirror protocol sources,
-  upki's cache roots, `upkiidx0`, and the closed overlapping-windows item.
-- **Decided in the review of this revision** (the maintainer): the `SOURCE_EMPTY` code; a mirror's
-  `If-Modified-Since` from the time its manifest was stored; no `c2spCache` helper; V `IO_DISPATCHER_UNCONFINED` for
-  exactly `Dispatchers.Unconfined`; `metadata.signatures[]` read as Firefox reads it (code follow-up #191); the
-  measured memory figures; the shared `RedirectingFetcher` (#192); the coverage-end tolerance; the rollback watermark floor
-  (from the #190 review).
-
-### Changes in revision 55 (x5u failure reasons, the leaf's SCT list, the ECDSA scope, 2026-11-07)
-- **Clarified** (§7.1, from the #170 and #174 reviews): which failure reason a malformed encoding gets.
-  - `PARSE` covers the certificate's outer structure: the TBS and the outer `signatureAlgorithm`, an indefinite length
-    included; the serial's minimal encoding; the primitive unique IDs; the `critical` BOOLEAN.
-  - Each extension value revokt reads (basicConstraints, keyUsage, extKeyUsage, subjectAltName, nameConstraints,
-    the leaf's SCT list) is parsed first, and anything malformed is `EXTENSION`: bytes after the value, a BOOLEAN such
-    as `cA` of `01`, a non-minimal length, an empty keyUsage (`03 00`, `03 01 00`), an empty extKeyUsage (`30 00`) or
-    a non-OID element in it, an unknown GeneralName tag. Only a well-formed value reaches the `SAN`, `EKU` and
-    `KEY_USAGE` checks. The TLS feature is compared byte for byte and never parsed. Before, the "DER" bullet said
-    `PARSE` for these, which contradicted the "Extensions" bullet.
-- **Added** (§7.1, matching Firefox): when the leaf carries the embedded SCT list, its `extnValue` is exactly one
-  OCTET STRING with nothing after it, else `EXTENSION` (`pkixbuild.cpp` lines 218 to 229 at
-  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`). The list's content is not read.
-- **Fixtures** (§9 (d)):
-  - the extension-internal rows now expect `EXTENSION`;
-  - new rows: the empty keyUsage and extKeyUsage forms, a non-OID extKeyUsage element and a SAN with an unknown
-    GeneralName tag → `EXTENSION`; a serial with a redundant leading `00` or `FF`, or an empty serial (`02 00`), →
-    `PARSE`, beside "a zero or negative serial loads"; a constructed unique ID → `PARSE`; `rsaEncryption` NULL
-    parameters with content → `ALGORITHM`; an empty critical Netscape certificate type → `EXTENSION`, and an empty
-    non-critical one → loads; the SCT list cases.
-- **Scoped** (§3, the #160 comment): the ECDSA range check covers standalone ECDSA. A composite ML-DSA + ECDSA
-  signature verifies as one provider operation, so its ECDSA component is the owning provider's responsibility;
-  both owning providers (BC's `ECDSASigner`, BoringSSL under Conscrypt) range-check it.
-- **Gated** (§9 verifier row): the brainpool cases under BC wait on #175, the BC dependency decision, instead of
-  being [0.2, #172]. The NIST-curve cases stay [0.2, #172].
-
-### Changes in revision 54 (the x5u chain follows mozilla::pkix, and the ECDSA range check, 2026-11-07)
-- **Added** (§7.1, the maintainer's decision on #126): the x5u chain follows mozilla::pkix at Firefox
-  `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki consulted and its divergences listed (Appendix A;
-  this entry said 0.103.15, but upki builds paths with 0.104.0-alpha.7, against which the rows were re-read, #217).
-  Each failure is `SyncOutcome.FAILED`, and §7.1 names the chain's failure reason for each. The rules, now after
-  §7.1's `CLOCK_SKEW` sentence, cover every link below the terminal:
-  - **DER as mozilla::pkix reads it** (`PARSE`): non-minimal headers, elements the grammar does not place, an
-    indefinite-length TBS, a BOOLEAN other than `00` or `FF`, unused bits in the signature BIT STRING, and times
-    other than `YYMMDDHHMMSSZ` or `YYYYMMDDHHMMSSZ` (either type for any year, from 1970, notBefore ≤ notAfter) fail.
-    Each extension value revokt reads is parsed to its end. What mozilla::pkix accepts against DER or RFC 5280,
-    revokt accepts too: an explicit v1 version, an explicit DEFAULT FALSE for `critical` and `cA`, an empty Extensions
-    SEQUENCE, a negative or zero serial, and a keyUsage without the minimal named-bit encoding. §9.2's TLS parser is
-    unchanged.
-  - **Version and issuer:** the version INTEGER is 0 to 3 (`PARSE`), and `[3]` is read whatever the version. An issuer
-    with no RDN fails (`NAME`). The outer `signatureAlgorithm` equals the TBS one as parsed (`ALGORITHM`).
-  - **SubjectPublicKeyInfo** (`ALGORITHM`), as `CheckSubjectPublicKeyInfo`: a namedCurve with an uncompressed point
-    of exact length, `rsaEncryption` with NULL parameters and a minimal positive modulus and exponent, and no unused
-    bits.
-  - **Extensions** (`EXTENSION`): any repeated OID (stricter than mozilla::pkix, Appendix A); an empty value for an
-    understood extension, `id-pkix-ocsp-nocheck` excepted; a `pathLenConstraint` above 127; a critical extension
-    outside `BackCert::RememberExtension`'s set; a critical Netscape certificate type without basicConstraints and
-    extKeyUsage (Firefox's actual rule; it does not read the type bits); and, enforced between the links below the
-    terminal, a link's TLS feature that its child does not carry with the same value (the terminal's is not read,
-    a remaining difference).
-  - **Leaf basicConstraints:** `cA = TRUE` fails (`LEAF_CA`, a new reason).
-  - **EKU** (`EKU`): every non-leaf link below the terminal with an extKeyUsage includes codeSigning
-    (anyExtendedKeyUsage alone does not), and the terminal is never checked. The leaf also rejects
-    `id-kp-OCSPSigning`.
-  - **nameConstraints**, critical or not, as `pkixnames.cpp`: dNSName subtrees against the leaf's dNSName on label
-    boundaries ignoring case, permitted applying per name type, `""` matching every name. A name outside fails
-    (`NAME_CONSTRAINTS`, a new reason). A malformed or unsupported constraint fails (`EXTENSION`): an invalid base, an
-    encoded `minimum` or `maximum`, an empty NameConstraints or GeneralSubtrees, and a directoryName subtree
-    (fail closed, stricter than mozilla::pkix). Every GeneralSubtree is still parsed (an unknown tag is malformed,
-    and a `minimum` or `maximum` fails whatever the form); only the base of a form revokt does not evaluate is left
-    alone. An rfc822Name subtree has no effect, as in mozilla::pkix, since the leaf carries a subjectAltName. Only the leaf's name is checked, a remaining difference.
-  - **Algorithm floor** (`ALGORITHM`): `id-RSASSA-PSS` only in mozilla::pkix's three byte-exact encodings, only
-    `rsaEncryption` and `id-ecPublicKey` keys, and ECDSA AlgorithmIdentifiers with NULL or absent parameters.
-    **§3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged.**
-- **Confirmed** (§7.1): the terminal is the first certificate *after the leaf* whose SPKI is pinned, so a pinned leaf
-  SPKI pins nothing (`NOT_PINNED`). The pin lookup runs before the strict parse, and the terminal is read for its SPKI
-  alone. §7.1's rationale now says that this is revokt's rule: Firefox matches the anchor by its
-  whole DER.
-- **Added** (§3, the maintainer's decision; #172): the ECDSA range check.
-  - The curve probe decides first, as for PSS: an unsupported curve is `UNSUPPORTED`, never `INVALID`. Then, after
-    the provider's `KeyFactory` has decoded the key and before `Signature`, every ECDSA signature's `ECDSA-Sig-Value`
-    is decoded, and the signature is `INVALID` unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1.
-  - n comes from the decoded key's curve (`ECPublicKey.params.order`), so the brainpool curves under BC are covered;
-    a key whose order cannot be read is `INVALID`.
-  - The value is a SEQUENCE of exactly two minimal positive INTEGERs with no trailing bytes, else `INVALID`, which
-    can be stricter than SunEC.
-  - The reasons: SEC 1 §4.1.4 step 1, as ring does, and CVE-2022-21449 (JDK 15 to 17.0.2 and 18 GA).
-  - High s stays accepted (the #163 review; SEC 1 and NSS).
-  - It covers every ECDSA signature through the verifier, the x5u links and the content signature included, and
-    §10's list of crypto written in Kotlin gains the decode and the comparison.
-- **Fixtures** (§9):
-  - (d) has a row for each rule, in the leaf and the intermediate where both apply. The accepting counterparts are
-    there too: mozilla::pkix's accepted encodings, a non-critical unknown extension, a critical certificatePolicies,
-    an intermediate without extKeyUsage, a terminal without codeSigning, NULL against absent parameters, a version 3
-    (v4) and an implicit v1 with `[3]`. So are the nameConstraints cases (`""` permitted and excluded, a leading-dot
-    base, a suffix off a label boundary, upper case, an excluded `mozilla.org`, an encoded minimum, Mozilla's real
-    intermediate), a leaf-only pin, a pinned terminal with a non-minimal length, and Mozilla's committed chain.
-  - The verifier row, tagged [0.2, #172], has the range check on the NIST curves and under BC on brainpool, the
-    CVE form against a stub provider that answers `VERIFIED`, and the `ECDSA-Sig-Value` profile (a redundant leading
-    `00` included).
-- **§10 and Appendix A:**
-  - §10's feed-path item names the chain checks.
-  - Appendix A records the mozilla::pkix and webpki sources read, webpki's divergences, the differences that remain,
-    and the two places revokt is stricter.
-  - It also gives the CVE's affected versions from the reporter's write-up, with Oracle's advisory revision log and
-    NVD's, and the SunEC check of a negative INTEGER.
-
-### Changes in revision 53 (a mirror's `index.bin` is built locally, 2026-11-06)
-- **Decided** (§7.3, §3.2; the maintainer's decision on #160): revokt never fetches an `index.bin` from a mirror.
-  - **Before:** §3.2 capped "a mirror's `index.bin` fetch" and ran the selection-equivalence check on `MIRROR`
-    generations, and the content-signature fixtures expected a mirror to serve an index. Revision 52 left open
-    whether a mirror's index is fetched or built.
-  - **Now:** as `upki fetch` does, a mirror publishes only `manifest.json` and the filter files. The loader builds
-    the generation's `index.bin` with its own index writer from each downloaded filter's coverage, under the
-    generation's names, including the derived name of a manifest name over 32 bytes.
-  - **§3.2:** the selection-equivalence check runs on every generation whose `index.bin` the loader reads rather
-    than builds: a `SYSTEM` cache, with a seed's rebuilt index byte-compared as before. The 1 MiB cap applies to
-    every `index.bin` the loader reads (a system cache's, a seed's, a stored generation's), and revokt fetches
-    none. The cross-engine suite's check and §6.5's install order say the same.
-  - **Outcomes per source:** a mismatch or an over-cap read is `STORE_UNREADABLE` for a system cache and
-    `SEED_UNREADABLE` for a seed. `INDEX_INCONSISTENT` there covered a fetched mirror index, which no longer exists;
-    §6.5's install order and §4's `INDEX_INCONSISTENT` line follow.
-  - **A built index over 1 MiB** (new): an `index.bin` the loader builds, for a Remote Settings or `MIRROR`
-    generation, that is over 1 MiB fails the install before the generation is written: `FAILED`,
-    `INDEX_INCONSISTENT`, stage `INDEX`. So the loader never writes a generation its own read cap would refuse at
-    reload, and a mirror's unsigned coverage cannot produce one. For signed data the cap only moves earlier a reload
-    failure that revision 48's read cap already guarantees, and real data is far below it: the live mirror's 40
-    files over 81 logs index to about 62 KiB (14 + 32 per file + 42 per log + 18 per log and file, bytes).
-  - **The limits table** (§5.1): the 1 MiB note names a system cache's `index.bin`.
-- **Fixtures** (§9):
-  - (e) regains the row for a 33-byte manifest name: it installs under its derived name, no `index.bin` is fetched,
-    and the locally built `index.bin` names the derived name. Revision 52's caveat now points here. Beside it, a
-    mirror whose coverage would build an `index.bin` of 1 MiB + 1 byte fails with `INDEX_INCONSISTENT`, and no
-    generation directory is written.
-  - The two [0.3] content-signature rows that expected a mirror's `index.bin` now apply to a system cache, the
-    source that still reads one: a log window absent from the filter's coverage, and an `index.bin` of 1 MiB + 1 byte,
-    are each not installed at `start()`, with `STORE_UNREADABLE`, §3.2's system-cache outcome. Their header and
-    §11's 0.3 row say so.
-- **Appendix A:** the `upki.rustls.dev` entry records the protocol:
-  - The mirror publishes no index, and `upki fetch` builds one (v1.0.1 `PlanStep::SaveIndex` → `Index::write`).
-  - `upki-mirror` writes only `manifest.json` and the filter files. For a filename over 32 bytes, `Index::write`
-    returns no index, while revokt renames the file and builds the index under the derived name.
-  - The open overlapping-windows verification (§3.2 and the C2SP entry) now names upki's `Index::write`, not
-    `upki-mirror`.
-
-### Changes in revision 52 (names from unsigned source data, 2026-11-06)
-- **Added** (§7.3, §6.3, §6.5; the maintainer's rules on #160, from the review of #166): a mirror's manifest names.
-  - **Why:** a mirror's data is unsigned, so a name it serves is checked before it names a file or a URL.
-  - **The check:** every `manifest.json` filename passes §6.3's filename rule, does not end in `.` (Win32 strips a
-    trailing `.`, so `meta.json.` would open `meta.json`), is none of §6.3's reserved names (compared ignoring ASCII
-    case, so `META.JSON` fails), and is unique in the manifest ignoring ASCII case.
-  - **The hash:** each file's manifest `hash`, the one unsigned string that reaches a storage key (`blobs/<sha256>`,
-    looked up before the fetch), is exactly 64 hex characters (32 bytes); the blob key is its lowercase re-encoding.
-  - **The URL:** the base is the configured `c2spMirror` URL with a `/` appended when it does not end in one;
-    `manifest.json` and every mirror file are fetched only from the base followed by their name. §4 gains the rule
-    "R: a `c2spMirror` URL with a query or a fragment": `build()` throws `IllegalArgumentException`.
-  - **The outcome:** any failing name or hash rejects the whole manifest before any body is fetched or written:
-    `SyncOutcome.FAILED` with `INDEX_INCONSISTENT`, stage `INDEX`, the outcome of §6.5's name collision. §4's
-    `INDEX_INCONSISTENT` line names it.
-  - **Names over 32 bytes:** the adopted text names `C2spIndex.isFilename`, C2SP's 1-to-32-byte rule. The
-    maintainer's earlier decision on #160 gives mirror filenames over 32 bytes §6.5's derived names, so the manifest
-    name is checked under §6.3's 1-to-64-byte rule, and the generation's name is the filename when it passes
-    `isFilename` and its derived name otherwise. So every name a mirror generation stores passes `isFilename`. The
-    generation's names are unique ignoring ASCII case too, and §6.5 now derives names from manifest filenames as well as
-    attachment filenames.
-- **Added** (§6.5): a seed's entry names.
-  - **Why:** a zip entry's name is outside the signature.
-  - **The rule:** the loader never derives a name or a path from a zip entry. It accepts exactly the fixed entries
-    (`seed.json`, `records.json`, `signature`, `x5u.pem`, `index.bin`), plus `attachments/<f>` for each §6.3-checked
-    `attachment.filename` f of a record in the verified `records.json` that `buildIndex(records, channel)` places
-    in the generation, and reads each entry by that exact name.
-  - **The outcome:** a duplicate, extra or missing entry is `SEED_UNREADABLE`. An entry that differs from an
-    expected name only in letter case is an extra entry, and so is a directory entry.
-  - **The central directory:** the entries are the zip's central directory. Every read goes through a
-    central-directory entry whose local header names the same file, and the first entry is `seed.json` (§5.1's header
-    read takes it), else `SEED_UNREADABLE`.
-  - **When:** the fixed entries are checked before any entry but `seed.json` is read, and at that check every name
-    that is neither a fixed entry nor under `attachments/` is already extra; the attachment entries are checked once
-    `records.json` is verified and before any of them is inflated.
-  - **Which records:** the verified `records.json` holds every channel's records, so the expected attachments are
-    the ones `buildIndex` places in the seed's generation, not one per record.
-- **Fixtures** (§9): the manifest rows join (e), beside the manifest cap: `.`, `..`, `../x`, `/x`, `a/b`,
-  `META.JSON`, `meta.json.`, two names equal ignoring case and a hash of 63 or 65 or non-hex characters each fail the
-  sync with nothing fetched or written; a mirror URL without a trailing `/` gets one, and one with a query or a
-  fragment throws at `build()`. No row tested a name over 32 bytes in this revision, since whether a mirror's
-  `index.bin` is fetched or built locally was still open on #160; revision 53 decides it and adds the row. The seed rows join the
-  content-signature fixtures, beside the seed's entry cap, as 0.2 gates: `attachments/../x`, a duplicate entry, an
-  extra entry, a case variant, a local-header name that differs from the central directory's, a first entry other
-  than `seed.json` and a missing attachment are each `SEED_UNREADABLE`.
-- **§10 and Appendix A:** §10's TLS-only mirror item says an unsigned name never names a path outside its generation
-  directory. A checked name can still be a Windows device name such as `NUL`; that only makes the install fail (the
-  read-back or `prepare()` fails, so the sync is `FAILED`), and full filters are stored under blob keys, not their
-  names. Its supply-chain item names the seed rule.
-  Appendix A's C2SP filename entry lists the case-insensitive checks as revokt's own rules.
-- **Omitted as not needed** (the maintainer, on #160), since signed data, the pinned-root chain check, or a check the names
-  already pass covers each: engine-side storage-key checks, a store symlink rule, load-time re-checks, the shape of
-  `attachment.location`, an x5u URL rebuild and a change to the install order.
-
-### Changes in revision 51 (Conscrypt's post-quantum algorithms and the PSS hashes, 2026-11-05)
-- **Corrected** (Appendix A, §3; found in the review of #156): Appendix A said Conscrypt does not ship ML-DSA.
-  Conscrypt uber 2.7.0 and 2.8.0, the §9.2 matrix's two releases, both register ML-DSA-44, -65 and -87,
-  SLH-DSA-SHA2-128s and 15 composite ML-DSA OIDs (`1.3.6.1.5.5.7.6.37`–`.46`, `.48`, `.49`, `.52`–`.54`).
-  - **How it was checked:** a single-file Java program over the Gradle-cached jars, on JDK 17.0.21 and 21.0.13,
-    listed the provider's services and `Alg.Alias` entries and looked each algorithm up by name and by OID. Each
-    ML-DSA set verifies a signature the JDK made. Appendix A records the details.
-  - **By name or by OID:** ML-DSA and the composites are registered by name and by OID alias, and
-    SLH-DSA-SHA2-128s by name only, with no OID alias.
-  - **Unverified:** whether Conscrypt's composite encoding matches draft -19, and the platform Conscrypt on Android.
-  - **§3:** the composite delegation rule names Conscrypt beside BC as a provider owning composite OIDs. No rule
-    changes. The JDK-provider fixtures, such as (j)'s JDK without ML-DSA, are unaffected, since the §9.2 matrix
-    uses Conscrypt as oracle 2's `CertificateFactory`, not as a `Signature` provider.
-- **Stated** (§3, as merged in #156 at `5d419cc`): how an OID reaches a JCA service.
-  - The probe and `verify` resolve it through one table to a `Signature` and a `KeyFactory` name: standard names
-    for RSA and ECDSA, `RSASSA-PSS`, the algorithm names for EdDSA, ML-DSA and SLH-DSA, and the bare OID for each
-    composite.
-  - **Under Conscrypt alone:** ML-DSA, SLH-DSA-SHA2-128s (by name) and the 15 registered composites are supported.
-    `unsupportedOids()` is 21 OIDs, the same under 2.7.0 and 2.8.0:
-    - `SHA512/224withRSA` and `SHA512/256withRSA`;
-    - `id-RSASSA-PSS`;
-    - Ed448;
-    - the other 11 SLH-DSA sets;
-    - the composites `.47`, `.50` and `.51`;
-    - the three brainpool curves.
-
-    §3 lists them all.
-  - An OID outside the tables is `INVALID`.
-  - **The unverified composite encoding:** if it differs from draft -19, the probe says supported and a real
-    certificate is `INVALID`, not `UNSUPPORTED`.
-- **Added** (§3, §9; the maintainer's choice on #156): the `id-RSASSA-PSS` parameter rule.
-  - The parameters are present.
-  - The message hash and the MGF1 hash are each a SHA-2 hash, the family the list gives RSA PKCS#1.
-  - The mask is `id-mgf1`, and `trailerField` is 1.
-  - An omitted field takes RFC 4055's SHA-1 DEFAULT.
-  - **Salt:** a salt over 2,048 bytes is `INVALID`. This describes #156's merged `MAX_SALT_LENGTH` guard, not a new
-    choice: the JDK throws `ArithmeticException` on salts near `Int.MAX_VALUE`.
-  - Any other PSS parameters are `INVALID`, whatever the provider would answer. That covers SHA-1 PSS, the
-    all-default parameters, a SHA-2 hash under MGF1 with SHA-1, and any other mask.
-  - **The probe decides first:** with `id-RSASSA-PSS` in `unsupportedOids()` (a verifier over Conscrypt alone),
-    every PSS signature is `UNSUPPORTED`.
-  - **Before:** §3 said only that the verifier "honours RSASSA-PSS parameters".
-  - **§9's verifier tests** name the SHA-1, MGF1-SHA-1 and non-MGF1 cases, and the `UNSUPPORTED` precedence.
-
-### Changes in revision 50 (the walker review's timing and the PKIX fallback finding, 2026-11-05)
-- **Aligned** (§14, #117): §14 gave the walker and the `Rule` model a dedicated adversarial review "before 0.2's
-  walker is coded". The review now runs once they are implemented (after the walker, `reconstruct` and decision steps
-  1–8 merge) and before the §9.1 walker fuzzer runs against them. §14 and §11's 0.2 row now say the same.
-  - **Why:** §11's 0.2 row already ordered the review before the fuzzer, and the spec's own review rounds on §5.1 and
-    the `Rule` model ran in revisions 9, 10 and 12. What is left to review adversarially is the implementation.
-  - The next sentence, the fuzzer's P1–P8 gate before 0.2 ships, is unchanged.
-- **Added** (§4, §5.1, §9; the maintainer's choice): `Finding.FallbackNotUsed` with `val reason: FallbackReason`, and
-  the growable `enum class FallbackReason { SKIPPED, DISABLED, FAILED }`.
-  - **Before:** step 6 and the PKIX fallback contract reported `VerifierError("fallback skipped")`,
-    `VerifierError("fallback disabled")` and `VerifierError("fallback")`. But `VerifierError.oid` is the signature
-    algorithm whose verification failed, and these three carried no algorithm.
-  - **Now:** `VerifierError` is a verifier or algorithm failure only, both fields non-null. Step 6 reports exactly
-    one `FallbackNotUsed` when the step-5 walk ended `NotFound` or `Budget` and no fallback path was evaluated: `SKIPPED`
-    above `FALLBACK_MAX_PRESENTED` with the fallback enabled, `DISABLED` under `pkixFallback(false)` and the
-    walker-only harness's disabled path, `FAILED` when the fallback ran and gave no path. It is named "not used"
-    because a `FAILED` fallback did run. A chain cut at step 3 (`MAX_PRESENTED`, `PARSE_FAILED`) never reaches the
-    walk and carries none.
-  - **`FAILED`** is a `build` that returned null or threw. A `jdk.certpath.disabledAlgorithms` rejection and a
-    provider that diverges from the delegate, which the contract already reported, are two such failures. Before,
-    the other failed runs had no finding. They now have one, since the JDK's builder reports them alike (below).
-  - **A throwing `build`** (the maintainer's choice, "`FAILED`, not cached"): before, a throw was unspecified and
-    reached the catch boundary as `ENGINE_ERROR`. Now step 6 catches it as a failed fallback, `FallbackNotUsed(FAILED)`,
-    and rethrows every `VirtualMachineError` except `StackOverflowError`, as §5.5's catch boundary does. A result
-    produced by a throw is cached nowhere, neither as a path-cache entry nor as the verdict built on it (flow step
-    3a), so a transient error is not remembered; a null return is cached as before. The acceptance memo (platform
-    acceptance at flow step 1) and the cross-call memo (the walker's `VERIFIED` signatures) hold nothing the
-    fallback produces.
-    - **Status effect:** a throw on a `Budget` walk is `PATH_BUDGET_EXCEEDED` instead of `ENGINE_ERROR`, so it
-      rejects under `DEFAULT` too. A throw on a `NotFound` walk is `NO_ISSUER` (`PLATFORM_ONLY` on a trust-manager
-      binding) or `ISSUER_UNVERIFIED` instead of `ENGINE_ERROR`; under `STRICT` it still rejects, but as
-      `NO_ISSUER`, which is exemptable.
-    - **`PathBuilderFallback`'s declaration** says that a throw counts as a failed build.
-  - **No message string:** every build failure of the JDK's `SunCertPathBuilder` carries the same text, "unable to
-    find valid certification path to requested target" (checked in JDK 21's source). Other builders' texts differ,
-    and consumers match on codes, never on messages. The reason is the triage value, and it fits the path cache.
-  - **Path cache:** an entry keeps the reason, so a hit reports the finding the miss did.
-  - **`RevoktStatus.verifierErrors`** counts `VerifierError` findings only; `FallbackNotUsed` has no counter.
-  - **Fixtures:** the walker-fixture header states the rule for every row and names the step-3 cuts that carry none.
-    (ad) and (af) disabled now expect `FallbackNotUsed(DISABLED)`, and (ae) `FallbackNotUsed(FAILED)`. Revision 49's
-    entry below names the new finding once, in its rule bullet; its fixture text and older entries stay as written.
-
-### Changes in revision 49 (0.2's scope, step 6 without the fallback, the engine name, the AMO SPKI pin, 2026-11-05)
-- **Retagged** (§9, §11; the maintainer's decisions on the 0.2 plan): four groups of items tagged or listed for 0.2
-  need machinery §11 puts in 0.3. They move to 0.3, and §11's 0.2 and 0.3 rows now say the same as §9.
-  - **`Rule` model:** the counter sums (`parseFailed.values.sum() == fired[PARSE_FAILED]`, the `rejects` sums), the
-    K6 clause on a path-cache hit, the `shadowPolicy` item and the loader halves of the `c2spCache`/`SYSTEM` items
-    need `status()` counters, the path cache, the shadow policy and the system cache.
-    - **Their verdict-level halves stay [0.2]:** over a `SYSTEM` generation the test hands the evaluator, `Accepted`
-      with `UNSIGNED_DATA` under `minTrustClass(CRLITE, SIGNED)` and `Rejected(UNSIGNED_DATA)` under `STRICT`; a
-      `NO_SCTS` chain under `DEFAULT` is `Accepted`.
-    - **§11's 0.3 row** now names `shadowPolicy`, which no row named before.
-  - **PKIX fallback:** "on both platforms" becomes the jvmMain `PkixPathBuilderFallback`, which Android also runs
-    through ojluni, tested on the JVM in 0.2. Its Android instrumented run joins the 0.3 suite, with `revokt-android`.
-  - **(g)'s fetcher items:** the 401/407 item's Android and OkHttp halves and the SAN item's Android half are 0.3,
-    with those fetchers' modules. The JDK halves stay 0.2.
-  - **Content-signature fixtures:** the restart with the clock still behind needs a store that outlives the
-    instance. The mirror `index.bin` window and the 1 MiB + 1 mirror `index.bin` need a `MIRROR` source. All three
-    are tagged [0.3].
-- **Decided** (§11, 0.2's minimal `Revokt`):
-  - **`FetcherTls`:** in 0.2 each source's `FetcherTls` carries the platform `fetcherDelegate` only. The fetcher
-    trust managers (`fetcherTrustManager` and the per-source instances), `FETCHER_TRUST_UNAVAILABLE` and the
-    `BLOCKED_BY_SELF` hold arrive together in 0.3, so the §8 fetcher policy does not run in 0.2. The signed feed is
-    still authenticated end to end by its content signature (§7.1).
-  - **`sync()`:** `sync()`, `syncAsync()` and `syncBlocking()` are internal in 0.2, so the updater syncs only on its
-    schedule; they are public from 0.3. `SyncResult`, `SyncOutcome` and `SyncStage` ship public in 0.2.
-  - **An empty or throwing default trust store:** `start()` succeeds, and `evaluator.evaluate` throws
-    `IllegalStateException` until an index exists. That is 0.3's behaviour too: fixture (h) starts a seed-only
-    configuration over an empty default trust store, and §4's lazily created `revokt.trustManager` throws only once
-    something asks for it. So 0.3 does not reverse 0.2.
-- **Decided** (§5.1 decision step 6, the walker fixtures): step 6 never said what happens with the PKIX fallback
-  disabled (`pkixFallback(false)`, and the walker-only harness's disabled path).
-  - **Now:** the disabled branch gives what step 6 gives when no fallback path exists. A walk `Budget` is
-    `PATH_BUDGET_EXCEEDED`, the same as with the fallback enabled, with `usedFallback = false` and only the walk's
-    partial leaf keys evaluated. A `NotFound` over more than `FALLBACK_MAX_PRESENTED` certificates is
-    `PATH_BUDGET_EXCEEDED`, whether or not step 1 ran. Any other `NotFound` is `ISSUER_UNVERIFIED` or `NO_ISSUER`
-    under the fallback-failed branch's rule, `PLATFORM_ONLY` on a trust-manager binding.
-  - **The finding** (the maintainer's choice): wherever the fallback did not run because it is configured off, step
-    6 reports a distinct `FallbackNotUsed(DISABLED)` (named so since revision 50). `SKIPPED` stays for the enabled,
-    too-long case only.
-  - **The skipped branch with the fallback enabled** named only "the platform accepted in step 1". It now also
-    applies where step 1 does not run (the walker-only harness and `Evaluator.evaluate`), as fixture (af) already
-    expected on every platform path.
-  - **Fixtures:** a row whose outcome depends on the fallback states its disabled expectation. (ad) disabled →
-    `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `VerifierError("fallback disabled")`, and the honest key absent
-    because only the fallback reaches it, so `rule = PATH_BUDGET_EXCEEDED`. (af) disabled → `PATH_BUDGET_EXCEEDED`
-    with `VerifierError("fallback disabled")`.
-- **Added** (§3.2, §4, §5.5): `RevocationEngine` gains `val name: String`, defaulting to the class's simple name, or
-  `"anonymous"` when the class has none. The Kotlin engine returns `"kotlin"` and the upki engine `"upki"`.
-  `Finding.EngineError.engineName` is that name whenever `producer == ENGINE`, so it is never null there. Before, a
-  third-party engine had no name to report. `name` must not throw, and revokt reads it once; an engine in an
-  R8-minified Android app overrides it with a stable string.
-- **Completed** (§7.1, Appendix A): §7.1 gave `root-ca-production-amo` only as a truncated certificate hash, from
-  which no SPKI pin can be written. Its full SPKI SHA-256, `3317FA45…B1E2E7`, is now the default pin of
-  `MozillaRemoteSettings.DEFAULT`. Appendix A records it, the full certificate hash and the two independent sources
-  it was verified against: the live x5u chain and Firefox's built-in content-signature root.
-
-### Changes in revision 48 (every unrelated leaf issuer collected, the C2SP index rules for every source, and the JSON allocation budget, 2026-11-04)
-- **Decided** (#98, found while reviewing #91's reference walker; the maintainer chose reading B): at the leaf, §5.1's
-  unrelated loop now also runs regardless of `foundHere` when **no related path** exists there, as it already did
-  under a custom canonicaliser.
-  - **Before:** with no related path at the leaf, the loop stopped at the first unrelated path. If two unrelated
-    presented certificates both verified the leaf and reached an anchor, only the first one's key was collected.
-    `leafKeys` then depended on the presented order, against P4. It differed from the §9.1 reference walker, against
-    P2. The second key was never evaluated, against §10's "every terminating leaf-issuer key is evaluated and
-    `REVOKED` wins".
-  - **Now:** the pseudocode keeps `relatedPath` (whether a related candidate's path exists at the node) and breaks
-    out of the unrelated loop only when a path exists and the node is not the leaf, or the leaf has a related path
-    and no custom canonicaliser.
-    - `unrelatedExploredAtLeaf` stays at most `presented − 1`, the bound the custom-canonicaliser case already has.
-      Each subtree stays under `MAX_VERIFICATIONS` and `MAX_EXPLORED`.
-    - P6 is unchanged: on the default delegates an honest issuer is related, so an honest world always has a related
-      path.
-    - §10's issuer-identity bullet now states exactly which leaf-issuer keys are evaluated.
-  - **A refinement of #98's text:** #98 keyed reading B on "no related candidate". The condition is "no related
-    path", so that a related decoy which verifies the leaf but leads nowhere cannot restore the order dependence.
-    This is exactly the §9.1 reference walker's "unrelated presented certificates only when no related path exists",
-    and it is what #91's reference implements.
-  - **Fixtures:** the termination rule and §9.1's reference-walker sentence say the same. A walker-harness fixture,
-    (aj), covers two unrelated anchored issuers in either order, with and without an unanchored related decoy.
-- **Changed** (§6.5, #87): `index.bin` names a generation's files by their Remote Settings attachment filenames, but
-  §6.3 admits attachment names of up to 64 characters and C2SP only 1 to 32 bytes. A 33-character name (today's
-  31-character names with a three-digit daily index) would have made the index writer throw.
-  - **The rule:** a name over 32 bytes becomes its first 15 characters, `-` and 16 hex characters of the SHA-256 of
-    its ASCII bytes. That derived name is the file's name everywhere in the generation: `index.bin`,
-    `GenerationFiles.names`, the directory and `meta.json`. The attachment filename stays only in the signed records.
-  - **Collisions:** two attachments that map to one name fail the generation before any body is fetched (stage
-    `INDEX`, `INDEX_INCONSISTENT`; `SEED_UNREADABLE` for a seed).
-  - **Seeds:** `buildIndex` follows the same rule. No seed has been published, so no `seedFormat` changes.
-  - **Related edits:** the CRLite schema check now names `attachment.filename`, and `index.bin` joins §6.3's reserved
-    names, since a filter of that name cannot sit beside the index.
-  - **New data-path fixtures:** a 33- and a 64-character name, and a colliding pair.
-- **Changed** (§3.2, #86): the 1 MiB cap §6.5 gives a seed's `index.bin` now applies to every `index.bin` revokt's
-  loader reads, including a mirror's fetch, checked before parsing.
-  - **Outcome:** the same as an inconsistent index. A stored generation over the cap is a failed load in the §6.5
-    recovery chain.
-  - **Already enforced:** #86's reader applies the cap to every source.
-  - **Effect:** it bounds the parse and the fetch. Real indexes are far smaller (the corpus golden is 8 KB).
-  - **Fixture:** a 1 MiB + 1 mirror `index.bin`.
-- **Changed** (§6.5, #97's review): the JSON allocation budget was `4·len`, with no constant term and no measurement
-  protocol.
-  - **Why it changes:** a tree with one object per value cannot meet `4·len` on every input. `[1.5,…]` needs a 24 B
-    number per 4 input bytes, about 6·len. A 1-byte input fails on the parser object alone, and the first decode in a JVM
-    allocates several MB of class initialisation.
-  - **The new budget:** `20·len + 64 KiB` on any input, asserted on every fuzz and replay input, and `4·len + 64 KiB`
-    on Remote Settings data, asserted on named fixtures: a committed CRLite-shaped changeset, and the pinned corpus's
-    real changeset.
-  - **Measurement protocol:** after one warm-up decode, on the same thread, of a fixed small document that contains
-    every value kind. Per-process class loading therefore does not count, and the warm-up never decodes the measured
-    input itself. Every buffer a decoder keeps across calls counts, so a cached buffer cannot hide allocation.
-  - **The worst case is stated and accepted.** A changeset can cost about 20 × `MAX_JSON_BYTES` (80 MiB at the default
-    cap), because it is decoded before its signature can be checked. A seed's `records.json` is now verified as raw
-    bytes before it is decoded: the signature and the x5u chain to the pinned root, every check except validity
-    periods, pass first. Validity periods are then checked at the decoded `<ts>` (§7.2), so `start()` decodes only
-    JSON signed under Mozilla's root.
-  - **Measured:** #97 measured a real Remote Settings changeset at about 3·len once the per-member and per-container
-    copies are gone. The worst adversarial shape measured was about 17·len. A 4 MiB input at the §9.1 harness's
-    `-Xmx256m` then no longer exhausts the heap.
-  - **Unchanged:** the filter and DER budgets.
-- **Clarified** (§11, the 0.1 row): it lists `SymVerifier`, the reference walker and the chain generator once, not
-  twice, and it names canonical JSON beside the JSON tree, as #92 implements it. The content-signature payload
-  builder is 0.2.
-- **Not changed:** historical changelog entries keep the names of their time. For example, revision 27's
-  `GenerationFiles.fromDirectory` became §3.2's `JvmGenerationFiles.fromDirectory` later.
-
-### Changes in revision 47 (the `DEFAULT` outcome of the two data rules that never fire there, 2026-10-30)
-- **Decided** (#75, found while implementing #72, the `Rule` model's golden fixture): §8 gave `DEFAULT`'s `STALE`
-  and `UNSIGNED_DATA` cells only as "never fires", while the golden fixture freezes each preset outcome within a
-  major. Both outcomes are `ALLOW`.
-  - **`STALE`:** the spec already implied it. `validate()`'s `STALE_REJECTS_WITHOUT_THRESHOLD` warns when
-    `outcome(STALE) == REJECT` and no dataset has a `rejectStaleAfter`, so a `REJECT` outcome would make plain
-    `DEFAULT` warn on every `validate()`. §8's "`DEFAULT.newBuilder().rule(STALE, REJECT)` alone changes nothing
-    until a `rejectStaleAfter` is set" says the same.
-  - **`UNSIGNED_DATA`:** the maintainer chose the same pattern, with one setting for the threshold and another for
-    the outcome. A policy derived from `DEFAULT` that raises `minTrustClass` makes the rule fire on lower-class data
-    and report it: it shows in `Verdict.rules`, in `DataState.rules` and in the counters `fired[UNSIGNED_DATA]` and
-    `unsignedData`. The verdict stays `Accepted`, and §7.3 still installs a lower-class generation as a bootstrap.
-    The rule rejects only with `rule(UNSIGNED_DATA, REJECT)` as well.
-  - **What `REJECT` would have meant:** raising the floor to `SIGNED` alone would reject on mirror or system-cache data
-    and stop §7.3 from installing it. A configuration without a seed, whose only local data is a `c2spCache`, would
-    then fail `validate()` with `NO_DATA_REJECTS_WITHOUT_LOCAL_DATA`, an `ERROR` under `ENFORCE`.
-
-  Neither rule fires in plain `DEFAULT`, whatever its outcome, so no verdict of the presets changes.
-- **Added** (§9, `Rule` model tests, 0.2): the `UNSIGNED_DATA` counterpart of the `STALE` test. An instance whose
-  policy is derived from `DEFAULT` with a `SIGNED` floor, with no seed and a `c2spCache` as its only source, installs
-  the cache and accepts with the rule fired.
-
-### Changes in revision 46 (D7's wording, Firefox's inner OCTET STRING, K6 to K8 kept narrow, 2026-10-30)
-- **Corrected** (#61): D7 called only its SCT-list outcomes normative, yet states required outcomes with other entries
-  (the envelope re-encodings, the `STRUCTURE` cases, the trailing-element cases, the D8-gap examples), which `D7Test`
-  asserts. Every outcome stated with an entry is now normative too; for an entry without one, the corpus is the record.
-- **Corrected** (#61): two of D7's trailing-element entries named K2 as their clause, but the first clause each fails
-  is K1 (HEADER), as their records show: the trailing element `9f 01 02 05 00` has a multi-octet tag, and the `[3]`
-  after a constructed `[1]` has the header `a3 81 nn`. They now read "(K1, and K2 for the ignored element)" and
-  "(K1, and K2)".
-- **Added** (#61): the Firefox SCT conditions in D3 gain those of mozilla::pkix, checked at Firefox `86136a5`
-  (Appendix A), which reject the certificate, not only the list. For an end-entity certificate, mozilla::pkix requires
-  the SCT extension's `extnValue` to be exactly one DER OCTET STRING, and otherwise fails every path through the
-  certificate; it also rejects any certificate with a second SCT extension, as a duplicate extension. revokt extracts
-  pairs from three such forms, each now a `FIREFOX_SCT_STRICT` record:
-  - a non-minimal length on the inner OCTET STRING (`d3/sct-inner-81`, `d7/sct-inner-84`, new);
-  - bytes after the inner OCTET STRING (`d7/sct-trailing-after-inner`, already one);
-  - two SCT extensions, whose union revokt queries (`d3/sct-two-extensions`, new).
-
-  On the other forms revokt's list fails too and the answer is `NO_SCTS` (§10 item 7, which now says that Firefox
-  rejects these certificates). Those forms are an inner length `0x80` or `0xFF`, a constructed inner OCTET STRING,
-  and an inner identifier other than `0x04`. Whether such a certificate is accepted stays the platform's decision;
-  revokt queries the pairs it extracts, the more-checking direction.
-- **Decided** (#57): K6, K7 and K8 stay narrow. No row is widened for the D8-gap entries with no zlint error, nor for
-  the P-192 key on which zlint gives no verdict (zcrypto cannot parse it), and their written justifications stand:
-
-  | Shape | Entries | Row |
-  |---|---|---|
-  | subjectAltName with a `directoryName`, `uniformResourceIdentifier` or `otherName`, or a dNSName of non-ASCII octets | 9 `x509-limbo` | K8 SAN |
-  | nameConstraints in a leaf | 2 `x509-limbo` | K8 |
-  | authorityInfoAccess with a `dNSName` accessLocation | 2 `x509-limbo` | K8 AIA |
-  | extKeyUsage with no purposes | 1 `x509-limbo` | K8 EKU |
-  | a DSA key | 1 `x509-limbo` | K7 |
-  | an EC key on P-192 (zlint gives no verdict) | 1 `x509-limbo` | K7 |
-  | a GeneralizedTime `notBefore` in year 0000 or 0001 | 4 seed-corpus leaves | K6 |
-
-  Widening a row needs its certificate-transparency-go return-site proof (§9.2, "The table is the proof"), and a
-  wrongly widened row is a false-`REVOKED` P0; a row kept narrow costs only that `DEFAULT` never queries such a leaf
-  and `STRICT` rejects it. Appendix A's re-scan of 159 270 RFC 6962 entries found none of the SAN, AIA or
-  nameConstraints shapes outside the profile, the D8 gap over the seed corpus's leaves of index issuers is 0 of
-  117 603 (revision 45), and the K6 leaves are those of eMudhra's "EM DV TLS CA - G3B", which no root program trusts.
-  The EKU and K7 rows have no CT evidence either way; a gap entry at them among a later pin's CT leaves of index
-  issuers counts toward the 10^-4 re-decision as any other does.
-- **Recorded**: the 24 corpus records whose justifications deferred to #57 now cite this decision, at revokt-corpus
-  `v6`, which differs from `v5` only in `replay/records.jsonl`, `replay/PROVENANCE`, the tool that writes the
-  `x509-limbo` gap justifications, and the manifest.
-
-### Changes in revision 45 (the seed corpus's leaves of every index issuer, 2026-10-29)
-- **Corrected** (#15): revision 44 took the `v4` pin for the 100 000 leaves the D8 re-decision needs. 44 454 of its
-  110 043 leaves are CT test traffic, certificates that log operators and monitors issue to test logs, under four
-  issuer names no root program trusts: Google's "Merge Delay Intermediate 1" (35 447), Geomys's "CT Uptime Test Root"
-  (7 407), "DigiCert CT Monitor" (1 598) and TrustAsia's "TrustAsia DV TLS ECC Test CA G4" (2). Only 60 427 of its
-  leaves verify under the key of an index issuer, those of 201 of the 1 035 index keys, so the re-decision was
-  evaluated on fewer leaves than §9.2 requires, and the seed did not reach most enrolled CAs.
-- **Changed** (#15): the seed corpus's CT leaves are two sets, pinned at revokt-corpus `v5` (§9.2, Appendix A): the log
-  sample of revision 44 without its CT test traffic (65 589 leaves), and a top-up from crt.sh of each index key's most
-  recently issued certificates valid at the top-up's start that cannot issue certificates, at most 120 per key (71 614
-  leaves of 927 keys). 132 041 leaves verify on the test JDK under an index key, of 975 of the 1 035 keys (118 159
-  distinct index keys and serials, since a precertificate and its final certificate count as two; 104 033 among the
-  117 603 unexpired leaves the D8 gap counts). Of the other 60, crt.sh holds no such certificate issued in the last 400
-  days for 54, its query timed out for 5 (the queries of 49 CAs timed out on every try; the log sample covers 44 of
-  their keys), and one key, of Telia's "Telia CA EC QWAC R1", has no crt.sh CA.
-- **Stated**: the top-up trusts nothing crt.sh sends (§9.2). crt.sh's database serves TLS under a certificate that
-  expired on 2026-06-21, so the connection is encrypted but not authenticated; a certificate is kept only when it is one
-  DER Certificate with nothing after it, minimal lengths in the headers checked and a v3 TBSCertificate, whose signature
-  verifies under the key that hashes to the index key, and a TBSCertificate is kept once. An attacker on the path can
-  withhold certificates, which the recorded counts show, but cannot add one its issuer did not sign.
-- **Changed** (§9.2 D8 gap): the gap and its 10^-4 re-decision count only the seed's leaves of index issuers, as the
-  100 000 do: those the test JDK verifies under the key of an issuer-corpus certificate whose SPKI hashes to an index
-  key and whose subject is the leaf's issuer. The filters hold no revocation of any other issuer's leaf, so a gap entry
-  there leaves no revocation unchecked; such leaves stay in the corpus for D1–D3. A gap leaf is
-  `PARSE_FAILED(PRODUCER_UNKEYABLE)` whatever its issuer, since keyability is decided at parse (revision 34); a keyable
-  leaf of such an issuer would be `NOT_ENROLLED`, which `STRICT` also rejects. The two differ only where `NOT_ENROLLED`
-  is exempted, as under `anchorIn` for a private anchor, since `PARSE_FAILED` is not exemptable: revision 34's
-  private-anchor caveat (§10 item 8). Revision 44's 6 gap entries are all of one such issuer: both CCADB records of
-  eMudhra's "EM DV TLS CA - G3B" are revoked and trusted by no root program, and its key is in neither fixture index.
-  Its 4 at TIME are the only K6 entries among the CT leaves, so no CT leaf of an index issuer argues for widening K6
-  (#57).
-- **Recorded**: the D8 gap over the `v5` pin's unexpired leaves of index issuers the matrix JDKs accept (as of the
-  top-up's start) is 0 of 117 603, the same on JDK 17, 21, 25 and 27, all in the D1 domain. With at least 100 000
-  leaves pinned and the gap below 10^-4, exact keyability is not reconsidered (§9.2 D8). The count by clause is
-  recorded per matrix JDK and shown in `docs/dev/status.md`.
-
-### Changes in revision 44 (the seed corpus's CT leaves pinned, 2026-10-29)
-- **Recorded** (#64, toward #15's seed corpus): the CT seed corpus is pinned at revokt-corpus `v4`, 110 043 distinct
-  leaves from 80 of the 81 CRLite-enrolled logs (Appendix A). A random sample of the logs, it has some 400 distinct
-  issuer names; that it covers every enrolled CA (§9.2) is not yet checked, and #15 stays open for it. Its D8 gap over
-  the unexpired leaves each matrix JDK accepts is 6 of 91 345 (6.6·10^-5, the same on JDK 17, 21, 25 and 27), below the
-  10^-4 re-decision threshold, so exact keyability is not reconsidered (§9.2 D8: the pin has the 100 000 leaves; a later
-  pin that #15's coverage check brings is re-evaluated). All 6 are leaves of one CA ("EM DV TLS CA - G3B", eMudhra) for
-  subjects under the `.invalid` TLD: 2 outside the profile at EXTENSION with zlint errors, and 4 at TIME, lint-clean,
-  whose `notBefore` is the GeneralizedTime year 0000 or 0001, outside K6's 1950 to 9999. They carry written
-  justifications, and whether to widen K6 joins #57's decision. The count by clause is recorded per matrix JDK and shown
-  in `docs/dev/status.md`.
-- **Added** (found on the same corpus): two more recorded platform cases in D2's normalisation, where revokt is right.
-  `CONSCRYPT_TIME_JULIAN`: Conscrypt 2.7.0 and 2.8.0 read a time before the Gregorian reform (1582-10-15) in
-  `java.util.GregorianCalendar`'s Julian–Gregorian hybrid, so the four year-0000/0001 `notBefore` above come out two
-  days earlier than the JDK's and revokt's proleptic Gregorian reading; a difference is recorded per Conscrypt version
-  only where the platform's value is exactly that hybrid reading of the time's fields and revokt's equals oracle 1's.
-  And the JDK's `getExtensionValue` reports `id-pkix-ocsp-nocheck` (whose value RFC 6960 makes NULL) with empty content
-  whatever the certificate carries, since its `OCSPNoCheckExtension` keeps no value: on oracle 1, D2 expects that
-  extension's value empty, in effect comparing its presence only (2 leaves of the corpus).
-
-### Changes in revision 43 (oracle 4's input in the producer SPKI check, 2026-10-25)
-- **Corrected** (found while implementing #15): revision 42 said oracle 4 runs on the DER, not `canon`, and that the
-  two are equal on every `ct`-path input. They are not: 5 issuer-corpus certificates (Appendix A) carry an outer
-  `signatureAlgorithm` (sha1WithRSAEncryption) other than their TBS's (ecdsa-with-SHA384, sha384WithRSAEncryption),
-  which `canon` replaces with the TBS's. Oracle 4 runs on `canon`, as everywhere, and what agreement needs holds: on
-  every `ct`-path input the TBS, and so the SPKI hashed, is the DER's, which the replay asserts. certificate-transparency-go
-  rejects those 5 on the DER ("mismatching signature algorithm identifiers"), so `canon`'s `ct` set is a superset of
-  the DER's (canon only removes ct-go errors) and index coverage counts only a certificate whose `canon` is its DER.
-- **Stated**: the issuer corpus's CCADB certificates come from the `AllCertificatePEMsCSVFormat` export by
-  `NotBeforeYear`, since the all-certificate-records export carries no PEM; the records export's certificates that
-  export lacks (15 on 2026-10-25, all revoked) are fetched from crt.sh by fingerprint. Until the 0.3 images are pinned,
-  AOSP `ca-certificates` `main` stands in for "the sources of the pinned images".
-- **Recorded**: the CT seed corpus starts as a pilot of 22 559 leaves from 80 of the 81 CRLite-enrolled logs (one did
-  not answer), with no D8-gap entry among its 19 846 unexpired leaves the JDK accepts (Appendix A). At that size
-  10^-4 is about 2 entries, so the re-decision is evaluated when #15 pins the full corpus (at least 100 000 leaves).
-
-### Changes in revision 42 (the producer SPKI check without an enrolment flag, 2026-10-25)
-- **Changed** (found while implementing #15): the producer SPKI check named "every intermediate the collection marks
-  CRLite-enrolled", but no record of Mozilla's `intermediates` collection marks it true: on 2026-10-25, the 1 020
-  records modified from 2019-06-07 to 2024-10-21 carry `crlite_enrolled: false`, and the 883 since 2024-11-09 omit the
-  field. The old check selected nothing and held vacuously. The pinned producer does not read the `intermediates`
-  collection. Its **program set** comes from the CCADB `MozillaAllUnexpiredPEMs` report: the intermediates zcrypto
-  parses, not revoked, that zcrypto verifies to a Mozilla root for serverAuth, each re-parsed by
-  certificate-transparency-go's `ParseCertificate` and dropped on any error, non-fatal included, and keyed by
-  `SHA-256(RawSubjectPublicKeyInfo)`, the SPKI TLV as presented (Appendix A). A generation's index (its full filter's
-  and each delta's) is a subset of the program set; "enrolled" means in an index, as `NOT_ENROLLED` does (§6.2, §8).
-  The check now has two parts, neither needing a flag: **SPKI agreement**, `SHA-256(rawSpki)` equal to oracle 4's SPKI
-  hash for every issuer-corpus certificate oracle 4 parses through `ct`, a superset of the program set, and a revokt
-  parse failure counting as a difference where oracle 4's hash is an index key; and **index coverage**, every key of
-  each index of the fixture generation equal to oracle 4's `ct` SPKI hash of an issuer-corpus certificate, and so, by
-  agreement, to revokt's. Together they assert what the old check meant, that revokt keys every enrolled issuer as the
-  producer does (a divergence makes revokt miss the issuer and skip its leaves, fail-open), over every enrolled
-  issuer. The old check would also have failed on a flagged issuer the producer left out; that was never a property of
-  revokt, and an issuer outside the index is not enrolled (`NOT_ENROLLED`, §6.2, §8).
-- **Added**: the issuer corpus includes the `MozillaAllUnexpiredPEMs` report. For an index key no snapshot covers (for
-  example, its certificate left the report after the generation), every CA certificate CT holds for that SPKI hash is
-  admitted, fetched from crt.sh by `spkisha256` with its id and retrieval time recorded in revokt-corpus. Each
-  snapshot is recorded in revokt-corpus with its URL, its retrieval time and the SHA-256 of the raw download.
-- **Clarified**: ct-go's strict parse, oracle 4's `ct` path, is `ParseCertificate` without a `lax` retry returning a
-  certificate, its non-fatal x509 errors included; the producer's program set takes only those it returns with no
-  error. D8 and the audit argument keep the term with that meaning.
-
-### Changes in revision 41 (two recorded platform cases in D2, 2026-10-25)
-- **Added** (found while implementing #14, the `x509-limbo` replay; #59): a second rule in D2's SPKI re-encoding
-  allow-list. A JDK without a KeyFactory for an algorithm returns a generic key whose `getEncoded()` re-encodes the
-  AlgorithmIdentifier with NULL parameters where the certificate has none; JDK 17.0.20.1 does so for ML-DSA keys,
-  17.0.21 knows ML-DSA and keeps the bytes. The rule, on the bytes alone, admits exactly that case: `rawSpki` with every
-  header minimal and NULL parameters added to an AlgorithmIdentifier that has none, nothing else differing. revokt is right there, since `rawSpki` is the
-  certificate's bytes, equals the raw-byte reference and is what the producer keys. CI runs each matrix JDK at its
-  latest patch (CONTRIBUTING §6), so the rule names a case a lagging patch, or any JDK meeting an algorithm it does
-  not know yet, would otherwise report as a violation.
-- **Added** (found while building the D7 corpus, #14): `CONSCRYPT_TIME_OFFSET`, a `D3_DIVERGENCE` record (a D2 field
-  difference) of oracle 2.
-  Conscrypt 2.7.0 and 2.8.0 accept a `UTCTime` with a `±hhmm` differential and drop the differential, reading the
-  local time as UTC (probed 2026-10-25: `261022134530+0100` is 13:45:30Z, where the JDK reads 12:45:30Z, and
-  `-0130` is also 13:45:30Z); they reject a `GeneralizedTime` with one. revokt decodes as the JDK does (§9.2
-  "Times"). A `getNotBefore()`/`getNotAfter()` difference from oracle 2 is recorded under this class, per Conscrypt
-  version, only where the time is a `UTCTime` with a differential (read from the input bytes by the replay, never by
-  revokt's parse) and oracle 2's value is revokt's plus the signed differential, revokt's being the local time minus
-  it; on a matrix run revokt's value must also equal oracle 1's. Any other time difference stays a violation. RFC 5280
-  requires `Z`, so only non-conforming certificates carry such a time, and K6 puts such a leaf outside the keyability
-  profile, so CRLite never queries it. M4's distrust-after reads revokt's `notBefore`, with the JDK's meaning, on both
-  platforms; a decision made from Android's `getNotBefore()` can differ from it by the differential, less than a day,
-  since the JDK and Conscrypt 2.7.0 and 2.8.0 reject an hour of 24 or more and a minute of 60 or more.
-- **Stated**: every SPKI hash revokt computes (`Cert.spkiHash`: the candidate index, `leafKeys`, the verifier caches)
-  is `SHA-256(rawSpki)`, over the encoded certificate's bytes, never over a platform's `getPublicKey().getEncoded()`
-  (§9.2 D2's normalisation is the only use of that getter in revokt's code). A binding that hashed it would usually
-  miss an enrolled issuer (fail open); where the re-encoding is another enrolled encoding of the same key, it would
-  query outside the universe (§10, "Two SPKI encodings").
-- **Clarified**: the matrix runs each JDK at its latest patch at run time ("Tiers and matrix"); "strict DER" for
-  Conscrypt means its TLV parse (no indefinite or non-minimal lengths), since it accepts a `UTCTime` differential; the
-  record schema's platform oracle entries carry `holds` on an oracle-dependent record, as the corpus already does, and
-  each entry's `version` is defined (a JDK patch or an APEX update that changes an outcome fails the run until the
-  records are regenerated).
-
-### Changes in revision 40 (the matrix file and the nightly's Conscrypt release, 2026-10-25)
-- **Clarified** (found while implementing #13): the version matrix runs one job per JDK with every Conscrypt version
-  of the matrix inside it, a test run per version, as CONTRIBUTING §6 already said. The committed matrix file is
-  `gradle/oracle-matrix.properties`; it names the Conscrypt versions by their catalog keys and the nightly's JDK EA
-  release, rolled by hand, and from 0.3 the Android system images.
-- **Changed**: the nightly replays the committed corpus against the newest JDK EA as before, but cannot replay a
-  Conscrypt release newer than the matrix's current one: an unadmitted dependency fails dependency verification
-  (CONTRIBUTING §3), and resolving an unverified Conscrypt artifact in CI is not acceptable. The nightly fails
-  instead, and so blocks a release (CONTRIBUTING §6), until that release is admitted (checksums and signing key
-  checked) and rolled into the matrix, after which every PR replays it. The cost: between a Conscrypt release and its
-  admission nothing replays it, where before the nightly did within a day. A patch of the previous minor waits for the
-  next roll.
-
-### Changes in revision 39 (the JDK read fallback, 2026-10-25)
-- **Added** (found while implementing #12, oracle 1; #49): on the JDK, a certificate whose `getEncoded()` is
-  `ParseFailed(STRUCTURE)` is read once more through the bytes the JDK verified the signature over,
-  `getTBSCertificate()` and `getSignature()`, assembled as `canon` is but with the padding bits cleared (the platform
-  canon, §9.2). A valid signature makes those bytes what the CA signed, however the presented encoding was altered, so
-  a certificate the platform or the walker verified is read as the CA issued it. Oracle 1's `encoded` is the bytes so
-  read, and D1, its domain, D2 and D6 follow unchanged. The JVM binding applies the fallback where the engine parses a
-  certificate; the bytes read are its DER for parsing and the engine's hashes, while the identity keys stay over
-  `getEncoded()` (§5.3, 0.2). Conscrypt needs none, since it parses strict DER. A certificate so read carries no
-  `AlgorithmIdMismatch` finding unless its TBS AlgorithmIdentifier is not minimal DER.
-- **Why**: the committed D7 corpus holds platform-accepted inputs that neither 3a nor 3b locates (an indefinite TBS
-  holding a non-minimal definite child, on JDK 17, 21 and 27; a definite TBS holding an indefinite Validity, on JDK 25
-  and 27; Appendix A), which broke D2's raw-byte-reference metric. A rule-based exclusion was drafted, but its
-  argument misread what the JDK verifies (the independent review of #48). With the fallback, revokt's safety does not
-  depend on that question, which #49 keeps open. The replay (#12) reads the nine indefinite-TBS inputs through their
-  platform canon: each parses, has a raw-byte reference and passes D1 and D2 on all four matrix JDKs, and oracle 4
-  rejects the platform canon of the three that JDK 25 and 27 accept, which are D1-dom. D7 records the nine's outcome
-  accordingly.
-- **Changed**: a JDK-accepted input for which no platform canon can be built is D1-dom by rule, since the producer
-  cannot key a TBS in which the locator finds no signature AlgorithmIdentifier. D2's metric gains an exclusion: inputs
-  revokt does not parse on whose `canon(encoded)` oracle 4 rejects, or for which no platform canon can be built; the
-  Acceptance criterion follows. The record schema carries oracle 1's read per JDK version. The 3b table notes its
-  `CANON` reply, and D7's SPKI form reads `30 83 00 …`, as the corpus builds it.
-
-### Changes in revision 38 (the JVM floor is 17; an indefinite `signatureValue` is `STRUCTURE` again, 2026-10-24)
-- **Changed** (the maintainer's decision, 2026-10-24, on #42): the JVM floor and bytecode target move from 11 to 17.
-  Android stays at API 26+: revokt is built with Kotlin 2.4 (CONTRIBUTING), so its Android consumers already need AGP
-  8.5.2 or later, whose D8 is expected to dex Java 17 class files (§3, Appendix A). JDK 11's parser reads every
-  identifier as one octet, and it accepts forms that JDK 17, 21 and 27 reject:
-  - an indefinite `signatureValue` (revision 35);
-  - found by the independent review of #41 (#42), a trailing-element stop element with a multi-octet identifier
-    (`9f 01 00` before `[3]`, `9f 03` or `bf 03` holding the Extensions SEQUENCE), which JDK 17, 21 and 27 reject
-    (probed, Appendix A).
-
-  Rather than loosen the parser for JDK 11, the floor rises: JDK 11 leaves the §9.2 version matrix, so it is no longer
-  a platform oracle for D1. revokt's rejection of a multi-octet stop element matches every JDK in the matrix.
-- **Reverted**: revision 35's acceptance of an indefinite `signatureValue`. No JDK in the matrix verifies it, so it is
-  `STRUCTURE` again, as before revision 35. The `tbsCertificate` header and the outer `signatureAlgorithm` keep their
-  indefinite forms, which JDK 17 and later verify. 3b's envelope follows, locating a definite `signatureValue` only.
-  The D8 boundary corpus drops its indefinite-`signatureValue` leaf, and D7's case moves to the reject side. The JDK
-  11 probes in Appendix A stay as the record of the change.
-
-### Changes in revision 37 (`3A_TBS_LAX` covers every tag-number-3 element, 2026-10-24)
-- **Corrected** (found by the independent review of #37, oracle 3a): `x509-parser` 0.18.1's `parse_extensions` checks
-  only the tag number of the element after the SPKI, so 3a takes as extensions not only a primitive `[3]` but any
-  element with tag number 3 that is not a constructed context-specific `[3]`: all seven forms `03`, `23`, `43`, `63`,
-  `83`, `C3` and `E3` (probed, Appendix A). revokt and the JDK read such an element as the trailing-element rule's
-  stop element (JDK 11 and 21 probed: no extensions). D7 and Appendix A record the cases. `3A_TBS_LAX` now names that
-  whole class in D2 and D3, so such an input is a recorded divergence with the §9.2 read (∅), not an unexplained D2
-  failure.
-
-### Changes in revision 36 (oracle 4's reply carries its parse path, 2026-10-24)
-- **Corrected** (found by the independent review of #30): §9.1's pipe protocol gave oracle 4's reply as
-  `OK <serial-hex> <spki-sha256-hex>`, without the `ct`, `lax` or `zc` path §9.2's oracle table and D8 require. The
-  reply is now `OK <serial-hex> <spki-sha256-hex> <ct|lax|zc>`, and an empty input line is answered `REJECT` so the
-  replies stay one per input.
-
-### Changes in revision 35 (an indefinite `signatureValue` verifies on JDK 11, 2026-10-24)
-- **Blocker, found by the independent review of #24 (the unsigned-header parser)**: JDK 11.0.32, the bytecode target,
-  verifies a certificate whose `signatureValue` has an indefinite length (`03 80 … 00 00`) whenever its content, read
-  from the unused-bits octet on, is a chain of TLVs with minimal headers ending at the end-of-contents. `getEncoded()`
-  keeps the presented bytes. About 0.44 % of P-256 ECDSA signatures read that way (17 of 4 000 and 7 of 1 500
-  re-signed probes; 0 of 1 500 RSA-2048), and no CA signature is needed to present one. revokt answered `STRUCTURE`,
-  so such a leaf was `PARSE_FAILED`, an allow in `DEFAULT`. JDK 17, 21 and 27 reject the form (0 of 4 000). This
-  supersedes revision 34's statement that JDK 11 verifies a strict subset of JDK 17's inputs: that held on the
-  revision 34 probe sets only.
-  - §9.2 now accepts an indefinite `signatureValue`, delimited and re-encoded by the same converter rule; `Cert.sig`
-    is read from the re-encoded content. A non-minimal header on its chain stays `STRUCTURE`: JDK 11 does not verify
-    such a form (probed, Appendix A).
-  - Oracle 3b delimits and re-encodes the `signatureValue` too, and `canon` holds its content after the unused-bits
-    octet, re-encoded when indefinite. D2 also compares `Cert.sig` with that content, its padding bits cleared.
-  - D7 gains the case on both sides, and the boundary corpus gains the accept side.
-  - Appendix A records the case as a revision 35 probe, and its statement that the JDK rejects a constructed or
-    indefinite `signatureValue` now separates the two: every probed JDK rejects a constructed one (JDK 11 and 17 probed
-    again), and JDK 17, 21 and 27 reject an indefinite one.
-- **K7 states header minimality inside the RSA key** (found by the independent review of #26, the keyability
-  profile): ct-go parses `RSAPublicKey` out of the BIT STRING and rejects a non-minimal header there, with no `lax`
-  retry, while K1 walks no primitive content. **K1's K8 list is matched on canonical OID content**, so a non-minimal
-  spelling of a listed OID is opaque to K1 and fails K4. K4's minimality is noted as stricter than the pinned ct-go,
-  which keys a leading `80`.
-- **Corrected**: walker fixture (r) contradicted §5.1 and §9.2, which compute `AlgorithmIdMismatch` after NULL/absent
-  normalisation. (r) is now an OID mismatch with the finding, and a NULL-vs-absent pair gives no finding.
-- **Clarified**: D6's offsets of TBS fields index `Cert.tbs` from its tag octet; they re-slice `b`, for a definite TBS
-  header, shifted by the TBS content's start in `b` less `Cert.tbs`'s header length.
-
-### Changes in revision 34 (D8 made one-directional after a four-seat cohort, and the envelope re-encoding blocker closed, 2026-10-23)
-- **Decision (issue #11): `producerKeyable` is a conservative keyability profile** (§9.2 clauses K1–K8) instead of an
-  exact model of Mozilla's producer. The cohort (security, implementer, spec coherence, operator/data) was unanimous.
-  - An exact model meant about 2 000 lines tracking certificate-transparency-go strict and `lax`, zcrypto with its own
-    `asn1` fork, and Go's `net/url`, `time` and `crypto/elliptic`.
-  - An error in the model of one parser shows only when the other also rejects, so fuzzing finds it slowly, and each
-    is a false-`REVOKED` P0.
-  - A sample of 200 230 entries from 18 CRLite-enrolled logs found none outside a strict DER profile and none keyed
-    only by zcrypto (Appendix A).
-- **D8 gates one direction at zero tolerance**: `producerKeyable` ⇒ oracle 4 keys `canon(encoded)` through ct-go's
-  strict parse with revokt's bytes; an oracle-4 crash counts as a rejection, and oracle 4 reports `ct`, `lax` or `zc`. The reverse is the measured **D8 gap**:
-  - D8-gap records (end-entity inputs only) carry oracle 4's path, the failing clause and the zlint result;
-  - the gap is zero on the real fixtures, ratcheted against a baseline, and a lint-clean entry blocks the release;
-  - a re-decision trigger at 10^-4 applies on the #15 seed corpus.
-- **Unchanged**: D1's domain is still defined by oracle 4, and the `[0]` rule and key-byte equality stand. The SCT
-  extension is opaque to the profile, so its non-minimal inner lengths still extract and stay keyable.
-- **Removed**: the zcrypto-only list, the ct-go struct-walk model and conditions (i) and (ii).
-- **Blocker, present since `producerKeyable` was introduced (revision 23) under either form of D8**: nothing outside
-  `tbsCertificate` is signed.
-  - The JDK verifies a certificate whose outer `signatureAlgorithm` or `signatureValue` header has a non-minimal
-    length, whose outer NULL parameters are flipped, or whose RSA `signatureValue` has a non-zero unused-bits octet.
-    It keeps those bytes through `getEncoded()` (probed on JDK 17, 21 and 27, Appendix A).
-  - revokt marked such a leaf unkeyable. A network attacker holding a revoked certificate's key could therefore turn
-    `REVOKED` into a `DEFAULT` allow.
-  - The `tbsCertificate` header is unsigned too: the JDK verifies over the TBS after `DerIndefLenConverter`, under a
-    minimal header. A non-minimal or indefinite TBS header, indefinite elements on a chain of indefinite elements
-    under it, an indefinite outer `signatureAlgorithm` and set signature padding bits also verify. revokt answered
-    `STRUCTURE` or unkeyable, or failed the walker's link check.
-  - The profile now reads `Cert.tbs`, the TBS re-encoded as the JDK re-encodes it (D2 checks it against
-    `getTBSCertificate()`); `Cert.sig` has its padding bits cleared; oracle 4 runs on `canon(encoded)` in D1, D1-dom
-    and D8.
-  - keyUsage BIT STRINGs that only zcrypto keys (`03 00`, `03 01 05`) are outside the profile.
-- **The profile follows Go's checks with narrowed value domains, not X.690 everywhere.** It accepts what the producer
-  keys and honest or private-PKI certificates use: negative, zero and long serials, an explicit `FALSE`, an explicit
-  v1, and `*` or `&` in a PrintableString. It still needs the EC on-curve check (pure-Kotlin field arithmetic, §10).
-- **Corrected statements**: §5.1 step 3 and §10 item 8 no longer say an unkeyable leaf is in no filter. Appendix A
-  records that a fatal parse halts the producer's log ingestion rather than skipping the entry.
-- **Additions**:
-  - new §10 item 15: the producer keys the logged precertificate;
-  - `RevoktStatus.parseFailed` and `Finding.Path.keyabilityClause`, so the outcome can be counted;
-  - a scheduled producer job that builds oracle 4 at the pin and at `mozilla/crlite` `main` and samples fresh CT
-    entries;
-  - the boundary corpus;
-  - D8 in the §9.2 Acceptance list.
-- **JDK 11 and 17 probed**: every revision 34 JDK probe was re-run on JDK 11.0.32, 17.0.21, 21.0.13 and 27 `SUN`.
-  JDK 17 matches JDK 21 on every input, so the blocker entry above, §9.2 and Appendix A cite JDK 17, 21 and 27.
-  JDK 27 differs only on an indefinite header under a definite parent: it parses every such case and then fails to
-  verify it. JDK 11 verifies a strict subset of JDK 17's inputs, with the same `getTBSCertificate()`, so the §9.2
-  rule holds there too (on these probe sets; revision 35 found an indefinite `signatureValue` only JDK 11 verifies).
-  The bypass remains on JDK 11 through an indefinite `tbsCertificate` header, an indefinite outer
-  AlgorithmIdentifier, the NULL flip and the RSA padding bits. JDK 11, the bytecode target, joins the §9.2 version
-  matrix (#20).
-- **Considered and not adopted**: deciding keyability at the query, after the walk. §10 item 8 says why, and when the
-  decision reopens.
-
-### Changes in revision 33 (SCT list rule restated against `x509-parser` 0.18.1, with one mini consistency round, 2026-10-22)
-- §9.2 "Parser contract": the SCT-list parenthetical described a stricter parser than the one D2 compares
-  against (oracle 3a). A probe of `x509-parser` 0.18.1 (asn1-rs 0.7.2, nom 7.1.3) showed:
-  - bytes after the inner `OCTET STRING`, after the declared list region and inside an item after its
-    signature are ignored;
-  - the list keeps the items before the first one that fails, and fails only when its first item fails;
-  - an empty list, or a first item of length 0, is an error (a later item of length 0 ends the list);
-  - any long-form inner length is accepted, and a zero-length signature is accepted.
-
-  §9.2 now states a self-standing rule. It follows 3a for list framing and length forms. It differs at the
-  inner identifier: revokt requires `0x04`, whereas 3a accepts tag number 4 in any class and in multi-octet
-  form, with a u32 wrap. That wider acceptance is the recorded D3 divergence class `3A_HEADER_LAX`, excluded
-  from D2's SCT comparison. It is equivalent to issuing without SCTs.
-- §9.2 `producerKeyable` paragraph and D7: a non-minimal inner `OCTET STRING` length extracts the SCTs, not
-  `NO_SCTS` (`producerKeyable = true` is unchanged, since ct-go's SCT sub-parse is non-fatal). D7 now states
-  normative outcomes for its SCT-list entries and splits them: both directions of a wrong declared length, a
-  bad first item, the three ignore levels, an SCT hidden in ignored bytes, a zero-length signature, a
-  non-`0x04` inner identifier, and a constructed inner `OCTET STRING`.
-- D2 states a per-extension expected SCT pair set, with ∅ for an inner identifier other than `0x04`. That octet
-  is read by 3b, so the comparison substitutes ∅ rather than skipping. The record schema gains `divergence`, and the
-  end-to-end oracle takes the same expectation.
-- D3: `Ok([])` does not occur; an empty list is `ParseError` → `NO_SCTS`. Firefox's decoder is not an oracle; its
-  divergences are hand-recorded `D3_DIVERGENCE` entries in the D7 corpus. A 3c pair revokt does not yield blocks the release until a spec
-  revision resolves it. `3A_HEADER_LAX` is a class against 3a only. The direction note names the M1
-  unverified-SCT residual.
-- §9.2 "Structurally strict" notes that the SCT list's inner length follows the SCT-list rule.
-- The `NO_SCTS` failure lists in §3.2, §4 and §10 item 7 are examples; §9.2 is the complete statement.
-- Oracle 3b's SCT walk applies the §9.2 rule, so D2 against 3b does not raise false P0s.
-- "Malformed list → `NO_SCTS`" in §3.2 (twice), §4 (`CrliteQuery.scts`), §6.1, §6.2 and §10 item 7 now reads
-  "no list that parses under §9.2". §10 item 7 says the Firefox match is narrowed: a list §9.2 accepts in
-  part is queried, and `STRICT` then sees the CRLite answer.
-- §9.2 "Parser contract" (Independent review of the parser, PR #16): the TBS read now tolerates trailing elements wherever the JDK's
-  `X509CertInfo` does, closing a D1 violation that made such leaves `PARSE_FAILED` and dropped such intermediates
-  (`NO_ISSUER`), which fails open in `DEFAULT`. The tolerated places are:
-  - after `subjectPublicKeyInfo`, read sequentially as optional `[1]`, `[2]` (either form) and constructed `[3]`;
-  - inside `[3]`, the bytes after the `Extensions` SEQUENCE, unparsed;
-  - inside an `Extension`, the bytes after `extnValue`, unparsed.
-
-  Ignored bytes are recorded for `producerKeyable`. The D8 note on trailing SEQUENCE elements follows. revokt is
-  stated as more lenient than the JDK in three places: no version gating, unique-id content not inspected, and the
-  time forms, now stated in §9.2 (the JDK's day rollover included) with a fail-closed rule for a null time; D2's
-  Java fields gain `notBefore`/`notAfter`. §5.5's "structurally strict" is qualified.
-  Oracle 3b walks the TBS tail by the same rule, and D7 gains the cases. `[0]` stays strict: ct-go does not
-  bound explicit `[0]`, so a trailing element there changes what ct-go accepts and which SPKI it records. The keyed
-  serial is bounded (the stdlib `RawValue` re-parse) and is the JDK's. Both are confirmed by running the producer
-  (Appendix A). No input is known on which the filter key
-  differs, so the case is excluded conservatively, D1-dom by rule. The cost is `PARSE_FAILED` for such a leaf and a
-  dropped candidate for such an intermediate, both allowing in `DEFAULT`. "Producer-keyable" now requires key-byte equality, in D1, D1-dom, D8 and
-  `producerKeyable`. The table models ct-go's struct walk. 3a's primitive-`[3]` reading is the declared class
-  `3A_TBS_LAX` (widened in revision 37), stated in D2, D3 and the record schema. The end-to-end oracle excludes
-  chains `x509-parser` rejects. D1's domain is defined against the reference view, with `[0]`-trailing input D1-dom
-  outright. D2's oracle-4 clause applies where `producerKeyable`.
-- §5.1 `Cert.notBefore`/`notAfter` are `Long?`: the parse yields null for a time that does not decode, which only
-  platform-rejected input reaches.
-- Appendix A records `x509-parser` 0.18.1, asn1-rs 0.7.2 and nom 7.1.3 by sha256. They are pinned exactly in
-  `revokt-oracle` when oracle 3a lands with the 0.1 oracle issue. The probed behaviour becomes a committed `revokt-oracle` test, and bumping any of the three
-  crates is a spec revision that re-runs it. 3b's SCT walk runs the same cases.
-
-### Changes in revision 32 (two factual corrections from the development-expectations review, 2026-10-22)
-- Maven Central's Portal has no OIDC "trusted publishing": publishing is a user token plus PGP signatures.
-  §10 and §14 now say "published from CI only, through a protected release environment with a second
-  maintainer's approval, PGP-signed with provenance attestations" (key custody and the release flow live in
-  CONTRIBUTING.md / MAINTAINERS.md).
-- §14's "Org" is read as "project": the repository stays under the maintainer's personal account (§13 item 1)
-  and uses only features free for public repositories there (ADR-0004 in the repository).
-
-### Changes in revision 31 (mini consistency round on revision 30, two seats: fold consistency, new-surface adversary)
-No blocker; eleven majors and about thirty minors, every one a precision gap in revision-30 material:
-- **Acceptance memo** keyed on (chain hash, host') only (the platform's acceptance does not depend on
-  revokt's snapshot and the retry re-validates under the platform's current store, so a `refreshAnchors()`
-  every minute can no longer empty it), 24 h TTL, live in every lifecycle state; the overload table and
-  §5.2 say "memo", "at most two validations"; a limits-table row.
-- **Fetcher attribution**: the per-source internal instance is handed only to the factory, and writes
-  `feedHostBlock`/`updateBlockedBySelf` only while a fetch of its source is in flight on it (the
-  revision-29 guard restored as a second condition); the `HttpFetcher.Factory` contract (one call per
-  source at `build()`, every handshake through the given `FetcherTls`); internal instances never counted
-  or listed; one shared snapshot refreshed as one; `FETCHER_TRUST` failure attribution; a §9 fixture.
-- **Sole-seed gap**: `close()` waits unconditionally for the decoding thread to re-take the lock; the
-  three outcomes tabled (flag seen before `activate`; flag missed; no `close()`); a cancelled `start()`
-  throws `IllegalStateException("closed")`; re-entrant `start()`/`close()` from the decoding thread throw.
-- **`exemptAnchors`** applied at its call position (later calls win), excludes rules by the §8 table's
-  "empty path" mark (`NO_ISSUER`, `ISSUER_UNVERIFIED`; the golden fixture carries the column), so M2's
-  `ISSUER_UNKNOWN_TO_MOZILLA` is covered; the recipe pairs `platformOnly()` with `hostSuffixIn`.
-- **`SeedOpener`** is jvmMain over `java.io.InputStream` (Okio stays out of every public signature);
-  `of(opener)` lives on the jvmMain actual companion.
-- **Clock-behind install**: carved out of "the three advance together"; `UNCHANGED`-by-timestamp defined
-  (attempt fields only, one `_since` body per poll while the clock is behind); `clockBehind` recomputed
-  at the sync decision, not read from the last publish.
-- Shadow: the §5.5 catch rule, a shadow-only `ENGINE_ERROR` is not cached (`shadowVerdict = null` in
-  the entry, counted once), counters applied by `apply()` after step 3a, shadow diagnostics logged at
-  `WARN`, `Revokt.evaluate` runs 3a and `Evaluator.evaluate` does not. Fallback migration: per-field
-  `updater.json` merge, failed-lock state, `STORE_UNREADABLE` clears on migration, a fallback still syncs.
-  Every `SyncStage` producer names its stage; cross-references and the changes block corrected.
-
-### Changes in revision 30 (mini consistency round on revision 29, two seats: fold consistency, new-surface adversary)
-No blocker; eight majors and twenty minors, every one in material revision 29 added; no design reversal:
-- **Clock-behind devices no longer freeze on the seed**: a changeset newer than a live generation that is
-  itself `clockBehind` installs under the same no-watermark-advance rule, `UNCHANGED` is tested before
-  `CLOCK_SKEW`, `lastVerifiedAtMillis` advances on such installs, `clockBehind` is recomputed at every
-  publish (never persisted); the §9 fixture rewritten.
-- **Shadow policy**: evaluated after the enforced catch boundary has closed, under its own boundary
-  (a shadow throw is a shadow-only `EngineError`, never on the enforced verdict); the shadow pair is read
-  with the policy pair at flow step 2; every setter call bumps the epoch; validated under `OBSERVE`
-  semantics; touches only `shadowWouldRejects` and `RevoktEvent.shadowVerdict`; computes its own data rules.
-- **Fetcher attribution is structural**: one internal trust-manager instance per configured source,
-  handed to that source's `HttpFetcher.Factory.create`; the public `fetcherTrustManager` is a distinct
-  consumer-facing instance that is always "no fetch in flight"; all share one snapshot over `fetcherDelegate`.
-- **`index.bin` consistency** restated as selection equivalence per (log id, timestamp), well-defined for
-  overlapping windows; upki-mirror's writer and `Index::check` on overlaps are a named 0.2 verification.
-- **3-arg Android overload**: a dedicated acceptance memo (chain hash, snapshot id, host'; 1,024 entries,
-  1 h) written only by socket and engine acceptances drives the null-host retry, independent of the path
-  LRU; `Revokt.evaluate` and 3-arg calls never write it; "at most two platform validations".
-- **Sole-seed gap**: an internal `STARTING` flag under the factory lock; a second `start()` waits for
-  the first and follows its outcome; `close()` sets a cancel flag the decode checks before `activate`
-  and waits (bounded) for it; a post-`activate` throw leaves the written generation, loaded as stored
-  on retry. **Fallback migration** under the ordinary candidate rules (class and age), watermark = max,
-  lock or registry failure → read-only or stay in fallback. The worker returns `failure()` for
-  `SEED_CHANNEL_MISMATCH` and validate `ERROR`s, `success()` for `DEFERRED`; `Provider` may return `CREATED`.
-- **Exemptions**: `exemptAnchors` declared, covering exemptable non-`EVIDENCE` rules whose outcome is
-  `REJECT` and skipping `PATH`-layer rules (their reported path is empty when they fire, so `anchorIn`
-  never matches); the enterprise recipe uses `hostSuffixIn`/`platformOnly` for `NO_ISSUER` and
-  `ISSUER_UNVERIFIED`; fixture (j) split (brainpool is now `NO_ISSUER(ALL_CANDIDATES_INVALID)`).
-- API sketch: `NOT_STARTED` removed from `DiagnosticCode`; `RevoktLoggers.jul()`/`RevoktAndroid.logger()`;
-  `SeedOpener` declared (jvmMain); `SeedSource` as `expect`/`actual`; `maxTrustManagers` overridable in both directions;
-  `SyncStage.FETCHER_TRUST` and the stage named per producing bullet; `logger` in the builder sketch;
-  `RevoktWork.uninstall` declared; `RULE_FLIPPED_THIS_MINOR`/`UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP`
-  recomputed with the policy pair; snapshot-read wording, "three data rules", `Residual 10` label,
-  `(B)` on `x5uHostRewrite`, `storageFallback` retry exception, data-rule snapshot site.
-
-### Changes in revision 29 (full cohort round four on revision 28, six seats: coherence, implementer, security, operator, format/differential, platform)
-Three blockers, all folded, none in the walker or the data path: two API-level crashes on the declared
-minSdk and one fail-closed path the default preset reached through a routine clock condition.
-- **Android API 26–30**: futures are completed through `executor.execute { future.complete(v) }`, never
-  `CompletableFuture.completeAsync` (API 31+); an API-26 instrumented fixture and a `NewApi` lint gate on
-  a minSdk-26 consumer guard it. **Android default fetcher**: `HttpURLConnection.setAuthenticator` does not
-  exist on Android; `revokt-android` defaults `http` to `OkHttpFetcher` when `revokt-okhttp` resolves, else
-  its own `AndroidHttpFetcher` (global-`Authenticator` residual recorded in §10); a 401/407 is `FAILED` on
-  every platform. **Future-dated seed**: installed, never refused (its timestamp is Mozilla-signed, so
-  "future" can only mean the local clock is behind): `ageMillis` clamps at 0, `DataState.clockBehind` and
-  the `CLOCK_BEHIND` warning are loud, the watermark takes the signed timestamp; the §9 fixture flips.
-  A `CLOCK_SKEW` changeset for a dataset with no generation installs the same way without advancing the
-  watermark. `pending` also clears at the end of the start task when no fetching source is configured.
-- **Engine agreement**: the loader verifies `index.bin`'s log directory against the union of the referenced
-  filters' coverage maps before `prepare()` (`INDEX_INCONSISTENT`), so coverage-driven selection equals
-  C2SP's `index.bin` selection; the upki adapter reads `{V3, V4}` (clubcard-crlite decodes both; the "v4
-  only" claim deleted) and the cross-engine suite runs the upki leg on Mozilla's v3 generations directly,
-  the v4 transcode a third leg; `query()` precedence closed → `ENGINE_ERROR`, no generation → `NO_DATA`,
-  empty SCTs → `NO_SCTS`; `UPKI_ERR_REVOCATION_NO_DATA` (76) named; v3/v4 decode-strictness rules stated.
-  **`producerKeyable`** restricted to headers the producer's *fatal* walk visits (ct-go's SCT-list parse is
-  non-fatal, so a non-minimal inner length there is keyable, `NO_SCTS`); **D8** scoped to `Parsed` inputs.
-  Self-check inputs fully named (issuer hash, SCT, outside probe, iteration order).
-- **Flow**: the 3-arg Android overload's step 1 defined relative to the caches (the null-host retry only
-  for a chain and host a socket or engine overload already accepted); the anchor snapshot is read exactly
-  once per handshake; `decide` = decision steps 1–6, `evaluate` = steps 7–8; one list of what a path-cache
-  entry reproduces; `Revokt.evaluate` runs step 1 with `authType = "UNKNOWN"` and is `@Throws`;
-  `Evaluator.evaluate` walks the default instance's snapshot and throws outside `STARTED`;
-  `revokt.trustManager` is created lazily (fixture (h) holds); `customCanonicaliser` is a class check over
-  the two final shipped `PlatformTrust`s; candidate order within a store group puts compatible `keyFamily`
-  first; `ISSUER_UNVERIFIED` counts only the child's signature OID (a server-chosen key OID on a decoy can
-  no longer relabel `NO_ISSUER`); `UnsupportedAlgorithm` emission rule stated; `MAX_PRESENTED` counts the raw chain.
-- **Lifecycle**: the synchronous seed decode runs only when no complete stored generation exists, and the
-  factory lock is released around it; `resetState()` publishes the empty snapshot before `engine.clear()`;
-  `install()` uses `use {}`; `close()` idempotence and single-owner injection in the engine contract; the
-  engine thread contract names the `start()` caller; fresh dependent futures per call; the policy setter
-  publishes `ready`; `RevoktState.warnings` is the set of currently true conditions with a clearing rule per
-  code and carries the V warnings of the published pair; `NOT_STARTED` is a counter only;
-  `RevoktState.storageFallback`; an in-memory fallback retries its configured storage and migrates; the
-  WorkManager worker starts a `CREATED` instance itself, syncs in-memory instances, has stop semantics and
-  an `uninstall`; `store.version` higher → `STORE_NEWER_LAYOUT` (JVM: in memory; Android: rebuild, one
-  package owns the directory), lower → `STORE_MIGRATED`.
-- **Operator surface (additive)**: `shadowPolicy` (steps 7–8 re-run under a second policy on cache misses;
-  `shadowWouldRejects`, `RevoktEvent.shadowVerdict`), the measurement path from `DEFAULT` to `STRICT`
-  without `OBSERVE`; `STALE`, `UNSIGNED_DATA` and `NO_DATA` exemptable (a feed outage no longer takes down
-  exempted private-anchor traffic under `STRICT`); `limits { maxTrustManagers }`; `RevoktLogger`;
-  `TrustManagerStatus.anchorRefreshFailures`; `SyncResult.{sourceId, stage, httpStatus, cause}` and
-  `SyncOutcome.DEFERRED`; `x5uHostRewrite` (a byte-for-byte reverse proxy is now a supported mirror);
-  `SeedSource.of(source)`; `sync()` with no fetching source re-checks the seed; `hostSuffixIn`;
-  `OkHttpClient.revoktTrustManager()`; `RevoktWork.uninstall`; V `NO_FETCHING_SOURCE`; R `STORAGE_UNSET`
-  on Android; R https-only source URLs; `/v1` is the default base URL; `mode` read and rejected when not
-  `p384ecdsa`; `If-None-Match` synthesised from the verified cursor; seed archive entries capped while
-  inflating; seed artifacts carry no code dependency (the floor lives in `seed.json`).
-- **Fetcher**: handshakes on `fetcherTrustManager` are attributed to the in-flight `FetchRequest`, never the
-  peer host; a handshake with no engine fetch in flight is evaluated under the fetcher policy but neither
-  writes `feedHostBlock` nor receives the `feedHostRevoked` allowance; `FETCHER_HOST_UNAVAILABLE` and the
-  Ktor-CIO exception are deleted; the fetcher policy ignores `Enforcement`; `FetcherTls.hostnameVerifier`
-  deleted (hostname verification is binding-owned; the OkHttp fetcher keeps OkHttp's verifier).
-- **Platform facts**: Android's `ApplicationConfig` holds one `RootTrustManager` (the memo rule stands and an
-  explicitly passed default is the same instance); OkHttp runs the chain cleaner lazily and coalesces HTTP/2
-  connections across hosts (per-host attribution and `hostIn` are per handshook host; stated in §5.1, §8, §10).
-- Milestones: the walker fuzzer is a 0.2 deliverable (its types exist there); the `Rule → BasicReason`
-  map moves to `revokt-engine` jvmMain so the 0.1 golden fixture is total; §9 `Rule` tests tagged by
-  milestone; the 0.1 gate is D1–D3, D5, D6, D8. Appendix A corrected (producer file path, panic site,
-  upki crates.io 1.0.0 vs tag v1.0.1, Android API facts, `allOf` entry removed).
-
-### Changes in revision 28 (mini consistency round on revision 27, two seats)
-Twenty-seven consistency findings on the revision-27 fold, no new design:
-- **Two-phase install carried through**: `formats`/seam/serialisation text says `prepare`/`activate`;
-  the upki adapter's lifecycle bullet maps `prepare` (handle + directory owned by the
-  `PreparedGeneration`, whose `query` runs the real native path), `activate` (swap, free previous)
-  and `close()`-without-activate; ownership after `activate`; a cancelled install closes an
-  un-activated prepared generation; an `activate()` throw leaves the live generation; the sole-seed
-  synchronous `start()` runs `prepare`, self-check and `activate` on the calling thread, the one
-  exception to "loader dispatcher only"; "an *install*" defined once as the whole sequence.
-- **Self-check probe fully deterministic**: a fixed candidate list (`0x01`..`0x1000`), inverted blocks
-  with `approxM == 0` included (every serial is revoked there), exception-list fallback, member of a
-  non-inverted block last.
-- `Evaluator` rename completed (three stale `Evaluator.evaluate`); `Evaluator`/`EvaluationRequest` in
-  the module table; `customCanonicaliser` set when `canonicalSubject` is overridden **or** the
-  delegate is not the default; `platformDefault` named; a `canonicalSubject` null or throw means no
-  canonical match; `DISTRUST` on a `PRELOAD`-only outcome is the unevaluable finding; `needsData`
-  reads the policy pair at step 0; `SeedSource`/`GenerationFiles` `internal constructor` with
-  `JvmGenerationFiles.fromDirectory`; `RevoktWork` as an object.
-- **Watermark**: the private mirror carries the cursor (the watermark is per dataset regardless);
-  the coverage-monotonic bound is read from the live generation, never stored. **Hold**: cleared only
-  by a hit-free sync completing after `sinceMillis + FEED_HOST_HOLD`, so an alternating-certificate
-  host cannot reset it; `updateBlockedBySelf`/§10 say "without a time bound" for TLS-only sources.
-  **`STALE` gate**: `seedInstalledAtMillis` and a dataset-level `lastAttemptAtMillis` persisted
-  beside the watermark; read-only instances stay gated until promotion; the §9 test updated.
-  **Host attribution**: the Ktor fetcher over CIO drops the host; a single configured class takes
-  null hosts; configured hosts enumerated; §10 records the host-dropping exception. **Pending**:
-  `generationEpoch` also advances when a dataset leaves `pending` without a generation, so a cached
-  pending-allow is never served afterwards; `pendingAllows` counts misses only. **`store.version`
-  rebuild** deletes every other key after writing the version. §5.2 observer defined.
-
-### Changes in revision 27 (full cohort round three on revision 26, three seats: coherence, new-surface adversary, API freeze)
-Four blockers, all in material added since revision 23 or in the §4 sketch's compile-ability; all folded.
-- **Adversary**: the engine self-check is **deterministic** (the loader picks a serial its own reference
-  evaluator calls revoked; never a random draw) and runs on a **two-phase install**:
-  `RevocationEngine.prepare(generation)` → self-check on the inactive `PreparedGeneration` →
-  `activate(prepared)`; a failure before `activate` leaves the engine untouched, so no recovery path
-  has a window (`install()` stays as a default convenience). The signed-source hold is keyed **per
-  source**, set on the first hit of any of its hosts and cleared only by a hit-free sync, so a CDN
-  with two certificates or a 398-day record cannot keep it alive. `fetcherTrustManager` attributes a
-  handshake to a source by `host'` (`FETCHER_HOST_UNAVAILABLE` when a consumer fetcher drops it).
-  `policy`/`policyEpoch` are one `@Volatile` pair read once at flow step 2; the two setters serialise
-  and validate the pair. The `STALE`-on-seed gate is the persisted `lastAttemptAtMillis`, and a
-  backoffed first sync completes as `BACKOFF` at once. **The rollback watermark is per dataset and
-  channel**, outside the per-source map, so a relabelled `sourceId` cannot roll back. `PRELOAD`
-  paths are never the clean alternative for the every-path rule. `fetcherDelegate` may not be a
-  `RevoktTrustManager`; `pendingAllows` counted; `cache(null)` forced and the JDK authenticator
-  answers proxies only; a rebuild writes `store.version` first; null host or anchor never matches a
-  helper; the preview-collection residual recorded.
-- **API freeze**: `FetchResponse.of`/`Builder` public (the fetcher seam was unimplementable);
-  `RevoktLifecycle` top-level in commonMain and the cross-artifact `@RevoktInternalApi` rule stated;
-  BCV `nonPublicMarkers` excludes `@RevoktTestingApi`; `GenerationFiles`/`CrliteSct` testing builders
-  and `GenerationFiles.fromDirectory`; `canonicalSubject` `internal expect … : String?` with
-  `PlatformTrust.canonicalSubject` as the public seam; `JvmSeedSource`; `RevoktWork.install(context, …)`;
-  **`Engine` renamed `Evaluator`** (sealed); `ExemptionContext.chain` nullable and `credentialType`
-  reserved for M5; `FakeRevokt` as a builder preset; the reference walker returns hex strings;
-  `StoreLockedException`/`OwnershipCheck` declared; the seed fields folded into `DataState` and
-  `remoteSettings` hoisted to `sources {}` now rather than at 0.4; `@JvmOverloads`, `@JvmField`,
-  `@JvmSynthetic`, `Revokt.builder()`, `AutoCloseable`, a nullable `verdict` after deserialisation.
-- **Coherence**: `pending` definition carries the future-dated-seed case; goal 3 names the sole
-  `c2spCache` case; `IllegalArgumentException` for a plain delegate everywhere; the blob rule stated
-  once; `Walk` variants carry `WalkStats`; test support lives in `revokt-engine`'s test set from 0.1;
-  `ChainSource.PRESENTED` reserved; `STORE_FAILED` producer named; `ENGINE_CLOSE_DRAIN` and
-  `FETCH_TIMEOUT` rows; "§5.1 limits"; sync-time diagnostics list complete; `FEED_HOST_REVOKED` is a
-  sync code; `PATH_BUDGET_EXCEEDED` produced at steps 3, 5, 6; §5.3 wrapper sentence; the null
-  delegate on `Revokt.evaluate`; cleanups.
-
-### Changes in revision 26 (mini consistency round on revision 25, two seats)
-Thirty-eight consistency findings on the revision-25 fold, no new design:
-- `fetcherTrustManager`'s warning-not-throw rule applied everywhere it was still a throw (§4 bullet,
-  §5.1 lifecycle and anchor-snapshot paragraphs, §9 invariant, §10 item 3); its start()-time failure
-  makes syncs `FAILED` **without a fetch** and `unevaluated[FETCHER_SNAPSHOT_UNAVAILABLE]` counts only
-  handshakes delivered to it directly; it wraps `fetcherDelegate` everywhere.
-- **Engine self-check** restated in equivalence classes (so the upki engine passes), per-filter
-  coverage, exception-list or three-draw serial for the inverted case, and an explicit re-install of
-  the previous generation on failure.
-- **Signed-source hold** persisted in `updater.json` (`feedHostBlock`), fixed at `FEED_HOST_HOLD` =
-  24 h, counts toward `signedSourceFailing`; `updateBlockedBySelf`/`SyncResult` fields and fixture (g)
-  aligned (23 h still blocked, 25 h installs).
-- `producerKeyable`: P0 parentheticals un-swapped; the serial is always INTEGER content (step (i)
-  tag-checks it) so `rawSerial` reproduces it exactly; non-minimal lengths matter only at visited
-  headers; a zcrypto-only acceptance is keyable and listed separately; `buildIndex` output frozen per
-  `seedFormat`; a future-dated seed is a warning with the dataset `pending`, excluded from the
-  synchronous throw.
-- Walker pseudocode: `Walk`/`CandidateIndex` `internal`, `WalkPath` at step 2, `endDepth` assigned at
-  every limit, `WalkStats` carried by every `Walk` variant; `expected Walk` asserted only in the
-  walker-only harness; fixtures (i), (s2), (t), (y) marked harness-only with their trust-manager-path
-  expectation (`MAX_PRESENTED` cuts them at step 3).
-- Flow 3b distinguishes a throwing `executor.execute` (listener removed) from a throwing `onVerdict`
-  (drain continues); ring counters untouched. `endReason = COMPLETE` on the fallback-skipped exit.
-  `policyEpoch` declared and in the cache-key sentence; the policy setter runs the `NO_DATA_AT_FLIP`
-  check (V bullet, fixture) and recomputes `ready`/`needsData`. `STALE` on seed data fires at once
-  when no fetching source exists. `Exemption` helpers in a shape that compiles (companion + extension
-  `and`/`or`, content-compared hashes). Path-cache entries keep the leaf's bytes only; the presented
-  chain is rebuilt from the live call. `unevaluated` monotonic since `build()`. Private mirror rewrites
-  `x5u` to an `x5uHosts` entry; `store.version` higher releases the lock; WorkManager `Result` rules;
-  milestone rows and fixture (e), (g) aligned; `CROSS_CALL_MEMO_ENTRIES` row; cleanups.
-
-### Changes in revision 25 (full cohort round two on revision 24, three seats: implementer, adversary, consumer/operator)
-One blocker (the `producerKeyable` gate had no codable predicate), fifteen majors, thirty-odd minors; all folded.
-- **Implementer**: `producerKeyable` is now an exact predicate derived from Mozilla's producer source
-  (ct-go/zcrypto parse plus the stdlib TBS re-parse; DER-minimal tag/length at every visited header,
-  lax INTEGER content; serial = content of the first TBS element after the optional version, whatever
-  its tag), pinned, with oracle 4 as ground truth (D8); the walker pseudocode is closed (`Cert`,
-  `WalkPath`, `WalkStats`, `endDepth`, `crossCallMemo`, leaf-level `NoIssuerReason` flags, `internal`
-  visibility, the harness in `revokt-engine`'s test set); fixture (y) made reachable; 0.2 ships a
-  minimal `Revokt`; the seed archive format and `SeedSource`/`MozillaRemoteSettings` shapes are
-  declared; `endReason` defined once; §6.2 `shift`/`eval` bounds; cache TTL semantics; fallback
-  anchor re-parse; path-cache entries keep the `PresentedChain`; SCT grammar pinned to `x509-parser`;
-  `classicalOids` defined; signature and canonical-JSON references named.
-- **Adversary**: the catch boundary closes before event emission and a throwing listener executor
-  can no longer turn `REVOKED` into an allow (`listenerFailures`); fired rules accumulate across a
-  late throw; **fetcher policy by source authenticity**: on the end-to-end-signed Mozilla source a
-  `REVOKED` feed-host chain is honoured for at most `signedSourceFailingAfter` (24 h), then the fetch
-  proceeds with `feedHostRevoked` loud, so no signed record can freeze the signed source for good;
-  TLS-only mirrors keep the hard `BLOCKED_BY_SELF`, with the blocked chain reported; a format the
-  engine does not list is `SEED_UNREADABLE`/`FORMAT_UNSUPPORTED`, never a silent skip; a post-install
-  engine self-check; `NO_DATA_AT_FLIP`; exempted-evidence events carry `Rejected` priority;
-  `NO_REQUIRED_DATASETS`; `MAX_PRESENTED_BYTES`; the Android 3-arg hit path mirrors step 4; bounded
-  waits on injected fetchers, engines and listeners; a newer `store.version` is left untouched; a
-  `fetcherTrustManager` build failure is a warning, never a crash loop.
-- **Operator**: `RevoktStatus.unevaluated` counts every fail-open path; `fetcherDelegate` seam and
-  the fetcher hostname list; the supported private-mirror path (`MozillaRemoteSettings` overrides,
-  `SIGNED` class) and `MIRROR_WITH_SEED_NEVER_INSTALLED`; runtime `policy` setter with `policyEpoch`
-  in the verdict-cache key; `STALE` does not fire on a seed generation until the first sync attempt
-  completes; `OkHttpFetcher` forces no redirects, no authenticator, no cookies; WorkManager request
-  contract and keep rule; `IN_MEMORY_STORE_WITH_FETCHING_SOURCE`; public `refreshAnchors()`;
-  `OwnershipCheck`; `JdkHttpFetcher` proxy rules; readiness-wait counters; `RULE_FLIPPED_THIS_MINOR`;
-  `EXEMPTION_ON_EVIDENCE_RULE`; seed POM floor; blob re-download on the delta path; shipped
-  `Exemption` helpers; the intercepting-proxy statement in §10.
-
-### Changes in revision 24 (mini consistency round on revision 23, two seats)
-Consistency fixes to the revision-23 fold, no new design:
-- **Seed as sole local source**: when the seed is the only local data source and `NO_DATA` rejects
-  under `ENFORCE`, its verification, `index.bin` rebuild and decode run synchronously inside
-  `start()` before the flip, so `start()` can throw `SEED_UNREADABLE` as §4 promised; otherwise the
-  seed loads on the loader task as before. `STORE_UNREADABLE` never throws. Goal 3 says "sole seed".
-- `SeedSource.bundled()` resolves at `build()`; an absent artifact is "no seed source" and the
-  `validate()` diagnostic; `SeedSource.none()` opts out.
-- `explore` pseudocode rewritten so it compiles against its declarations: preload certificates are
-  store candidates yielded by `related()`, a preload-only path is recorded only when no anchor is
-  reachable through it (`terminalKind = PRELOAD`, a terminal of last resort); `CandidateIndex.customCanonicaliser`.
-- `NO_DATA` definition carries `pending` everywhere (§4 `dataStates`, §8, §9 `Rule` test).
-- `BasicReason` lives in a jvmMain `Rule → BasicReason` map in `revokt-jsse`, in the golden fixture
-  tuple, asserted for every rule.
-- `dataDeadline` origin, the `SIGNED` cap (`FetchRequest`, §6.3) and the data-path fixture
-  milestones stated once; 0.2 runs the updater over `RevoktStorage.inMemory()`; `records.json`
-  reserved and in the layout; async futures complete off the loader and `close()` fails pending
-  ones; `PathHit.onReportedPath` meaningful; residual 1 and the fallback rationale restated;
-  `terminalKind` null on an empty path; §13 quickstart item; trust-class table rows merged;
-  artifact table, sync-time diagnostics and Appendix A heading updated.
-
-### Changes in revision 23 (full cohort on revision 22, three seats: API/extensibility, security/data path, systems/platform; plus the seed decision)
-No blockers were found. Every major and minor is folded; prose nits where cheap.
-- **Decision: a seed ships by default.** `SeedSource.bundled()` is the builder default and resolves
-  the `revokt-seed-<channel>` artifact; the quickstarts declare it (§4, §6.5, §13 item 5).
-- **API/extensibility (M2–M5)**: `RevocationEngine` is declared CRLite-only, other layers get their
-  own evaluator seams (§3.2, §12); preloaded intermediates are candidates the walk continues from,
-  terminals only of last resort when no anchor is reachable through them (`Finding.Path.terminalKind`,
-  `AnchorSnapshot.preloadGenerationId`, an `INTERMEDIATES` install rebuilds the index); the M2
-  exhaustive re-walk runs under fresh budgets and never demotes a `Found` (`Finding.Path.rewalkEnd`),
-  including on a `PLATFORM` path (`ChainSource.MIXED`); the one-minor grace no longer traps a consumer
-  who wrote an explicit `ALLOW` (`WARNING` in the flip minor, `ERROR` after), and `ONECRL`/`DISTRUST`
-  are exemptable; `BasicReason` is a per-rule constant (`UNSPECIFIED` for `CT` and `DISTRUST`);
-  `Finding.PathHit` reshaped; M5 routes through `EvaluationRequest.credentialType`; channel-less
-  datasets use the `all` segment and `channel` is mandatory only with a CRLite source; M4 dataset and
-  source named; `notBefore`/`notAfter` parsed from 0.1; `CT_UNVERIFIED` covers SCTs delivered outside
-  the certificate.
-- **Security/data path**: a changeset `timestamp` beyond local now + `clockSkew` is `CLOCK_SKEW` and
-  prolonged `ROLLBACK_REFUSED` sets `signedSourceFailing`; **`producerKeyable`**: a leaf Mozilla's
-  producer cannot key is `PARSE_FAILED(PRODUCER_UNKEYABLE)` and never queried (D8, 0.1 gate); goal 3
-  names `NO_DATA` as its second exception and `start()` throws when the only local data source is
-  unreadable; `NO_DATA` does not fire while the start task has not passed the seed step
-  (`DataState.pending`); the `SIGNED` body cap is `min(attachment.size, MAX_FILTER_BYTES)` and the
-  loader catches `Throwable`; P8 honest acceptance; residual 1 restated and the unrelated loop runs
-  at the leaf under a non-platform canonicaliser; blobs re-hashed on reuse; backoff clamped on read;
-  `records.json` persisted per `SIGNED` generation; x5u algorithm floor; the catch boundary catches
-  `Throwable` short of `VirtualMachineError`; a one-certificate `PLATFORM` path; `resetState()`
-  rollback bound recorded.
-- **Systems/platform**: `close()` holds the factory lock only for the flip; `meteredNetwork` seam
-  and `METERED_DEFERRED`; the null-host retry is unavailable with any `<domain-config>` (AOSP
-  `RootTrustManager`), named in the §5.2 residual; `resetState()` keeps the published generation
-  until the replacement swaps in; read-only promotion re-runs the start task as owner; a null
-  delegate resolves to the one memoised default instance; walker and `Evaluator.evaluate` move to 0.2
-  with the fuzzer gate, the store to 0.3, estimates revised; fixture (y2) `verifications = 3`;
-  directory fsync on every rename; `.lock` key exclusivity; listener cursor at registration;
-  non-reentrant factory lock; `start()` racing `close()`; `close()` on the loader thread throws;
-  issuer corpus 0.1 tier; `dataDeadline` from the flip; `/v1` and `/v2` both recorded.
-
-### Changes in revision 22 (mini round on revision 21, one seat; `CrliteQuery` value class)
-- **`CrliteQuery` value class** replaces the three positional engine parameters, so a field can be
-  added in a minor without breaking third-party engines.
-- **Shim is the only native artifact the adapter loads**: `revokt-upki-shim` statically links the
-  `upki` crate and exposes `revokt_upki_config_new/free` and `revokt_upki_check`; no `Config`
-  pointer crosses between two cdylibs. Module table, license line, lifecycle bullet, §9 suite, oracle
-  3c, D3, §12 trigger and Appendix A updated; the equivalence-class paragraph names `Store::check`.
-- **`NO_SCTS` classification stated once**: revokt's parser collapses absent, empty and malformed to
-  an empty list; the Kotlin engine answers `NO_SCTS` on it, the upki engine `NOT_COVERED` (one class).
-- **Path-cache entries store the leaf's serial and SCT list**, so a path-cache hit never re-parses.
-- **Lazy `fetcherTrustManager` build failure no longer throws**: the call returns on the platform
-  verdict (flow step 1 only), is logged, and the next call retries; goal 3 holds without exception.
-- Numbering fixed: "flow step 1" (platform call) versus "decision step 1" (take the snapshot); the
-  invariant reads "can go past flow step 1"; "handed out" wording replaced in `ready`, decision
-  step 1 and residual 3.
-
-### Changes in revision 21 (engine seam below the parser; mini round on revision 20, one seat)
-- **Decision: swapping engines must not change verdicts.** `RevocationEngine.query` now takes the
-  extracted triple (issuer SPKI SHA-256, raw serial, SCT timestamps) for every engine; the DER-based
-  `query(leafDer, issuerDer, nowMillis)` and the internal `IndexedRevocationEngine` are gone. revokt's
-  parser and issuer resolution feed every engine the same values. The upki adapter calls upki's
-  library API (`RevocationCheckInput::new` + `Store::check`, public in upki 1.0.1) through a small
-  shim of ours, not the stock `upki_check_revocation`, so webpki never parses a certificate in
-  revokt. The §3.2 mapping table loses its three abstain rows; the cross-engine suite compares the
-  lookup alone. Path-cache entries no longer carry an issuer DER.
-- Consistency fixes from the rev20 seat: the invariant reads "can go past decision step 1" (step 1
-  is the platform call, the snapshot is first consulted at step 2); `fetcherTrustManager`'s lazy
-  build defined (no `HttpFetcher`/`FetcherTls` without a fetching source; built under the factory
-  lock on its first `checkServerTrusted` in `STARTED`, a failure there is `CertificateException`,
-  not memoised; `status()` reports null until then); the factory-lock hold during `start()` stated in
-  full; flow step 0 and the readiness paragraph say "before any handshake can go past step 1";
-  §10 residual 3 restated for the unconditional guard; fixture (h) scoped to `trustManager(d)`
-  instances; "fetching source" defined at its first use; §7.3 says `SYSTEM` is attempted, not fetched.
-
-### Changes in revision 20 (mini consistency round on revision 19, two seats)
-Consistency fixes to the synchronous anchor snapshot, no new design:
-- **`start()` holds the factory lock for its whole synchronous part and flips to `STARTED` last**,
-  so a `trustManager(d)` or a second `start()` can never observe a flip that is later undone;
-  `close()` flips under the same lock. A throwing `start()` discards the snapshots it built and a
-  retry rebuilds every pre-start instance.
-- **No trust-store broadcast receiver.** Android clears the NSC caches in every running process by
-  a system push (`handleTrustStorageUpdate()`), with no app receiver; a receiver would be a second,
-  unordered delivery. The walker-reason trigger (`NO_CANDIDATE`/`UNANCHORED` → `refreshAnchors()`)
-  covers a newly installed user CA. The Android `StrictMode.allowThreadDiskReads` guard is therefore
-  **unconditional** around the delegate call, whatever the delegate and thread, restored in a
-  `finally`; it hides the report, not the read (a Conscrypt `TrustManagerImpl` over `AndroidCAStore`
-  re-enumerates the cacerts directories on every call).
-- `fetcherTrustManager`'s snapshot is built inside `start()` only when a fetching source is
-  configured (an empty or throwing default trust store then fails `start()`, since no fetch could
-  succeed); with none it is built lazily at first access with the wiring rule.
-- `TrustManagerStatus.anchorSnapshotId`/`anchorSnapshotAgeMillis` nullable again, null only for an
-  instance obtained in `CREATED` before `start()` or in `CLOSED`; the invariant reads "a trust
-  manager that can reach decision step 1 has a snapshot". `Finding.Path.anchorSnapshotId` is 0 when
-  no snapshot was consulted. `RevoktTrustManager.awaitReady()` defined as the owning `Revokt`'s.
-- A concurrent `trustManager(d)` after a failed build retries it (failures are not memoised); the
-  dead default-delegate warm-up clause removed; fixtures (h)/(u) de-duplicated and six cases added;
-  the 0.3 probe names its trigger; Appendix A corrected for `TrustManagerImpl` and the NSC push.
-
-### Changes in revision 19 (anchor snapshot synchronous on both platforms; mini round on the revision-18 draft, two seats)
-Revision 18 built the anchor snapshot synchronously on the JVM only and kept a loader build on
-Android. The mini round found that the loader path still leaked into the start task, `resetState()`,
-a `start()`/`trustManager(d)` race, `fetcherTrustManager` and a settled future that cannot be
-re-completed on retry, and verified (AOSP `NetworkSecurityTrustManager`, `DirectoryCertificateSource`)
-that Android's `getAcceptedIssuers()` is lazy and cached per process: disk is read on the first
-call per process and after a trust-store change only. So revision 19 makes the build synchronous
-on **both** platforms and deletes the asynchronous snapshot machinery:
-- **Built before the trust manager is handed out**: inside `start()` for trust managers created in
-  `CREATED` (first synchronous step, before the registry and the store lock) and at wiring, inside
-  the factory lock, for trust managers created in `STARTED`; `start()` collects the pre-start set
-  and flips the lifecycle under that same lock, so no instance falls between. A throw from
-  `getAcceptedIssuers()`, an empty anchor set or a build failure throws `IllegalStateException`
-  from `start()` (which stays `CREATED`, holds no lock, registers nothing, may be retried) or from
-  `trustManager(d)` (no registry entry, no cap slot, no `sslContext` memo entry).
-- **Android**: `start()` warms the NSC certificate sources once; a later wiring on the main thread
-  reads disk only after a trust-store change and runs the delegate call under
-  `StrictMode.allowThreadDiskReads`. The rule is thread-independent.
-- **Deleted**: `snapshotReady(tm)`, `snapshotDeadline`, `TrustManagerStatus.snapshotFailed`,
-  `DiagnosticCode.SNAPSHOT_FAILED`, `NoIssuerReason.SNAPSHOT_UNAVAILABLE`, the snapshot clause of
-  `RevoktState.ready`, the snapshot wait in flow step 0. Decision step 1 now reads the snapshot
-  reference. `refreshAnchors()` rebuilds on the loader and a failed rebuild keeps the current snapshot.
-- `fetcherTrustManager` is created at `build()` and built inside `start()`. `resetState()` leaves
-  snapshots untouched. Fixtures (h) and (u), the trust-manager invariants, the §11 0.3 emulator
-  probe and Appendix A updated. **§10 residual 3 is closed.**
-
-### Changes in revision 17 (mini consistency round on the revision-16 edits, two seats)
-Consistency-only fixes, no new design: download and record caps are builder-overridable while
-walker budgets stay constants; `CAP_NEAR_LIMIT` measures against the fixed caps and the live check
-warns; §6.3 "declared size" qualified; `FetchRequest.maxBodyBytes` is the signed size or the fixed
-cap; leaf validity is checked at a live fetch (only the terminal is exempt); a fourth
-`ENGINE_ERROR` producer wording; the read-only lock retry uses the bounded try; a cancelled install
-deletes its directory at once while a crash-interrupted one is pruned at the next `start()`;
-`GenerationFiles.generationId` added so `install()` echoes it; `SNAPSHOT_FAILED` and `SYNC_FAILED`
-codes defined where emitted; `BLOCKED_BY_SELF` mapped for the worker; the Go producer oracle is a
-CLI during fuzzing and admission, `c-shared` nowhere required; `STORE_LOCKED` cites §5.1; x5u cap
-in KiB; a sync-time `engine.install()` throw increments `storeFailures`.
-
-### Changes in revision 16 (round E: third full-spec pass, three independent seats)
-Six blockers, all three seats converging on one: the read-only instance of revision 15 was told to
-run the same loader task as the owner, which writes. Resolved here:
-- **Read-only mode never writes**: the seed and the system cache are installed into the engine and
-  published in memory only, the seed-vs-stored rule is re-applied on every pointer reload,
-  `store.version` is not initialised, `resetState()` throws; the instance retries the try-lock every
-  `READONLY_POLL_INTERVAL` (60 s) and on `sync()`, and **promotes itself to writer** when the owner
-  is gone; `OverlappingFileLockException` maps to `StoreLockedException`; `close()` deregisters the
-  directory. `RevoktStorage.identity()` is the registry key.
-- **Prune never touches a pointer-named directory**; a failed or interrupted `engine.install()`
-  deletes its directory; "newest" is pointer order. Two consecutive bad records can no longer turn
-  a stale client into a fail-closed one.
-- **Cursor, `lastVerified*` and the watermark advance only after the pointer flip of a successful
-  install**, and every record is schema-validated for the requested collection before any state
-  change: the content signature does not bind the collection id, so a replayed signed changeset
-  from a sibling collection could otherwise freeze the cursor. `collection` recorded in `meta.json`.
-- **x5u terminal has trust-anchor semantics**: only its pinned SPKI is checked; validity, CA bits
-  and subject are evaluated on the leaf and non-terminal links only. Root expiry can no longer
-  freeze deployed clients or seeds, and the check it replaces stopped no attacker.
-- **Caps**: for `SIGNED` sources the per-body cap is the signed `attachment.size`; the fixed caps
-  bound unsigned bodies only; `MAX_MANIFEST_ENTRIES` is over C2SP manifest attachments, changeset
-  records have their own cap; bodies are fetched, verified and written one at a time; gzip inflation
-  is capped while inflating; every download and record cap is overridable upward through
-  `limits { }` (walker budgets stay constants); a live check warns at half of each fixed cap.
-- **Seed**: skipped when the stored `SIGNED` generation is not older; blobs with an existing key are
-  never rewritten; a complete existing directory is `UNCHANGED`; the watermark takes
-  `max(watermark, verified seed timestamp)`.
-- `CrliteQueryResult.NO_DATA` mapping split by whether a generation is published; step 7 never
-  queries an engine for a dataset without a generation; `RevocationEngine.clear()` with a default
-  body; `install()` returns the identity the loader publishes.
-- `RevoktState.warnings` and `SyncResult.warnings` are `List<PolicyDiagnostic>`; `ready` requires
-  `STARTED` and settled snapshots; `snapshotDeadline` measured from `max(created, startedAt)`;
-  `resetState()` re-runs the start task; on-disk field derivations fixed (directory name, blob map,
-  `updater.json` source id, persisted enum names, lowercase segments); owner-uid and permission
-  check falls back to `inMemory()` for the session; redirects never followed; events enqueued only
-  with a listener and drained outside the ring lock with a lost-wakeup re-check; the Go producer
-  oracle runs out of process during fuzzing; `GenerationFiles.sha256(name)`; `channel` is mandatory
-  on the builder; dependency scopes `api` where types cross; `Finding` labelled growable.
-
-### Changes in revision 15 (round D: second full-spec pass, three independent seats)
-Round D found eight blockers, seven of them inconsistencies among the revision-14 edits and one
-older (`java.time` members on commonMain types). All are resolved here:
-- **Public types with `java.time` members live in jvmMain** (`Staleness`, `RevoktPolicy` and its
-  `Builder`); commonMain holds only an internal policy table. The purity gate compiles commonMain.
-- **Store lock**: acquired once in `start()`, held to `close()`, bounded try-lock; a locked-out
-  instance (another process) runs **read-only** and re-reads the pointer each loader tick; writes
-  never take the lock themselves; single instance per directory per process by registry.
-- **Fetch is buffered, not streamed**: per-kind download caps (filter 16 MiB, JSON 4 MiB, x5u 64 KB),
-  manifest entry cap, per-sync total cap, manifest rejected before any body fetch.
-- **Event delivery**: per-listener cursor and drain flag over one sequence-indexed ring.
-- **`start()` split**: synchronous on both platforms for the lock, `store.version`, pointer and
-  `meta.json` reads and the `seed.json` header (these may throw); decode, seed verification, install,
-  snapshot builds and first sync run as one loader task that the JVM joins; the loader is the sole
-  publisher of the generation.
-- **After `close()`** every live trust manager runs step 1 only (the "keep evaluating" sentence is
-  gone); in-flight counter pattern stated.
-- **Seed vs stored generation**: the seed installs unless the stored generation is `SIGNED` and
-  newer; a stored lower-class generation is always evicted by the seed and pruned at once; the
-  pointer file records `previous` explicitly and recovery never selects a lower class than the
-  class being replaced; the seed advances the watermark; seed `index.bin` is rebuilt from
-  `records.json` and byte-compared.
-- **Rollback**: the coverage-monotonic refusal applies only inside the rollback window
-  (`timestamp ≤ watermark`); a newer signed changeset installs whatever its coverage (reverses a
-  revision-14 rule that would have frozen every client on a legitimate Mozilla rebuild). Honoured
-  `Backoff`/`Retry-After` capped at 24 h, failure backoff at 6 h, persisted backoff at 24 h.
-- **Store layout**: content-addressed blobs for filter files, generation directories named
-  `gen-<timestamp>-<hash16>`, `channel` in `meta.json` and in the layout, `meta.json` written last as
-  the completeness marker, delta parent derived from the pointed generation, first run is not a
-  store failure, directory permissions checked on POSIX, path-escape and reserved-name rules.
-- **Install order**: `engine.install()` → publish snapshot → flip pointer → `updater.json`;
-  `CrliteQueryResult.NO_DATA` while a generation is published is `ENGINE_ERROR`.
-- Sync source order by descending rank with the bootstrap condition; lower-class sources are not
-  fetched while a higher-class generation exists; `mirrorFallback` dropped (redundant with
-  `trustClass`); `c2spCache` counts as local data only when the policy can install it.
-- `awaitReady()` settles on a failed snapshot and fails on `close()`; `resetState()` rules;
-  output-type builders stay on the production types behind `@RevoktTestingApi`; `Finding` sealed;
-  `FetcherTls` members and a default `JdkHttpFetcher`; `OkHttpFetcher` replacement list; WorkManager
-  name per instance and worker in the store-owning process; `MAX_CERT_BYTES` consistent; new §9
-  fixtures for every rule above.
-
-### Changes in revision 14 (round C: full-spec pass, three independent seats: API, security, systems)
-- **Blocker, security: mirror displacement.** A `MIRROR`/`SYSTEM` generation could displace a stale
-  `SIGNED` one after 24 h of a blocked feed, and the mirror is TLS-only. Now **bootstrap-only**: a
-  lower-class generation installs only when the dataset has no higher-class generation at all and is
-  evicted by the first `SIGNED` one (seed included); a stale `SIGNED` generation is never displaced
-  by a lower class (§7.3, §6.3, §10).
-- **Blocker, API: `EVIDENCE_ALLOWS`** (introduced in revision 12) would have made the shipped
-  presets fail `validate(ENFORCE)` on the M3/M4 releases; it now fires only when the consumer lowers
-  an `EVIDENCE` rule below its preset, and a test asserts every preset validates at every release.
-- **Rollback**: coverage-monotonic rule applied to `SIGNED` generations too; `rollbackWindow`
-  default = `clockSkew` (24 h); a refused rollback is not a feed failure.
-- **Fetcher policy defined** (§8): `REVOKED` and later evidence rules reject, everything else allows,
-  no data rules, no exemptions, evaluated against `SIGNED`/`BUNDLED` generations only, from M1.
-  Self-lockout is possible only by a signed revocation of the feed host's certificate, reported as
-  `updateBlockedBySelf`.
-- **x5u chain**: basicConstraints, pathLen, name chaining, keyUsage and per-certificate validity on
-  every non-leaf link; `mode` pinned to `p384ecdsa`; attachment base URL pinned; absolute per-file
-  download cap.
-- **Store specified** (§6.5): `RevoktStorage` is an interface over a flat key space; the engine's
-  layout has a `store.version`, per-generation `meta.json`, a persisted updater record (backoff,
-  consecutive failures, cursors, watermark), pointer-file flip with fsync, crash recovery order
-  (pointer → previous → seed, counted), advisory file lock, single instance per directory, and a
-  versioned seed manifest with channel and format floors.
-- **Lifecycle** (§5.1): `CREATED → STARTED → CLOSED`; `start()` installs the stored generation and
-  seed synchronously on the JVM; `close()` ordering with in-flight handshakes and engine ownership;
-  `RevocationEngine.query` after `close()` returns `ENGINE_ERROR`; trust managers created before
-  `start()` or after `close()` run step 1 only; the loader runs under every enforcement mode.
-- **Readiness**: `awaitReady()`/`readyFuture()` complete when `RevoktState.ready` first becomes
-  true with no internal deadline; `ready` no longer depends on a default trust manager nobody built.
-- **Counters** increment per applied verdict, cache hit or miss; events on misses only; one
-  immutable `GenerationSnapshot` read per call; event drain is triggered on enqueue.
-- Fetch moved off the loader thread with streaming to the store; `FetchRequest`/`FetchResponse`
-  shaped; `PlatformTrust` moved to jvmMain with its member list; `EvaluationRequest` split into
-  `presented` and `verifiedPaths`; `JcaSignatureVerifier` key cache bounded; `TrustClass` growable
-  with `rank`; `DataState.trustClass` nullable; `MAX_CERT_BYTES` 256 KiB; WorkManager worker name
-  and `Revokt.Provider` fixed; new §9 data-path fixtures as 0.2 gates.
-
-### Changes in revision 13 (round B: §9.2 differential parser oracle, two independent seats)
-- **D1 and D2 restated over each oracle's own `getEncoded()` output (blocker, both seats)**: the
-  JDK factory ignores trailing bytes and converts BER before parsing, so a raw-bytes D1 was
-  violated by the spec's own D7 corpus. Raw-byte leniency is now informational (D1-raw).
-- **Producer oracle added**: Mozilla's own `crlite/go/types` (`ParseCertificate`,
-  `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`) compiled as a Go `c-shared` library.
-  Verified in source: the producer keys on the **raw INTEGER content bytes** of the TBS serial
-  (`asn1.RawValue.Bytes`) and the raw SPKI TLV, parsed by ct-go's lax parser; a proposed
-  minimal-encoding normalisation of the serial was therefore rejected. D1's security domain is
-  "platform-accepted and producer-keyable"; a certificate the producer cannot key is recorded, not
-  gated, since no filter can contain it and revokt's `PARSE_FAILED` is the correct answer.
-- **Oracle 3 split**: `x509-parser` single-certificate reference for D2/D3; webpki via upki
-  (pair input) records divergence only and is never a precondition; a minimal independent TLV
-  locator supplies raw bytes where `x509-parser` rejects. Per-oracle `Accept | Reject | Crash`
-  rules and the effect of an oracle crash on the gate are tabled.
-- **Issuer corpus**: every Mozilla `intermediates` record, the CCADB export and both platform root
-  stores at zero tolerance; every CRLite-enrolled intermediate's `SHA-256(rawSpki)` must be a key of
-  the live filter index; a dropped candidate is now observable (`Finding.Path.candidatesDropped`).
-- **SCT rules fixed**: pairs are the union over every SCT extension whose list parses; `NO_SCTS`
-  iff the union is empty; the `x509-parser` mapping and Firefox-decoder divergences are recorded.
-- **Harness made runnable**: fuzzing on one pinned JDK ≥ 22 with oracles in-process; the version
-  matrix is a replay of the union corpus with goldens recorded at admission; one entry schema for
-  the four record kinds; seed corpus pinned by manifest; secondary corpus bounded by coverage merge;
-  platform-Conscrypt replay is a 0.3 gate; Kover over the committed replay is the coverage gate.
-- Public byte contracts fixed in §3.2/§4: `serial` is `rawSerial`; `issuerSpkiHash` is the SHA-256
-  of the SPKI TLV; SCT timestamps are RFC 6962 `u64` carried in `Long`, compared unsigned.
-- Appendix A: producer-side verification entries.
-
-### Changes in revision 12 (round A: `Rule` model, two independent seats)
-- **`STALE` semantics fixed (blocker)**: `STALE` fires for a dataset iff `rejectStaleAfter != null
-  && age > rejectStaleAfter`; `staleAfter` is only the loud threshold (`DataState.stale`,
-  `RevoktStatus.stale` per dataset, metered deferral). The `DEFAULT` row never fires; `validate()`
-  warns when `STALE` rejects but no dataset has a reject threshold.
-- **Data rules computed outside the catch boundary** and merged into every verdict, `ENGINE_ERROR`
-  included, so an engine exception can no longer turn a `NO_DATA` reject into an allow.
-- **`MIRROR_FALLBACK` replaced by `UNSIGNED_DATA`** defined by trust class against a per-dataset
-  floor (`minTrustClass`), so `SYSTEM` and mirror-only data are covered; the loader never installs a
-  lower-class generation that the policy would reject, so a mirror can only add availability.
-- **Growability contract repaired**: the one-minor `ALLOW → REJECT` flip is an accepted fixture
-  diff (`flippedIn` column, once per rule and preset); "frozen rows" carves it out.
-- **`Exemption` takes an `ExemptionContext`** (growable final class) instead of positional parameters.
-- **`RevoktCertificateException` cause**: `BasicReason.REVOKED` only for an `EVIDENCE` rule;
-  `UNDETERMINED_REVOCATION_STATUS` otherwise.
-- **Path aggregation for L1/L2/L5 stated now** (M2 ships `REJECT` without the one-minor rule):
-  a path-level evidence rule fires only when every found path carries a hit after the exhaustive
-  re-walk; `Finding.PathHit` reserved.
-- `RuleClass` defined one line each; M3 `CT` planned as `EVIDENCE`, `CT_UNVERIFIED` as `NON_ANSWER`.
-- `NOT_WALKED(SNAPSHOT_UNAVAILABLE)` spellings replaced by `NO_ISSUER(SNAPSHOT_UNAVAILABLE)`.
-- Additive-but-cheap-now: `Finding.DataState.rules`, `PolicyDiagnostic.code`/`dataset` with the
-  emitting call per diagnostic, `Rejected.rule` non-null, `EVIDENCE` rule set to `ALLOW` is an
-  error under `ENFORCE`, missing Java overloads, `exempt()` replaces, `Finding.EngineError.producer`
-  an enum, `Severity` and `DiagnosticCode` declared, duplicate `GenerationFiles` removed from §4,
-  §6.2 `NO_SCTS` branch, `rules` iteration order, new §9 tests.
-
-### Changes in revision 11 (decisions, upki-engine seam, standalone text)
-- **Decisions recorded**: the name stays `revokt` (§13); `NO_SCTS` and `PARSE_FAILED` keep allowing
-  in `DEFAULT`, matching Firefox (§10, residuals 7 and 8 are now decisions, not open items).
-- **§3.2 rewritten so a upki-backed engine is a drop-in**: `revocationEngine(…)` is a public builder
-  seam from 0.1; `GenerationFiles` carries a `format` (`FilterFormat.V3 | V4`) and is always in C2SP
-  layout with an `index.bin` that revokt builds for Remote Settings generations; `RevocationEngine`
-  declares the formats it accepts; the upki adapter's lifecycle (fresh directory per generation,
-  volatile handle swap, drain before `upki_config_free`), its fixed result-code mapping, and the
-  cross-engine **equivalence classes** are specified, verified against upki's `ffi.rs`,
-  `revocation/mod.rs` and `rustls-upki` (Appendix A). Corrected: through the C FFI a certificate
-  with no SCTs is `NOT_COVERED`, not a `cert_has_no_scts` outcome, and `rustls-upki` rejects a
-  malformed SCT list rather than treating it as absent; the suite classes reflect both.
-- **Standalone text**: §9 M1 test bullets, §9.1 targets and harness, and the §10 security bullets
-  previously cited "as in revision 7/8" are inlined.
-- **New §9.2 differential parser oracle**, the mitigation that residual 8 relies on: oracles,
-  properties D1–D7, generators, platform matrix, and acceptance gates. It is a 0.1 gate.
-- `Revokt.evaluate` over raw bytes is documented as presuming platform-accepted encodings.
-
-### Changes in revision 10 (seventh review round, scoped to §5.1 and the `Rule` model)
-
-Cohort 7 again found **no blocker in §5.1 from either walker seat**; the adversarial reviewer's
-verdict is that a server cannot choose to go unchecked on JVM bindings or the Android socket
-binding, and that §5.1 is clean once three text items land. The two blockers this round were
-outside the walker: a committed fixture that contradicted the ordering rule, and `kotlin.time.Duration`
-on the policy surface, which broke the spec's own Java rule. All items are folded in below.
-
-- **Walker text**: one ordering rule for byte-duplicates (earliest position in the node's order;
-  store position below the leaf); the unrelated loop stops as soon as a path exists and is the
-  complement of the related set; `MAX_PRESENTED` (64) added with excess as `Budget`; a `NotFound`
-  on a chain the platform accepted but too long for the fallback is `PATH_BUDGET_EXCEEDED`, not an
-  allow; the fallback's role restated (canonicalisation residue on `NotFound` chains of at most 8
-  certificates; on default delegates every honest issuer is related, so the residue is confined to
-  custom delegates); a no-throw contract for the walk under any verifier; `MAX_DEPTH` convention
-  fixed; `Walk` variants all carry the unsupported-OID set; Android step 4 retries the extension
-  call with a null host before falling to the walker. (§5.1, §5.2)
-- **Decision list**: every exit from steps 1–6 continues to step 7; parse inside step 3;
-  `PLATFORM_ONLY` applies to any `NotFound` whose fallback also failed on a trust-manager binding,
-  with the walker's own reason kept on `Finding.Path.walkerReason`; anchor refresh keyed on the
-  walker reason. (§5.1)
-- **Caches, readiness, factory, events**: `PLATFORM` entries carry hashes, not indices; the 3-arg
-  Android overload always calls the extension to obtain its return value; readiness waits only on
-  what the policy needs and not under `OFF`; `ENGINE_ERROR` and `SNAPSHOT_UNAVAILABLE` never cached;
-  `sslContext` memo holds contexts weakly; queue drained on loader ticks; concurrency of caches
-  stated. (§5.1)
-- **Fixtures**: (y) rewritten to a chain whose sub-leaf issuer is not in the store, with the old
-  construction kept as (y2) pinning terminal-first; (k) count corrected; (ac)/(ad) marked
-  walker-harness-only; (ad) rebuilt as an exploration-budget mesh; a verification-budget fixture;
-  determinism notes; P3/P4/P6 wording; P7 no-throw. (§9, §9.1)
-- **`Rule` model**: time fields stored as millis with `java.time.Duration` accessors and factories,
-  `kotlin.time` as `@JvmSynthetic` extensions; `Rule.PRECEDENCE` in a companion with the invariant
-  "declaration order grouped by class, append at the end of the group"; explicit `PathStatus → Rule`
-  and `CrliteQueryResult → Rule` tables and multi-key aggregation; `validate()` returns typed
-  diagnostics; empty `requiredDatasets` semantics; `generationEpoch` internal and `dataStates`
-  entries for every required dataset; `RevoktEvent.chainSha256`; sync timestamps and counters;
-  `Verdict.crlite` and the reported path defined on `Budget`; `Freshness` moved to `DataState` with
-  `fromSeed`; the one-minor rule applied uniformly with a golden-fixture test; output builders moved
-  to `revokt-testing`; walker counters behind `Path.WalkStats`. (§4, §8)
-- **§10 residuals** corrected and extended.
-
-### Changes in revision 9 (sixth review round, scoped to §5.1 and the `Rule` model)
-
-Cohort 6 was the first in which **neither walker reviewer found a blocker in §5.1**: the
-adversarial reviewer could not construct an allow for a revoked leaf under `DEFAULT` on any binding,
-and the implementation reviewer confirmed termination and that every exhaustion unwinds to a
-reject. The changes below are the should-fix items from that round plus two blockers outside the
-walker itself (the fuzzer oracle and the data rules).
-
-- **Walker text and limits corrected to match the code.** Unrelated candidates are presented
-  certificates only (store anchors never enter the unrelated loop) and are not capped, so an honest
-  issuer the relation test misclassifies is still explored unless the chain exceeds the verification
-  guard; below the leaf, related candidates are ordered terminal-first (store anchors, then
-  presented) so an honest cross-signed chain costs two verifications; `MAX_RELATED_PER_LEVEL` raised
-  to 64; "any exhaustion anywhere is `Budget`" stated plainly; the cost claim restated as bounded by
-  the guards; exact-byte dedup across presented and store; unsupported OIDs collected from related
-  candidates only; `leafKeys` defined for a `[leaf]` path; `WalkEnd.DEPTH` dropped. (§5.1)
-- **Decision list made total**: snapshot → anchor-by-bytes → parse → Android platform path →
-  walk → fallback → data → rules; `NO_DATA` fires whenever the data step runs; on `Budget` only
-  `REVOKED` fires from CRLite; `ENGINE_ERROR`'s three producers named; `PLATFORM_ONLY` reason for a
-  chain the platform accepted that neither the walker nor the fallback can reproduce. (§5.1, §8)
-- **Fallback's role stated**: it covers canonicalisation residue and platform divergence; a
-  policy may not disable it while `NO_ISSUER` allows; capped at 8 presented certificates against
-  PKIX backtracking blow-up. **Fixtures (s) and (t) corrected** to what the code does. (§5.1, §9)
-- **§9.1 fuzzer oracle rewritten**: a relation-aware, uncapped reference walker; world versus
-  attacker mutations; P2–P6 restated so a correct implementation passes them. (§9.1)
-- **Readiness, factory, flow and listener mechanics made implementable**: component futures
-  completed at their own deadlines by the loader; waiting overloads always wait for the snapshot;
-  verdict cache consulted before parsing; one lock for the factory; `ReferenceQueue` on the trust
-  manager reference; `sslContext` matched by identity per key manager; `Rejected` events evict
-  `Accepted` ones with a bounded side queue. (§5.1)
-- **`Rule` model**: data rules scoped **per dataset** (`requiredDatasets`, per-dataset staleness,
-  per-dataset freshness timestamp) so OneCRL's quiet months never trip `STALE`; `Verdict.path`
-  non-null with `NOT_WALKED` producers; `CrliteStatus` merged into `CrliteQueryResult`;
-  `Verdict.crlite` defined; `TrustManagerStatus`; `exempted` counter; the seed rule warns under
-  `OBSERVE` and fails under `ENFORCE` with `validate(enforcement)`; growability contract completed
-  (`layer`/`exemptable` frozen, every enum labelled, new `REJECT` rows ship `ALLOW` for one minor);
-  closed `RuleClass` deriving precedence; `onStateChanged` default listener method; `CrliteSct` defined. (§4, §8)
-- **§10 residuals recorded** as the adversarial reviewer listed them.
-
-### Decisions carried from revisions 2 to 8 (verified against live sources, Appendix A)
-
-Mozilla serves CRLite **v3** on two channels and the upki mirror a **v4 transcode**; three source
-trust classes; Conscrypt's hostname-only path drops TLS SCTs; `DEFAULT` is fail-closed on missing
-CRLite data and allows stale data loudly with no ceiling (upki's model); seeds verified at their
-signed timestamp; `channel` top-level and required; observe mode is a runtime switch; pure-Kotlin
-engine on DER bytes with `LongArray` columns; minSdk 26; MPL port contained per §3.1; Apache-2.0;
-0.x until M2; `kotlin.time.Clock`; fuzzing a requirement; CI-only upki-backed engine; chain-driven
-`RevocationEngine`; §6.2 aggregates over covering filters only; mirror precedence trust-class-aware;
-extended delegates required on the JVM; `ENGINE_ERROR` allows in `DEFAULT`; deferral by relation.
+# revokt: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
+
+Status: **draft spec, revision 59** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-18
+
+> **Name: `revokt`.** Maven group `dev.revokt`, GitHub repository under the maintainer's own account, domain
+> `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub handle `Revokt` is taken; §13 gives the
+> disambiguation rules that follow from that.
+
+**This file is the normative core.** It states the behaviour of the current milestone (0.2) and what the next one
+builds on. Its companions:
+- [test-plan.md](test-plan.md): §9, the fixture rows, §9.1 fuzzing and the walker properties, §9.2 the differential
+  parser oracle (normative);
+- [references.md](references.md): Appendix A, the verification log;
+- [CHANGELOG.md](CHANGELOG.md): what each revision changed, and why;
+- [`docs/design/`](../design/): non-normative notes for later milestones and cut features, each promoted into this
+  file when its milestone starts;
+- [`docs/decisions/`](../decisions/): the decision log and the divergences from the references.
+
+From revision 59, a new sentence enters this file only with a fixture id or a test name that checks it. Rationale goes
+to an ADR, and pseudocode for an internal function gives way to the code and its property tests (CONTRIBUTING §1).
 
 ## 1. Problem and gap
 
@@ -1710,7 +40,7 @@ stack, one line into OkHttp and every Ktor engine.
    `upki-revocation@v1.0.0` conformant, able to read a system upki cache.
 2. **Authenticated data with an explicit trust class per dataset**; policy can require signed data.
 3. **Additive-only rejection.** The platform verdict runs first and is final for acceptance. revokt
-   never rejects because of its own failures (`NO_ISSUER`, `ISSUER_UNVERIFIED`, `PARSE_FAILED`,
+   never rejects because of its own failures (`NO_ISSUER`, `PARSE_FAILED`,
    `ENGINE_ERROR` in `DEFAULT`). **Two stated exceptions**: `PATH_BUDGET_EXCEEDED` rejects in
    `DEFAULT`; it is reachable only by a chain carrying more same-name or same-key-identifier
    candidates for one certificate, or more verifying junk overall, than any honest chain has (§5.1).
@@ -1747,7 +77,7 @@ verifier; non-JVM targets in 1.0.
 | `revokt-testing` | jvm | `FakeRevokt` (a builder preset, `object FakeRevokt { @JvmStatic fun builder(): Revokt.Builder }`, since `Revokt` is final), `SymVerifier`, the reference walker (takes `List<ByteArray>`, returns `Set<String>` of lowercase-hex leaf-issuer SPKI hashes, so P2's equality is by value), recorded fixtures, the §9.1 chain generator; from 0.1 to 0.3 these live in `revokt-engine`'s test source set and move here in 0.3. Built from public API only (output-type builders are on the production types under `@RevoktTestingApi`). | `revokt-engine`, `revokt-jsse` |
 | `revokt-bom` | — | Code artifacts only, including both `revokt-engine` (KMP root) and `revokt-engine-jvm`; the Maven consumer test references both | — |
 | `revokt-seed-compat`, `revokt-seed-default`, `revokt-denylist` *(M2)* | data | Date-versioned, weekly, not in the BOM (§7.2) | — |
-| `revokt-engine-upki` *(CI-only, unpublished)* | jvm 22+ | `RevocationEngine` over `revokt-upki-shim` via Panama (§3.2) | `revokt-engine`, `revokt-upki-shim` |
+| `revokt-engine-upki` *(CI-only, unpublished)* | jvm 22+ | `RevocationEngine` over `revokt-upki-shim` via Panama (test-plan.md §9.3) | `revokt-engine`, `revokt-upki-shim` |
 | `revokt-upki-shim` *(CI-only, unpublished)* | — | Rust cdylib (~40 lines) statically linking the `upki` crate; exposes `revokt_upki_config_new/free` (thin wrappers over `Config`/`Store`) and `revokt_upki_check(handle, serial, serial_len, spki_hash[32], scts, n)` over `RevocationCheckInput::new` + `Store::check`; returns ffi.rs's result codes; `catch_unwind` | Rust |
 | `revokt-oracle` *(test-only)* | — | Rust cdylib (Panama) and CLI over `clubcard-crlite`, `upki`, `rust-query-crlite`, `x509-parser`, the §9.2 TLV locator, `canonical_json`, with a `catch_unwind` shim; plus a Go CLI over Mozilla's `crlite/go/types` (the producer oracle, §9.2; out of process, batched over a pipe) with a `recover` shim | Rust, Go |
 
@@ -1765,15 +95,15 @@ interface SignatureVerifier {
     fun unsupportedOids(): Set<String>                      // startup probe over the signature, key and curve OID tables
 }
 enum class VerifyResult { VERIFIED, INVALID, UNSUPPORTED }   // closed
-interface PathBuilderFallback { fun build(chainDer: List<ByteArray>, anchors: AnchorSnapshot, nowMillis: Long): List<ByteArray>? }   // leaf first, trust anchor's certificate appended last; null = no path; a throw counts as a failed build: FallbackNotUsed(FAILED), cached in neither the path nor the verdict cache, every VirtualMachineError except StackOverflowError rethrown (§5.1 decision step 6, revision 50)
+interface PathBuilderFallback { fun build(chainDer: List<ByteArray>, anchors: AnchorSnapshot, nowMillis: Long): List<ByteArray>? }   // leaf first, trust anchor's certificate appended last; null = no path; a throw counts as a failed build: FallbackNotUsed(FAILED), cached in neither the path nor the verdict cache, every VirtualMachineError except StackOverflowError rethrown (§5.1 decision step 6)
 internal expect fun canonicalSubject(nameDer: ByteArray): String?     // JVM/Android: X500Principal(der).getName(CANONICAL), null on a construction failure; linuxX64 gate: an empty actual stub returning null (the gate only compiles); the public seam is PlatformTrust.canonicalSubject
 class StoreLockedException @JvmOverloads constructor(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 enum class NewerLayout { IN_MEMORY, REBUILD }   // growable; what a store whose `store.version` is higher than this engine's gets (§6.5)
-fun interface RevoktLogger { fun log(level: LogLevel, message: String, cause: Throwable?) }   // commonMain; every "logged" in this document names its level. jvmMain: object RevoktLoggers { @JvmStatic fun jul(): RevoktLogger } (java.util.logging "dev.revokt"; DEBUG → FINE, INFO → INFO, WARN → WARNING, ERROR → SEVERE, the slf4j-jdk14 and log4j mapping, so DEBUG is hidden under JUL's default INFO level; revision 56); revokt-android: RevoktAndroid.logger() (android.util.Log, tag "revokt"; kept by the consumer R8 rules); builder default: RevoktAndroid.logger() when revokt-android resolves by class name, else RevoktLoggers.jul() (a commonMain fun interface cannot gain companion members in another source set); a throwing logger is swallowed (never on a handshake path's verdict)
+fun interface RevoktLogger { fun log(level: LogLevel, message: String, cause: Throwable?) }   // commonMain; every "logged" in this document names its level. jvmMain: object RevoktLoggers { @JvmStatic fun jul(): RevoktLogger } (java.util.logging "dev.revokt"; DEBUG → FINE, INFO → INFO, WARN → WARNING, ERROR → SEVERE, the slf4j-jdk14 and log4j mapping, so DEBUG is hidden under JUL's default INFO level); revokt-android: RevoktAndroid.logger() (android.util.Log, tag "revokt"; kept by the consumer R8 rules); builder default: RevoktAndroid.logger() when revokt-android resolves by class name, else RevoktLoggers.jul() (a commonMain fun interface cannot gain companion members in another source set); a throwing logger is swallowed (never on a handshake path's verdict)
 enum class LogLevel { DEBUG, INFO, WARN, ERROR }   // closed
 enum class OwnershipCheck { STRICT, OWNER_OR_GROUP }   // growable
 interface RevoktStorage {                                   // flat key space; the engine owns the layout (§6.5)
-    fun read(name: String): ByteArray?
+    fun read(name: String): ByteArray?                     // null = absent; a read that fails throws, never returns null
     fun write(name: String, bytes: ByteArray)              // atomic replace, durable (fsync) before return; visible to read() only when complete
     fun delete(name: String); fun names(): Set<String>     // keys: segments of [A-Za-z0-9._-]{1,96} joined by '/', never '.' or '..'; a key resolving outside the root is rejected; delete() removes directories left empty; names() excludes the lock and temp keys
     fun identity(): String? = null                         // stable key for the per-process single-instance registry; JvmStorage: the canonical absolute directory; null = not registered (inMemory)
@@ -1782,10 +112,10 @@ interface RevoktStorage {                                   // flat key space; t
 // jvmMain: object JvmStorage { @JvmStatic @JvmOverloads fun directory(dir: java.nio.file.Path, ownership: OwnershipCheck = OwnershipCheck.STRICT, onNewerLayout: NewerLayout = NewerLayout.IN_MEMORY): RevoktStorage }   // Java sees (dir), (dir, ownership) and the full form, so a REBUILD caller spells out STRICT; creates rwx------; on POSIX the directory must be owned by the process uid and, under STRICT, not group/other-writable (OwnershipCheck.OWNER_OR_GROUP tolerates group-writable, the Kubernetes fsGroup case, documented in the README), else STORE_UNREADABLE and the instance runs on inMemory() for the session (no read, no write, never chmod; the store lock is released and the identity deregistered, as for STORE_NEWER_LAYOUT, §6.5, and RevoktState.storageFallback = true); the lock is per directory while the layout is per channel, so two channels on one directory in two processes leave the second instance read-only, and in one process the registry throws (use one directory per channel); never share a directory across hosts (advisory fcntl over NFS); Windows: ATOMIC_MOVE over an open `current` is retried
 // revokt-android: AndroidStorage.noBackup(context, name) = JvmStorage.directory(context.noBackupFilesDir.toPath().resolve(name), STRICT, onNewerLayout = REBUILD) (one package owns its directory, so a higher store.version there can only be a Play rollback to an older binary, which must keep working: rebuilt from the seed with STORE_NEWER_LAYOUT); credential-encrypted, so unavailable before the first unlock: an instance started from a direct-boot-aware component gets STORE_UNREADABLE, runs on the in-memory fallback and migrates to the directory once it becomes readable (§5.1 "Storage fallback"); AndroidStorage.deviceProtected(context, name) is the recommended value for anything started before unlock (the data is public Mozilla data). Builder default: RevoktStorage.inMemory(), meant for tests and 0.2; on AndroidPlatformTrust build() throws R STORAGE_UNSET unless storage was set, inMemory() included (an explicit inMemory() is a decision; the default would silently age the seed); on the JVM V IN_MEMORY_STORE_WITH_FETCHING_SOURCE warns
 expect class FetcherTls                                     // linuxX64 gate: an empty actual stub, as for canonicalSubject. jvmMain actual: val sslSocketFactory: SSLSocketFactory; val trustManager: X509TrustManager /* that source's internal fetcher trust manager (§5.1 "Anchor snapshot"), never the public fetcherTrustManager */. Hostname verification is binding-owned, never a FetcherTls member (the JDK has no public RFC 6125 verifier): the JDK and Android fetchers rely on HttpsURLConnection's endpoint identification ("HTTPS", set by HttpsClient; a §9 fixture asserts a SAN mismatch is FAILED), the OkHttp fetcher keeps the base client's hostnameVerifier and build() throws IllegalArgumentException when it is not OkHttp's default (a replaced verifier is both a regression and non-coalescable), the Ktor fetchers keep their engine's
-class FetchRequest private constructor(…) {   // @RevoktTestingApi Builder, so fetcher tests can construct requests; val url: String; val headers: Map<String, String> /* engine sets User-Agent and, from #141, If-None-Match (until #141 a sync sends none, §7.1, revision 57), the latter synthesised as the quoted verified cursor ("<lastVerifiedLastModified>"), never an echoed server ETag (a persisted ETag the transport rejects would fail every later request); a 304 is UNCHANGED and updates lastAttemptAtMillis only; never Accept-Encoding */; val maxBodyBytes: Long /* min(attachment.size, MAX_FILTER_BYTES) for a SIGNED body, else the per-kind RevoktLimits cap */; val timeoutMillis: Long /* enforced by the engine: each fetch runs under Future.get(timeoutMillis) on ioDispatcher; expiry is FAILED and the next sync proceeds, so a hung injected fetcher cannot block later syncs */ }
+class FetchRequest private constructor(…) {   // @RevoktTestingApi Builder, so fetcher tests can construct requests; val url: String; val headers: Map<String, String> /* engine sets User-Agent and If-None-Match, the latter synthesised as the quoted verified cursor ("<lastVerifiedLastModified>"), never an echoed server ETag (a persisted ETag the transport rejects would fail every later request); a 304 is UNCHANGED and updates lastAttemptAtMillis only; never Accept-Encoding */; val maxBodyBytes: Long /* min(attachment.size, MAX_FILTER_BYTES) for a SIGNED body, else the per-kind RevoktLimits cap */; val timeoutMillis: Long /* enforced by the engine: each fetch runs under Future.get(timeoutMillis) on ioDispatcher; expiry is FAILED and the next sync proceeds, so a hung injected fetcher cannot block later syncs */ }
 class FetchResponse private constructor(…) { class Builder { fun status(status: Int): Builder; fun header(name: String, value: String): Builder; fun headers(headers: Map<String, List<String>>): Builder; fun body(body: ByteArray): Builder; fun build(): FetchResponse }; companion object { @JvmStatic fun of(status: Int, headers: Map<String, List<String>>, body: ByteArray): FetchResponse }   // public, not testing-API: an HttpFetcher must construct one
     val status: Int; val headers: Map<String, List<String>>; val body: ByteArray /* decoded, buffered; the fetcher stops at maxBodyBytes while inflating (gzip bomb) and throws; a fetcher never follows a 3xx and returns it as is; a C2SP mirror source's fetcher is wrapped in the shared internal RedirectingFetcher, which follows redirects under §7.3's rules; for every other source a 3xx is FAILED; the engine re-checks and hashes */ }
-fun interface HttpFetcher { fun fetch(request: FetchRequest): FetchResponse /* synchronous; one HttpFetcher per configured source, created by one Factory.create(tls) call per source at build() with that source's FetcherTls (a throwing factory propagates from build()); the contract: every TLS handshake the returned fetcher performs goes through the given tls and nothing else, one factory call serves one source only, and the shipped factories are the supported ones (§8 fetcher policy); runs on ioDispatcher, never the loader; never follows a redirect, its underlying client configured not to (redirects are followed above it, for C2SP mirror sources only, by the shared RedirectingFetcher, §7.3; revision 56); must honour thread interruption so a timed-out fetch does not pile up; the body is handed to the loader, which alone writes the store; any Throwable = SyncOutcome.FAILED for that sync; a 401 or 407 is FAILED on every platform and no fetcher ever answers a challenge */; fun interface Factory { fun create(tls: FetcherTls): HttpFetcher } }   // a fetcher-policy reject and a 401/407 carry the stage of the fetch they interrupted (CHANGESET, X5U or ATTACHMENT)
+fun interface HttpFetcher { fun fetch(request: FetchRequest): FetchResponse /* synchronous; one HttpFetcher per configured source, created by one Factory.create(tls) call per source at build() with that source's FetcherTls (a throwing factory propagates from build()); the contract: every TLS handshake the returned fetcher performs goes through the given tls and nothing else, one factory call serves one source only, and the shipped factories are the supported ones (§8 fetcher policy); runs on ioDispatcher, never the loader; never follows a redirect, its underlying client configured not to (redirects are followed above it, for C2SP mirror sources only, by the shared RedirectingFetcher, §7.3); must honour thread interruption so a timed-out fetch does not pile up; the body is handed to the loader, which alone writes the store; any Throwable = SyncOutcome.FAILED for that sync; a 401 or 407 is FAILED on every platform and no fetcher ever answers a challenge */; fun interface Factory { fun create(tls: FetcherTls): HttpFetcher } }   // a fetcher-policy reject and a 401/407 carry the stage of the fetch they interrupted (CHANGESET, X5U or ATTACHMENT)
 // jvmMain (JVM types, so not in commonMain):
 interface PlatformTrust {
     fun defaultDelegate(): X509TrustManager
@@ -1798,7 +128,7 @@ interface PlatformTrust {
 
 **Verifier contract.** The engine never hands the verifier a non-X.509 encoding and always passes
 the signed TBS `signature` field. An implementation must not modify its arguments: the engine passes a certificate's
-own arrays, shared by every handshake on the anchor snapshot (revision 57). `JcaSignatureVerifier(provider: Provider? = null)` selects
+own arrays, shared by every handshake on the anchor snapshot. `JcaSignatureVerifier(provider: Provider? = null)` selects
 `KeyFactory` by the SPKI key OID, creates `Signature`/`KeyFactory` per call, honours RSASSA-PSS
 parameters, caches parsed `PublicKey`s by SPKI hash in an LRU of 1,024 entries holding only keys that
 produced `VERIFIED` (presented junk keys are server-chosen; entry count exposed), and classifies by the startup probe, never by a
@@ -1813,13 +143,12 @@ ECDSA; EdDSA, ML-DSA, SLH-DSA, composite: key OID equals signature OID; unknown 
 everything. Composite signatures are delegated to a provider owning the composite OID (BC; Conscrypt 2.7.0 and
 2.8.0 register 15 of them, Appendix A) or `UNSUPPORTED`.
 
-**`id-RSASSA-PSS` parameters** (revision 51). The `RSASSA-PSS-params` must be present. The message hash and the
+**`id-RSASSA-PSS` parameters**. The `RSASSA-PSS-params` must be present. The message hash and the
 MGF1 hash must each be a SHA-2 hash, the family RSA PKCS#1 takes above. The mask generation function must be
 `id-mgf1`, and `trailerField` must be 1. A field left out takes its RFC 4055 DEFAULT, so an omitted hash or
 mask-generation field means SHA-1.
 
-**Salt length:** a salt longer than 2,048 bytes is `INVALID`, decided before the provider is called. This describes
-the guard merged in #156 (`MAX_SALT_LENGTH`), not a new choice. 2,048 bytes, the modulus bits / 8 at SunRsaSign's
+**Salt length:** a salt longer than 2,048 bytes is `INVALID`, decided before the provider is called (`MAX_SALT_LENGTH`). 2,048 bytes, the modulus bits / 8 at SunRsaSign's
 largest modulus of 16,384 bits, is an upper bound on any RSA key's salt. The real maximum is `emLen - hLen - 2`
 (RFC 8017 §9.1.1, `emLen >= hLen + sLen + 2`). The JDK refuses a
 longer salt for the key on its own, with a `GeneralSecurityException`, except near `Int.MAX_VALUE`. There its
@@ -1836,12 +165,12 @@ The probe decides first. When `id-RSASSA-PSS` is in `unsupportedOids()`, every P
 whatever its parameters, a SHA-1 one included. A verifier over the Conscrypt provider alone is such a case
 (Appendix A).
 
-**ECDSA range check** (revision 54, the maintainer's decision; #172). The curve probe decides first, as for PSS: a
+**ECDSA range check**. The curve probe decides first, as for PSS: a
 curve the provider does not support is `UNSUPPORTED`, never `INVALID`. Then, after the provider's `KeyFactory` has
 decoded the key and before `Signature` is called, the verifier decodes the signature's `ECDSA-Sig-Value` and answers
 `INVALID` unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1.
 - **n** is the order of the decoded key's own curve, `ECPublicKey.params.order`, so every curve the provider supports
-  is covered: P-256, P-384 and P-521, and the brainpool curves under BC (tested with `revokt-bc`; #175 closed without a BC test dependency, revision 56). A key whose order cannot be read is
+  is covered: P-256, P-384 and P-521, and the brainpool curves under BC (tested with `revokt-bc`). A key whose order cannot be read is
   `INVALID`.
 - **The `ECDSA-Sig-Value` profile:** a SEQUENCE of exactly two INTEGERs, with minimal definite lengths, each INTEGER
   in minimal two's complement and positive, and no bytes after the SEQUENCE. Anything else is `INVALID`. This can be
@@ -1849,14 +178,13 @@ decoded the key and before `Signature` is called, the verifier decodes the signa
   and 27, Appendix A).
 - **Why:** SEC 1 §4.1.4 step 1, which ring's verifier also performs. The JDK's own check was missing from JDK 15 to
   17.0.2 and in 18 GA (CVE-2022-21449), which within revokt's JVM 17+ target is 17.0.0 to 17.0.2 and 18 GA.
-- **High s** (s > n/2) stays accepted: the #163 review found Mozilla's `ct-logs` collection signature with s > n/2,
+- **High s** (s > n/2) stays accepted: Mozilla's `ct-logs` collection signature has s > n/2,
   and SEC 1 and NSS accept it.
 - **Scope:** every standalone ECDSA signature that reaches the verifier: a TLS chain's links, the x5u chain's links
   (§7.1) and the content signature after its raw-to-DER conversion. A composite ML-DSA + ECDSA signature verifies as
-  one provider operation, so its ECDSA component is the owning provider's responsibility (revision 55, the #160
-  comment); both owning providers range-check it (BC's `ECDSASigner`, and BoringSSL under Conscrypt; Appendix A).
+  one provider operation, so its ECDSA component is the owning provider's responsibility; both owning providers range-check it (BC's `ECDSASigner`, and BoringSSL under Conscrypt; Appendix A).
 
-**From OID to JCA service** (revision 51, as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
+**From OID to JCA service** (as `JcaSignatureVerifier`'s tables do). The probe and `verify` resolve each
 signature and key OID through the same table, to one `Signature` name and one `KeyFactory` name. The probe marks an
 OID unsupported when the provider has no service under that name. A named curve is probed separately: it is
 unsupported unless a key on it decodes through the provider's EC `KeyFactory` and its ECDSA `Signature` runs over
@@ -1895,7 +223,7 @@ caller's thread before any loader task exists; never two at once.
 
 Dependency and version choices: Okio internal only; no JSON library (§7.1); Kotlin floor 2.3; stable stdlib types in
 Kotlin-facing signatures with `java.time` and `long` overloads; no third-party or unstable stdlib types in public
-signatures; minSdk 26; JVM bytecode 17 (revision 38), which Android consumers dex with the AGP that revokt's Kotlin
+signatures; minSdk 26; JVM bytecode 17, which Android consumers dex with the AGP that revokt's Kotlin
 2.4 build already requires (8.5.2 or later, confirmed by the 0.3 consumer fixture; Appendix A), while the JVM
 artifacts call no JDK API above API 26 (animal-sniffer against an API-26 signature, CONTRIBUTING); compile against
 OkHttp 4.12 and the Okio 3.x floor.
@@ -1925,8 +253,8 @@ MPL-2.0 is file-level copyleft. Upstream files carry the Exhibit A header only, 
 
 ```kotlin
 interface RevocationEngine : AutoCloseable {
-    val formats: Set<FilterFormat>                                   // a generation with any filter (the full or a delta) in another format is never offered to prepare() (§6.5 format check, revision 57)
-    val name: String get() = this::class.simpleName ?: "anonymous"   // the class's simple name, or "anonymous" when the class has none; Finding.EngineError.engineName on every ENGINE_ERROR whose producer is ENGINE (§4, §5.5), so never null there; the Kotlin engine returns "kotlin", the upki engine "upki"; must not throw, and revokt reads it once per instance; on Android under R8, which renames classes, an engine overrides it with a stable string (revision 49)
+    val formats: Set<FilterFormat>                                   // a generation with any filter (the full or a delta) in another format is never offered to prepare() (§6.5 format check)
+    val name: String get() = this::class.simpleName ?: "anonymous"   // the class's simple name, or "anonymous" when the class has none; Finding.EngineError.engineName on every ENGINE_ERROR whose producer is ENGINE (§4, §5.5), so never null there; the Kotlin engine returns "kotlin", the upki engine "upki"; must not throw, and revokt reads it once per instance; on Android under R8, which renames classes, an engine overrides it with a stable string
     fun prepare(generation: GenerationFiles): PreparedGeneration     // serialised: the loader dispatcher, or the start() caller's thread in the sole-seed synchronous path (§4 S), never concurrently; builds an inactive state (decode, validate); throws on a corrupt generation; the engine's live generation is untouched
     fun activate(prepared: PreparedGeneration)                        // loader only; atomic swap with respect to concurrent query(); the previous generation is released once in-flight queries drain; a throw leaves the live generation in place
     fun install(generation: GenerationFiles): String = prepare(generation).use { activate(it); it.generationId }   // convenience (use {} so an activate() throw closes the prepared generation; close() after activate() is a no-op); the loader never calls it: it runs the §6.5 self-check on the prepared state between the two calls, so a failure leaves the engine untouched and no recovery path has a window
@@ -1938,7 +266,7 @@ interface PreparedGeneration : AutoCloseable { val generationId: String; fun que
 enum class FilterFormat { V3, V4 }                                                             // growable
 enum class CrliteQueryResult { NOT_REVOKED, REVOKED, NOT_COVERED, NOT_ENROLLED, NO_SCTS, NO_DATA, ENGINE_ERROR }   // growable; the only CRLite status type
 class GenerationFiles internal constructor(…) {                      // always C2SP layout: "index.bin" plus the files it names; @RevoktTestingApi Builder; jvmMain: object JvmGenerationFiles { @RevoktTestingApi @JvmStatic fun fromDirectory(dir: java.nio.file.Path, dataset: Dataset, trustClass: TrustClass, format: FilterFormat): GenerationFiles }, so a third-party engine is testable against the §9 corpus images from revokt-engine alone
-    val generationId: String; val dataset: Dataset; val trustClass: TrustClass; val format: FilterFormat   // the full filter's encoding; each filter is read in its own (mixed encodings allowed), and every one is in the engine's formats (§6.5 format check; revision 57)
+    val generationId: String; val dataset: Dataset; val trustClass: TrustClass; val format: FilterFormat   // the full filter's encoding; each filter is read in its own (mixed encodings allowed), and every one is in the engine's formats (§6.5 format check)
     val names: Set<String>; fun bytes(name: String): ByteArray /* fresh copy; a disk-backed implementation later is not a break */; fun sha256(name: String): ByteArray /* content hash, computed once by the loader */; val sourceTimestampMillis: Long }
 class CrliteSct private constructor(…) { val logId: ByteArray /* 32 bytes */; val timestampMillis: Long /* RFC 6962 u64 carried in Long; compared with java.lang.Long.compareUnsigned */ }   // @RevoktTestingApi Builder
 class CrliteQuery private constructor(…) {                           // growable value-semantics class (builder, @RevoktTestingApi); a field added in a minor does not break engines
@@ -1951,30 +279,29 @@ updater builds `index.bin` itself for Remote Settings generations (the channel's
 ordered by time, with their coverage; `parent` is not read, §6.5), so every `GenerationFiles` is a directory image any C2SP reader accepts; the
 only engine-specific property is `format`. **`index.bin` consistency, verified by the loader before
 `prepare()` for every generation whose `index.bin` it reads rather than builds** (`SYSTEM`, a seed's rebuilt index being
-byte-compared instead; a `MIRROR` generation's index is built by the loader, §7.3, revision 53): **selection equivalence**: for every log id and every timestamp (inclusive at both
+byte-compared instead; a `MIRROR` generation's index is built by the loader, §7.3): **selection equivalence**: for every log id and every timestamp (inclusive at both
 ends, overlapping windows allowed), the set of filters the `index.bin` log directory names for that
 (log id, timestamp) must equal the set of referenced filters whose own coverage map contains it, i.e. every
 directory entry lies within its filter's window and every filter's window is exactly covered by its entries;
 a mismatch installs nothing, and its outcome is per source: `STORE_UNREADABLE` for a system cache, and
-`SEED_UNREADABLE` for a seed's byte-compare (revision 53; the `INDEX_INCONSISTENT` this sentence named covered a
-fetched mirror index, and revokt now fetches none). **Every `index.bin` revokt's loader reads, whatever its
+`SEED_UNREADABLE` for a seed's byte-compare. **Every `index.bin` revokt's loader reads, whatever its
 source (a system cache's, a seed's, a stored generation's), is at most 1 MiB, checked before it is parsed; revokt
-never fetches an `index.bin`** (the seed's cap, §6.5, applied to every source, revision 48; a mirror has no `index.bin`
-fetch since revision 53; an injected engine's own reads are its concern), with the
+never fetches an `index.bin`** (the seed's cap, §6.5, applied to every source; a mirror has no `index.bin`
+fetch; an injected engine's own reads are its concern), with the
 same outcome as a mismatch (`STORE_UNREADABLE` for a system cache, `SEED_UNREADABLE` for a seed); a stored generation whose `index.bin` is over the cap is a failed load in the §6.5
 recovery chain (`STORE_UNREADABLE`). **An `index.bin` the loader builds** (a Remote Settings or `MIRROR` generation's)
 that is over 1 MiB fails the install before the generation directory is written: `SyncOutcome.FAILED` with
-`INDEX_INCONSISTENT`, stage `INDEX` (revision 53), so the loader never writes a generation it could not reload (a
+`INDEX_INCONSISTENT`, stage `INDEX`, so the loader never writes a generation it could not reload (a
 mirror's coverage, which sizes its index, is unsigned). **revokt's index reader takes only the magic `upkiidx1`**
 (C2SP `upki-revocation@v1.0.0`); the legacy `upkiidx0` that upki v1.0.1 also reads is rejected as malformed, with the
-outcome of a mismatch (revision 56, Appendix A). This is what makes the Kotlin engine's
+outcome of a mismatch (Appendix A). This is what makes the Kotlin engine's
 coverage-driven filter selection (§6.2, every filter consulted by its own coverage) equal to C2SP's
 `index.bin`-driven selection (upki binary-searches the log directory and loads only the filters it names)
 on every generation the suite admits; upki's `Index::write` writes one entry per (log, filter), the filter's
 coverage window for that log, so overlapping windows (a full and its deltas sharing boundary timestamps) are
-separate entries, which the check admits (closed in revision 56, Appendix A), and a legitimate Mozilla generation
+separate entries, which the check admits (Appendix A), and a legitimate Mozilla generation
 passes by construction. **A fetched generation with any placed filter (the full or a delta) whose encoding the
-engine does not list is `SyncOutcome.FAILED` with `DiagnosticCode.FORMAT_UNSUPPORTED`** (stage `PREPARE`; revision 57:
+engine does not list is `SyncOutcome.FAILED` with `DiagnosticCode.FORMAT_UNSUPPORTED`** (stage `PREPARE`;
 every filter, not only the full, is checked, and the previous generation stays live), counts toward `consecutiveFailures`
 and `signedSourceFailing`, and advances nothing (never a silent skip; a seed in such a format is
 `SEED_UNREADABLE` at `start()`, §6.5; for fetching sources `validate()` warns or errors up front, §4 V `FORMAT_UNSUPPORTED`). **The seam carries `Dataset.CRLITE` only**: the loader
@@ -1987,62 +314,12 @@ another layer is a separate interface with its own builder method, never a widen
 from connection threads and must observe either the previous or the new generation, never a mix;
 `close()` waits for in-flight `query` calls at most `ENGINE_CLOSE_DRAIN` (5 s), then proceeds; a query that returns later sees `ENGINE_ERROR`. **Ownership**:
 `Revokt` owns the engine whether defaulted or injected and closes it last (§5.1 lifecycle). `NO_SCTS` means
-no SCT extension, or none whose list parses under §9.2 (for example an empty list, a first item that fails, an inner identifier other than `0x04`; §9.2 states every case; decision,
+no SCT extension, or none whose list parses under §9.2 (for example an empty list, a first item that fails, an inner identifier other than `0x04`; §9.2 states every case;
 §10 item 7); revokt's parser passes an empty `scts` list in each case before the engine is called; the Kotlin engine answers
-`NO_SCTS` on it, the upki engine `NOT_COVERED` (one equivalence class, below).
+`NO_SCTS` on it, the upki engine `NOT_COVERED` (one equivalence class, test-plan.md §9.3).
 
-**upki adapter (`revokt-engine-upki`, Panama, JDK 22+; CI-only until the §12 trigger).**
-Verified against upki at tag v1.0.1 (crates.io: 1.0.0; the shim's `Cargo.lock` pins the git tag) `ffi.rs`, `revocation/mod.rs` and `rustls-upki` (Appendix A).
-- *Name*: `"upki"`, the `engineName` of its `ENGINE_ERROR` findings (revision 49).
-- *Formats*: `{V3, V4}`. upki's `clubcard-crlite` dependency (`bincode` feature) decodes both version bytes (`Encoding::read` accepts 3 and 4), so Mozilla's v3 filters are read as served; the C2SP spec says v4 and the crate is laxer than the spec. The engine never transcodes.
-- *Lifecycle*: `prepare` writes the files verbatim into a fresh directory, writes a TOML config whose
-  `cache_dir` is that directory and calls `revokt_upki_config_new`; the returned `PreparedGeneration`
-  owns that handle and directory and its `query` runs `revokt_upki_check` against the handle, so the
-  §6.5 self-check exercises the real native path; `activate` publishes the handle with a `@Volatile`
-  swap and frees the previous handle with `revokt_upki_config_free` once in-flight queries on it drain
-  (per-handle in-flight counter), deleting its directory; `PreparedGeneration.close()` without
-  `activate` frees the handle and deletes its directory. `Store::from_config` re-opens `index.bin` on
-  every check, so a handle has no state to invalidate. `close()` frees the live handle and deletes the directories.
-  `coverageEndMillis` is read from `index.bin` by revokt's own reader.
-- *Query*: **not** the stock `upki_check_revocation`, which parses the leaf with webpki and
-  resolves the issuer by byte-equal subject name and would make the verdict depend on webpki's
-  profile. The adapter loads exactly one native artifact, `revokt-upki-shim` (§3 module table), a
-  cdylib of ours that statically links the `upki` crate and is built by the native CI job; it
-  exposes `revokt_upki_config_new/free` and `revokt_upki_check(handle, serial, serial_len,
-  spki_hash[32], scts, n)` over upki's public library API, `RevocationCheckInput::new(CertSerial,
-  IssuerSpkiHash, Vec<CtTimestamp>)` + `Store::check` (verified in upki 1.0.1 `revocation/mod.rs`),
-  and returns ffi.rs's result codes, mapping `Store::check`'s `Result` exactly as
-  `upki_check_revocation` does, so the table below is unchanged; upstreaming the check function to
-  rustls/upki is attempted but not required. upki takes no time. Panics surface as
-  `UPKI_ERR_PANICKED` through `catch_unwind` in the shim.
-- *Result mapping* (fixed; the suite asserts the table):
-
-| upki result | `CrliteQueryResult` | Suite treatment |
-|---|---|---|
-| `UPKI_REVOCATION_NOT_REVOKED` / `_REVOKED` | `NOT_REVOKED` / `REVOKED` | compare, exact |
-| `UPKI_REVOCATION_NOT_COVERED` | `NOT_COVERED` | compare by class (below) |
-| `UPKI_ERR_REVOCATION_NO_DATA` (76; `Error::NoData`, outside the `UPKI_REVOCATION_*` range) | `NO_DATA` | compare, exact |
-| `UPKI_ERR_PANICKED`, any other code (76 excepted) | `ENGINE_ERROR`, `engineName = "upki"` | failure |
-
-(No abstain rows: with the extracted triple as input, upki parses nothing and resolves no issuer.)
-
-**Cross-engine equivalence classes.** Through the shim the class
-`{NOT_COVERED, NOT_ENROLLED, NO_SCTS}` is one value, `UPKI_REVOCATION_NOT_COVERED`: `Store::check`
-applies no `cert_has_no_scts` policy (that is `rustls-upki`'s verifier), and with no SCT timestamps
-no filter covers the certificate.
-`REVOKED`, `NOT_REVOKED` and `NO_DATA` compare exactly; any `REVOKED`/`NOT_REVOKED` disagreement
-between the two engines is a release blocker (no input is abstained). The finer split of that
-class is compared against `revokt-oracle`'s `clubcard-crlite` binding instead. What an engine swap
-can still change is therefore only the lookup itself and the data decoding, both pinned by this
-suite. Documented, out of scope: the `rustls-upki` verifier, a different product, fails the
-handshake on a malformed SCT list and on a leaf webpki cannot parse; revokt yields `NO_SCTS` when no
-list parses under §9.2 (otherwise it queries the items §9.2 keeps) and `PARSE_FAILED`, both allowing in
-`DEFAULT` by decision. Generations: (i) Mozilla `SIGNED` v3 generations as served, both engines directly (no transcoder
-in the oracle path); (ii) `MIRROR` v4 generations as fetched from `upki.rustls.dev`; (iii) the v3
-generations re-encoded as v4 by `revokt-oracle`, a bare `clubcard-crlite` `to_bytes(V4)` (revision 56: upki-mirror
-v1.0.1 does not transcode; upki main added one in `c2ba5e3`, which also sorts the coverage, so the bytes may differ
-from the live mirror's, while verdicts cannot), a third leg; every generation whose `index.bin` revokt did not write passes the `index.bin` consistency check above before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
-engine-side type above is public from 0.1.
+The upki adapter (`revokt-engine-upki`) and the cross-engine equivalence classes are CI-only test infrastructure:
+[test-plan.md §9.3](test-plan.md#93-the-upki-backed-engine-and-the-cross-engine-suite-ci-only).
 
 ## 4. Public API (sketch, M1 surface)
 
@@ -2050,7 +327,7 @@ One configuration surface: fluent `Builder` classes (`fun channel(c: CrliteChann
 `Revokt(block)`, `sources { }` and the assignment-style `var`s shown below are `@JvmSynthetic` sugar
 over the same builder. Every public value or output type, including every `Finding` subclass, is a final class with a private
 constructor, content-based `equals`/`hashCode`/`toString` (timing fields excluded: a timing field is a measured duration, such as
-`Verdict.elapsedNanos`; timestamps such as `atMillis` and `createdMillis` take part, revision 56), a nested `Builder` and
+`Verdict.elapsedNanos`; timestamps such as `atMillis` and `createdMillis` take part), a nested `Builder` and
 `newBuilder()` (service types such as `KotlinRevocationEngine()`, `AndroidPlatformTrust()`, `JcaSignatureVerifier()` and exceptions have public constructors); on output types (`Verdict.*`, every `Finding`, `RevoktEvent`, `RevoktStatus`,
 `RevoktState`, `AnchorSnapshot`, `ExemptionContext`, `PolicyDiagnostic`, `SyncResult`) the builder is `@RevoktTestingApi` (opt-in,
 `WARNING` level, outside the 1.0 promise). `Finding` is a sealed class, **growable** (a subtype may be added in a minor; use `else`); `Verdict` is closed. No data classes, no inline value classes. **Public type rule**: stable stdlib types
@@ -2060,21 +337,21 @@ member; kotlinx-coroutines is the one non-stdlib dependency in signatures, with 
 
 ```kotlin
 val revokt = Revokt {
-    channel = CrliteChannel.COMPAT                      // enum class CrliteChannel { COMPAT, DEFAULT } (growable); mandatory iff a CRLite source is configured (a seed counts); R: build() throws when unset (decision: the consumer chooses); channel-less datasets (M2+) use the literal store segment `all`
+    channel = CrliteChannel.COMPAT                      // enum class CrliteChannel { COMPAT, DEFAULT } (growable); mandatory iff a CRLite source is configured (a seed counts); R: build() throws when unset (the consumer chooses); channel-less datasets (M2+) use the literal store segment `all`
     storage = AndroidStorage.noBackup(context, "revokt")
     platformTrust = AndroidPlatformTrust()              // default: auto-detected (AndroidPlatformTrust when android.os.Build resolves, else JvmPlatformTrust); R: on Android a platformTrust that is not AndroidPlatformTrust throws
     fetcherDelegate = corpTrustManager                   // the delegate fetcherTrustManager wraps; default platformTrust.defaultDelegate(); R: where requiresExtendedDelegate() is true a plain X509TrustManager throws IllegalArgumentException from build(), as trustManager(d) does at wiring; R: a RevoktTrustManager as fetcherDelegate throws IllegalArgumentException (the fetch would wait on the data it is supposed to produce); its snapshot is attempted inside start() when a fetching source is configured (§5.1 "Anchor snapshot"); with remoteSettings(MozillaRemoteSettings.DEFAULT) the fetcher contacts firefox.settings.services.mozilla.com, firefox-settings-attachments.cdn.mozilla.net and content-signature-2.cdn.mozilla.net (the NSC and egress allowlist, §7.1)
     signatureVerifier = JcaSignatureVerifier()
     revocationEngine = KotlinRevocationEngine()           // default; §3.2 seam
     clock = Clock.System                                // Java: clock(java.time.Clock); timeSource(TimeSource) for the monotonic deadlines (testable)
-    sources { remoteSettings(MozillaRemoteSettings.DEFAULT); c2spMirror("https://upki.rustls.dev/revocation/") /* with a seed this trips MIRROR_WITH_SEED_NEVER_INSTALLED; shown for completeness */; c2spCache("/var/cache/upki/revocation"); seed(SeedSource.fromResource("/revokt/seed-compat.zip")) }   // seed default when none is configured: SeedSource.bundled(), resolved at build(): /revokt/seed-<channel>.zip from the revokt-seed-<channel> artifact (§6.5; the quickstarts declare it); absent from the classpath → no seed source, and validate() emits NO_DATA_REJECTS_WITHOUT_LOCAL_DATA; present but unreadable → SEED_UNREADABLE at start() (§4 S bullet); seed(SeedSource.none()) opts out explicitly. No fetching source is configured by default (a library never opens the network unasked); a required dataset with local data and no fetching source is V NO_FETCHING_SOURCE, a WARNING under both enforcements (the instance updates only through sync()'s seed re-check, below; air-gapped seed-by-deploy fleets are legitimate). R: every source URL (baseUrl, attachmentBaseUrl, x5uHosts) is https with no userinfo, and a c2spMirror URL is read by §7.3's hop grammar (https:// in lowercase, no userinfo, a DNS host name or an IP literal, a port of 1 to 65535; revision 58), else build() throws (NSC blocks cleartext on API 28+, the JVM does not). c2spCache takes the directory that holds index.bin, upki's <cache root>/revocation (revision 56); upki's built-in default (Config::try_default) is the user cache, ProjectDirs("dev", "rustls", "upki") (Linux $XDG_CACHE_HOME/upki or ~/.cache/upki, macOS ~/Library/Caches/dev.rustls.upki, Windows %LOCALAPPDATA%\rustls\upki\cache), when it exists; else the system cache (Linux /var/cache/upki, macOS /Library/Caches/dev.rustls.upki, Windows %ProgramData%\rustls\upki\cache) when that exists; else the user cache. A upki config file's cache directory overrides both. revokt has no helper for this (the maintainer's decision): the caller passes the directory.
+    sources { remoteSettings(MozillaRemoteSettings.DEFAULT); c2spMirror("https://upki.rustls.dev/revocation/") /* with a seed this trips MIRROR_WITH_SEED_NEVER_INSTALLED; shown for completeness */; c2spCache("/var/cache/upki/revocation"); seed(SeedSource.fromResource("/revokt/seed-compat.zip")) }   // seed default when none is configured: SeedSource.bundled(), resolved at build(): /revokt/seed-<channel>.zip from the revokt-seed-<channel> artifact (§6.5; the quickstarts declare it); absent from the classpath → no seed source, and validate() emits NO_DATA_REJECTS_WITHOUT_LOCAL_DATA; present but unreadable → SEED_UNREADABLE at start() (§4 S bullet); seed(SeedSource.none()) opts out explicitly. No fetching source is configured by default (a library never opens the network unasked); a required dataset with local data and no fetching source is V NO_FETCHING_SOURCE, a WARNING under both enforcements (the instance updates only through sync()'s seed re-check, below; air-gapped seed-by-deploy fleets are legitimate). R: every source URL (baseUrl, attachmentBaseUrl, x5uHosts) is https with no userinfo, and a c2spMirror URL is read by §7.3's hop grammar (https:// in lowercase, no userinfo, a DNS host name or an IP literal, a port of 1 to 65535), else build() throws (NSC blocks cleartext on API 28+, the JVM does not). c2spCache takes the directory that holds index.bin, upki's <cache root>/revocation; upki's built-in default (Config::try_default) is the user cache, ProjectDirs("dev", "rustls", "upki") (Linux $XDG_CACHE_HOME/upki or ~/.cache/upki, macOS ~/Library/Caches/dev.rustls.upki, Windows %LOCALAPPDATA%\rustls\upki\cache), when it exists; else the system cache (Linux /var/cache/upki, macOS /Library/Caches/dev.rustls.upki, Windows %ProgramData%\rustls\upki\cache) when that exists; else the user cache. A upki config file's cache directory overrides both. revokt has no helper for this: the caller passes the directory.
     meteredNetwork { false }                             // BooleanSupplier; revokt-android: RevoktAndroid.meteredNetwork(context) over ConnectivityManager.isActiveNetworkMetered(); sampled once per sync before a full download; a throw reads as false (§7.2)
     logger = RevoktLoggers.jul()                        // RevoktLogger; default auto-detected (§3)
     policy = RevoktPolicy.DEFAULT                       // or STRICT; RevoktPolicy.DEFAULT.newBuilder().rule(Rule.NO_SCTS, REJECT).exempt(Rule.NO_SCTS, …).staleness(Dataset.CRLITE, Staleness.ofMillis(3.days.inWholeMilliseconds, null))
     enforcement = Enforcement.ENFORCE
     awaitData(2.seconds)                                // Java: awaitData(java.time.Duration) / awaitDataMillis(long); defaults RevoktLimits.AWAIT_DATA_<CHANNEL>
     caches { pathEntries = 256; verdictEntries = 1024 }
-    ioDispatcher = Dispatchers.IO                       // fetch I/O; Java: ioExecutor(Executor). The loader dispatcher is internal, single-parallelism. The dispatcher or executor must not run tasks inline (Dispatchers.Unconfined, Executor { it.run() }, Guava's directExecutor()): an inline one runs each fetch on the loader thread, which blocks before the per-fetch timeout (FetchRequest.timeoutMillis) can be applied (revision 56)
+    ioDispatcher = Dispatchers.IO                       // fetch I/O; Java: ioExecutor(Executor). The loader dispatcher is internal, single-parallelism. The dispatcher or executor must not run tasks inline (Dispatchers.Unconfined, Executor { it.run() }, Guava's directExecutor()): an inline one runs each fetch on the loader thread, which blocks before the per-fetch timeout (FetchRequest.timeoutMillis) can be applied
     limits { maxFilterBytes = 32 * MiB; maxTrustManagers = 64 }   // MiB = 1 shl 20 (a RevoktLimits constant); download and record caps (MAX_FILTER_BYTES, MAX_JSON_BYTES, MAX_X5U_BYTES, MAX_MANIFEST_ENTRIES, MAX_CHANGESET_RECORDS) are overridable upward only (R: a lower value throws IllegalArgumentException from build()); maxTrustManagers in both directions, ≥ 1; walker budgets are constants. MAX_FILTER_BYTES also caps SIGNED bodies (limits table below), so raising it is the recovery for a larger Mozilla filter; maxTrustManagers is the multi-tenant case (per-tenant trust stores), one CandidateIndex and two small caches per instance
     http = OkHttpFetcher.Factory(baseClient)             // default on the JVM: JdkHttpFetcher.Factory (ProxySelector.getDefault() and a per-connection HttpURLConnection.setAuthenticator that answers RequestorType.PROXY only, JDK 9+, so a trusted intercepting proxy cannot harvest default credentials; a 401/407 is FAILED; revokt configures no proxy; Basic auth to an HTTPS tunnel is disabled by the JDK unless jdk.http.auth.tunneling.disabledSchemes is cleared; proxy-authenticated fleets use OkHttpFetcher.Factory with proxyAuthenticator; setInstanceFollowRedirects(false)). Default on Android (AndroidPlatformTrust): OkHttpFetcher.Factory over a fresh OkHttpClient() when revokt-okhttp resolves (detected by class name), else AndroidHttpFetcher.Factory from revokt-android (HttpURLConnection.setAuthenticator does not exist in Android's libcore, so JdkHttpFetcher is never used there; Android's HttpsURLConnection answers a 407 from the VM-global Authenticator.getDefault() with no per-connection suppression, the §10 residual, which is why the OkHttp fetcher is preferred). OkHttp: sslSocketFactory and x509TrustManager are replaced from FetcherTls unconditionally, the base client's hostnameVerifier is kept (R: must be OkHttp's default), and followRedirects(false), followSslRedirects(false), authenticator(NONE), cookieJar(NO_COOKIES) and cache(null) are forced (a consumer disk cache would serve the first ETag-less request, on a fresh install or after resetState(), from its own max-age) (§7.1 "redirects are never followed" holds at the transport); proxy, dns, interceptors and certificatePinner are inherited and consumer-owned: application and network interceptors see every revokt request, so the consumer must not attach credential-adding interceptors to the base client (the README warns)
 }
@@ -2097,7 +374,7 @@ val revokt.fetcherTrustManager: RevoktTrustManager          // created at build(
 expect class SeedSource internal constructor(…) { companion object { fun none(): SeedSource } }   // commonMain; internal open(): okio.Source? (Okio never appears in a public signature)
 // jvmMain: fun interface SeedOpener { fun open(): java.io.InputStream? }   // one functional type, usable from Java as a lambda; the actual companion adds @JvmStatic fun of(opener: SeedOpener): SeedSource /* asset packs, a downloaded seed; re-opened on every start task and sync() seed re-check; wrapped into okio internally */, @JvmStatic fun fromResource(path: String): SeedSource and @JvmStatic fun bundled(): SeedSource /* resolve through SeedSource::class.java.classLoader, then the thread context loader, in that order (app servers) */
 // jvmMain: object JvmSeedSource { @JvmStatic fun fromPath(path: java.nio.file.Path): SeedSource }   // mirrors JvmStorage
-class MozillaRemoteSettings private constructor(…) { class Builder { fun baseUrl(url: String): Builder; fun bucket(name: String): Builder /* security-state */; fun collection(dataset: Dataset, name: String): Builder /* cert-revocations */; fun attachmentBaseUrl(url: String): Builder /* default https://firefox-settings-attachments.cdn.mozilla.net/, §7.1 */; fun x5uHosts(hosts: Set<String>): Builder; fun x5uHostRewrite(from: String, to: String): Builder /* applied to the parsed x5u URI host before the x5uHosts check; hosts and rewrite targets are compared exactly, ASCII case included; makes a byte-for-byte reverse proxy of the three Mozilla hosts a supported mirror, §7.1. MozillaRemoteSettings.Builder.build() throws IllegalArgumentException when `to` is not in x5uHosts, and when an x5uHosts entry, or either side of an x5uHostRewrite, is not a host name in the grammar #181's X5uUrl checks at fetch time: labels of 1 to 63 ASCII letters, digits and '-', separated by single dots, a name of at most 253 characters, no trailing dot, and a last label that is neither all digits nor 0x-hex (so no IP literal); upper case is allowed, since comparison is exact; so build() and the fetch-time check accept the same set (revision 56, the maintainer's decision, worded from the #193 review; the second case's code is a follow-up in MozillaRemoteSettings) */; fun pinnedRootSpkiSha256s(hashes: Collection<ByteArray>): Builder /* compared by content */; fun userAgent(ua: String): Builder; fun sourceId(id: String): Builder /* default "mozilla-remote-settings"; the updater.json key */; fun build(): MozillaRemoteSettings }; companion object { @JvmField val DEFAULT: MozillaRemoteSettings } }   // the content signature is read from metadata.signatures[], each entry's signature, x5u and mode (an entry is tried only when its mode equals "p384ecdsa"; the algorithm is never derived from it); metadata.signature is not read (revision 56, §7.1)
+class MozillaRemoteSettings private constructor(…) { class Builder { fun baseUrl(url: String): Builder; fun bucket(name: String): Builder /* security-state */; fun collection(dataset: Dataset, name: String): Builder /* cert-revocations */; fun attachmentBaseUrl(url: String): Builder /* default https://firefox-settings-attachments.cdn.mozilla.net/, §7.1 */; fun x5uHosts(hosts: Set<String>): Builder; fun x5uHostRewrite(from: String, to: String): Builder /* applied to the parsed x5u URI host before the x5uHosts check; hosts and rewrite targets are compared exactly, ASCII case included; makes a byte-for-byte reverse proxy of the three Mozilla hosts a supported mirror, §7.1. MozillaRemoteSettings.Builder.build() throws IllegalArgumentException when `to` is not in x5uHosts, and when an x5uHosts entry, or either side of an x5uHostRewrite, is not a host name in the grammar X5uUrl checks at fetch time: labels of 1 to 63 ASCII letters, digits and '-', separated by single dots, a name of at most 253 characters, no trailing dot, and a last label that is neither all digits nor 0x-hex (so no IP literal); upper case is allowed, since comparison is exact; so build() and the fetch-time check accept the same set  */; fun pinnedRootSpkiSha256s(hashes: Collection<ByteArray>): Builder /* compared by content */; fun userAgent(ua: String): Builder; fun sourceId(id: String): Builder /* default "mozilla-remote-settings"; the updater.json key */; fun build(): MozillaRemoteSettings }; companion object { @JvmField val DEFAULT: MozillaRemoteSettings } }   // the content signature is read from metadata.signatures[], each entry's signature, x5u and mode (an entry is tried only when its mode equals "p384ecdsa"; the algorithm is never derived from it); metadata.signature is not read (§7.1)
 @JvmOverloads fun revokt.sslContext(delegate: X509TrustManager? = null, keyManagers: Array<KeyManager>? = null): SSLContext
 fun RevoktTrustManager.status(): TrustManagerStatus; suspend fun RevoktTrustManager.awaitReady(); fun RevoktTrustManager.readyFuture(): CompletableFuture<Void>   // = the owning Revokt's; kept so a binding that holds only the trust manager can wait
 fun RevoktTrustManager.refreshAnchors(): CompletableFuture<Void>   // rebuilds the anchor snapshot on the loader (rate-limited by ANCHOR_REFRESH_MIN_INTERVAL; a failed rebuild keeps the snapshot); for delegates that reload their trust store
@@ -2105,9 +382,9 @@ fun RevoktTrustManager.refreshAnchors(): CompletableFuture<Void>   // rebuilds t
 fun OkHttpClient.withRevokt(revokt: Revokt): OkHttpClient; fun OkHttpClient.revoktTrustManager(): RevoktTrustManager?   // the client's x509TrustManager when it is revokt's, else null; for a startup assertion
 class EvaluationRequest private constructor(…) { class Builder {
     fun presented(chain: List<ByteArray>): Builder            // leaf first, as sent; walked (decision steps 2–6)
-    fun verifiedPath(path: List<ByteArray>): Builder  // one platform-verified path, leaf → anchor (upki's single webpki VerifiedPath), at most MAX_DEPTH + 1 certificates, trusted without re-verification; source = PLATFORM; the walk is skipped; it is both the reported path and the exemptions' chain; a one-certificate path is FOUND under its own key and skips step 3's keyability check only when its leaf is an anchor by bytes in the snapshot read at entry (step 2's rule), else its leaf is gated like any leaf (revision 57, the maintainer's decisions on #195)
-    fun host(host: String?): Builder; fun nowMillis(nowMillis: Long): Builder; fun build(): EvaluationRequest } }   // at least one of presented/verifiedPath; build() also throws IllegalArgumentException when presented is set and empty, verifiedPath is set and empty (revision 56, the maintainer's decision), verifiedPath holds more than MAX_DEPTH + 1 certificates, or both are set and verifiedPath's first certificate is not byte-equal to presented[0] (revision 57, the maintainer's decision on #195); with both set the verified path wins and the walk is skipped; chainSource is derived. M5 adds credentialType(CredentialType) (growable, default X509), routed before decision step 3 with PathStatus.NOT_APPLICABLE; JSSE never delivers an MTC credential to an X509TrustManager, so M5 is Evaluator.evaluate-only
-sealed interface Evaluator { fun evaluate(request: EvaluationRequest): Verdict }   // sealed, never consumer-implemented, so members can be added; formerly `Engine`, renamed so it cannot collide with RevocationEngine
+    fun verifiedPath(path: List<ByteArray>): Builder  // one platform-verified path, leaf → anchor (upki's single webpki VerifiedPath), at most MAX_DEPTH + 1 certificates, trusted without re-verification; source = PLATFORM; the walk is skipped; it is both the reported path and the exemptions' chain; a one-certificate path is FOUND under its own key and skips step 3's keyability check only when its leaf is an anchor by bytes in the snapshot read at entry (step 2's rule), else its leaf is gated like any leaf
+    fun host(host: String?): Builder; fun nowMillis(nowMillis: Long): Builder; fun build(): EvaluationRequest } }   // at least one of presented/verifiedPath; build() also throws IllegalArgumentException when presented is set and empty, verifiedPath is set and empty, verifiedPath holds more than MAX_DEPTH + 1 certificates, or both are set and verifiedPath's first certificate is not byte-equal to presented[0]; with both set the verified path wins and the walk is skipped; chainSource is derived. M5 adds credentialType(CredentialType) (growable, default X509), routed before decision step 3 with PathStatus.NOT_APPLICABLE; JSSE never delivers an MTC credential to an X509TrustManager, so M5 is Evaluator.evaluate-only
+sealed interface Evaluator { fun evaluate(request: EvaluationRequest): Verdict }   // sealed, never consumer-implemented, so members can be added; not named `Engine`, so it cannot collide with RevocationEngine
 @Throws(CertificateException::class) @JvmOverloads fun Revokt.evaluate(chain: List<X509Certificate>, host: String? = null, delegate: X509TrustManager? = null): Verdict   // never waits; always runs step 1 (a null delegate resolves to platformTrust.defaultDelegate()) as `delegate.checkServerTrusted(chain.toTypedArray(), "UNKNOWN")`, the 2-arg call with SunJSSE's own TLS 1.3 authType (a signature-capable key-usage check, no endpoint identification since there is no peer; Conscrypt only requires a non-empty authType), host being used for host' only; a step-1 reject propagates the delegate's CertificateException unchanged, no Verdict (the annotation is what lets a Java caller catch it); with a delegate it uses (and if needed creates, counting toward MAX_TRUST_MANAGERS) the registry instance for that delegate and shares its caches; Evaluator.evaluate shares no trust-manager path or verdict cache
 // Raw DER in EvaluationRequest is presumed to come from a platform-accepted chain; PARSE_FAILED on caller-fabricated bytes is the caller's to police (§9.2). The JVM binding applies the §9.2 read fallback before it builds the request; raw bytes passed here get none
 ```
@@ -2125,10 +402,10 @@ enum class RuleClass { EVIDENCE, UNEVALUABLE, NON_ANSWER, DATA_QUALITY }
 enum class Rule(val ruleClass: RuleClass, val layer: Layer?, val exemptable: Boolean) {   // RuleClass.* and Layer.* are imported; constants below are unqualified for brevity
     REVOKED(EVIDENCE, CRLITE, false),                                   /* M2: DENYLIST, ONECRL, CRLSET; M3: CT; M4: DISTRUST */
     PATH_BUDGET_EXCEEDED(UNEVALUABLE, PATH, false), NO_DATA(UNEVALUABLE, null, true), ENGINE_ERROR(UNEVALUABLE, null, false),
-    PARSE_FAILED(UNEVALUABLE, PATH, false), ISSUER_UNVERIFIED(UNEVALUABLE, PATH, true), NO_ISSUER(UNEVALUABLE, PATH, true),
+    PARSE_FAILED(UNEVALUABLE, PATH, false), NO_ISSUER(UNEVALUABLE, PATH, true),
     NOT_ENROLLED(NON_ANSWER, CRLITE, true), NO_SCTS(NON_ANSWER, CRLITE, true), NOT_COVERED(NON_ANSWER, CRLITE, false),
                                                                         /* M2: ISSUER_UNKNOWN_TO_MOZILLA(NON_ANSWER, PATH, true); M3: CT_UNVERIFIED */
-    STALE(DATA_QUALITY, null, true), UNSIGNED_DATA(DATA_QUALITY, null, true);   // Rule.NO_DATA is driven by requiredDatasets, never by CrliteQueryResult.NO_DATA. The three data rules (NO_DATA, STALE, UNSIGNED_DATA) are exemptable (decision, revision 29): under STRICT a feed outage must not take down traffic under a private anchor the operator already exempted from CRLite; ExemptionContext carries path.anchorSha256 and host for the data rules too (the walk still runs)
+    STALE(DATA_QUALITY, null, true), UNSIGNED_DATA(DATA_QUALITY, null, true);   // Rule.NO_DATA is driven by requiredDatasets, never by CrliteQueryResult.NO_DATA. The three data rules (NO_DATA, STALE, UNSIGNED_DATA) are exemptable: under STRICT a feed outage must not take down traffic under a private anchor the operator already exempted from CRLite; ExemptionContext carries path.anchorSha256 and host for the data rules too (the walk still runs)
     companion object { @JvmField val PRECEDENCE: List<Rule> = entries }                 // declaration order; a test asserts entries == entries.sortedBy { it.ruleClass }
 }
 enum class Outcome { ALLOW, REJECT }                     // closed
@@ -2140,31 +417,31 @@ enum class EngineErrorProducer { BOUNDARY, ENGINE, EXEMPTION }   // growable; ex
 enum class Layer { PATH, CRLITE }                        // growable; M2: ONECRL, CRLSET, DENYLIST (L1/L2); M3: CT (L4); M4: DISTRUST (L5)
 enum class Dataset { CRLITE /* M2: INTERMEDIATES, ONECRL, CRLSET, DENYLIST; M3: CT_LOGS; M4: DISTRUST */ }   // growable; the freshness rule per dataset and source is §7.2 prose
 enum class Freshness { RECORD_LAST_MODIFIED, LAST_VERIFIED_POLL, MANIFEST_LAST_MODIFIED /* MIRROR and SYSTEM: the newest coverage end, §7.2; the name is historical */, SEED_SIGNED_TIME, SEQUENCE_TIME, ARTIFACT_DATE }   // growable; what a generation's sourceTimestamp means
-enum class PathStatus { FOUND, NO_ISSUER, ISSUER_UNVERIFIED, PATH_BUDGET_EXCEEDED, PARSE_FAILED, NOT_WALKED }   // growable; M5: NOT_APPLICABLE
+enum class PathStatus { FOUND, NO_ISSUER, PATH_BUDGET_EXCEEDED, PARSE_FAILED, NOT_WALKED }   // growable; M5: NOT_APPLICABLE
 enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable; parseReason != null ⇔ path.status == PARSE_FAILED (§5.1 step 3, §9.2 D8)
 enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; keyabilityClause != null ⇔ parseReason == PRODUCER_UNKEYABLE
 enum class TerminalKind { ANCHOR /* M2: PRELOAD */ }   // growable; the reported path's terminal (§5.1 invariant)
-enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
-enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and found no path: build returned null or threw; a thrown result is neither path- nor verdict-cached */ }   // growable; why decision step 6 evaluated no fallback path (§5.1, revision 50)
+enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, UNSUPPORTED_ALGORITHM, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
+enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and found no path: build returned null or threw; a thrown result is neither path- nor verdict-cached */ }   // growable; why decision step 6 evaluated no fallback path (§5.1)
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
 enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
 enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
 enum class ChainSource { PLATFORM, RECONSTRUCTED, PRESENTED /* reserved; produced by no M1 path */ }   // growable; PLATFORM: a platform-verified chain, §5.1 decision step 4 or EvaluationRequest.verifiedPath; M2: MIXED (paths from both a PLATFORM chain and the re-walk)
 enum class SyncOutcome { INSTALLED, UNCHANGED, DEFERRED /* a metered-deferred full (§7.2); not UNCHANGED, which reads as healthy */, FAILED, CLOCK_SKEW, ROLLBACK_REFUSED, BACKOFF, STORE_FAILED, STORE_LOCKED, BLOCKED_BY_SELF }   // growable
-enum class SyncStage { FETCHER_TRUST, CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: FETCHER_TRUST = the §5.1 build retry failed (no fetch); CHANGESET = the changeset fetch or its last_modified CLOCK_SKEW, and a mirror's manifest fetch or a malformed or over-cap manifest (§7.3, revision 58); X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), any x5u PEM or chain failure other than validity (which is CLOCK_SKEW at X5U), or the content signature (revision 57, §7.1); ATTACHMENT = a body fetch or the over-cap signed record, and a mirror file's fetch or a body whose size or SHA-256 differs from the manifest's (§7.3, revision 58); each producing bullet names its stage
+enum class SyncStage { FETCHER_TRUST, CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: FETCHER_TRUST = the §5.1 build retry failed (no fetch); CHANGESET = the changeset fetch or its last_modified CLOCK_SKEW, and a mirror's manifest fetch or a malformed or over-cap manifest (§7.3); X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), any x5u PEM or chain failure other than validity (which is CLOCK_SKEW at X5U), or the content signature (§7.1); ATTACHMENT = a body fetch or the over-cap signed record, and a mirror file's fetch or a body whose size or SHA-256 differs from the manifest's (§7.3); each producing bullet names its stage
 
 /** jvmMain. Time fields are stored as millis. Java: *Millis properties and java.time.Duration accessors/factories (API 26+). Kotlin: kotlin.time.Duration via @JvmSynthetic extensions. No inline value class on the surface. commonMain sees only an internal PolicyTable these compile to. */
 class Staleness private constructor(…) { val staleAfterMillis: Long; val rejectStaleAfterMillis: Long?   // staleAfter: loud threshold only (DataState.stale). rejectStaleAfter: the only threshold at which Rule.STALE fires; null = STALE never fires for this dataset
     fun staleAfter(): java.time.Duration; fun rejectStaleAfter(): java.time.Duration?
     companion object { @JvmStatic fun ofMillis(staleAfter: Long, rejectStaleAfter: Long?): Staleness; @JvmStatic fun of(staleAfter: java.time.Duration, rejectStaleAfter: java.time.Duration?): Staleness } }
 class PolicyDiagnostic private constructor(…) { val code: DiagnosticCode; val severity: Severity; val rule: Rule?; val dataset: Dataset?; val message: String }   // tests and consumers match on code, never on message
-class RevoktPolicy private constructor(…) {           // newBuilder() on any policy, keeping the preset it derives from (revision 56); no from-scratch builder; companion object { @JvmField val DEFAULT; @JvmField val STRICT }; fun exemption(rule: Rule): Exemption?
+class RevoktPolicy private constructor(…) {           // newBuilder() on any policy, keeping the preset it derives from; no from-scratch builder; companion object { @JvmField val DEFAULT; @JvmField val STRICT }; fun exemption(rule: Rule): Exemption?
     fun outcome(rule: Rule): Outcome; val requiredDatasets: Set<Dataset>; fun staleness(dataset: Dataset): Staleness?; fun minTrustClass(dataset: Dataset): TrustClass
     val rollbackWindowMillis: Long; val clockSkewMillis: Long; val signedSourceFailingAfterMillis: Long   // plus java.time accessors
-    class Builder {                                      // every method returns Builder; build() returns RevoktPolicy and runs the build()-time checks below; every duration and millis argument is ≥ 0, else IllegalArgumentException, and so is a java.time.Duration whose milliseconds overflow Long (revision 56)
-        fun rule(rule: Rule, outcome: Outcome): Builder                       // on NO_ISSUER or ISSUER_UNVERIFIED it sets both: the two share one outcome and one exemption (revision 57, the maintainer's decision on #196, as Firefox puts both errors in one override category); a policy cannot hold a split pair, so no V diagnostic exists for one
-        fun exempt(rule: Rule, exemption: Exemption): Builder                 // a second call for the same rule replaces the first; clearExemption(rule); exempt and clearExemption on NO_ISSUER or ISSUER_UNVERIFIED apply to both (revision 57)
-        fun exemptAnchors(sha256s: Collection<ByteArray>): Builder             // = exempt(rule, anchorIn(sha256s)) for every exemptable rule that is not EVIDENCE, is not marked "empty path" in the §8 table, and whose outcome in the builder at this call is REJECT; applied at its call position over the rule set as it stands then (a later rule() or exempt() on the same builder wins, so a narrower explicit exempt() written after it is kept): EVIDENCE rules (M2 ONECRL, M4 DISTRUST) need an explicit exempt(), so an M1 call never widens to evidence on upgrade, while a non-EVIDENCE rule that flips to REJECT in a later minor (M3 CT_UNVERIFIED) is covered by a call made after the flip, as a private CA wants; the "empty path" rules (NO_ISSUER, ISSUER_UNVERIFIED; a column of the golden fixture, so a future rule must declare it) fire only on an empty reported path, where anchorIn can never match (use hostSuffixIn, platformOnly), whereas M2's ISSUER_UNKNOWN_TO_MOZILLA fires on a Found path and is covered; sha256s are of each anchor's DER as revokt reads it (§5.3), which is getEncoded() unless the §9.2 read fallback applies
+    class Builder {                                      // every method returns Builder; build() returns RevoktPolicy and runs the build()-time checks below; every duration and millis argument is ≥ 0, else IllegalArgumentException, and so is a java.time.Duration whose milliseconds overflow Long
+        fun rule(rule: Rule, outcome: Outcome): Builder                       //
+        fun exempt(rule: Rule, exemption: Exemption): Builder                 // a second call for the same rule replaces the first; clearExemption(rule)
+        fun exemptAnchors(sha256s: Collection<ByteArray>): Builder             // = exempt(rule, anchorIn(sha256s)) for every exemptable rule that is not EVIDENCE, is not marked "empty path" in the §8 table, and whose outcome in the builder at this call is REJECT; applied at its call position over the rule set as it stands then (a later rule() or exempt() on the same builder wins, so a narrower explicit exempt() written after it is kept): EVIDENCE rules (M2 ONECRL, M4 DISTRUST) need an explicit exempt(), so an M1 call never widens to evidence on upgrade, while a non-EVIDENCE rule that flips to REJECT in a later minor (M3 CT_UNVERIFIED) is covered by a call made after the flip, as a private CA wants; the "empty path" rule (NO_ISSUER; a column of the golden fixture, so a future rule must declare it) fire only on an empty reported path, where anchorIn can never match (use hostSuffixIn, platformOnly), whereas M2's ISSUER_UNKNOWN_TO_MOZILLA fires on a Found path and is covered; sha256s are of each anchor's DER as revokt reads it (§5.3), which is getEncoded() unless the §9.2 read fallback applies
         fun requiredDatasets(set: Set<Dataset>): Builder
         fun staleness(dataset: Dataset, s: Staleness): Builder; fun clearStaleness(dataset: Dataset): Builder   // clearing a required dataset's entry → validate() WARNING STALENESS_CLEARED_FOR_REQUIRED_DATASET
         fun rejectStaleAfter(dataset: Dataset, d: java.time.Duration?): Builder; fun rejectStaleAfterMillis(dataset: Dataset, millis: Long?): Builder   // null clears only the reject threshold; the loud flag stays; on a dataset with no entry, creates one with staleAfter = rejectStaleAfter
@@ -2185,23 +462,23 @@ sealed interface Verdict {
     class Rejected private constructor(…) : Verdict { override val rule: Rule; class Builder { … } }   // non-null narrowing; Java getRule() is @NotNull on Rejected
 }
 sealed class Finding {
-    class Path : Finding() { val status: PathStatus; val source: ChainSource; val noIssuerReason: NoIssuerReason?; val walkerReason: NoIssuerReason?   // the walker's own reason before any PLATFORM_ONLY promotion; set on every walk NotFound, whatever the reported status (so a fallback Found after UNANCHORED still carries it), null otherwise (revision 56)
+    class Path : Finding() { val status: PathStatus; val source: ChainSource; val noIssuerReason: NoIssuerReason?; val walkerReason: NoIssuerReason?   // the walker's own reason before any PLATFORM_ONLY promotion; set on every walk NotFound, whatever the reported status (so a fallback Found after UNANCHORED still carries it), null otherwise
         val parseReason: ParseReason?                    // non-null ⇔ status == PARSE_FAILED
         val keyabilityClause: KeyabilityClause?          // non-null ⇔ parseReason == PRODUCER_UNKEYABLE (§9.2 K1–K8)
         val terminalKind: TerminalKind?                  // null when the reported path is empty; else ANCHOR in M1; M2: PRELOAD for a preload-only path (a terminal of last resort), where anchorSha256 is null
         val rewalkEnd: WalkEnd?                          // null unless a re-walk ran; M2: the re-walk's WalkEnd (COMPLETE or its exhaustion), which never demotes the first walk's Found
         val endReason: WalkEnd?                          // COMPLETE on Found/NotFound (the step-6 fallback-skipped exit included), the Budget's end on Budget, EXPLORATION_BUDGET with endDepth = 0 for the step-3 no-walk cut, null only when no walk ran (NOT_WALKED, PLATFORM, the step-2 anchor leaf)
-        val endDepth: Int?                               // path size at which the walk ended (1 = leaf level); null on a completed walk (Found, NotFound) and when no walk ran; set only on Budget, and 0 on the step-3 no-walk cut (revision 56)
-        val cacheHit: Boolean; val anchorSnapshotId: Long /* id of the snapshot read once at flow step 2 (Evaluator.evaluate: at its entry) and consumed at decision step 1; 0 when none was consulted (Evaluator.evaluate with a verifiedPath of two or more certificates, presented also set or not; a one-certificate verifiedPath consults the snapshot read at entry for step 2's anchor test and reports its id, revision 57); the walker harness assigns ids to its fixture snapshots */; val usedFallback: Boolean   // true whenever a fallback path was evaluated, Found or Budget
+        val endDepth: Int?                               // path size at which the walk ended (1 = leaf level); null on a completed walk (Found, NotFound) and when no walk ran; set only on Budget, and 0 on the step-3 no-walk cut
+        val cacheHit: Boolean; val anchorSnapshotId: Long /* id of the snapshot read once at flow step 2 (Evaluator.evaluate: at its entry) and consumed at decision step 1; 0 when none was consulted (Evaluator.evaluate with a verifiedPath of two or more certificates, presented also set or not; a one-certificate verifiedPath consults the snapshot read at entry for step 2's anchor test and reports its id); the walker harness assigns ids to its fixture snapshots */; val usedFallback: Boolean   // true whenever a fallback path was evaluated, Found or Budget
         val pathsFound: Int                              // on Found: the paths found (M2: first walk plus completed re-walk paths); on Budget: the partial paths
-        val reportedPathSha256s: List<ByteArray>         // DER hashes leaf → terminal of the reported path: the first found path, else the first partial path, else empty; on a Budget walk with a fallback path and no partial path, the fallback path, with terminalKind and anchorSha256 following it, so issuerSpkiSha256s[0] stays the reported path's key (revision 56)
+        val reportedPathSha256s: List<ByteArray>         // DER hashes leaf → terminal of the reported path: the first found path, else the first partial path, else empty; on a Budget walk with a fallback path and no partial path, the fallback path, with terminalKind and anchorSha256 following it, so issuerSpkiSha256s[0] stays the reported path's key
         val issuerSpkiSha256s: List<ByteArray>           // every distinct leaf-issuer key evaluated: walker keys in candidate order, then the fallback key if new; first is the reported path's
         val candidatesDropped: Int                       // presented or platform-built certificates the parser rejected and the walker never saw (§9.2 issuer corpus); also RevoktStatus.candidatesDropped
         val anchorSha256: ByteArray?                     // SHA-256 of the reported path's anchor DER; null when the reported path is empty or (M2) terminalKind == PRELOAD
         @RevoktInternalApi val walkStats: WalkStats      // @RevoktInternalApi class WalkStats(val verifications: Int, val candidatesExplored: Int, val relatedExploredAtLeaf: Int, val unrelatedExploredAtLeaf: Int), annotated at class level so it stays out of the dump; walker internals, opt-in
         val credentialType: CredentialType               // growable enum, X509 in M1; M5 adds MTC (reserved now so M5 lands additively) }
     class Crlite : Finding() { val result: CrliteQueryResult; val issuerSpkiSha256: ByteArray?; val coverageEndMillis: Long? }
-    class DataState : Finding() { val dataset: Dataset; val trustClass: TrustClass? /* null ⇔ generationId == null; UNSIGNED_DATA never fires on null */; val generationId: String?   // SIGNED: "<changeset timestamp>/<last applied record id>", the last filter in buildIndex placement order (the full, then deltas by (effectiveTimestamp, id); revision 57, #137); MIRROR/SYSTEM: manifest hash; seed: seed id; null ⇔ no generation
+    class DataState : Finding() { val dataset: Dataset; val trustClass: TrustClass? /* null ⇔ generationId == null; UNSIGNED_DATA never fires on null */; val generationId: String?   // SIGNED: "<changeset timestamp>/<last applied record id>", the last filter in buildIndex placement order (the full, then deltas by (effectiveTimestamp, id)); MIRROR/SYSTEM: manifest hash; seed: seed id; null ⇔ no generation
         val freshness: Freshness?; val fromSeed: Boolean; val sourceTimestampMillis: Long?; val ageMillis: Long?
         val pending: Boolean                             // true while the loader's start task has not passed the seed and system-cache steps for this dataset (in-process; the §8 STALE gate is the persisted one); false at the end of the start task whatever it found, a fetching source configured or not; Rule.NO_DATA never fires while pending (§5.1 overload table)
         val clockBehind: Boolean                         // sourceTimestampMillis > now + clockSkew, recomputed at every publish (a load after restart included) and never persisted (a future-dated seed, or a changeset installed under the §6.3 clock-behind rule): ageMillis is clamped at 0 and the CLOCK_BEHIND warning is on RevoktState.warnings while any dataset has it
@@ -2211,19 +488,19 @@ sealed class Finding {
     /* M2, reserved shape: class PathHit : Finding() { val rule: Rule; val dataset: Dataset; val certSha256: ByteArray; val onReportedPath: Boolean; val recordId: String? }  // M4: certSha256 == anchorSha256 */
     class UnsupportedAlgorithm : Finding() { val oid: String; val where: Layer; val outcomeDepended: Boolean }
     class VerifierError : Finding() { val oid: String; val message: String }   // a verifier or algorithm failure only: oid is the signature algorithm whose verification failed; never the PKIX fallback, which is FallbackNotUsed
-    class FallbackNotUsed : Finding() { val reason: FallbackReason }   // exactly one ⇔ the step-5 walk ended NotFound or Budget and usedFallback == false (§5.1 decision step 6, revision 50); named "not used" because a FAILED fallback did run
+    class FallbackNotUsed : Finding() { val reason: FallbackReason }   // exactly one ⇔ the step-5 walk ended NotFound or Budget and usedFallback == false (§5.1 decision step 6); named "not used" because a FAILED fallback did run
     class AlgorithmIdMismatch : Finding() { val certIndex: Int }
     class EngineError : Finding() { val message: String; val producer: EngineErrorProducer; val engineName: String? /* the engine's RevocationEngine.name (§3.2) when producer == ENGINE, so never null there: "kotlin" and "upki" for the two shipped engines */ }
     class Exempted : Finding() { val rule: Rule }
 }
-class PresentedChain private constructor(…) { val size: Int; fun der(i: Int): ByteArray; fun parsed(i: Int): Boolean; fun subject(i: Int): ByteArray; fun issuer(i: Int): ByteArray; fun spkiSha256(i: Int): ByteArray /* SHA-256 of the SPKI TLV */; fun serial(i: Int): ByteArray /* rawSerial: INTEGER content bytes as encoded, sign byte and leading zeros preserved */; fun dnsNames(i: Int): List<String> }   // every presented certificate in presented order, so index i is AlgorithmIdMismatch.certIndex's (revision 56, the maintainer's decision); an entry revokt did not parse keeps its raw der(i), has parsed(i) false, and empty subject, issuer, spkiSha256 and serial and an empty dnsNames, so nothing matches it; equality is by each entry's bytes and parsed flag; ByteArray getters return copies; an index outside 0 until size throws IndexOutOfBoundsException
+class PresentedChain private constructor(…) { val size: Int; fun der(i: Int): ByteArray; fun parsed(i: Int): Boolean; fun subject(i: Int): ByteArray; fun issuer(i: Int): ByteArray; fun spkiSha256(i: Int): ByteArray /* SHA-256 of the SPKI TLV */; fun serial(i: Int): ByteArray /* rawSerial: INTEGER content bytes as encoded, sign byte and leading zeros preserved */; fun dnsNames(i: Int): List<String> }   // every presented certificate in presented order, so index i is AlgorithmIdMismatch.certIndex's; an entry revokt did not parse keeps its raw der(i), has parsed(i) false, and empty subject, issuer, spkiSha256 and serial and an empty dnsNames, so nothing matches it; equality is by each entry's bytes and parsed flag; ByteArray getters return copies; an index outside 0 until size throws IndexOutOfBoundsException
 fun interface Exemption { fun isExempt(context: ExemptionContext): Boolean   // pure; runs after policy mapping for fired REJECT rules on exemptable rules; cached with the verdict; a throw = not exempt + Finding.EngineError(EXEMPTION)
     companion object {                                                        // shipped helpers, commonMain, in the same file as Exemption (a companion cannot straddle source sets; they need only ByteArray, String and okio.ByteString); the enterprise-CA and §5.2-gap cases without hand-written lambdas
-        @JvmStatic fun anchorIn(sha256s: Collection<ByteArray>): Exemption   // copied into a Set<okio.ByteString> at construction; matches context.path.anchorSha256 by content, the anchor of the reported path (reportedPathSha256s; M1: the first path found in §5.1's candidate order; revision 57, the maintainer's decision on #196, as Firefox applies its anchor-dependent rules to the one chain it built)
-        @JvmStatic fun hostIn(hosts: Collection<String>): Exemption          // each entry normalised as host' (§5.1 flow step 2); matches context.host, which on an HTTP/2-coalesced connection is the host OkHttp handshook for (§5.1); an entry that is not ASCII (pass the A-label), is empty after normalisation, starts with '.' or holds a '*' throws IllegalArgumentException when the exemption is made (revision 56); an empty or null context.host never matches
+        @JvmStatic fun anchorIn(sha256s: Collection<ByteArray>): Exemption   // copied into a Set<okio.ByteString> at construction; matches context.path.anchorSha256 by content, the anchor of the reported path (reportedPathSha256s; M1: the first path found in §5.1's candidate order, as Firefox applies its anchor-dependent rules to the one chain it built)
+        @JvmStatic fun hostIn(hosts: Collection<String>): Exemption          // each entry normalised as host' (§5.1 flow step 2); matches context.host, which on an HTTP/2-coalesced connection is the host OkHttp handshook for (§5.1); an entry that is not ASCII (pass the A-label), is empty after normalisation, starts with '.' or holds a '*' throws IllegalArgumentException when the exemption is made; an empty or null context.host never matches
         @JvmStatic fun hostSuffixIn(suffixes: Collection<String>): Exemption // host' equals a suffix or ends with "." + suffix; private CAs serve many subdomains; entries normalised and checked as for hostIn
         @JvmStatic fun platformOnly(): Exemption } }                         // context.path.noIssuerReason == PLATFORM_ONLY; a null host or anchorSha256 never matches hostIn/anchorIn
-// Exemptions.kt, @file:JvmName("Exemptions"): infix fun Exemption.and(other: Exemption): Exemption; infix fun Exemption.or(other: Exemption): Exemption   // Java: Exemptions.and(a, b). CEL's && and || (revision 56, the maintainer's decision): short-circuiting but commutative; the side that decides the result wins whatever the other side did (true or broken = broken or true = exempt; false and broken = broken and false = not exempt), and its partner's throw is absorbed and not recorded; with no deciding side the first throw propagates and is recorded as not exempt plus the EXEMPTION engine error (when both throw, the left operand's); a fatal error (§5.5's catch rule) propagates at once; the outcome and findings never depend on operand order
+// Exemptions.kt, @file:JvmName("Exemptions"): infix fun Exemption.and(other: Exemption): Exemption; infix fun Exemption.or(other: Exemption): Exemption   // Java: Exemptions.and(a, b). CEL's && and ||: short-circuiting but commutative; the side that decides the result wins whatever the other side did (true or broken = broken or true = exempt; false and broken = broken and false = not exempt), and its partner's throw is absorbed and not recorded; with no deciding side the first throw propagates and is recorded as not exempt plus the EXEMPTION engine error (when both throw, the left operand's); a fatal error (§5.5's catch rule) propagates at once; the outcome and findings never depend on operand order
 class ExemptionContext private constructor(…) { val rule: Rule; val chain: PresentedChain? /* null for a non-X.509 credential (M5) */; val credentialType: CredentialType; val path: Finding.Path; val host: String? /* normalised */; val nowMillis: Long; val dataStates: Map<Dataset, Finding.DataState> }   // growable: new evidence (M3 SCTs, M4 distrust record) lands as new nullable properties; builder @RevoktTestingApi on the type
 class AnchorSnapshot private constructor(…) { val id: Long /* process-local counter, like generationEpoch; not stable across processes */; val sha256: ByteArray /* of the sorted anchor DERs only (the bytes read, §5.3); stable */; val anchors: List<ByteArray> /* each anchor's bytes read (§5.3); the snapshot also keeps the platform's anchor objects, whose getEncoded() the PKIX fallback is given */; val createdMillis: Long; val preloadGenerationId: String? /* null in M1; M2: the INTERMEDIATES generation the index holds; an INTERMEDIATES install rebuilds every live index and advances id, so both caches miss */ }
 class SyncResult private constructor(…) { val outcome: SyncOutcome; val atMillis: Long; val installed: Map<Dataset, String> /* each dataset this sync installed, with the installed generation's id */; val sourceId: String? /* the source the outcome is about */; val stage: SyncStage? /* where a FAILED/STORE_FAILED/CLOCK_SKEW sync stopped */; val httpStatus: Int? /* the last response status when a fetch was involved */; @Transient val cause: Throwable? /* the fetcher's or loader's throwable; not persisted, null when read back; not part of equality or toString */; val blockedSource: String? /* BLOCKED_BY_SELF: which source */; val blockedChainSha256: ByteArray?; val blockedLeafSerial: ByteArray? /* BLOCKED_BY_SELF only */; val warnings: List<PolicyDiagnostic> }
@@ -2267,7 +544,7 @@ managers' verdicts (public and per-source) neither count in `evaluations` nor em
 |---|---|
 | `FOUND`, `NOT_WALKED` | nothing |
 | `NO_ISSUER` (any reason, including `PLATFORM_ONLY`) | `NO_ISSUER` |
-| `ISSUER_UNVERIFIED`, `PATH_BUDGET_EXCEEDED`, `PARSE_FAILED` | the same-named rule |
+| `PATH_BUDGET_EXCEEDED`, `PARSE_FAILED` | the same-named rule |
 
 | `CrliteQueryResult` | fires |
 |---|---|
@@ -2295,7 +572,7 @@ flow step 2, computed **before** the catch boundary and merged into every verdic
 `ENGINE_ERROR` included.
 
 **Growability contract.** `newBuilder()` works on any policy and keeps the preset it derives from, so every policy
-derives from a preset (revision 56; "only from a preset" before). A `Rule` added in a minor
+derives from a preset. A `Rule` added in a minor
 takes the preset's table value in every derived policy; **every post-1.0 rule that will be `REJECT`
 in any preset, `STRICT` included, ships `ALLOW` in that preset for one minor and flips in the next
 with a release note** (the M2 rows are the 0.4 → 1.0 transition and are the only exception); preset
@@ -2326,7 +603,7 @@ remaining a subsequence.
   V `FORMAT_UNSUPPORTED`: a `remoteSettings` source while `V3 ∉ revocationEngine.formats`, or a `c2spMirror`
   while `V4 ∉ formats` → `WARNING` under `OBSERVE`, `ERROR` under `ENFORCE` (Mozilla serves v3, `upki.rustls.dev` v4; both shipped engines list both, so it fires only for a third-party engine). V `NO_FETCHING_SOURCE`: a required dataset with a local data source and no fetching source → `WARNING` under both enforcements (the instance updates only through `sync()`'s seed re-check, §4). `minTrustClass(dataset)` for a dataset with no entry is
   the preset floor, which therefore applies to datasets added later.
-- **Under `Enforcement.OFF` every V diagnostic is a `WARNING`** (revision 56), so an `ERROR` can never block the switch
+- **Under `Enforcement.OFF` every V diagnostic is a `WARNING`**, so an `ERROR` can never block the switch
   to the kill switch; this binds every `ERROR`-capable V code, the ones `validate()` adds in `revokt-jsse` included.
 - Each diagnostic names its `DiagnosticCode` and the call that emits it: **B** = `RevoktPolicy.Builder`
   method throws `IllegalArgumentException`; **R** = `Revokt.Builder.build()` throws `IllegalArgumentException`; **V** = `validate(enforcement)` returns it (the setter and
@@ -2351,14 +628,14 @@ remaining a subsequence.
   exemption is `ALLOW` by another name). A
   preset's own `ALLOW` rows (a new evidence rule in its one-minor grace) never fire it: **every preset passes `validate(ENFORCE)` with no `ERROR` at every
   release** (a §9 test).
-- S `UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP`: `outcome(ISSUER_UNVERIFIED) == REJECT && unsupportedOids() ∩ classicalOids ≠ ∅` → `WARNING`; `classicalOids` = RSA PKCS#1 with SHA-256/384/512, ECDSA P-256/P-384 with SHA-2, Ed25519.
+- S `UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP`: `outcome(NO_ISSUER) == REJECT && unsupportedOids() ∩ classicalOids ≠ ∅` → `WARNING`; `classicalOids` = RSA PKCS#1 with SHA-256/384/512, ECDSA P-256/P-384 with SHA-2, Ed25519.
 - S `RULE_FLIPPED_THIS_MINOR`: for every rule with `flippedIn == current minor` whose outcome in the consumer's policy is `REJECT` by inheritance → `WARNING` on `RevoktState.warnings` (a runtime signal that this build enforces a newly flipped rule; a rule in its grace minor is visible only in `fired`).
 - S `FETCHER_TRUST_UNAVAILABLE`: `fetcherTrustManager`'s snapshot build failed in `start()` → `WARNING` (cleared by the first successful build); each sync first retries the build on the loader (under the factory lock) and, while it fails, is `FAILED` without a fetch (stage `FETCHER_TRUST`, `sourceId` null, every configured fetching source's `consecutiveFailures` advancing; counting toward `signedSourceFailing` and the failure backoff as any `FAILED`); with a fetching source configured the public instance never attempts the lazy build itself, a handshake on it counts `unevaluated[FETCHER_SNAPSHOT_UNAVAILABLE]` until the loader's retry succeeds.
 - V `NO_DATA_AT_FLIP` (the one state-dependent V code): in `STARTED`, `validate(ENFORCE)` (the enforcement setter, and the policy setter against the current enforcement) returns `ERROR` when `outcome(NO_DATA) == REJECT` and a required dataset has `generationId == null`, `pending == false` and a `SEED_UNREADABLE`/`STORE_UNREADABLE` warning for its sole local source; while `pending == true` the flip is accepted and the dataset becomes `NO_DATA` if the start task finds nothing, which `validate()` cannot see.
 - Sync `FEED_HOST_REVOKED` (on `SyncResult.warnings`, and carried on `RevoktState.warnings` while `feedHostRevoked`): the signed source's hold expired and fetches proceed (§8). Sync `CLOCK_BEHIND` (and on `RevoktState.warnings` while any dataset has `clockBehind`): a future-dated seed or changeset was installed under the §6.3 rule, so the local clock is behind the signed data.
 - V `STRICT_ON_ANDROID_WITHOUT_NO_ISSUER_EXEMPTION`: `STRICT` on `AndroidPlatformTrust` with no `NO_ISSUER` exemption → `WARNING` citing the §5.2 gap.
 - V `BUDGET_ALLOWS`: `outcome(PATH_BUDGET_EXCEEDED) == ALLOW` → `WARNING` (re-opens the stuffing evasion).
-- V `IO_DISPATCHER_UNCONFINED` (revision 56, the maintainer's decision): `ioDispatcher` is exactly
+- V `IO_DISPATCHER_UNCONFINED`: `ioDispatcher` is exactly
   `Dispatchers.Unconfined` → `WARNING` under both enforcements (fetches would run on the loader thread, defeating the
   per-fetch timeout, §4). Other inline executors are covered by §4's sentence only.
 - R: `outcome(NO_ISSUER) == ALLOW` with the PKIX fallback disabled (§5.1: the fallback is load-bearing).
@@ -2366,14 +643,14 @@ remaining a subsequence.
   whose `minTrustClass` is above that class while `outcome(UNSIGNED_DATA) == REJECT` → `WARNING`
   (the loader will never install it, §7.3).
 - (not a diagnostic) An empty anchor set, a throwing `getAcceptedIssuers()` or a failed index build throws `IllegalStateException` from `trustManager(delegate)` in `STARTED` and from `start()` for consumer trust managers created in `CREATED`, on both platforms (§5.1 "Anchor snapshot"); `fetcherTrustManager`'s failure is the S `FETCHER_TRUST_UNAVAILABLE` warning instead.
-- S `SOURCE_EMPTY` (revision 56): the system cache holds no filters or no coverage, so it is not installed (§7.3).
+- S `SOURCE_EMPTY`: the system cache holds no filters or no coverage, so it is not installed (§7.3).
 - S `SEED_UNREADABLE` / `SEED_CHANNEL_MISMATCH` / `STORE_UNREADABLE` / `STORE_MIGRATED` / `STORE_NEWER_LAYOUT` (per §6.5) / `STORE_LOCKED` (per §5.1 read-only mode); S→`ERROR` thrown by `start()` under `ENFORCE` with `outcome(NO_DATA) == REJECT` when the seed is the only local data source and is unreadable: **in that configuration, and only when the synchronous `meta.json` read finds no complete stored generation (first run, a rebuild, corruption), the seed's verification, `index.bin` rebuild, `prepare`, the §6.5 self-check and `activate` run synchronously inside `start()` on the calling thread, before the flip and before any loader task exists (the one exception to "loader dispatcher only"; a self-check failure is `SEED_UNREADABLE` and throws here; the factory lock is released around this work, §5.1 lifecycle)**; with a complete stored generation the loader decodes it as §5.1 states (falling to `previous`, then the seed, so a readable store masks a bad seed and the common cold start never decodes on the calling thread), otherwise on the loader task (a loud failure in `CREATED`, platform-only, instead of a silent reject-all); `STORE_UNREADABLE` never throws (§6.5), and an unreadable sole `c2spCache` is a `STORE_UNREADABLE` warning with the dataset `NO_DATA` once the start task completes, which is why the seed is the default; a seed
   channel mismatch is an `ERROR` thrown synchronously by `start()` on both platforms (the `seed.json`
   header is read synchronously).
 - `NOT_STARTED` is not a warning: a trust manager or `sslContext()` obtained before `start()` runs step 1 only until `start()` and counts `unevaluated[NOT_STARTED]` (creating trust managers before `start()` is the recommended main-thread pattern, so it cannot be a stuck alert).
 - R `CHANNEL_UNSET`: no `channel` configured while a CRLite source (a seed included) is. R `PLATFORM_TRUST_MISMATCH`: Android runtime with a non-Android `platformTrust`. R `STORAGE_UNSET`: `AndroidPlatformTrust` with no explicit `storage` (§3).
-- R: a `c2spMirror` URL that §7.3's hop grammar refuses (IP literals allowed; revision 58), or one with a query or a fragment (§7.3: every mirror URL is the base followed by a name).
-- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2's over-cap built index, §6.5's index-name collision, and §7.3's manifest names), `SOURCE_EMPTY` (§7.3: a mirror with no filters or no coverage, with `FAILED` at stage `INDEX`; also an S code for a system cache at `start()`; revision 56), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
+- R: a `c2spMirror` URL that §7.3's hop grammar refuses (IP literals allowed), or one with a query or a fragment (§7.3: every mirror URL is the base followed by a name).
+- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2's over-cap built index, §6.5's index-name collision, and §7.3's manifest names), `SOURCE_EMPTY` (§7.3: a mirror with no filters or no coverage, with `FAILED` at stage `INDEX`; also an S code for a system cache at `start()`), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
 
 ## 5. Trust manager [M1]
 
@@ -2387,7 +664,7 @@ remaining a subsequence.
 | `MAX_PRESENTED` / `MAX_PRESENTED_BYTES` | 64 / 1 MiB | presented certificates and their summed DER; beyond either the chain is `Budget(EXPLORATION_BUDGET)` without a walk (honest chains are under 20 KB; bounds per-handshake memory independently of `MAX_CERT_BYTES`) |
 | `MAX_RELATED_PER_LEVEL` | 64 | related candidates explored at one node; the 65th triggers `RELATED_BUDGET` without being explored |
 | `MAX_VERIFICATIONS` | 256 | verifier calls per walk (memo hits excluded; the guard-tripping attempt not counted) |
-| `MAX_EXPLORED` | 1,024 | candidates for which verification was requested per walk, memo hits included |
+| `MAX_EXPLORED` | 1,024 | candidates explored per walk, a candidate refused by the CA check and memo hits included |
 | `FALLBACK_MAX_PRESENTED` | 8 | the PKIX fallback is skipped for longer presented chains; a `NotFound` on such a chain is `PATH_BUDGET_EXCEEDED`, never `NO_ISSUER`, whether the platform accepted it in step 1 or step 1 did not run (the walker-only harness, `Evaluator.evaluate`), and with the fallback enabled or disabled (decision step 6) |
 | `PATH_CACHE_ENTRIES` / `PATH_CACHE_TTL` | 256 / 10 min | per trust manager; TTLs are absolute from insertion on the monotonic `TimeSource`, not sliding; entries hold the leaf's DER, `serial` and `scts` only, never the presented chain |
 | `CROSS_CALL_MEMO_ENTRIES` | 1,024 | per `Revokt`; `VERIFIED` only; synchronized, shared by concurrent handshake threads across trust managers |
@@ -2401,7 +678,7 @@ remaining a subsequence.
 | `MAX_TRUST_MANAGERS` | 16 | live instances per `Revokt`, builder-overridable in both directions, ≥ 1 (`limits { maxTrustManagers }`); live referents are counted through `WeakReference`, and before the cap throws every entry whose referent has cleared is evicted regardless of `ReferenceQueue` delivery, so a rebuilt client's dropped instance never counts |
 | `MAX_CERT_BYTES` | 262144 | per-certificate DER size (measured max over the seed corpus with margin), of `getEncoded()` before any parse and again of the bytes read (§5.3, §9.2); a larger certificate is a dropped candidate (`candidatesDropped`; leaf: `PARSE_FAILED(OVERSIZE)`); §9.2 fuzzes to the cap + 1 and asserts the over-cap behaviour |
 | `MAX_FILTER_BYTES`, `MAX_JSON_BYTES`, `MAX_X5U_BYTES` | 16 MiB, 4 MiB, 64 KiB | caps for **unsigned** bodies (mirror and system-cache files, the changeset JSON itself, x5u; a system cache's `index.bin` is read only up to 1 MiB, §3.2); for a `SIGNED` attachment the cap is `min(attachment.size, MAX_FILTER_BYTES)` (hash and size both verified; a signed record declaring more is `SyncOutcome.FAILED` with `CAP_NEAR_LIMIT` (stage `ATTACHMENT`) and advances nothing: a 16 MiB freeze is recoverable by raising the cap, a crash loop from one bad signed record is not); enforced while inflating; bodies are fetched, verified and written **one at a time**, so heap peak is one body plus its decode |
-| `MAX_MANIFEST_ENTRIES`, `MAX_CHANGESET_RECORDS` | 256 (32 before revision 56; Remote Settings listed 53 records a channel on 2026-11-12), 256 | manifest cap over C2SP attachments to fetch; record cap per changeset after channel filtering; a manifest or changeset over its cap is rejected before any body fetch. There is no per-sync total (revision 57, the maintainer's decision on #137: neither upki nor Firefox has one), so a sync is bounded by these counts and the per-file caps, about 4 GiB from a malicious mirror (256 × 16 MiB), which is accepted |
+| `MAX_MANIFEST_ENTRIES`, `MAX_CHANGESET_RECORDS` | 256 (Remote Settings listed 53 records a channel on 2026-11-12), 256 | manifest cap over C2SP attachments to fetch; record cap per changeset after channel filtering; a manifest or changeset over its cap is rejected before any body fetch. There is no per-sync total (neither upki nor Firefox has one), so a sync is bounded by these counts and the per-file caps, about 4 GiB from a malicious mirror (256 × 16 MiB), which is accepted |
 | `READONLY_POLL_INTERVAL` | 60 s | a read-only instance's pointer re-read and lock retry |
 | `MAX_BACKOFF` | 24 h | cap on honoured `Backoff`/`Retry-After` and on persisted `backoffUntilMillis`; computed failure backoff ≤ the 6 h poll interval |
 | `AWAIT_DATA_COMPAT`, `AWAIT_DATA_DEFAULT` | measured (§6.4) on Android; a fixed 2 s on the JVM (§11) | readiness deadline per channel |
@@ -2415,7 +692,7 @@ checkServerTrusted(chain, authType, socket|engine|host|none)
   0. readiness (after step 1; waiting overloads only, under needsData): dataReady.get(max(0, dataDeadline − now)), TimeoutException = proceed; the anchor snapshot needs no wait, it exists before any handshake can go past step 1 (§5.1 "Anchor snapshot")
      needsData = requiredDatasets.isNotEmpty() && (outcome(NO_DATA) == REJECT || outcome(NO_ISSUER) == REJECT), from the (policy, policyEpoch) pair read once here when step 0 runs   // NO_ISSUER is here because from M2 the preload is data that can turn NO_ISSUER into Found
   2. gen = generationSnapshot (one @Volatile read: generation, epoch, dataStates, coverageEnd; threaded through decide and the engine query)
-     chainHash = sha256(for each cert in order: u32be(len) ‖ DER); host' = host (argument, socket.handshakeSession.peerHost or engine.peerHost) with ASCII A–Z folded to lowercase, never Unicode case folding (RFC 4343), and one trailing dot stripped, applied once (it is not idempotent) when ExemptionContext.host is filled; an empty result is no host (revision 56)
+     chainHash = sha256(for each cert in order: u32be(len) ‖ DER); host' = host (argument, socket.handshakeSession.peerHost or engine.peerHost) with ASCII A–Z folded to lowercase, never Unicode case folding (RFC 4343), and one trailing dot stripped, applied once (it is not idempotent) when ExemptionContext.host is filled; an empty result is no host
      (policy, policyEpoch) = the pair step 0 read, else one @Volatile read now; threaded through steps 3, 7, 8, the exemptions and the cache put
      (shadowPolicy, shadowPolicyEpoch) = likewise, read beside the policy pair at step 0 or here; threaded through step 3a and the cache put
      for a Socket or SSLEngine overload: acceptanceMemo.put(chainHash, host')   // flow step 1 returned, so the platform accepted this chain and host; written before any lifecycle or Enforcement check (under OFF, in CREATED and in CLOSED the write still happens right after flow step 1)
@@ -2424,7 +701,7 @@ checkServerTrusted(chain, authType, socket|engine|host|none)
      pathKey = (chainHash, anchorSnapshotId, host' if step 4 would run on this platform and host' != null)
      walk = pathCache[pathKey] ?: decide(chain, index).also { cache unless decide threw or step 6's build threw }               // decide = decision steps 1–6 only (the path result; no CRLite query, so the path cache is valid across installs)
   3. verdict = evaluate(walk, gen, policy)                                                            // decision steps 7–8; the enforced catch boundary closes here: the verdict is final before any event work
-  3a. shadowVerdict = evaluate(walk, gen, shadowPolicy) under its own boundary (the §5.5 catch rule) when set, skipped (null) when verdict carries EngineError(BOUNDARY)   // after the enforced boundary closed: a throw yields a shadow Verdict carrying Finding.EngineError(BOUNDARY) and never touches `verdict`; verdictCache.put(verdict, shadowVerdict) unless `verdict` is ENGINE_ERROR or step 6's build threw (revision 50: a throw's outcome is cached nowhere), with shadowVerdict stored as null when it is a shadow-only ENGINE_ERROR (never cached, counted once on this miss); counters (`rejects`/`wouldRejects`/`fired`/`exempted`, per-dataset and per-reason maps from `verdict`; `shadowWouldRejects` from `shadowVerdict`) are applied by `apply()` here, after 3a, never inside `evaluate`. Runs on every trust-manager path and in `Revokt.evaluate` (which shares the registry caches); `Evaluator.evaluate` evaluates the enforced policy only, `shadowVerdict` null
+  3a. shadowVerdict = evaluate(walk, gen, shadowPolicy) under its own boundary (the §5.5 catch rule) when set, skipped (null) when verdict carries EngineError(BOUNDARY)   // after the enforced boundary closed: a throw yields a shadow Verdict carrying Finding.EngineError(BOUNDARY) and never touches `verdict`; verdictCache.put(verdict, shadowVerdict) unless `verdict` is ENGINE_ERROR or step 6's build threw (a throw's outcome is cached nowhere), with shadowVerdict stored as null when it is a shadow-only ENGINE_ERROR (never cached, counted once on this miss); counters (`rejects`/`wouldRejects`/`fired`/`exempted`, per-dataset and per-reason maps from `verdict`; `shadowWouldRejects` from `shadowVerdict`) are applied by `apply()` here, after 3a, never inside `evaluate`. Runs on every trust-manager path and in `Revokt.evaluate` (which shares the registry caches); `Evaluator.evaluate` evaluates the enforced policy only, `shadowVerdict` null
   3b. emit event (verdict-cache misses only): each listener's drain submission (executor.execute) runs under its own try/catch; a throw (RejectedExecutionException after shutdown, or any Throwable other than a VirtualMachineError except StackOverflowError, as §5.5) counts listenerFailures, removes that listener and clears its cursor; the ring entry is untouched, so droppedEvents/droppedRejectedEvents are unaffected; nothing here changes the verdict or step 4
   4. if enforcement == ENFORCE && verdict is Rejected throw RevoktCertificateException(verdict)
 ```
@@ -2459,22 +736,22 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    with and without a `<domain-config>`, it does not establish availability.
 5. `walk = reconstruct(presented, index)`; `Found` → step 7.
 6. `fallback = pathBuilder.build(presented, anchors, now)` if the fallback is enabled and `presented.size ≤ FALLBACK_MAX_PRESENTED`,
-   cached under the path key; a `build` that returns null or throws is a **failed** fallback. A throw is caught here
+   cached under the path key; a `build` that returns null, throws, or returns a path decide cannot use (empty, holding a
+   null element, not starting with the presented leaf's bytes, with an intermediate that does not parse or is not a
+   CA, or with a leaf-issuer key that cannot be read) is a **failed** fallback. A throw is caught here
    and is never an engine error, except that every `VirtualMachineError` other than `StackOverflowError` is rethrown,
    as at §5.5's catch boundary. A result produced by a throw is **not** cached, neither in the path cache nor, through
-   its verdict, in the verdict cache (flow step 3a), so a transient error is not remembered; a null return is (the
-   maintainer's choice, revision 50):
+   its verdict, in the verdict cache (flow step 3a), so a transient error is not remembered; a null return is:
    - walk `NotFound` and the fallback finds a path → `Found([fallback], usedFallback = true)`.
    - walk `NotFound`, the fallback was **skipped** (chain too long) and the platform accepted in
      step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
      no honest Web PKI chain is longer than 8 certificates and unreproducible by the walker, and the
      server controls chain length.
-   - walk `NotFound` and the fallback failed (`FallbackNotUsed(FAILED)`) (revision 57, the maintainer's decisions on
-     #196 and #197): on a trust-manager binding (and `Revokt.evaluate`, which always runs step 1), **any** such walk
+   - walk `NotFound` and the fallback failed (`FallbackNotUsed(FAILED)`): on a trust-manager binding (and `Revokt.evaluate`, which always runs step 1), **any** such walk
      `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`, whatever the walk recorded: the platform trusts a chain neither revokt's
      walker nor its PKIX builder can reproduce (divergent canonicalisation, constraints, verifier or anchors). The
      walker's own reason is kept in `Finding.Path.walkerReason`, and every recorded OID in an `UnsupportedAlgorithm`
-     finding. In the walker-only harness and `Evaluator.evaluate` it is `ISSUER_UNVERIFIED` when the walk recorded an
+     finding. In the walker-only harness and `Evaluator.evaluate` it is `NO_ISSUER(UNSUPPORTED_ALGORITHM)` when the walk recorded an
      own signature OID (`tbsSigOid`) in `unsupportedOids()`, in mozilla::pkix's order (`CheckIssuerIndependentProperties`
      runs before `VerifySignedData`):
      - every related candidate that is not an anchor, when explored, whether or not it verifies its child;
@@ -2483,22 +760,23 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
        alone is `NO_ISSUER(NO_CANDIDATE)`.
 
      A candidate's key or curve OID never counts. Otherwise it is `NO_ISSUER` with the walker's reason. A server can
-     relabel `NO_ISSUER` as `ISSUER_UNVERIFIED` there, so the two rules share one outcome and one exemption (§4, §8).
+     steer the reason there, which is why it is a reason of one rule and not a rule of its own; `walkerReason` keeps
+     the walk's reason.
      Unlike pkix, there is no collapse to one error when candidates fail differently.
    - walk `Budget`: the fallback path's issuer key (appended last) and the walk's partial leaf keys
      are evaluated in step 7 **only so that `REVOKED` is reported when reachable**; the path status
      is `PATH_BUDGET_EXCEEDED` regardless; `usedFallback = true` when a fallback path was evaluated.
-   - **fallback disabled** (`pkixFallback(false)`, and the walker-only harness's disabled path; revision 49):
+   - **fallback disabled** (`pkixFallback(false)`, and the walker-only harness's disabled path):
      `pathBuilder.build` is never called, and step 6 gives what the branches above give when no fallback path
      exists, with `FallbackNotUsed(DISABLED)` wherever the fallback did not run because it is configured off
      (`SKIPPED` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
      as with the fallback enabled, with only the walk's partial leaf keys evaluated and `usedFallback = false`; walk
      `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE`,
-     whether or not step 1 ran; any other walk `NotFound` → `ISSUER_UNVERIFIED` or `NO_ISSUER` under the
+     whether or not step 1 ran; any other walk `NotFound` → `NO_ISSUER`, its reason under the
      fallback-failed branch's rule. On a trust-manager binding any such walk `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`,
-     whatever the label (revision 57): the platform trusts a chain the walker cannot reproduce, and no PKIX builder ran;
+     whatever the reason: the platform trusts a chain the walker cannot reproduce, and no PKIX builder ran;
      `walkerReason` keeps the walker's reason.
-   - **The fallback finding** (revision 50): exactly one `Finding.FallbackNotUsed` when the walk ended `NotFound` or
+   - **The fallback finding**: exactly one `Finding.FallbackNotUsed` when the walk ended `NotFound` or
      `Budget` and no fallback path was evaluated (`usedFallback = false`), on every branch above: `DISABLED` with the
      fallback disabled; else `SKIPPED` when `presented.size > FALLBACK_MAX_PRESENTED`; else `FAILED`. A fallback
      path evaluated, a walk `Found`, and every exit before step 5 carry none. It never changes the path status or a
@@ -2513,7 +791,7 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    policy; exemptions for fired exemptable `REJECT` rules; `Verdict.rule` is the first fired,
    non-exempted `REJECT` rule in `Rule.PRECEDENCE`; `rejects`/`wouldRejects` increment once on it;
    `fired` and `exempted` increment per rule.
-   **Steps 7 and 8, decided** (revision 56, the maintainer's readings R1 to R5 on #133):
+   **Steps 7 and 8, in detail**:
    - **Engine results:** an engine `ERROR`, or a published `NO_DATA` that does not fire `ENGINE_ERROR` (another key is
      `REVOKED`, for example), is recorded in that key's `Finding.Crlite`; `Finding.EngineError(ENGINE)` is attached
      only when `ENGINE_ERROR` fires from the engine.
@@ -2526,10 +804,10 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    - **`engine.query` throwing** (a breach of its never-throws contract) is caught at the boundary: producer
      `BOUNDARY`, `engineName` null. Keys answered before it keep their findings and rules, and later keys are not
      queried.
-   - **No key** (revision 57, matching the merged evaluator): a decision whose status fires no rule of its own
+   - **No key**: a decision whose status fires no rule of its own
      (`FOUND`, `NOT_WALKED`) and that has no leaf-issuer key is the boundary's `ENGINE_ERROR`, so an empty key set is
      never a clean answer. `Evaluator.evaluate` with a `verifiedPath` whose second certificate revokt cannot parse
-     reaches it: the path is `FOUND` with no key (#195).
+     reaches it: the path is `FOUND` with no key.
 
 | Overload | Who calls it | Waits? | Before readiness |
 |---|---|---|---|
@@ -2537,8 +815,6 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
 | `(chain, authType, String host)` 3-arg | OkHttp's Android chain cleaner, lazily after the socket overload (flow step 1) | yes | its step 1 is defined at flow step 1: the extension call with host', with the null-host retry only for a chain and host a socket or engine overload already accepted (acceptance memo entry present, flow step 1; never a path-cache lookup); at most two platform validations per call, the second only the null-host retry, the last one's returned list being the call's return value and its step-4 result; declared on the final `RevoktTrustManager` in `revokt-jsse` (`revokt-android` cannot subclass it); on the JVM, where `verifiedChain` is null, it returns the presented chain as a list |
 | `(chain, authType, SSLEngine)` | `java.net.http`, Netty, Ktor Java | no | seed if loaded; while the start task has not passed the seed and system-cache steps the dataset is `pending` and `NO_DATA` does not fire (allow), so the Android seed load never rejects on a non-waiting overload; `NO_DATA` only once the start task found nothing local; the anchor snapshot always exists in `STARTED` |
 | `(chain, authType)` 2-arg | Ktor CIO, casts to `X509TrustManager` | no | as above; step 5 runs via `reconstruct` |
-
-**HTTP/2 coalescing (OkHttp, verified in `RealConnection.isEligible`).** A request to host B reuses an established HTTP/2 connection to host A when the route's socket address matches, A's certificate covers B and B's pins pass; `checkServerTrusted` never runs for B. revokt therefore evaluates once per connection for the host OkHttp handshook for: the verdict cache key, `RevoktEvent.host`, `hostIn`/`hostSuffixIn`, `OBSERVE` attribution by host and the NSC `<domain-config>` selection at step 1 are all A's, and a coalesced B inherits A's verdict. A consumer that needs per-host policy on coalescable hosts uses a separate `OkHttpClient` or `ConnectionPool` per host (OkHttp treats a non-default `HostnameVerifier` instance as non-coalescable, but revokt does not rely on that). Ktor-OkHttp inherits this; `java.net.http` does not coalesce across hosts (unverified).
 
 **Lifecycle.** `RevoktLifecycle`: `CREATED → STARTED → CLOSED`; `start()` and `close()` are
 idempotent; `start()` after `close()` throws. **`start()`, synchronous on both platforms** (may throw;
@@ -2607,39 +883,6 @@ the loader is the only publisher of the generation reference. The loader thread 
 immediate. An explicit `sync()` queues behind the start task and any in-flight install, ignores
 the poll interval and honours `backoffUntilMillis` (`BACKOFF`).
 
-**Read-only mode.** A read-only instance **never writes to the store**: no blob, directory, pointer,
-`updater.json`, prune or `store.version` write. Its seed and system cache, when the seed-vs-stored
-rule selects them, are installed into the engine and published **in memory only**
-(`DataState.fromSeed`, `installed` report them). Every `READONLY_POLL_INTERVAL` and on each `sync()`
-the loader re-reads the pointer, re-applies the seed-vs-stored and class rules against the pointed
-generation (a lower-class or older pointed generation never displaces the in-memory seed), reloads
-when the pointer changed, and retries `storage.lock()` (its bounded ≤ 1 s try); on success it **promotes
-itself to writer** (`readOnly = false`) and re-runs the loader start task as owner: the seed-vs-stored
-rule is applied again with writes enabled, so an in-memory seed newer than the pointed generation is
-now written and pointed, then a sync is scheduled. Until
-then `sync()` returns `SyncOutcome.STORE_LOCKED` and `resetState()` throws `IllegalStateException`.
-
-**Storage fallback** (`RevoktState.storageFallback`, `STORE_UNREADABLE` from an ownership failure or a
-credential-encrypted directory before the first unlock, or `STORE_NEWER_LAYOUT` under
-`NewerLayout.IN_MEMORY`): the instance runs on `inMemory()`, releases the store lock and deregisters
-the identity; on every `READONLY_POLL_INTERVAL` tick and on each `sync()` the loader retries the
-configured storage (the same bounded checks `start()` ran; never for `STORE_NEWER_LAYOUT`, which cannot
-become readable); when it succeeds the loader registers (a registry collision, another instance now owning the
-directory, keeps the fallback, logged at `WARN`; a fallback instance keeps syncing in memory, it does not
-defer to the owner), locks (`StoreLockedException` → the instance becomes
-**read-only** over that directory instead: `readOnly = true`, `storageFallback = false`, the in-memory
-generation stays published until the pointed generation displaces it under the read-only rules, and
-`sync()` returns `STORE_LOCKED` from then on), runs the owner start task against it with the in-memory
-generation as one more candidate under the ordinary rules (it displaces a stored generation only when
-its trust class is not lower and it is newer, exactly as a seed would; a `MIRROR` never displaces a
-stored `SIGNED`), merges `updater.json` per field (watermark = max; `feedHostBlock` = the later episode; cursor and
-`lastVerified*` from the generation that ends up installed; `backoffUntilMillis` = max; `consecutiveFailures`
-and per-source `lastAttemptAtMillis` from the newer record; `seedInstalledAtMillis` from whichever seed
-install is live; `datasetLastAttemptAtMillis` = max, so an in-memory attempt that opened the `STALE` gate
-is never undone by an older disk record) and clears `storageFallback` and the `STORE_UNREADABLE` warning
-that caused it (a `STORE_NEWER_LAYOUT` fallback is never retried, so that warning stays), so a direct-boot process
-migrates to disk after unlock instead of staying in memory for its lifetime.
-
 **`close()`** (never on the Android main thread, and never on the loader thread, where it throws
 `IllegalStateException`; it blocks): take the factory lock **only** to flip the state to `CLOSED`
 (serialised with `start()`'s flip and `trustManager(d)`'s lifecycle read; a `start()` that then sees
@@ -2657,19 +900,6 @@ runs step 1 only**, as `OFF`, with no events and frozen counters other than `une
 returns such an instance. Clients that outlive `close()` therefore keep working on the platform verdict alone.
 `dataDeadline` is measured from the lifecycle flip to `STARTED`, not from the call to `start()`, which may block on the store lock's try and the NSC warm-up first. Every handshake that returns after flow step 1 without reaching step 2 (in `CREATED`, after `close()`, under `OFF`, or on `fetcherTrustManager` without a snapshot) increments `RevoktStatus.unevaluated[reason]`, the one counter group that is never frozen.
 
-**Readiness.** One future per `Revokt`, `dataReady`, **completed normally by the loader scheduler
-at `dataDeadline = flipToStarted + awaitData` if still pending** (monotonic `TimeSource`; no `orTimeout`,
-which is API 31+) and never completed exceptionally. It is internal to the handshake path; the
-public `awaitReady()`/`readyFuture()` wait for `RevoktState.ready` with no deadline. Waiting
-overloads wait for it only under `needsData` (flow step 0); step 0 does not run under `OFF`;
-`OBSERVE` waits exactly as `ENFORCE` does. There is no snapshot future: the anchor snapshot is built
-before a trust manager can go past step 1 ("Anchor snapshot" below). The loader's deadline-completion task
-runs on the single-parallelism loader dispatcher, which performs only verify, decode, install and
-anchor rebuilds; fetches run on `ioDispatcher`, buffered under the per-kind caps, and hand the body
-to the loader, so a slow download never delays the deadline; the `get(timeout)` bound still covers
-an in-flight install. `InterruptedException` restores the flag and throws
-`CertificateException("interrupted")` with no verdict.
-
 **`reconstruct`: invariant, deferral rule, termination rule and argument.**
 
 *Invariant.* A returned path is leaf → … → terminal in which every link's signature was
@@ -2686,7 +916,7 @@ candidate (no deduplication by key, name or key identifier; only exact byte dupl
 presented and store, and certificates already on the current path are skipped; **an exact-byte
 duplicate is yielded once, at the earliest position in the node's order: the store position for a duplicate of
 an anchor, since anchors come first at every depth, and in M2 the presented position for a duplicate of a preload
-certificate, since presented certificates come before the preload; revision 57**). A candidate may be deferred
+certificate, since presented certificates come before the preload**). A candidate may be deferred
 or capped only by its own relation to the child. A candidate is **related** when its subject equals
 the child's issuer (raw bytes, or under `canonicalSubject`, which on the JVM and Android is the
 platform's own `X500Principal` canonical form) or its SKI equals the child's AKI `keyIdentifier` (an
@@ -2699,7 +929,7 @@ related to the child**, are explored only while no path exists through the node 
 every candidate), and are not capped; **at the leaf, the unrelated loop runs regardless of `foundHere` when
 `CandidateIndex.customCanonicaliser` is set** (`platformTrust` is not one of the two shipped final classes, or the delegate is not `platformTrust.defaultDelegate()`; §3). Otherwise an honest issuer misclassified as
 unrelated could be hidden by a related decoy path (§10 residual 1). **It also runs regardless of `foundHere` when no
-related path exists at the leaf** (revision 48, #98): every unrelated certificate that verifies the leaf and terminates
+related path exists at the leaf**: every unrelated certificate that verifies the leaf and terminates
 is then collected, so `leafKeys` does not depend on the presented order and every such key is evaluated. In both
 cases `unrelatedExploredAtLeaf ≤ presented − 1`, each subtree stays under `MAX_VERIFICATIONS` and `MAX_EXPLORED`, and
 P6 holds on the default delegates, where an honest issuer is always related. Store certificates are never unrelated candidates.
@@ -2712,109 +942,27 @@ budgets, shared memo, never demoting the first walk's `Found`). **Any limit exce
 aborts the whole walk with `Budget`**; only `MAX_DEPTH` is a local dead end. `Found` is returned
 only when the walk completed without exhaustion; a `Budget` may carry partial paths.
 
-*Why this is sound.* Recovered or substituted keys cannot chain to a real anchor (rounds 1–2). An
-`UNSUPPORTED` link is never trusted (round 2). Nothing is excluded for a shared property, so a
+*Why this is sound.* Every path member below the leaf that is not an anchor must be a CA: its one basicConstraints
+extension reads `cA = TRUE`. An absent, FALSE or unreadable basicConstraints is a dead end before the link is
+verified, as webpki (`EndEntityUsedAsCa`) and mozilla::pkix (`CheckBasicConstraints`, `ERROR_CA_CERT_INVALID`)
+require of an issuer. Anyone can obtain an end-entity certificate under a real anchor, and its key can sign a
+certificate for any other key, a recovered one included; the CA check removes that route. A recovered key can then
+terminate only through a certificate chain that a holder of a CA key under a real anchor signed. An
+`UNSUPPORTED` link is never trusted. Nothing is excluded for a shared property, so a
 same-key decoy or a cross-certificate to a non-anchor listed first cannot hide the real certificate,
-which is related and is explored (round 3). The honest issuer's key is the only key that verifies a
-real leaf's signature other than a recovered key, and a recovered key terminates only if certified
-under a real anchor, which the attacker cannot obtain; so a `Found` carrying only benign keys is
-unreachable for a real revoked leaf. Stuffing related junk past the cap, or verifying junk past the
+which is related and is explored. The honest issuer's key is the only key that verifies a
+real leaf's signature, other than a recovered key. A recovered key terminates only through CA certificates up to a
+real anchor, so a `Found` carrying only benign keys needs the cooperation of some CA key holder under a real anchor
+(§10 residual "constrained sub-CA"). Stuffing related junk past the cap, or verifying junk past the
 guards, yields `Budget`, which rejects; an exhaustion in any subtree also yields `Budget`, so a
-stuffed subtree cannot starve the honest key out of a `Found` (round 4). Every terminating
+stuffed subtree cannot starve the honest key out of a `Found`. Every terminating
 leaf-issuer key is evaluated and `REVOKED` wins. The PKIX fallback covers one residue the walker
 does not: a `NotFound` on a chain of at most `FALLBACK_MAX_PRESENTED` certificates whose honest link
-the walker could not reproduce (a custom delegate's constraints or verifier divergence; canonicalisation alone no longer yields `NotFound`, §10 residual 1). Beyond the
+the walker could not reproduce (a custom delegate's constraints or verifier divergence; canonicalisation alone never yields `NotFound`, §10 residual 1). Beyond the
 guards the walk is `Budget`, which rejects whatever the fallback does, and a `NotFound` too long for
 the fallback is `PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback while `NO_ISSUER` allows.
 
-```kotlin
-// Declarations the walker and the §9.1 harness compile against. Walk, WalkPath, Cert, CandidateIndex and reconstruct are `internal`
-// to revokt-engine; the walker-only harness and the Jazzer walker fuzzer live in revokt-engine's own test source set; revokt-testing's
-// reference walker takes List<ByteArray> and returns the Set<String> of lowercase-hex leaf-issuer SPKI hashes (value equality), so it needs no internal type.
-internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray /* the TBS re-encoded by the §9.2 unsigned-header rule: the verified message and the input of every TBS field */, val sig: ByteArray /* signatureValue content after the unused-bits octet, padding bits cleared (§9.2) */, val tbsSigAlg: ByteArray, val tbsSigOid: String, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long? /* null when the time does not decode (§9.2; every JDK-accepted form decodes) */, val notAfter: Long?, val producerKeyable: Boolean, val keyabilityClause: KeyabilityClause? /* null ⇔ producerKeyable (§9.2 K1–K8); evaluated for the leaf at decision step 3 only */, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
-internal class WalkPath(val certs: List<Cert>, val terminal: TerminalKind)   // leaf → … → terminal; distinct from Finding.Path
-internal sealed interface Walk {                          // every variant carries unsupportedOids (the probe-listed own signature OIDs of explored related non-anchors, unrelated-loop nodes, and the leaf once it had a related candidate; revision 57), findings and stats: WalkStats (verifications, candidatesExplored, relatedExploredAtLeaf, unrelatedExploredAtLeaf), built at the three return sites
-    class Found(val paths: List<WalkPath>, val leafKeys: Set<ByteString>, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
-    class NotFound(val reason: NoIssuerReason, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
-    class Budget(val end: WalkEnd, val endDepth: Int, val partialPaths: List<WalkPath>, val partialLeafKeys: Set<ByteString>, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
-}
-/** Built once per snapshot, synchronously at wiring or inside start(), or lazily for fetcherTrustManager (§5.1 "Anchor snapshot"), rebuilt on the loader by refreshAnchors() (~10 ms for 140 anchors on ART; ~150–200 ms for M2's 2,500 preload certificates):
- *  bySubjectRaw, bySubjectCanonical, bySki over store certificates, with canonicalSubject, keyFamily and spkiHash precomputed and exact-byte duplicates removed.
- *  The presented chain (≤ ~10 certificates) is scanned linearly per call; no maps are built for it. */
-internal class CandidateIndex {
-    fun related(presented: List<Cert>, child: Cert, seen: Set<ByteString>): Sequence<Cert>   // at every depth (revision 57, the maintainer's decision on #196, Firefox's order): the store's anchors, then the presented certificates by index, then (M2) the store's preload certificates (NSSCertDBTrustDomain FindIssuer: roots first, then intermediates). Within store, in order: raw-name matches, canonical-name matches, SKI matches; within each group candidates whose keyFamily is compatible with child.tbsSigOid's family first, incompatible last; ties by bytesHash. Byte-duplicates yielded once at the earliest position: the store's for an anchor; M2: the presented one for a preload certificate. The index is per snapshot and shared across calls, so the presented chain is an argument.
-    fun unrelated(presented: List<Cert>, child: Cert, seen: Set<ByteString>): Sequence<Cert>   // the presented certificates NOT in related(child), by index
-    fun isAnchorBytes(c: Cert): Boolean
-    fun isPreloadBytes(c: Cert): Boolean                                                   // M2: the store's second candidate set (Mozilla's bytes), yielded by related() after the anchors and the presented certificates
-    val customCanonicaliser: Boolean                                                        // platformTrust is not one of the two shipped final classes, or the delegate is not platformTrust.defaultDelegate() (§3, a class check); §5.1 deferral rule
-}
-internal class LruMap<K, V>(capacity: Int) { /* synchronized, access-ordered; put/get */ }
-
-internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier: SignatureVerifier, probe: Set<String>, crossCallMemo: LruMap<Pair<ByteString, ByteString>, VerifyResult>): Walk {
-    val leaf = presented[0]
-    val found = mutableListOf<WalkPath>(); val unsupported = mutableSetOf<String>(); val findings = mutableListOf<Finding>()
-    var verifications = 0; var explored = 0; var relatedAtLeaf = false; var verifiedAtLeaf = false   // leaf-level flags decide NoIssuerReason; deeper nodes never change it
-    var relatedExploredAtLeaf = 0; var unrelatedExploredAtLeaf = 0
-    var endDepth = 0                                                                                // set to path.size at the node where a limit is detected, before unwinding
-    val memo = HashMap<Pair<ByteString, ByteString>, VerifyResult>()        // (child bytesHash, candidate spkiHash) → result
-
-    fun verifyOnce(child: Cert, cand: Cert): VerifyResult? {               // null = VERIFICATION_BUDGET
-        memo[child.bytesHash to cand.spkiHash]?.let { return it }
-        crossCallMemo[child.bytesHash to cand.spkiHash]?.let { return it }   // per Revokt, VERIFIED only, CROSS_CALL_MEMO_ENTRIES, synchronized
-        if (verifications >= MAX_VERIFICATIONS) return null
-        verifications++
-        return verifier.verify(child.tbsSigAlg, cand.spki, child.tbs, child.sig).also { memo[child.bytesHash to cand.spkiHash] = it; if (it == VERIFIED) crossCallMemo.put(child.bytesHash to cand.spkiHash, it) }
-    }
-
-    /** null when the node completed; a WalkEnd when any limit stopped the walk */
-    fun walk(child: Cert, path: List<Cert>, seen: Set<ByteString>): WalkEnd? {
-        if (path.size > MAX_DEPTH) return null                                // dead end
-        val isLeaf = path.size == 1
-        var foundHere = false; var related = 0
-        if (!isLeaf && child.tbsSigOid in probe) unsupported += child.tbsSigOid   // a node that verified its child: an unrelated-loop node (a related one was already counted as a candidate)
-
-        fun explore(cand: Cert, isRelated: Boolean): WalkEnd? {
-            if (explored >= MAX_EXPLORED) { endDepth = path.size; return EXPLORATION_BUDGET }
-            explored++
-            if (isRelated) { if (isLeaf && child.tbsSigOid in probe) unsupported += child.tbsSigOid; if (!index.isAnchorBytes(cand) && cand.tbsSigOid in probe) unsupported += cand.tbsSigOid }   // pkix order: issuer-independent before the link; the leaf deferred until it has an issuer; a key or curve OID never counts (decision step 6)
-            when (verifyOnce(child, cand) ?: run { endDepth = path.size; return VERIFICATION_BUDGET }) {
-                INVALID -> return null
-                UNSUPPORTED -> return null
-                VERIFIED -> { if (isLeaf) verifiedAtLeaf = true }
-            }
-            val before = found.size
-            if (index.isAnchorBytes(cand)) {
-                found += WalkPath(path + cand, terminal = ANCHOR)
-            } else {
-                walk(cand, path + cand, seen + cand.bytesHash)?.let { return it }
-                if (found.size == before && index.isPreloadBytes(cand)) found += WalkPath(path + cand, terminal = PRELOAD)   // M2: preload-only path, recorded only when no anchor is reachable through it (invariant); a terminal of last resort
-            }
-            if (found.size > before) foundHere = true
-            return null
-        }
-
-        for (cand in index.related(presented, child, seen)) {
-            if (isLeaf) relatedAtLeaf = true
-            if (!isLeaf && foundHere) break
-            if (related >= MAX_RELATED_PER_LEVEL) { endDepth = path.size; return RELATED_BUDGET }   // the 65th related candidate is not explored
-            related++; if (isLeaf) relatedExploredAtLeaf++
-            explore(cand, isRelated = true)?.let { return it }
-        }
-        val relatedPath = foundHere                                                     // a path through a related candidate exists at this node
-        for (cand in index.unrelated(presented, child, seen)) { if (foundHere && !(isLeaf && (index.customCanonicaliser || !relatedPath))) break; if (isLeaf) unrelatedExploredAtLeaf++; explore(cand, isRelated = false)?.let { return it } }   // stops as soon as a path exists, except at the leaf under a custom canonicaliser (deferral rule) or with no related path (every unrelated issuer is collected, revision 48)
-        return null
-    }
-
-    val end = walk(leaf, listOf(leaf), setOf(leaf.bytesHash))          // endDepth is recorded where the WalkEnd originated
-    val leafKeys = found.map { it.certs[1].spkiHash }.toSet()            // every found path here has ≥ 2 certificates; the [leaf] case is decision step 2
-    val stats = WalkStats(verifications, explored, relatedExploredAtLeaf, unrelatedExploredAtLeaf)
-    return when {
-        end != null        -> Walk.Budget(end, endDepth, found, leafKeys, unsupported, findings, stats)   // some node did not complete
-        found.isNotEmpty() -> Walk.Found(found, leafKeys, unsupported, findings, stats)
-        else               -> Walk.NotFound(when { !relatedAtLeaf -> NO_CANDIDATE; !verifiedAtLeaf -> ALL_CANDIDATES_INVALID; else -> UNANCHORED }, unsupported, findings, stats)
-    }
-}
-```
+The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walker-pseudocode.md](../design/walker-pseudocode.md). The code and the §9.1 properties are normative.
 
 - **Explored** means the walker requested the candidate's verification (memo hits included);
   **verifications** counts calls into the injected verifier. `related` counts related candidates
@@ -2825,7 +973,7 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   reached below the leaf once the anchor verifies, and even when reached it is a memo hit (same key); a root-issued
   leaf is one verification, or two when a cross-certificate X of the root is presented and its issuer R′ is in the
   snapshot: every related candidate is explored at the leaf, so the walk is L/R, then an L/X memo hit, then X/R′
-  (depth + 1 on the path found, revision 57); a chain whose snapshot holds the other root of a cross-sign costs
+  (depth + 1 on the path found); a chain whose snapshot holds the other root of a cross-sign costs
   depth + 1 (three). A verifying decoy costs one extra verification per presented certificate not on
   the path, since the unrelated loop runs at every node without a path. Honest bound: **≤ depth + 1**;
   fixture (v) asserts ≤ 4 against a 200-anchor snapshot. **Worst case is bounded by `MAX_VERIFICATIONS` and `MAX_EXPLORED`, not by the
@@ -2834,13 +982,13 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   and ends in `Budget`, never an allow. Per-candidate sub-budgets treated as dead ends must not be
   introduced: they would let a stuffed subtree starve the honest key out of a `Found`.
 - **Findings.** `AlgorithmIdMismatch` comes once per presented certificate that `decide` parsed, which at the
-  step-2, `PRODUCER_UNKEYABLE` and `MAX_PRESENTED` exits is the leaf only (revision 56); the parser computes its flag
+  step-2, `PRODUCER_UNKEYABLE` and `MAX_PRESENTED` exits is the leaf only; the parser computes its flag
   after NULL/absent normalisation (none for a certificate read through the §9.2 platform canon whose TBS
   AlgorithmIdentifier is minimal DER), and `decide` derives the finding from that flag. Only `VerifierError` rides on
-  the `Walk` (revision 57); its `oid` is the child's TBS signature OID, `""` when the TBS AlgorithmIdentifier does
+  the `Walk`; its `oid` is the child's TBS signature OID, `""` when the TBS AlgorithmIdentifier does
   not decode.
   `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` is emitted once per OID in `Walk.unsupportedOids`
-  on **every** outcome, with `outcomeDepended = (status == ISSUER_UNVERIFIED)`; fixture (n) asserts the
+  on **every** outcome, with `outcomeDepended = (noIssuerReason == UNSUPPORTED_ALGORITHM)`; fixture (n) asserts the
   `false` case on a `Found`.
 - **PKIX fallback contract** (`PathBuilderFallback`; the fallback re-parses the snapshot's anchors' `getEncoded()` with `CertificateFactory` once per `AnchorSnapshot.id`, memoised, and its `CollectionCertStore` holds every presented certificate): result lists the leaf first and **appends the
   trust anchor's certificate**; the leaf must be in the `CollectionCertStore`; one base
@@ -2848,68 +996,16 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
   call; `setRevocationEnabled(false)`, `setPolicyQualifiersRejected(false)`, `setDate(now)`,
   `X509CertSelector().apply { certificate = leaf }`; Android resolves to ojluni's `SunCertPathBuilder`
   with Conscrypt doing signatures. The builder verifies every link under the platform's providers,
-  so its path satisfies the invariant's intent; `jdk.certpath.disabledAlgorithms` and provider
+  so its path satisfies the invariant's intent. Every certificate of a returned path between the leaf and the anchor must
+  be a CA under RFC 5280 basicConstraints (`cA = TRUE`), as `CertPathBuilder("PKIX")` requires; decision step 6
+  checks it again, so a path with an intermediate that does not parse or is not a CA is a failed build,
+  `FallbackNotUsed(FAILED)` (the JDK's builder already enforces it, so only a consumer builder is affected); `jdk.certpath.disabledAlgorithms` and provider
   divergence from the delegate fail the build, and like every failed build (null or a throw) are reported as
   `Finding.FallbackNotUsed(FAILED)` and surface as `PLATFORM_ONLY` on a walk `NotFound` at a trust-manager binding.
   It is skipped above `FALLBACK_MAX_PRESENTED` presented certificates (no candidate
   budget; exponential on stuffed chains) with `FallbackNotUsed(SKIPPED)`, which cannot change
   a `Budget` outcome. With `pkixFallback(false)` it never runs, and step 6 reports `FallbackNotUsed(DISABLED)`
-  instead (revision 49; a `FallbackNotUsed` since revision 50).
-- **Caches**, per trust manager, LRU-bounded (a synchronized access-ordered `LinkedHashMap` or a
-  striped LRU; touched from concurrent handshake threads): the path cache holds `Found`, `NotFound`,
-  `Budget` and the fallback result alike. **A path-cache entry is exactly**: `status`, `source`,
-  `noIssuerReason`, `walkerReason`, `parseReason`, `keyabilityClause`, `terminalKind`, `endReason`, `endDepth`,
-  `usedFallback`, the step-6 `FallbackReason` (null when no `FallbackNotUsed` was reported; revision 50), `pathsFound`, the reported path as (source, index) pairs for walker entries or, for
-  `PLATFORM` entries, the leaf-issuer SPKI hash, the anchor hash and the path length (a
-  Conscrypt-completed chain can contain certificates from neither source), `reportedPathSha256s`,
-  `issuerSpkiSha256s`, `candidatesDropped`, `anchorSha256`, the walk's `WalkStats` and `unsupportedOids`
-  (the overload that produced it is **not** recorded; the 3-arg retry decision lives in the separate acceptance memo, flow step 1),
-  plus the leaf's DER, `serial` and `scts` (never the other presented certificates, which would let a
-  server park `PATH_CACHE_ENTRIES × MAX_PRESENTED_BYTES` in the cache); on a hit the `Finding.Path` is
-  the stored one with `cacheHit = true` and `anchorSnapshotId` from the key, step 7 runs without
-  re-parsing, and an exemption's `PresentedChain` is rebuilt from the live `chain` argument of that
-  call; `PLATFORM` results are keyed with the host; nothing is cached when `decide` threw or step 6's `build` threw,
-  and a verdict built on a thrown `build` is not put in the verdict cache either (flow step 3a, revision 50). The
-  verdict cache key includes `generationEpoch` (internal; a `Long` incremented on any install and whenever a dataset leaves `pending` without a generation at the end of the start task, so a verdict cached as a pending-allow is never served once `NO_DATA` should fire), `policyEpoch` and `shadowPolicyEpoch` (the §4 setters) and
-  the anchor snapshot id. Events are emitted only on verdict-cache misses. On a walker reason of
-  `NO_CANDIDATE` or `UNANCHORED` (read before any `PLATFORM_ONLY` promotion) a rate-limited
-  `refreshAnchors()` is scheduled (`ANCHOR_REFRESH_MIN_INTERVAL`; never while a rebuild is in
-  flight); the triggering verdict stands; the next call re-walks under the new snapshot id. `canonicalSubject`
-  is total (a `X500Principal` constructor failure yields null and raw-only matching) and is cached on
-  each `Cert`, presented and store, so the relation test never allocates twice per pair.
-
-**Trust managers per delegate.** Creation, lookup and the cap check run under **one lock** (this path
-runs once per client build): drain the `ReferenceQueue`, purge entries whose trust-manager reference
-has cleared, count live referents, and either return the existing instance (matched by `===` on the
-delegate) or create one, evicting every entry whose `WeakReference.get()` is null, and throwing `IllegalStateException("<n>
-live trust managers; close clients or reuse delegates")` only when live referents still reach
-`maxTrustManagers`. In `STARTED` the anchor snapshot is built **inside this lock**, before
-the instance is registered against the cap and the `ReferenceQueue`: a concurrent `trustManager(d)`
-for the same delegate waits on the lock and then returns the built instance or, after a failed
-build, retries the build itself (failures are not memoised); a failed build registers nothing,
-consumes no cap slot and leaves no `sslContext` memo entry; a `trustManager(d)` or `sslContext(d)`
-that arrives while `start()` holds the lock blocks for `start()`'s lock-held part (the
-pre-start builds, bounded by `maxTrustManagers + 1` index builds and on an Android cold process
-the NSC directory read, tens to hundreds of ms, plus the store lock's bounded ≤ 1 s try and the
-pointer, `meta.json` and seed-header reads; the sole-seed synchronous decode runs with the lock
-released, lifecycle paragraph), so a consumer that wires on the main thread creates its trust managers before
-`start()` or wires after `start()` returned; `RevoktState` updates and listener dispatch
-happen after the lock is released; the delegate's `getAcceptedIssuers()` runs under the lock and
-must not call back into `Revokt`: the factory lock is not reentrant for `trustManager(d)`, a call
-from the thread holding it throws `IllegalStateException("re-entrant trustManager() from a delegate")`. `start()` runs its whole synchronous part and flips the lifecycle
-to `STARTED` under this same lock, `close()` flips to `CLOSED` under it, and `trustManager(d)` reads
-the lifecycle under it, so every instance is built by exactly one of `start()`, the post-gap builds for
-trust managers created during the sole-seed decode, wiring, the fetcher snapshot's per-sync retry on the
-loader (which takes this lock) and `fetcherTrustManager`'s lazy build, and none falls between (the JVM join of the loader task runs after the lock is released). The `ReferenceQueue` is registered on the **trust-manager** reference
-(the trust manager holds its delegate strongly, so the delegate reference can never clear first).
-Loader and refresh tasks hold a `WeakReference` to the trust manager, `get()` it each tick and reach
-the delegate through it. `sslContext(delegate, keyManagers)` is memoised by bucket on identity hashes
-but matched by `delegate === e.delegate && km.size == e.km.size && km.indices.all { km[i] === e.km[i] }`;
-`null` and empty arrays are distinct keys; **contexts are held through `WeakReference`** (an
-`SSLContext` strongly holds its trust managers, so a strong memo would pin every instance; the
-client's own context keeps it alive); the `ReferenceQueue` is drained on every factory call and on
-every loader and refresh tick (on those ticks under a `tryLock` that skips when contended, so the
-loader never blocks on the factory lock); all contexts are dropped on `close()`.
+  instead.
 
 **Anchor snapshot, built where upki builds its state.** The snapshot (`getAcceptedIssuers()` plus
 the `CandidateIndex` build over `platformTrust.anchors(delegate)`, i.e. `getAcceptedIssuers()`, ~10 ms for 140 anchors) exists before any handshake can go past step 1
@@ -2975,55 +1071,16 @@ retries, so goal 3 holds without exception; reading the property or `status()` b
 `maxTrustManagers` (nor do the per-source instances), wraps `fetcherDelegate` (default `platformTrust.defaultDelegate()`), uses the fixed
 fetcher policy (§8), never waits, and runs step 2 from M1 against `SIGNED`/`BUNDLED` generations only.
 
-**Listeners** are dispatched off the handshake thread. `Accepted` events go through a ring of
-`EVENT_RING_CAPACITY` (drop-oldest, `droppedEvents`); a `Rejected` event evicts the oldest `Accepted`
-one, and when the ring holds only `Rejected` events it overflows into a side queue of
-`REJECTED_QUEUE_CAPACITY` with its own counter `droppedRejectedEvents`. Events carry monotonic
-sequence numbers. **Drain**: the ring is sequence-indexed; each registered listener holds its own
-cursor (set to the current tail by `addListener`, so a listener sees only events enqueued after
-registration; `removeListener` clears it and a running drain stops at its next event) and its own `drainScheduled` flag; each delivery runs under try/catch (a throwing `onVerdict` counts `listenerFailures` and the drain continues, so a cursor never stalls; a throwing `executor.execute` removes the listener instead, flow 3b); an event whose verdict carries `Finding.Exempted` is enqueued with `Rejected` priority (it evicts `Accepted` events and overflows to the side queue), so exempted evidence never vanishes from the audit stream under load; on enqueue the handshake thread CASes each listener's flag
-and submits one drain task to that listener's executor; the task delivers every event with
-`sequence > cursor` still in the ring or side queue in order, advances the cursor and clears the
-flag, then re-checks `tail > cursor` and, if so, re-CASes and loops (no lost wake-up). The task copies
-the pending slice under the ring lock and delivers outside it. Events are enqueued, and drops counted,
-only while at least one listener is registered; side-queue entries are released once every cursor has
-passed them. Delivery latency is one executor hop. `droppedEvents`/`droppedRejectedEvents` count
-evictions from the ring (global); a slow listener misses evicted events and its gap is visible as a
-sequence jump.
-
 `checkClientTrusted` and `getAcceptedIssuers` delegate to the platform unchanged.
 
+**Moved to design notes** (not normative before 0.3): "Trust managers per delegate" and "Caches"
+([trust-managers.md](../design/trust-managers.md)); "Readiness", "Read-only mode" and "Storage fallback"
+([readiness-and-store-modes.md](../design/readiness-and-store-modes.md)); "Listeners"
+([listeners.md](../design/listeners.md)); "HTTP/2 coalescing" ([okhttp-and-ktor.md](../design/okhttp-and-ktor.md)).
+A reference in this file to one of these names that note.
+
 ### 5.2 Android (`AndroidPlatformTrust`)
-- Default delegate: the NSC `RootTrustManager`. `requiresExtendedDelegate()` is false. `pathBuilder`
-  is the platform PKIX `CertPathBuilder`. `PlatformTrust.canonicalSubject` defaults to `X500Principal.getName(CANONICAL)`.
-- Verified chain: `X509TrustManagerExtensions(delegate).checkServerTrusted(chain, authType, host')`
-  at decision step 4; its last element is the anchor. **Known gap, confirmed in Conscrypt:**
-  `checkCT` runs only when `host != null && isCTVerificationRequired(host)`, with TLS SCT data
-  `null` in the hostname-only variant; under Android 16 CT enforcement a chain that passed step 1 via
-  TLS-extension SCTs can throw here and the flow continues with `reconstruct`.
-- **Named M1 residual.** On the plain-delegate binding (`X509TrustManagerExtensions` cannot wrap
-  it, so step 4 is unavailable), and on any path where the null-host extension call is unavailable,
-  the walker cannot complete a chain whose intermediate is omitted (Conscrypt's intermediate index
-  accepts such chains, and a revoked leaf without embedded SCTs that delivers SCTs in the TLS
-  extension reaches the CT gap on demand) or whose presented intermediate is signed by a retired
-  root while Conscrypt completes through a cached cross-certificate; those yield
-  `NO_ISSUER(PLATFORM_ONLY)` until M2's preload. Decision step 4's null-host retry closes the CT-gap
-  and host-null cases only for an app whose NSC has no `<domain-config>` (`RootTrustManager`
-  rejects a null hostname otherwise, Appendix A); any app with a `<domain-config>` ends the CT-gap
-  path in `reconstruct` against the default config's anchors (`RootTrustManager.getAcceptedIssuers()`
-  returns those only), and a host whose `<domain-config>` declares its own `<trust-anchors>` then
-  yields `NO_ISSUER(PLATFORM_ONLY)`; the 0.3 emulator probe runs with and without a `<domain-config>`.
-- `RevoktTrustManager` is a public, final, non-anonymous class in `revokt-jsse` with public
-  `checkServerTrusted(X509Certificate[], String, String): List<X509Certificate>` and
-  `isSameTrustConfiguration(String, String)` declared on it for every platform (`X509TrustManagerExtensions`
-  duck-types them; on the JVM the former returns the presented chain); consumer R8 rules keep both; `authType` is not validated.
-  AOSP main also carries a 5-arg `checkServerTrusted(chain, ocspData, tlsSctData, authType, host)` on
-  `RootTrustManager` and `X509TrustManagerExtensions` (public API level unverified), which would close the
-  CT gap if the TLS SCT bytes were available, which app code cannot read from a platform Conscrypt session;
-  the 0.3 matrix probes for it.
-- `RootTrustManager`'s 2-arg `checkServerTrusted` throws with any `<domain-config>` (§5.4 CIO caveat).
-- The 3-arg overload on a plain delegate returns the presented chain after step 1; otherwise the extension call with host', or on a memo hit its null-host retry, is both its return value and its step-4 result (flow step 1).
-- Lifecycle observer in its own class, guarded on `androidx.lifecycle.ProcessLifecycleOwner`, installed by `RevoktWork.install` when the dependency resolves, or directly by `RevoktAndroid.observeLifecycle(provider)` for consumers without WorkManager: it calls `sync()` on the process's `onStart` (a `CREATED` instance is started first under the worker's rule, §3, a `start()` throw logged at `WARN` and the sync skipped; queues behind the start task and honours `backoffUntilMillis`, §5.1, so overlap with the worker is harmless); consumer rules carry `-dontwarn androidx.lifecycle.**` and the keep rules verbatim, and keep `AndroidPlatformTrust` (revokt-jsse auto-detects it by name).
+Not normative before 0.3: [docs/design/android.md](../design/android.md).
 
 ### 5.3 JVM (`JvmPlatformTrust`)
 - Default delegate: SunJSSE's `X509ExtendedTrustManager`. `requiresExtendedDelegate()` is **true**
@@ -3042,9 +1099,7 @@ sequence jump.
   own anchor objects' `getEncoded()`.
 
 ### 5.4 Ktor engine caveats (verified against Ktor 3.6.0 source)
-- **CIO**: a JVM artifact that also runs on Android, TLS 1.2 only, 2-arg `checkServerTrusted`, never runs CT; **refused on Android by revokt** (`RootTrustManager`'s 2-arg overload throws with any `<domain-config>`).
-- **OkHttp**, **Java**, **Android** engines pass the socket or host; every adapter takes an optional
-  explicit delegate and replaces a previously configured factory or context.
+Not normative before 0.3: [docs/design/okhttp-and-ktor.md](../design/okhttp-and-ktor.md).
 
 ### 5.5 Engine evaluation (shared)
 All byte inputs come from one minimal DER parse of each certificate's `Cert.tbs` (the TBS re-encoded by the §9.2 unsigned-header rule):
@@ -3058,7 +1113,7 @@ the exception preceded the walk; the data rules and `dataStates`, computed befor
 on the verdict regardless. `ENGINE_ERROR` has exactly three producers (`EngineErrorProducer`): the
 catch boundary, an engine result (`CrliteQueryResult.ENGINE_ERROR`, or `NO_DATA` while a generation
 is published; with `engineName`, the engine's `RevocationEngine.name`), and an exemption that throws;
-each attaches `Finding.EngineError`. **Interrupts** (JVM; revision 57, #196): at every catch of consumer code (verifier,
+each attaches `Finding.EngineError`. **Interrupts** (JVM): at every catch of consumer code (verifier,
 canonicaliser, fallback, exemption, logger, a throwable's `toString`, the install self-check's engine `query` and
 `coverageEndMillis`) and at the boundary, a caught `InterruptedException` sets the thread's interrupt flag again. The
 fetch timeout path keeps its own interrupt handling.
@@ -3083,7 +1138,7 @@ eval(eq, z: LongArray): limb = s/64; sh = s%64; r = 0
      t = z[i] ushr sh; if (sh != 0) t = t or (z[i+1] shl (64 - sh))   // columns padded with one zero word
      r = r xor (t and a[i - limb])
   return r.countOneBits() and 1
-query(q): if q.scts.isEmpty(): return NO_SCTS   // revokt's parser passes an empty list when no SCT extension's list parses under §9.2 (§3.2, §6.1; decision §10 item 7); never reaches a filter
+query(q): if q.scts.isEmpty(): return NO_SCTS   // revokt's parser passes an empty list when no SCT extension's list parses under §9.2 (§3.2, §6.1; §10 item 7); never reaches a filter
 perFilter(filter, key, scts):
   if no (log, ts) in scts is within filter.coverage: return NotCovering
   meta = filter.index[issuerSpkiHash] ?: return NotEnrolled
@@ -3107,8 +1162,8 @@ Detect the encoding from the 2-byte prefix `[version, reserved0 = 0]`:
   `u64` low, `u64` high}), `()` (0 bytes), index map (`u64` n × {`u64` len + key bytes,
   `u64` approx_m, `u64` exact_m, `u64` rank, `u64` approx_offset, `u64` exact_offset, `u8` inverted,
   `u64` n × {`u64` len + bytes}}), approx (`u64` n × {`u64` len + LE `u64`…}), exact (`u64` len + LE `u64`…).
-- **Decode strictness, stated per rule** (decode-only; a violation is `SyncOutcome.FAILED`, never a verdict): v3 trailing bytes are accepted (bincode 1.x legacy `deserialize` allows them), v4 trailing bytes rejected; a row window past the end of a column reads as zero (C2SP lets a builder omit trailing all-zero words; `Equation::eval` bounds the same way), so `offset + 256 > 64·words` is **not** rejected; `rank > columns` is rejected at `prepare()` (unchecked by `clubcard-crlite`, where it panics → upki `ENGINE_ERROR`); `inverted ∉ {0, 1}` is rejected (C2SP MUST; `clubcard-crlite` reads `!= 0`); a v3 filter is held to v4's ranges
-(revision 56): `approx_m`, `exact_m` and both offsets fit `u32`, the rank and the column count fit `u8` (≤ 255),
+- **Decode strictness, stated per rule** (decode-only; a violation is `SyncOutcome.FAILED`, never a verdict): v3 trailing bytes are accepted (bincode 1.x legacy `deserialize` allows them), v4 trailing bytes rejected; a row window past the end of a column reads as zero (C2SP lets a builder omit trailing all-zero words; `Equation::eval` bounds the same way), so `offset + 256 > 64·words` is **not** rejected; `rank > columns` is rejected at `prepare()` (unchecked by `clubcard-crlite`, where it panics → upki `ENGINE_ERROR`); `inverted ∉ {0, 1}` is rejected (C2SP MUST; `clubcard-crlite` reads `!= 0`); a v3 filter is held to v4's ranges:
+`approx_m`, `exact_m` and both offsets fit `u32`, the rank and the column count fit `u8` (≤ 255),
 and no other v4 limit is imposed on v3; the sorted-index and distinct-log-id MUSTs are checked. The resulting decode-only asymmetries against upki are recorded in the cross-engine suite as `FAILED`-vs-loaded, never as verdict classes.
 - **Observed 2026-10-21:** Mozilla serves v3 on both channels; `upki.rustls.dev` serves a v4 transcode.
 - **Validated 2026-10-21:** prototype matched `clubcard-crlite 0.6.2` on 43,510 / 43,510 queries.
@@ -3116,7 +1171,7 @@ and no other v4 limit is imposed on v3; the sorted-index and distinct-log-id MUS
   record's `last_modified` + `clockSkew` is rejected (`SyncOutcome.FAILED`, stage `INDEX`; cursor and watermark unchanged); **inside the rollback window** (changeset
   `timestamp ≤ watermark`; **the effective watermark** is max(the stored watermark, the live `SIGNED` generation's
   `sourceTimestampMillis`), except while that generation is `clockBehind`, when the stored one alone applies,
-  revision 56, the maintainer's decision from the #190 review, so a malformed or absent `updater.json` beside a live
+  so a malformed or absent `updater.json` beside a live
   `SIGNED` generation cannot reopen a rollback, and a far-future `clockBehind` generation cannot freeze the feed) a
   maximum coverage below the active `SIGNED` generation's is
   `ROLLBACK_REFUSED`; a changeset with `timestamp > watermark` installs and advances the watermark
@@ -3132,8 +1187,8 @@ and no other v4 limit is imposed on v3; the sorted-index and distinct-log-id MUS
   neither watermark nor cursor (the bootstrap and clock-behind cases: a fleet behind a wrong clock must
   neither sit at `NO_DATA` nor freeze on its seed while server time keeps moving away from it; the
   watermark stays unpinned, so the first sane changeset once the clock is right advances it, and the
-  cursor stays, so the next poll re-fetches from the last verified cursor (from #141; until then the whole changeset,
-  §7.1; either way a 200 with a full body every poll while the clock is behind, the accepted cost) and finds the same changeset
+  cursor stays, so the next poll re-fetches from the last verified cursor (§7.1; a 200 with a full body every poll
+  while the clock is behind, the accepted cost) and finds the same changeset
   **`UNCHANGED`-by-timestamp**: a verified changeset whose signed `<ts>` equals the live generation's
   `sourceTimestampMillis` is `UNCHANGED`, updating the attempt fields only, and that test precedes the
   `CLOCK_SKEW` test; "the live generation is `clockBehind`" is recomputed at the sync decision as
@@ -3145,7 +1200,7 @@ and no other v4 limit is imposed on v3; the sorted-index and distinct-log-id MUS
   evicts a `MIRROR` or `SYSTEM` one.
 
 **Hardening**: every length and offset checked before allocation with an explicit allocation budget
-per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (today's attachment names are 31 characters; a three-digit daily index must not fail the rule; a name longer than C2SP's 32 bytes is renamed in `index.bin`, §6.5) and never a reserved name (`index.bin`, `meta.json`, `records.json`, `current`, `updater.json`, `store.version`, `.lock`; `index.bin` added in revision 48, since a filter of that name cannot sit beside the index in a C2SP image; a mirror's manifest names are compared with them ignoring ASCII case, §7.3); downloads capped at `min(attachment.size, MAX_FILTER_BYTES)` for signed bodies and at the per-kind fixed cap for unsigned bodies (§5.1 limits).
+per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (today's attachment names are 31 characters; a three-digit daily index must not fail the rule; a name longer than C2SP's 32 bytes is renamed in `index.bin`, §6.5) and never a reserved name (`index.bin`, `meta.json`, `records.json`, `current`, `updater.json`, `store.version`, `.lock`; `index.bin` among them since a filter of that name cannot sit beside the index in a C2SP image; a mirror's manifest names are compared with them ignoring ASCII case, §7.3); downloads capped at `min(attachment.size, MAX_FILTER_BYTES)` for signed bodies and at the per-kind fixed cap for unsigned bodies (§5.1 limits).
 
 ### 6.4 Filter storage
 `LongArray` columns padded with one zero word in an immutable `Generation`. No mmap.
@@ -3155,12 +1210,12 @@ per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (t
 | `compat` | 1.57 MB | ~2.5 MB | 8.56 MB (8,558,354 B) | ~5–10 ms | ~50–100 ms plus seed verification |
 | `default` | 6.0 MB | ~7.8 MB | 18.59 MB (18,593,366 B) | ~15–30 ms | ~150–300 ms plus seed verification |
 
-The measured column (revision 56) is the sum of the signed `attachment.size` values per channel in the live
+The measured column is the sum of the signed `attachment.size` values per channel in the live
 `cert-revocations` changeset of 2026-11-12 (`timestamp` 1794499022363, 106 records: per channel 1 full and 52 deltas;
 deltas average 134 KB on `compat` and 242 KB on `default`; Appendix A). The delta count varies: 8 per channel on
 2026-10-21, 52 per channel on 2026-11-12.
 `MAX_MANIFEST_ENTRIES` (256) admits a full and 255 deltas, about 68 MB at `default`'s ~242 KB a delta; no per-sync
-total caps it (revision 57), only the count and the per-file caps.
+total caps it, only the count and the per-file caps.
 
 Baseline Profile covering the decoder, seed verification, the TBS parser, the walker and `evaluate`,
 with `androidx.profileinstaller` as `api`. `AWAIT_DATA_<CHANNEL>` from a physical ARM device at API
@@ -3170,8 +1225,8 @@ are a fixed 2 s.
 ### 6.5 Store, persistence and seeds
 
 **Layout over `RevoktStorage`'s key space** (each generation is materialisable into a C2SP directory
-image). **A file's name in a generation** (revision 48) is derived from its §6.3-validated Remote Settings
-`attachment.filename`, or in a `MIRROR` generation from its §7.3-checked `manifest.json` filename (revision 52): the
+image). **A file's name in a generation** is derived from its §6.3-validated Remote Settings
+`attachment.filename`, or in a `MIRROR` generation from its §7.3-checked `manifest.json` filename: the
 filename itself when it is at most 32 bytes (a C2SP filename: 1 to 32 bytes of
 `[A-Za-z0-9._-]`), otherwise its first 15 characters, `-` and the first 16 lowercase hex characters of the SHA-256 of
 the filename's ASCII bytes (not `attachment.hash` or the manifest's hash), 32 characters in all, since §6.3 admits names of up to 64
@@ -3191,43 +1246,54 @@ values are names, never ordinals:
 - `<dataset>/<channel>/current`: a small pointer file `{live, previous}` naming generation
   directories; `previous` is only ever a complete generation of the same or higher trust class as
   `live`, so recovery never falls to a lower class than the one being replaced.
+  **Beside a `current` that is present but malformed**, which may name any directory, a generation directory whose
+  `meta.json` is present is held: a complete one is compared, reused when it holds this generation, and never
+  reopened, rewritten or deleted; one whose `meta.json` is malformed (a torn write, or another `metaVersion`) is
+  kept, and the sync is `STORE_FAILED` at that `<ts>`, which a new `<ts>` heals. Only a directory with no
+  `meta.json` (incomplete, or not yet written) is staged. When an install flips beside a malformed pointer, the new
+  pointer's `previous` is the generation the running loader's engine held live, if that generation is complete, is
+  another directory, and is of the same or a higher trust class; a fresh loader has no `previous`.
 - `<dataset>/<channel>/gen-<timestamp>-<hash16>/` (`timestamp` = `sourceTimestampMillis` zero-padded to
   13 digits so lexical order is chronological; `hash16` = the first 16 lowercase hex characters of
   `SHA-256(generationId)`; `generationId` itself may contain `/`): immutable; `index.bin`, delta files, `records.json` for `SIGNED`, and `meta.json` **written last as
   the completeness marker** (engine's own JSON tree): `metaVersion`, `dataset`, `channel`,
   `trustClass`, `generationId`, `format` (the full filter's encoding; each filter is read in its own, so a channel
-  may mix encodings, as Firefox's cert_storage and upki allow; revision 57, the maintainer's decision on #137),
+  may mix encodings, as Firefox's cert_storage and upki allow),
   `freshness`, `sourceTimestampMillis`, `collection`, a map from
   each full-filter name to `blobs/<sha256>`, for `SIGNED` the changeset timestamp, signer leaf
-  SHA-256 and signature bytes (the raw pair, any non-empty even length, since §7.1 admits any EC leaf curve;
-  revision 57, #137), and for `MIRROR` the local time its manifest was stored, which is §7.3's
-  `If-Modified-Since` (revision 56). A
+  SHA-256 and signature bytes (the raw pair, any non-empty even length, since §7.1 admits any EC leaf curve), and for `MIRROR` the local time its manifest was stored, which is §7.3's
+  `If-Modified-Since`. A
   `MIRROR` generation reloads as `MIRROR`, never as `SIGNED`; a `channel` mismatch is no generation.
   A `SIGNED` generation directory also holds `records.json`, the full verified record set (the same bytes as the seed's `records.json`: the canonical-JSON signed payload), so a
-  `_since` changeset (from #141) can be verified against it (tombstones merged) without a full re-fetch.
+  `_since` changeset can be verified against it (tombstones merged) without a full re-fetch. A `_since` changeset is
+  merged over the pointed generation's `records.json`; the whole collection, fetched with no cursor, is verified as
+  served.
 - `<dataset>/<channel>/blobs/<sha256>` (64 lowercase hex): content-addressed full-filter files referenced from
   `meta.json`; when the key exists the stored blob is re-hashed and reused on a match (a mismatch rewrites it, `storeFailures++`; on the delta path, where the full is not being fetched, the full attachment is fetched again in the same sync, subject to the metered rule), so a daily delta install never rewrites the 6 MB full and a bit-rotted blob is never decoded; prune removes unreferenced
   blobs. The upki CI adapter materialises a C2SP directory image from a generation (it already
   copies into a fresh directory, §3.2).
-- `<dataset>/<channel>/updater.json`: **the rollback watermark is per dataset and channel, stored once outside the per-source map** (the effective watermark is floored by the live `SIGNED` generation's timestamp unless it is `clockBehind`, §6.3; a malformed file's dataset-level members are read as absent and count a store failure, so the floor applies; revision 56) together with `seedInstalledAtMillis` (written with the watermark when the seed install flips the pointer) and a dataset-level `datasetLastAttemptAtMillis` (written at the end of every sync whatever its outcome, `STORE_LOCKED` excepted; the §8 `STALE` gate; the loader evaluates the gate when it writes this file and carries the boolean in the published `DataState`, internal field, so handshakes read the snapshot only, never the store) (a changeset installs only if its timestamp passes the dataset watermark, whichever source delivered it, so a relabelled `sourceId` on a private mirror cannot start a fresh watermark and roll back; the coverage-monotonic bound is the live `SIGNED` generation's maximum coverage, read from the published generation, never from this file); the per-source map is keyed by a **stable source id** (not the URL, so overriding a
+- `<dataset>/<channel>/updater.json`: **the rollback watermark is per dataset and channel, stored once outside the per-source map** (the effective watermark is floored by the live `SIGNED` generation's timestamp unless it is `clockBehind`, §6.3; a malformed file's dataset-level members are read as absent and count a store failure, so the floor applies) together with `seedInstalledAtMillis` (written with the watermark when the seed install flips the pointer) and a dataset-level `datasetLastAttemptAtMillis` (written at the end of every sync whatever its outcome, with two exceptions: `STORE_LOCKED`, and a sync whose read of
+  `updater.json` threw, which writes nothing; the §8 `STALE` gate; the loader evaluates the gate when it writes this file and carries the boolean in the published `DataState`, internal field, so handshakes read the snapshot only, never the store) (a changeset installs only if its timestamp passes the dataset watermark, whichever source delivered it, so a relabelled `sourceId` on a private mirror cannot start a fresh watermark and roll back; the coverage-monotonic bound is the live `SIGNED` generation's maximum coverage, read from the published generation, never from this file); the per-source map is keyed by a **stable source id** (not the URL, so overriding a
   base URL keeps the cursor): `lastVerifiedLastModified` (the `_since` cursor),
   `lastVerifiedAtMillis`, `lastAttemptAtMillis`, `backoffUntilMillis` (clamped to now + `MAX_BACKOFF` on write and again on read, so a clock that was far ahead at write time cannot leave a years-long backoff),
-  `consecutiveFailures`, `feedHostBlock: {sinceMillis, chainSha256s}` (the §8 signed-source hold, **per source, not per chain**: `sinceMillis` is set on the first `BLOCKED_BY_SELF` of any host of the source and cleared only by a hit-free sync that completes after `sinceMillis + FEED_HOST_HOLD`, never earlier and never by an install alone, so an episode lasts at least the hold and expires exactly once (an alternating hit/clean chain cannot reset it); `chainSha256s` is the set of hit chains, for reporting; the hold is measured from the persisted value, so restarts do not extend it; with `RevoktStorage.inMemory()` it restarts per process); written atomically. **The cursor, `lastVerified*`
+  `consecutiveFailures`, `feedHostBlock: {sinceMillis, chainSha256s}` (the §8 signed-source hold, **per source, not per chain**: `sinceMillis` is set on the first `BLOCKED_BY_SELF` of any host of the source and cleared only by a hit-free sync that completes after `sinceMillis + FEED_HOST_HOLD`, never earlier and never by an install alone, so an episode lasts at least the hold and expires exactly once (an alternating hit/clean chain cannot reset it); `chainSha256s` is the set of hit chains, for reporting; the hold is measured from the persisted value, so restarts do not extend it; with `RevoktStorage.inMemory()` it restarts per process); written atomically. A sync whose read of `updater.json` throws
+  writes nothing to it: no attempt is recorded, `consecutiveFailures` does not rise and no backoff is written;
+  `storeFailures` is the only persisted signal (the sync still returns `STORE_FAILED` with `SYNC_FAILED`). **The cursor, `lastVerified*`
   and the watermark advance only after the pointer flip of a successful install** (one carve-out: the §6.3 clock-behind install advances `lastVerifiedAtMillis` only); a failure-path
   write (`consecutiveFailures`, `backoffUntilMillis`) leaves those three untouched; [0.3] `UNCHANGED`
   against the pointed generation rewrites the file (repairing a crash between flip and write); in 0.2, whose store is
   in memory, `UNCHANGED` writes only the attempt fields, the `consecutiveFailures` reset and the backoff headers'
-  effect (§7.1; revision 56, the maintainer's reading R4 on #131). The
+  effect (§7.1). The
   delta parent is derived from the pointed generation's `meta.json` at `start()`, never from this
   file.
 - **Prune keeps exactly the directories the pointer names** (`live`, `previous`) and deletes every
   other directory, complete or not, and every unreferenced blob; it runs at `start()` and after every `INSTALLED`
-  sync, never after a failed one (revision 57); on a failed `prepare()`, self-check or `activate()` the loader deletes
+  sync, never after a failed one; on a failed `prepare()`, self-check or `activate()` the loader deletes
   the directory it was given before returning (blobs stay, content-addressed); an interrupted install
   (process death; no `meta.json`) is deleted by prune at the next `start()`; a sync-time `prepare()`/`activate()`
   throw and a self-check mismatch increment `storeFailures` and are `SyncOutcome.FAILED` (stage `PREPARE`, `ACTIVATE` or `SELF_CHECK`; cursor and watermark do not advance, so the same changeset is retried under backoff); a store write or pointer-flip failure during an install is `SyncOutcome.STORE_FAILED` (stage `STORE`, `storeFailures++`); "newest" is pointer order, never directory timestamp.
 **Order of an install** (an *install* anywhere in this document means this whole sequence): fetch, verify and write **one body at a time** (hash against the signed
-record or the manifest, write the blob unless the key exists, drop the body) → build `index.bin` (≤ 1 MiB, §3.2) → the format check (revision 56, as #184 does; revision 57, a decision on #137: on every placed filter, the full
+record or the manifest, write the blob unless the key exists, drop the body) → build `index.bin` (≤ 1 MiB, §3.2) → the format check (on every placed filter, the full
 and each delta, each in its own encoding; a filter whose encoding the engine does not list fails the install,
 `FAILED`, `FORMAT_UNSUPPORTED`, stage `PREPARE`, §3.2, the previous generation stays live, and nothing is offered to
 `prepare`) →
@@ -3240,7 +1306,7 @@ of the first coverage entry of the filter under test in `index.bin` order; the o
 (`logId`, `high + 1` unsigned, or `low − 1` when `high` is the maximum); filters are iterated in
 `index.bin` order and index entries by ascending issuer hash, so "some block" is reproducible. The absent
 issuer hash with the inside SCT must answer in the `NOT_ENROLLED` class (`{NOT_COVERED, NOT_ENROLLED,
-NO_SCTS}`, the §3.2 equivalence class, so the upki engine passes); the outside SCT must answer
+NO_SCTS}`, the equivalence class of test-plan.md §9.3, so the upki engine passes); the outside SCT must answer
 `NOT_COVERED` or its class; and the `REVOKED` probe uses a serial the loader's own `revokt-clubcard`
 reference evaluator (§6.2) calls `Revoked`, chosen deterministically and first-match (one branch is
 exercised per generation, the first that yields): the first of the serials
@@ -3256,8 +1322,7 @@ chain's included, where a failure is the corresponding load failure, `SEED_UNREA
 deleted, the engine and the published snapshot untouched (no window, nothing to re-install)
 → `engine.activate(prepared)` → publish the generation snapshot with that id (`generationEpoch++`; the window between `activate` and publish, i.e. between
 install and publish is stated: a verdict in it carries the new answer under the old epoch for at most
-the verdict-cache TTL) → flip the pointer → write `updater.json` → prune (revision 57, the maintainer's decision on
-#137: after every `INSTALLED`, once the flip and `updater.json` are written, never after a failure, as upki deletes
+the verdict-cache TTL) → flip the pointer → write `updater.json` → prune (after every `INSTALLED`, once the flip and `updater.json` are written, never after a failure, as upki deletes
 after a successful plan and Firefox drops old deltas when a new full installs). Decision step 7 never queries an
 engine for a dataset whose snapshot has no generation; `CrliteQueryResult.NO_DATA` from an engine
 while the snapshot holds a generation for that dataset is reported as `ENGINE_ERROR(ENGINE)`, never
@@ -3273,7 +1338,7 @@ the lock `start()` holds; readers re-read the pointer once on a missing key. Ins
 `ByteBuffer.asLongBuffer().get(LongArray)`. Allocation budgets per decoder: filter ≤ len + 1 MiB +
 entries × 128 B; JSON ≤ 20·len + 64 KiB on any input, asserted on every fuzz and replay input, and ≤ 4·len + 64 KiB on
 Remote Settings data, asserted on named fixtures (a committed CRLite-shaped changeset, and the pinned corpus's real
-Remote Settings changeset in the corpus tier) (revision 48: a tree with one object per value cannot hold 4·len on
+Remote Settings changeset in the corpus tier) (a tree with one object per value cannot hold 4·len on
 every input, `[1.5,…]` alone needing about 6·len, and a bound needs a constant term); DER ≤ 2·len; asserted in the §9.1
 replay by `com.sun.management.ThreadMXBean.getThreadAllocatedBytes` deltas (HotSpot), after one warm-up decode, on the same thread,
 of a fixed small document that contains every value kind (for example `{"a":[0,-1.5e3,18446744073709551616,"é😀\u00e9\ud83d\ude00",true,false,null,{}]}`, covering exponents, negative and beyond-`Long` numbers, multi-byte UTF-8 and `\u` escapes with a surrogate pair), and of one fixed rejected input such as `[`
@@ -3286,16 +1351,15 @@ the pinned content-signature root (signatures, names and every check except vali
 periods are then checked at the decoded `<ts>` (§7.2), so only JSON signed under Mozilla's root is decoded inside
 `start()`. The budgets are measured on HotSpot only; ART is not asserted.
 
-**Seed archive** (`revokt-seed-<channel>`, weekly; **shipped by default**: `SeedSource.bundled()`, the builder default, resolves `/revokt/seed-<channel>.zip` from that artifact on the classpath, and the OkHttp and Android quickstarts declare the dependency; decision, revision 23): a zip with `seed.json` {`seedFormat`, `channel`,
+**Seed archive** (`revokt-seed-<channel>`, weekly; **shipped by default**: `SeedSource.bundled()`, the builder default, resolves `/revokt/seed-<channel>.zip` from that artifact on the classpath, and the OkHttp and Android quickstarts declare the dependency): a zip with `seed.json` {`seedFormat`, `channel`,
 `dataset`, `filterFormat`, `recordsLastModified`, `engineFloor`}, `records.json` (byte-for-byte the canonical-JSON signed payload `{"data": records sorted by id, tombstones removed, "last_modified": "<ts>"}`, so the seed verifier hashes the file unchanged; the `<ts>` inside it, verified, is the seed's timestamp for every rule below, the unsigned `seed.json.recordsLastModified` being a hint for the header read only), `signature` (the `signature` field as served, of the `metadata.signatures[]` entry that verified when the seed was
 built, whose `x5u` body is `x5u.pem`: unpadded base64url of the raw r‖s pair, any non-empty even length, a
 wrong-size pair failing verification, §7.1; for today's P-384 leaf the 128-character text of 96 bytes), `x5u.pem` (the x5u body as served, leaf first), `attachments/<f>`, `index.bin` (produced by one engine function `buildIndex(records, channel)` with entries ordered by `(effectiveTimestamp, record id)`, full before deltas; it places exactly the channel's one full filter, a channel with none or more than one being refused
 (`SyncOutcome.FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, or `SEED_UNREADABLE` for a seed; the previous generation
-stays live), plus every delta of the channel, ordered by time, without reading `parent`, as Firefox does (revision 56,
-the maintainer's decision; upki-mirror walks the `parent` chain instead, Appendix A; an extra delta can only add
+stays live), plus every delta of the channel, ordered by time, without reading `parent`, as Firefox does (upki-mirror walks the `parent` chain instead, Appendix A; an extra delta can only add
 revocations, so the rule fails closed); a placed filter that does not decode is `FAILED` at stage `PREPARE`; its
-output bytes are frozen per `seedFormat`, a change bumps `seedFormat`, which is what makes the load-time byte compare valid across minors; the weekly job calls that function from the oldest supported minor). **Entry names** (revision 52; a zip entry's name is outside the signature): the loader never derives a name or a path from a zip entry. It accepts exactly the fixed entries `seed.json`, `records.json`, `signature`, `x5u.pem` and `index.bin`, plus `attachments/<f>` for each §6.3-checked `attachment.filename` f of a record in the verified `records.json` that `buildIndex(records, channel)` places in the generation, and reads each entry by that exact name. The entries are the zip's central directory: every read goes through a central-directory entry whose local header names the same file, and the first entry is `seed.json`; otherwise the seed is `SEED_UNREADABLE`. A duplicate, extra or missing entry is `SEED_UNREADABLE`; an entry that differs from an expected name only in letter case is an extra entry, and so is a directory entry. The fixed entries are checked before any entry but `seed.json` is read, and at that check every name that is neither a fixed entry nor under `attachments/` is already extra; the attachment entries are checked once `records.json` is verified and before any of them is inflated. **Entry caps, enforced while inflating** (zip-declared sizes are untrusted; `fromResource`/`fromPath`/`of` accept any file, and the sole-seed `ENFORCE` path inflates inside `start()`, where an `OutOfMemoryError` would crash-loop an app): `records.json` ≤ `MAX_JSON_BYTES`, `x5u.pem` ≤ `MAX_X5U_BYTES`, each attachment ≤ `min(signed size, MAX_FILTER_BYTES)`, `index.bin` ≤ 1 MiB, `seed.json` ≤ 64 KiB; over any cap → `SEED_UNREADABLE` (§10 supply chain). Engine rules: `seedFormat` or
-`engineFloor` above what this engine supports, or `filterFormat ∉ revocationEngine.formats`, → `SEED_UNREADABLE` warning and the seed is ignored (so in the sole-seed `ENFORCE` configuration `start()` throws, §4 S bullet); **a seed whose signed timestamp exceeds local now + `clockSkew` is installed** (decision, revision 29: the timestamp is Mozilla-signed and its x5u checks run at that signed time, so "future" can only mean the local clock is behind, which the spec calls routine; refusing it put the default preset at `NO_DATA` on every device whose clock was a day behind) with `DataState.clockBehind = true`, `ageMillis` clamped at 0, the sticky-while-true `CLOCK_BEHIND` warning, and the watermark at the signed timestamp as for any seed (rollback comparisons are server time against server time and never involve the local clock);
+output bytes are frozen per `seedFormat`, a change bumps `seedFormat`, which is what makes the load-time byte compare valid across minors; the weekly job calls that function from the oldest supported minor). **Entry names** (a zip entry's name is outside the signature): the loader never derives a name or a path from a zip entry. It accepts exactly the fixed entries `seed.json`, `records.json`, `signature`, `x5u.pem` and `index.bin`, plus `attachments/<f>` for each §6.3-checked `attachment.filename` f of a record in the verified `records.json` that `buildIndex(records, channel)` places in the generation, and reads each entry by that exact name. The entries are the zip's central directory: every read goes through a central-directory entry whose local header names the same file, and the first entry is `seed.json`; otherwise the seed is `SEED_UNREADABLE`. A duplicate, extra or missing entry is `SEED_UNREADABLE`; an entry that differs from an expected name only in letter case is an extra entry, and so is a directory entry. The fixed entries are checked before any entry but `seed.json` is read, and at that check every name that is neither a fixed entry nor under `attachments/` is already extra; the attachment entries are checked once `records.json` is verified and before any of them is inflated. **Entry caps, enforced while inflating** (zip-declared sizes are untrusted; `fromResource`/`fromPath`/`of` accept any file, and the sole-seed `ENFORCE` path inflates inside `start()`, where an `OutOfMemoryError` would crash-loop an app): `records.json` ≤ `MAX_JSON_BYTES`, `x5u.pem` ≤ `MAX_X5U_BYTES`, each attachment ≤ `min(signed size, MAX_FILTER_BYTES)`, `index.bin` ≤ 1 MiB, `seed.json` ≤ 64 KiB; over any cap → `SEED_UNREADABLE` (§10 supply chain). Engine rules: `seedFormat` or
+`engineFloor` above what this engine supports, or `filterFormat ∉ revocationEngine.formats`, → `SEED_UNREADABLE` warning and the seed is ignored (so in the sole-seed `ENFORCE` configuration `start()` throws, §4 S bullet); **a seed whose signed timestamp exceeds local now + `clockSkew` is installed** (the timestamp is Mozilla-signed and its x5u checks run at that signed time, so "future" can only mean the local clock is behind, which the spec calls routine; refusing it put the default preset at `NO_DATA` on every device whose clock was a day behind) with `DataState.clockBehind = true`, `ageMillis` clamped at 0, the sticky-while-true `CLOCK_BEHIND` warning, and the watermark at the signed timestamp as for any seed (rollback comparisons are server time against server time and never involve the local clock);
 `channel` ≠ configured channel → `SEED_CHANNEL_MISMATCH` `ERROR` thrown by `start()`; the shipped
 `index.bin` is **rebuilt from `records.json` and byte-compared** at load (the signature binds records
 and attachment hashes, not parentage), a mismatch → `SEED_UNREADABLE`; the weekly job publishes
@@ -3314,38 +1378,35 @@ every `seedFormat` the oldest supported minor lists, in the filter format Mozill
 ### 7.1 Mozilla Remote Settings protocol and verification [M1]
 All constants live in `MozillaRemoteSettings` (per source, overridable), including the pinned root
 SPKI hash set and the three fields read from each `metadata.signatures[]` entry (`signature`, `x5u`, `mode`). `MozillaRemoteSettings.Builder` exposes `baseUrl`, `attachmentBaseUrl` and `x5uHosts` (§4): `attachmentBaseUrl` defaults to `https://firefox-settings-attachments.cdn.mozilla.net/`, Mozilla's live
-`capabilities.attachments.base_url` with its trailing `/` (revision 56, Appendix A). `x5uHosts` entries and rewrite
+`capabilities.attachments.base_url` with its trailing `/` (Appendix A). `x5uHosts` entries and rewrite
 targets are compared exactly, ASCII case included. **a private mirror that serves the changeset, attachment and x5u bytes unchanged (a byte-for-byte reverse proxy of the three Mozilla hosts) with the builder's `baseUrl`, `attachmentBaseUrl` and `x5uHostRewrite("content-signature-2.cdn.mozilla.net", mirrorHost)` pointing at it (`attachment.location` is relative, so `attachmentBaseUrl` suffices; the rewrite is applied to the parsed x5u URI host before the `x5uHosts` check, so no JSON is rewritten on the wire; x5u is outside the signed payload; the https-only, port-443 and no-userinfo rules apply to the mirror host too), verifies and installs as `SIGNED` under the default `sourceId`, so the `_since` cursor carries over (the watermark is per dataset and channel and carries over whatever the `sourceId`, §6.5); this is the supported offline-fleet path** (`c2spMirror` is bootstrap-only and never updates a seeded client, §7.3). Base `https://firefox.settings.services.mozilla.com/v1` (the Kinto API, Firefox's own `services.settings.server`; `/v2`, a distinct newer server that was hours old at verification, serves the same changeset shape and is the documented alternative value of `MozillaRemoteSettings.baseUrl`; both verified 2026-10-22, Appendix A);
-only `monitor/changes` and per-collection `changeset`; `_expected` mandatory; **until #141 every sync fetches the
-whole changeset**, sending neither `_since` nor `If-None-Match`, and the cursor is written but not read (revision 57,
-the maintainer's decision on #137); from #141 a delta poll sends `_since=<cursor>`
-bare in the changeset query, as Firefox does, beside the quoted `If-None-Match` (§3; revision 56); `User-Agent`; gzip;
-honour `Backoff` and `Retry-After` up to `MAX_BACKOFF` (24 h; transport headers are unsigned), on every response, 2xx included (revision 56; revokt's own rule, stricter than Firefox, which keeps `Backoff` only from a `/changes` response that is not a server error and carries the expected JSON, and never reads `Retry-After`; revision 57 corrects the earlier "as Firefox and Kinto do", Appendix A): a response with such a header waits the header, a failure too even when that is shorter than its computed backoff; a success without one clears `backoffUntilMillis`; a failure without one waits the computed failure backoff, 15 min × 2^(n − 1) for the n-th consecutive feed failure, capped at the 6 h poll interval; poll at most every 6 h with jitter. **Feed failures** (revision 56, the maintainer's readings R1 and R2 on #131): `FAILED` (`FORMAT_UNSUPPORTED`, which a placed full or delta in an encoding the engine does not list gives at stage `PREPARE`, the previous generation staying live (§6.5, revision 57), and a `FETCHER_TRUST` failure included), `CLOCK_SKEW` and `STORE_FAILED` advance `consecutiveFailures` and take the failure backoff; `ROLLBACK_REFUSED` is not a feed failure; `BACKOFF` and `DEFERRED` leave the count unchanged; every successful poll resets it to 0: `INSTALLED`, a clock-behind install included, and `UNCHANGED`, by a 304 or by a timestamp match. **Verify** every collection
+only `monitor/changes` and per-collection `changeset`; `_expected` mandatory; a delta poll sends `_since=<cursor>`
+bare in the changeset query, as Firefox does, beside the quoted `If-None-Match` (§3); `User-Agent`; gzip;
+honour `Backoff` and `Retry-After` up to `MAX_BACKOFF` (24 h; transport headers are unsigned), on every response, 2xx included (revokt's own rule, stricter than Firefox, which keeps `Backoff` only from a `/changes` response that is not a server error and carries the expected JSON, and never reads `Retry-After`; Appendix A): a response with such a header waits the header, a failure too even when that is shorter than its computed backoff; a success without one clears `backoffUntilMillis`; a failure without one waits the computed failure backoff, 15 min × 2^(n − 1) for the n-th consecutive feed failure, capped at the 6 h poll interval; poll at most every 6 h with jitter. **Feed failures**: `FAILED` (`FORMAT_UNSUPPORTED`, which a placed full or delta in an encoding the engine does not list gives at stage `PREPARE`, the previous generation staying live (§6.5), and a `FETCHER_TRUST` failure included), `CLOCK_SKEW` and `STORE_FAILED` advance `consecutiveFailures` and take the failure backoff, except a `STORE_FAILED` sync whose read of `updater.json` threw, which writes nothing (§6.5); `ROLLBACK_REFUSED` is not a feed failure; `BACKOFF` and `DEFERRED` leave the count unchanged; every successful poll resets it to 0: `INSTALLED`, a clock-behind install included, and `UNCHANGED`, by a 304 or by a timestamp match. **Verify** every collection
 state (`"Content-Signature:\0"` + canonical JSON of `{"data": records sorted by id (deleted removed),
-"last_modified": "<ts>"}`; merge `_since` tombstones first; reset-and-retry once; canonical JSON per `canonical_json` 0.7.0 number and escape rules, pinned by the §9 differential test; the `signature` field is unpadded base64url of the raw pair r‖s, two equal halves of any non-empty even length (a pair of the wrong size for the leaf's key fails verification), the leaf on any EC curve the floor admits (Firefox parity, the maintainer's decision on #163; P-384 today), converted to DER and verified as `SHA384withECDSA`). **`<ts>`** (revision 56) is the value the verified payload was built from: a live sync builds it from the changeset envelope's `timestamp`, as Firefox's `RemoteSettingsClient` does, so that value is signed exactly when verification succeeds; a seed's is the one inside `records.json`. The unsigned value is `monitor/changes`' `last_modified`, used only as `_expected`. **`metadata.signatures[]` is read, as Firefox reads it** (revision 56, the maintainer's decision; implemented in #198): the array must be non-empty; at most 4 entries are tried, in array order, and a changeset with more than 4, or with no entry tried (every entry skipped, for example for a missing `mode`), is `SyncOutcome.FAILED` at stage `SIGNATURE`, since it concerns signature metadata, not records; so is a JSON `null` element that the loop reaches, as Firefox's destructuring throws on it (an earlier entry that verifies is accepted first; revision 57); each tried entry's `x5u` is fetched and validated under the pinned chain (§7.1 "x5u chain"), an `x5u` URL already fetched and validated in the same sync being reused, not fetched again, and one whose fetch or validation failed not being retried by a later entry in the same sync; the first entry that verifies is accepted, and the records installed are exactly the records it verified, at the `<ts>` it verified; an entry with no `signature` or `x5u`, an empty string included (Firefox's `!x5u || !signature`; revision 57), or whose `mode` is not `p384ecdsa`, is skipped; any failure of a tried entry, a failed `x5u` fetch included, moves on to the next entry (Firefox leaves the loop when the fetch itself is rejected, Appendix A); when none verifies, the last tried entry's failure is the outcome (Firefox throws its first error): a failed `x5u` fetch is `FAILED` at stage `X5U`, a validity failure `CLOCK_SKEW` at stage `X5U`, and every other PEM or chain failure (`NOT_PINNED`, `EKU` and `SAN` included) and a content-signature failure `FAILED` at stage `SIGNATURE` (revision 57, from #191's verifier); `metadata.signature` is no longer read (Appendix A). **The signed
+"last_modified": "<ts>"}`; merge `_since` tombstones first; reset-and-retry once; canonical JSON per `canonical_json` 0.7.0 number and escape rules, pinned by the §9 differential test; the `signature` field is unpadded base64url of the raw pair r‖s, two equal halves of any non-empty even length (a pair of the wrong size for the leaf's key fails verification), the leaf on any EC curve the floor admits (Firefox parity; P-384 today), converted to DER and verified as `SHA384withECDSA`). **`<ts>`** is the value the verified payload was built from: a live sync builds it from the changeset envelope's `timestamp`, as Firefox's `RemoteSettingsClient` does, so that value is signed exactly when verification succeeds; a seed's is the one inside `records.json`. The unsigned value is `monitor/changes`' `last_modified`, used only as `_expected`. **`metadata.signatures[]` is read, as Firefox reads it**: the array must be non-empty; at most 4 entries are tried, in array order, and a changeset with more than 4, or with no entry tried (every entry skipped, for example for a missing `mode`), is `SyncOutcome.FAILED` at stage `SIGNATURE`, since it concerns signature metadata, not records; so is a JSON `null` element that the loop reaches, as Firefox's destructuring throws on it (an earlier entry that verifies is accepted first); each tried entry's `x5u` is fetched and validated under the pinned chain (§7.1 "x5u chain"), an `x5u` URL already fetched and validated in the same sync being reused, not fetched again, and one whose fetch or validation failed not being retried by a later entry in the same sync; the first entry that verifies is accepted, and the records installed are exactly the records it verified, at the `<ts>` it verified; an entry with no `signature` or `x5u`, an empty string included (Firefox's `!x5u || !signature`), or whose `mode` is not `p384ecdsa`, is skipped; any failure of a tried entry, a failed `x5u` fetch included, moves on to the next entry (Firefox leaves the loop when the fetch itself is rejected, Appendix A); when none verifies, the last tried entry's failure is the outcome (Firefox throws its first error): a failed `x5u` fetch is `FAILED` at stage `X5U`, a validity failure `CLOCK_SKEW` at stage `X5U`, and every other PEM or chain failure (`NOT_PINNED`, `EKU` and `SAN` included) and a content-signature failure `FAILED` at stage `SIGNATURE`; `metadata.signature` is not read (Appendix A). **The signed
 payload does not bind the collection id**, and every security-state collection shares a signer, so
 before any state change every record is schema-validated for the requested collection (CRLite:
-`channel`, `incremental`, `attachment.{filename,hash,size,location}` (the filename under §6.3's rule), `effectiveTimestamp`, and `parent` on deltas only, since live full records carry none (revision 56); M2
+`channel`, `incremental`, `attachment.{filename,hash,size,location}` (the filename under §6.3's rule), `effectiveTimestamp`, and `parent` on deltas only, since live full records carry none; M2
 schemas likewise); a verified changeset whose records fail validation is `SyncOutcome.FAILED` with
 `SYNC_SCHEMA_REJECTED` (stage `SCHEMA`), counts as a feed failure, and advances nothing. Remote Settings redirects are never followed (a mirror's, §7.3, up to 10). **JSON**: the
 engine's own tree and tokenizer; duplicate keys and unpaired surrogates rejected; keys sorted by code
-point. **Content signature**: each entry's `mode` is read and must equal `p384ecdsa` for the entry to be tried (an entry with none is skipped), a deliberate narrowing: Firefox accepts an entry with no `mode` (the maintainer's decision on #163, recorded in revision 56); the algorithm is never derived from it; the attachment
+point. **Content signature**: each entry's `mode` is read and must equal `p384ecdsa` for the entry to be tried (an entry with none is skipped), a deliberate narrowing: Firefox accepts an entry with no `mode`; the algorithm is never derived from it; the attachment
 base URL pinned in `MozillaRemoteSettings`, never taken from the server root response. **x5u chain**: the body is
-read as `rustls-pki-types` 1.15.1 reads it (upki v1.0.1's pin; the maintainer's decision on #164, recorded in revision
-56): text and blank lines outside a block are skipped; a block whose label `rustls-pki-types` knows (`CERTIFICATE`,
+read as `rustls-pki-types` 1.15.1 reads it (upki v1.0.1's pin): text and blank lines outside a block are skipped; a block whose label `rustls-pki-types` knows (`CERTIFICATE`,
 `PUBLIC KEY`, `RSA PRIVATE KEY`, `PRIVATE KEY`, `EC PRIVATE KEY`, `X509 CRL`, `CERTIFICATE REQUEST`, `ECHCONFIG`) is
 decoded, only `CERTIFICATE` blocks are kept and the others dropped, and a decode error in any of them fails the body;
 a block with an unknown label is skipped undecoded; the base64 decoder skips whitespace (HT, LF, VT, FF, CR, space)
-and needs no padding; a body that ends inside a block, or has no `CERTIFICATE` block, fails; HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; the URL is read by the strict grammar §7.3's redirect hops share, with DNS host names only and no IP literal, its rules unchanged by revision 58; `_expected` is validated as an integer before it enters a query string), `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal (revision 54: Firefox's `AppTrustDomain` set): a signature is RSA PKCS#1 v1.5 or ECDSA with SHA-256, SHA-384 or SHA-512 (an ECDSA AlgorithmIdentifier with NULL or absent parameters, as mozilla::pkix reads it), or `id-RSASSA-PSS` whose parameters are byte for byte one of mozilla::pkix's three encodings (SHA-256, SHA-384 or SHA-512 with NULL hash parameters, MGF1 with the same hash, a salt length equal to the hash length, `trailerField` omitted for its default 1); a link's key is `rsaEncryption` of at least 2048 bits or `id-ecPublicKey` on P-256, P-384 or P-521, so an `id-RSASSA-PSS` key fails; anything else `FAILED` (`ALGORITHM`; the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply). This floor is the x5u chain's own: §3's `id-RSASSA-PSS` rule for the TLS verifier (revision 51) is unchanged; validity at verification time for the leaf
+and needs no padding; a body that ends inside a block, or has no `CERTIFICATE` block, fails; HTTPS from the allowlist (today `content-signature-2.cdn.mozilla.net`; the parsed URI host after rejecting userinfo, a non-https scheme and a port other than 443; `_expected` is validated as an integer before it enters a query string). **The x5u URL grammar**, strict and never repaired: `https://` in lowercase, so `HTTPS://` is refused; an authority with no userinfo; a host that is a DNS host name (labels of ASCII letters, digits and `-` of 1 to 63 characters, at most 253 in all, no trailing dot, a last label that is not a number), never an IP literal and never a percent-encoded or non-ASCII host; no port, or port 443; then a path and an optional query of RFC 3986 `pchar`s, `/` and `?`, every `%` followed by two hex digits; and any fragment, which must be one RFC 3986 allows and is dropped. Anything else is `FAILED` at stage `X5U`, never repaired, `MAX_X5U_BYTES` (64 KiB) cap; **algorithm floor** for every link below the terminal (Firefox's `AppTrustDomain` set): a signature is RSA PKCS#1 v1.5 or ECDSA with SHA-256, SHA-384 or SHA-512 (an ECDSA AlgorithmIdentifier with NULL or absent parameters, as mozilla::pkix reads it), or `id-RSASSA-PSS` whose parameters are byte for byte one of mozilla::pkix's three encodings (SHA-256, SHA-384 or SHA-512 with NULL hash parameters, MGF1 with the same hash, a salt length equal to the hash length, `trailerField` omitted for its default 1); a link's key is `rsaEncryption` of at least 2048 bits or `id-ecPublicKey` on P-256, P-384 or P-521, so an `id-RSASSA-PSS` key fails; anything else `FAILED` (`ALGORITHM`; the JCA verifier is called directly, so `jdk.certpath.disabledAlgorithms` does not apply). This floor is the x5u chain's own: §3's `id-RSASSA-PSS` rule for the TLS verifier is unchanged; validity at verification time for the leaf
 and every non-terminal link; for every non-leaf link below the terminal: basicConstraints `cA = TRUE`,
 `pathLenConstraint` honoured, subject name equal to the child's issuer (raw or canonical), keyUsage
 `keyCertSign` when present (`KEY_USAGE`);
 links verified with the signed TBS algorithm; root SPKI hash in the pinned set (today one entry, the SPKI SHA-256 of
 `CN=root-ca-production-amo`, `3317FA45154AC7DA55694D3782316056471FC147C04AED3E03FFE99565B1E2E7`, which
-`MozillaRemoteSettings.DEFAULT` pins; certificate SHA-256 `C8A80E9A…A106DB`; both verified in Appendix A, revision 49;
+`MozillaRemoteSettings.DEFAULT` pins; certificate SHA-256 `C8A80E9A…A106DB`; both verified in Appendix A;
 the set is additive while any seed references a root); **the terminal is a trust anchor**: the first certificate after the leaf whose SPKI is
 pinned, anything after it ignored (a pinned SPKI on the leaf pins nothing, so a chain pinned only there is `FAILED`,
-`NOT_PINNED`; confirmed in revision 54: mozilla::pkix fails a pinned root used as the end entity with
+`NOT_PINNED`; mozilla::pkix fails a pinned root used as the end entity with
 `ERROR_CA_CERT_USED_AS_END_ENTITY`, and rustls-webpki never takes the end entity as an anchor); only its SPKI is checked, never its validity, CA bits, key usage
 or subject. This is revokt's own rule, not Firefox's: `AppTrustDomain` matches the anchor by its whole DER and
 mozilla::pkix still checks it. Pinning the key alone keeps a re-issued root working, and the wrapper around a pinned
@@ -3356,12 +1417,12 @@ alone. Leaf EKU
 codeSigning and never `id-kp-OCSPSigning` (`EKU`); leaf SAN exactly `onecrl.content-signature.mozilla.org` (`SAN`). Any non-terminal certificate
 on the path outside its window at a live fetch is `SyncOutcome.CLOCK_SKEW` (stage `X5U`).
 
-**The chain follows mozilla::pkix** (revision 54, the maintainer's decision on #126: mozilla::pkix at Firefox
+**The chain follows mozilla::pkix** (at Firefox
 `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, with rustls-webpki consulted: 0.104.0-alpha.7, the version upki builds paths
 with (`upki/Cargo.toml:32` at 9821cce), its divergences listed in Appendix A and `docs/decisions/DIVERGENCES.md`). Every failure is
-`SyncOutcome.FAILED` at stage `SIGNATURE` (revision 57), and the parenthesis names the chain's failure reason. For every link below the terminal:
+`SyncOutcome.FAILED` at stage `SIGNATURE`, and the parenthesis names the chain's failure reason. For every link below the terminal:
 - **DER as mozilla::pkix reads it** (`PARSE` for the certificate's outer structure, `EXTENSION` inside an
-  extension value; revision 55): in the outer structure, minimal tag and length headers; no indefinite length, the
+  extension value): in the outer structure, minimal tag and length headers; no indefinite length, the
   TBS and the outer `signatureAlgorithm` included; no element the certificate grammar does not place (a TLV after the
   SPKI other than the optional unique IDs, which are primitive, and `[3]`, a second SEQUENCE inside `[3]`, bytes after
   an extension's `extnValue`); a minimally encoded serial; the `critical` BOOLEAN `00` or `FF`; zero unused bits in
@@ -3390,7 +1451,7 @@ with (`upki/Cargo.toml:32` at 9821cce), its divergences listed in Appendix A and
   mozilla::pkix, which rejects only a repeated extension it understands, Appendix A); an understood extension with
   an empty value fails, except `id-pkix-ocsp-nocheck`; a malformed basicConstraints or keyUsage on the leaf fails as
   on every link; a `pathLenConstraint` above 127 fails, as mozilla::pkix's integer reader does. **The leaf's
-  embedded SCT list** (revision 55, as Firefox): when the leaf carries the extension, its `extnValue` is exactly one
+  embedded SCT list** (as Firefox): when the leaf carries the extension, its `extnValue` is exactly one
   OCTET STRING with nothing after it (`pkixbuild.cpp` lines 218 to 229 at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`,
   `ExtractSignedCertificateTimestampListFromExtension`); anything else fails. The list's content is not read.
 - **Critical extensions** (`EXTENSION`): a critical extension outside mozilla::pkix's understood set
@@ -3437,8 +1498,7 @@ install subject to the §6.3 coverage-monotonic rule, which applies only inside 
 Channel is top-level (`DEFAULT`: all reasons, a 6.0 MB full and 242 KB a delta on average (measured 2026-11-12,
 §6.4), Firefox desktop and the public mirrors; `COMPAT`: keyCompromise, cessationOfOperation, privilegeWithdrawn, a
 1.57 MB full and 134 KB a delta (the same measurement),
-Firefox for Android, no public mirror). Recommended: `DEFAULT` for backends, `COMPAT` for Android apps (APK and metered cost, §12). Delta chain depth varies: 8 deltas per channel on Remote Settings on 2026-10-21, 52 on 2026-11-12 (§6.4,
-revision 56); Phase-0 task: observe
+Firefox for Android, no public mirror). Recommended: `DEFAULT` for backends, `COMPAT` for Android apps (APK and metered cost, §12). Delta chain depth varies: 8 deltas per channel on Remote Settings on 2026-10-21, 52 on 2026-11-12 (§6.4); Phase-0 task: observe
 two full-filter cuts for re-parenting. When the stored full is no longer the delta parent, a full
 download is deferred while `meteredNetwork` (§4; sampled once per sync; Android: `ConnectivityManager.isActiveNetworkMetered()`) reports true, until `staleAfter`, then proceeds; a deferred full is `SyncOutcome.DEFERRED` with the `METERED_DEFERRED` warning; missing data always
 downloads. **Seeds** verified like a live fetch except x5u validity at the seed's signed
@@ -3450,108 +1510,16 @@ their content changes only when a CA is listed; CRLSet from its sequence time; t
 artifact date; seeds from their signed timestamp; a `MIRROR` or `SYSTEM` generation (`MANIFEST_LAST_MODIFIED`) from
 its newest coverage end: `sourceTimestampMillis` is the newest `high` over its filters, so `ageMillis` = now − that;
 an end within (now, now + `clockSkew`] installs with `ageMillis = 0` and `clockBehind` false, and an end beyond now +
-`clockSkew` is rejected at install (§6.3) (revision 56, the maintainer's decisions).
+`clockSkew` is rejected at install (§6.3).
 
 ### 7.3 C2SP manifest mirrors and system cache [M1]
-Protocol as `upki fetch` (v1.0.1; revision 56, the maintainer's decision Q13, Appendix A). **The manifest**:
-`GET <base>manifest.json`; a JSON object with `generated_at` (seconds, an unsigned integer), `comment` (a string,
-required) and `files` (alias `filters`), an array of `{filename, size, hash}` with `hash` the hex SHA-256 of the
-file. upki sends `If-Modified-Since` from its cached file's modification time and reuses the cache on a 304; revokt
-does the same (the maintainer's decision): on the manifest request only, as an IMF-fixdate (RFC 9110 §5.6.7), its
-`If-Modified-Since` is the time the live `MIRROR` generation's manifest was stored, taken from the local clock as upki's file time is and persisted in that generation's `meta.json`, none without a live `MIRROR` generation, and a 304 is
-`UNCHANGED`. Each file is fetched as `<base><filename>`. Every request has the `FETCH_TIMEOUT` (30 s, upki's too).
-**Stages** (revision 58, the maintainer's decision for #194, 2026-11-15): the manifest fetch, a malformed manifest
-and an over-cap manifest are stage `CHANGESET`; a file fetch, or a file body whose size or SHA-256 differs from its
-manifest entry, is stage `ATTACHMENT`. upki splits its errors the same way, but only by the URL its fetch error
-carries (Appendix A). A manifest name or `hash` that fails the rules below is `INDEX_INCONSISTENT` at stage `INDEX`,
-as before.
-**Redirects** (revision 56, the maintainer's decision; the grammar and the rules below revision 58, the decisions on
-#192; code `RedirectingFetcher`, #204): followed in the fetch layer by one shared internal `RedirectingFetcher` that
-wraps a C2SP mirror source's `HttpFetcher`; neither the loader nor any client follows one, and the underlying client
-never does (§3). Every hop is a new request through the wrapped fetcher, so it goes through the source's `FetcherTls`
-and the §8 host checks. **The hop grammar** (revision 58, the maintainer's decisions Q2 and Q3): every URL of the
-chain, the request's own included, is read by the one strict grammar the x5u URL is read by too (§7.1), with IP
-literals allowed: `https://` in lowercase, so `HTTPS://` is refused; an authority with no userinfo; a host that is a
-DNS host name (labels of ASCII letters, digits and `-` of 1 to 63 characters, at most 253, no trailing dot, a last
-label that is not a number), an IPv4 dotted quad with no leading zeros, or a bracketed IPv6 address with no zone
-identifier and no `IPvFuture`, a dotted quad standing only for its last 32 bits (so `[1.2.3.4::]` is refused), never a
-percent-encoded or non-ASCII host; an optional port of 1 to 65535, and no other port rule; then a path and an optional
-query of RFC 3986 `pchar`s, `/` and `?`, every `%` followed by two hex digits; and any fragment, which must be one RFC
-3986 allows and is dropped. Anything else is `FAILED`, never repaired. A relative `Location` resolves against the URL
-of the request it answered (RFC 3986 §5.2, dot segments removed). **Each hop, the first included, is fetched as revokt
-re-serialises it**, never as the configured string or the `Location` value: `https://`, the host lowercased, the port
-only when it is not 443, the path (`/` when empty, dot segments removed) and the query as written. Only a 301, 302,
-303, 307 or 308 answering a `GET` is followed (every mirror request is one); any other status, another 3xx included,
-is returned as the final response, and so is one of the five with no `Location` (the lead's Q1), as reqwest and
-Firefox's Necko return it (Appendix A). The mirror client fails any 3xx it is handed but the manifest's 304 above (a
-300 or 305, a 302 with no `Location`, or a 304 to a filter request, for example) as `FAILED` with that `httpStatus`
-(#194; a reading the lead accepted, from #204's review). A `Location` value is
-trimmed of SP and HTAB; distinct values on a redirect response are `FAILED`, as Necko refuses a differing duplicate
-`Location`, and equal ones collapse to one (Q4). At most 10 redirects are followed, as reqwest's `Policy::limited(10)`
-allows, so a chain makes at most 11 requests; an eleventh redirect is `FAILED`, and so is a hop to a URL already
-requested in the chain, the initial URL counted (a loop). **The loop key** (Q5) is the re-serialised URL above, which
-has no fragment: scheme and host lowercased and `:443` dropped, the path and the query compared exactly, IPv6
-addresses as written, not in a canonical form. It is RFC 3986's simple string comparison (§6.2.1) after that
-normalisation, not what every client sends: `%2e` is not a dot segment here, while WHATWG parsers and OkHttp's
-`HttpUrl` read `/a/%2e%2e/b` as `/b`, so a loop spelled with `%2e` ends at the hop limit instead; it is `FAILED`
-either way, and the host cannot change. `FETCH_TIMEOUT` (30 s) is one deadline for the whole chain, as upki's client
-timeout is: each hop is sent with the time left, and a response that arrives at or after the deadline is `FAILED`. A
-hop to another host or port than the previous hop's drops the headers that carry credentials (`Authorization`,
-`Cookie`, `Cookie2`, `Proxy-Authorization`, `WWW-Authenticate`, compared ignoring case), as reqwest 0.13.0's
-`remove_sensitive_headers` does for that hop; unlike reqwest, which rebuilds each hop's headers from the original
-request (tower-http 0.6.11 `follow_redirect/mod.rs` line 327) and so re-sends them on a later same-host hop, they stay
-dropped on every later hop, whatever its host (revokt sends none today). Every other header, `If-Modified-Since`
-included, is sent on every hop unchanged, and no `Referer` is added, a departure from upki: reqwest adds one on every
-hop by default and upki does not turn it off (Appendix A).
-The body cap (`maxBodyBytes`) and the time left apply to each hop, a 3xx body included, and the caller re-checks the
-final response's body (§3). Remote Settings fetches are not wrapped and never follow a redirect (§7.1). **Manifest names** (revision 52; a mirror's data is unsigned, so a name it serves is checked
-before it names anything): every `manifest.json` filename passes §6.3's filename rule (1 to 64 bytes of
-`[A-Za-z0-9._-]`, not `.` or `..`), does not end in `.` (Win32 strips a trailing `.`, so `meta.json.` would open
-`meta.json`), is none of §6.3's reserved names, compared ignoring ASCII case, and is unique in the manifest ignoring
-ASCII case. Its name in the generation is §6.5's: the filename itself when it passes
-`C2spIndex.isFilename` (C2SP's rule, 1 to 32 bytes of the same characters), otherwise its 32-character derived name,
-and the generation's names are unique ignoring ASCII case too. Each file's manifest `hash` is exactly 64 hexadecimal
-characters (32 bytes), since it is the one unsigned string that reaches a storage key; its `blobs/<sha256>` key
-(§6.5) is the lowercase re-encoding of those 32 bytes. **The base** is the configured `c2spMirror` URL with a `/`
-appended when it does not end in one, and the request for `manifest.json` and for every mirror file is the base
-followed by its name, nothing else from the manifest entering a URL; a redirect from it follows the rules above (a
-`c2spMirror` URL with a query or a fragment throws at `build()`, §4). A manifest with any
-failing name or hash is rejected whole before any body is fetched or written: `SyncOutcome.FAILED` with
-`INDEX_INCONSISTENT`, stage `INDEX`, as for §6.5's name collision. **The index is built locally** (revision 53, the
-maintainer's decision, as `upki fetch` does): a mirror publishes only `manifest.json` and the filter files, and revokt
-never fetches an `index.bin` from it. The loader builds the generation's `index.bin` with its own index writer
-(§3.2) from each downloaded filter's coverage, under the generation's names, the derived name of a manifest name
-over 32 bytes included. **Bootstrap only.** A `MIRROR` or `SYSTEM` generation installs **only when
-the dataset has no generation of a higher trust class at all** (no seed, no stored `SIGNED`
-generation), its trust class is not below the dataset's `minTrustClass` while
-`outcome(UNSIGNED_DATA) == REJECT`, and its coverage passes §6.3; **a `MIRROR` or `SYSTEM` generation with no
-filters or no coverage is refused** (revision 56, the maintainer's decision Q24), "no coverage" meaning that every
-filter's coverage (its universe) is empty, so `NO_DATA` keeps firing, with the `SOURCE_EMPTY` warning naming the
-source (the maintainer's decision): a mirror's sync is `SyncOutcome.FAILED` at stage `INDEX` with `SOURCE_EMPTY` on
-`SyncResult.warnings`; a system cache is not installed at `start()` (§6.5's recovery chain moves past it), S
-`SOURCE_EMPTY`, and its re-read at a sync installs nothing; it is
-evicted by the first
-`SIGNED` generation, seed included, and pruned at once. A stale `SIGNED` generation is never
-displaced by a lower class: stale-but-signed is the accepted state under the no-ceiling decision,
-and a TLS-only mirror must never be able to hide revocations the signed data already holds or turn
-into a kill switch. `DataState.trustClass` is the carrier. **Within one sync, sources are attempted
-in descending `TrustClass.rank`; a lower-class source is fetched only after every higher-class
-source failed in this sync and the bootstrap condition holds** (so a healthy signed install never
-downloads the mirror; `MIRROR` precedes `SYSTEM`, which is attempted, not fetched: the cache is re-read). The `c2spCache` is read at `start()` after the
-seed, in the recovery order of §6.5. `signedSourceFailing` (3 consecutive failures or more than
-`signedSourceFailingAfter` since the last verified changeset, both persisted) is reported in
-`RevoktState` and drives nothing else. A configured `c2spCache` counts as local data for the
-`NO_DATA` validation rule only when the policy can install it (§4). Residual, recorded in §10: a fresh install without a seed, on-path,
-with a mirror certificate the platform trusts can be bootstrapped with attacker data until Mozilla
-is reachable; `NO_DATA_REJECTS_WITHOUT_LOCAL_DATA` pushes consumers to ship a seed.
+Not normative: [docs/design/mirror-and-system-cache.md](../design/mirror-and-system-cache.md). Only the Remote Settings source is configurable.
 
 ### 7.4 Mozilla intermediate preloading [M2]
-Second candidate set by Mozilla's bytes (candidates the walk continues from; a terminal only of last resort when no anchor is reachable through it, `terminalKind = PRELOAD`, §5.1 invariant); splits `NOT_ENROLLED` (with no `INTERMEDIATES` generation the split does not happen and `NOT_ENROLLED` fires; the upki engine never produces it, class collapse); closes the
-§5.2 residual; `Dataset.INTERMEDIATES` with `LAST_VERIFIED_POLL` freshness.
+Not normative before M2: [docs/design/m2-sources.md](../design/m2-sources.md).
 
 ### 7.5 OneCRL, bundled denylist and Chrome CRLSet [M2]
-OneCRL applied as Firefox does (all records enforced). Denylist project-attested, availability-only.
-CRLSet opt-in with CRX3 verification and `crl-set` parsing per Chromium.
+Not normative before M2: [docs/design/m2-sources.md](../design/m2-sources.md).
 
 ## 8. Policy
 
@@ -3559,8 +1527,7 @@ CRLSet opt-in with CRX3 verification and `crl-set` parsing per Chromium.
 per-dataset staleness map and three time fields. Presets: `DEFAULT`, `STRICT`. **`Enforcement.OBSERVE`
 runs the configured policy, emits events, and never throws.** The Firefox, Chrome and upki columns give each
 reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b84c4e2fe3caabdc5` and upki at v1.0.1
-(`9821cce`); "n/a" means the reference has no counterpart, and the sources are in `docs/decisions/DIVERGENCES.md`
-(#217).
+(`9821cce`); "n/a" means the reference has no counterpart, and the sources are in `docs/decisions/DIVERGENCES.md`.
 
 | `Rule` | Class | `DEFAULT` | `STRICT` | Firefox | Chrome | upki | Produced by |
 |---|---|---|---|---|---|---|---|
@@ -3569,8 +1536,7 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
 | `NO_DATA` | unevaluable | **reject** (exemptable) | reject (exemptable) | → OCSP: no filter is `Success` | n/a | reject: `missing_data = Error` | decision step 7, per required dataset |
 | `ENGINE_ERROR` | unevaluable | allow | reject | reject: `FATAL_ERROR_LIBRARY_FAILURE` | n/a | reject: a hard error, and rustls-upki fails closed | boundary, engine result, exemption throw |
 | `PARSE_FAILED` | unevaluable (goal 3) | allow | reject | n/a | n/a | n/a | decision step 3 |
-| `ISSUER_UNVERIFIED` | unevaluable | allow | reject (exemptable; **empty path**; shares its outcome and exemption with `NO_ISSUER`, revision 57) | n/a | n/a | n/a | decision step 6 |
-| `NO_ISSUER` | unevaluable (goal 3) | allow | reject (exemptable; **empty path**: `anchorIn` never matches; reason on `Finding.Path`, including `PLATFORM_ONLY`; shares its outcome and exemption with `ISSUER_UNVERIFIED`, revision 57) | n/a | n/a | n/a | decision step 6 |
+| `NO_ISSUER` | unevaluable (goal 3) | allow | reject (exemptable; **empty path**: `anchorIn` never matches; reason on `Finding.Path`, including `UNSUPPORTED_ALGORITHM` and `PLATFORM_ONLY`) | n/a | n/a | n/a | decision step 6 |
 | `NOT_ENROLLED` | non-answer | allow | reject (exemptable) | not compared | n/a | collapsed into `NOT_COVERED` (allow) | CRLite |
 | `NO_SCTS` | non-answer | allow | reject (exemptable) | → OCSP | n/a | allow | CRLite |
 | `NOT_COVERED` | non-answer | allow | allow | → OCSP | n/a | allow | CRLite (the coverage gap: a certificate issued after the live filter's coverage `high` is unchecked by every preset; §10) |
@@ -3588,7 +1554,7 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
   `DataState.stale` (the loud flag) is `ageMillis > staleAfter` and never fires a rule.
   `UNSIGNED_DATA` fires for a dataset iff `DataState.trustClass` is below `minTrustClass(dataset)`
   (`DEFAULT`: `BUNDLED` for every dataset; `STRICT`: `SIGNED`, M2 `DENYLIST` `BUNDLED`). In `DEFAULT`, `STALE` and
-  `UNSIGNED_DATA` allow (revision 47): setting a `rejectStaleAfter` or raising `minTrustClass` makes the rule fire
+  `UNSIGNED_DATA` allow: setting a `rejectStaleAfter` or raising `minTrustClass` makes the rule fire
   and report, and rejecting takes `rule(…, REJECT)` as well. `ageMillis = now − sourceTimestampMillis` per the dataset's
   `Freshness`. Preset defaults: `CRLITE` `staleAfter` 3 d, `rejectStaleAfter` null in `DEFAULT`, 30 d
   in `STRICT`. **Stated plainly:** `DEFAULT` with stale data is "reject what the stale filter says is
@@ -3597,7 +1563,7 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
   generation is `fromSeed` until a sync attempt has completed since the seed was installed** (the persisted
   `updater.json.datasetLastAttemptAtMillis ≥ updater.json.seedInstalledAtMillis`, both per dataset (§6.5), never the in-process `lastSync`; the loader carries the boolean in the published `DataState`;
   a read-only instance (§5.1) makes no attempt and writes nothing, so its in-memory seed stays gated until it
-  promotes itself to writer and the owner start task's first sync completes, `STORE_LOCKED` results not being attempts; a backoffed
+  promotes itself to writer and the owner start task's first sync completes, `STORE_LOCKED` results and a sync whose `updater.json` read threw (§6.5) not being attempts; a backoffed
   first sync completes at once as `BACKOFF`, §5.1, and `FETCH_TIMEOUT` bounds "completed", so an on-path
   attacker answering `503 + Retry-After` cannot keep the gate shut across restarts),
   or at once when no fetching source is configured (there is no fetch to race; `sync()`'s seed re-check is still an attempt; `SEED_PAST_REJECT_THRESHOLD` is still emitted), because installs happen months after a build and the first
@@ -3608,957 +1574,17 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
   future bound), `signedSourceFailingAfter` (24 h). `wouldRejects` advances only under `OBSERVE` and
   `rejects` only under `ENFORCE`, so the two columns compare cleanly after a flip.
 - **`ENGINE_ERROR` allows in `DEFAULT`** and rejects in `STRICT`.
-- **Exemptions** register per exemptable rule and run after policy mapping for fired `REJECT` rules only. **Enterprise-CA recipe under `STRICT`**: exempt `NO_SCTS`, `NOT_ENROLLED` **and the data rules** (`NO_DATA`, `STALE`, `UNSIGNED_DATA`) with the same `anchorIn(privateCa)` (`RevoktPolicy.Builder.exemptAnchors(sha256s)` does exactly that, §4), and `NO_ISSUER` with `hostSuffixIn(corpDomains) and platformOnly()`, one `exempt` that covers `ISSUER_UNVERIFIED` too, since the two share one exemption (revision 57) (they fire only on an empty reported path, where `anchorIn` never matches; `platformOnly()` alone would exempt every chain the §5.2 intermediate-omission residual produces on Android, for every host, turning `STRICT` into `DEFAULT` for a revoked public leaf presented without its intermediate), so a feed outage never takes down traffic CRLite cannot evaluate anyway ( on the JVM the supported private-CA delegate is a `TrustManagerFactory` over a merged `KeyStore`, never a hand-written `X509ExtendedTrustManager` composite, which passes `requiresExtendedDelegate()` but drops SunJSSE's constraints; call `refreshAnchors()` on rotation).
-- **`outcomeDepended`** (M1; revision 57): `outcomeDepended = (status == ISSUER_UNVERIFIED)` (§5.1 "Findings"): the
-  walk recorded an own signature OID and the result is `ISSUER_UNVERIFIED`; false on `Found`, `Budget` and, on the
+- **Exemptions** register per exemptable rule and run after policy mapping for fired `REJECT` rules only. **Enterprise-CA recipe under `STRICT`**: exempt `NO_SCTS`, `NOT_ENROLLED` **and the data rules** (`NO_DATA`, `STALE`, `UNSIGNED_DATA`) with the same `anchorIn(privateCa)` (`RevoktPolicy.Builder.exemptAnchors(sha256s)` does exactly that, §4), and `NO_ISSUER` with `hostSuffixIn(corpDomains) and platformOnly()` (it fires only on an empty reported path, where `anchorIn` never matches; `platformOnly()` alone would exempt every chain the §5.2 intermediate-omission residual produces on Android, for every host, turning `STRICT` into `DEFAULT` for a revoked public leaf presented without its intermediate), so a feed outage never takes down traffic CRLite cannot evaluate anyway ( on the JVM the supported private-CA delegate is a `TrustManagerFactory` over a merged `KeyStore`, never a hand-written `X509ExtendedTrustManager` composite, which passes `requiresExtendedDelegate()` but drops SunJSSE's constraints; call `refreshAnchors()` on rotation).
+- **`outcomeDepended`** (M1): `outcomeDepended = (noIssuerReason == UNSUPPORTED_ALGORITHM)` (§5.1 "Findings"): the
+  walk recorded an own signature OID and the result is `NO_ISSUER(UNSUPPORTED_ALGORITHM)`; false on `Found`, `Budget` and, on the
   bindings, `NO_ISSUER(PLATFORM_ONLY)`.
-- **Fetcher policy**, fixed, **ignores `Enforcement`** (under `OBSERVE` or `OFF` a hit chain on a TLS-only mirror would otherwise be accepted and the signed-source hold could never be set), applies only to the fetcher trust managers, **per source authenticity class, attributed structurally**: each configured source has its own internal trust-manager instance (§5.1 "Anchor snapshot"), created at `build()` and handed to that source's `HttpFetcher` through `FetcherTls`, so a handshake on it is that source's by construction, whatever the peer host and whichever fetcher dropped the host (Ktor CIO needs no exception); **and, as a second condition, an internal instance writes `feedHostBlock`, `updateBlockedBySelf` and `blockedSource` only while a fetch of its source is in flight on it** (the engine knows when it called `fetch`; a handshake outside that window, from a factory that leaked the instance or from a timed-out fetch handshaking late, is rejected on a hit but records nothing); the public `fetcherTrustManager` is a distinct instance over the same snapshot that is always "no fetch in flight": a handshake on it (a consumer that wired the property into another client) is evaluated under this policy but **never writes `feedHostBlock`, `updateBlockedBySelf` or `blockedSource` and never receives the `feedHostRevoked` allowance** (a rejected hit there is just a reject), so unrelated traffic can neither start a hold on the signed source nor inherit its post-hold acceptance; no global pointer exists:
-  evidence rules (`REVOKED`; M2: `DENYLIST`, `ONECRL`, `CRLSET`; M4: `DISTRUST`) are evaluated against
-  `SIGNED`/`BUNDLED` generations only, so attacker-fed mirror data can never block the signed source;
-  every other rule `ALLOW`; no data rules; no exemptions; from M1. For a **TLS-only source**
-  (`c2spMirror`) an evidence hit on the host's chain is `REJECT` for as long as its current chain is hit: `SyncOutcome.BLOCKED_BY_SELF` with
-  `SyncResult.blockedSource`, `blockedChainSha256` and `blockedLeafSerial` (the name says which rule,
-  not the cause: an on-path attacker with a mis-issued-then-revoked certificate produces the same
-  signal; compare `blockedChainSha256` with the host's current chain), and `RevoktState.updateBlockedBySelf`.
-  For the **end-to-end-signed source** (`remoteSettings` changesets, attachments and x5u, whose payload
-  is authenticated by the content signature regardless of transport) the hit is honoured for at most
-  `FEED_HOST_HOLD` (24 h, fixed; §5.1 limits) **per source**, measured from the first hit of any of its hosts and persisted in `updater.json` (`feedHostBlock`, cleared only by a hit-free sync that completes after `sinceMillis + FEED_HOST_HOLD`, never by an install alone, so restarts, a CDN alternating or holding two certificates, three hosts in one source, or a record that stays listed for a year cannot extend it: the hold expires once per episode), reported the same way and counting toward `signedSourceFailing`;
-  after that the fetch **proceeds** with `RevoktState.feedHostRevoked = true` and the `FEED_HOST_REVOKED`
-  warning, so a single signed record naming the feed host (a leaked signing leaf, a producer false
-  positive, a seed cut in that window) can never stop the next signed record from arriving: a MITM on
-  that path can only serve real signed data, old signed data (rollback guard) or nothing, which a
-  packet-dropping attacker already can.
 - **Established connections**: a rejection applies to new handshakes; pooled connections already established are not torn down (the README says so); an HTTP/2 connection coalesced onto another host inherits that host's verdict (§5.1).
 - **What `OBSERVE` yields**: `wouldRejects` over `evaluations` by rule from `status()`; by host, policy epoch,
   anchor, issuer key and generation from events. **What `shadowPolicy` yields while `ENFORCE` stays on**: `shadowWouldRejects` by rule and `RevoktEvent.shadowVerdict` per event, so `STRICT` (or a rule in its grace minor set to `REJECT` in the shadow) is measured for weeks without lifting `REVOKED`, `NO_DATA` or `PATH_BUDGET_EXCEEDED` enforcement; the migration procedure is: shadow `STRICT`, drive `shadowWouldRejects` to the exemptions above, then set `policy = STRICT`.
 
 ## 9. Correctness and testing
 
-Tiered CI: **every PR** runs unit tests, committed fixtures, corpus replay, the purity compile, BCV,
-the POM license assertion, the `Rule`/precedence tests and a Maven consumer build, all offline and
-JDK-only; **nightly and release branches** run the oracle, fuzzing, emulators and minified-build
-tests; **live checks** are informational.
-
-**M1**
-- **End-to-end oracle**: `rust-query-crlite` and `clubcard-crlite` driven with tens of thousands of
-  PEM chains from CT (where `rust-query-crlite` takes SCTs from `x509-parser`, its pair set gets the same
-  per-extension ∅ expectation as D2 for an inner identifier other than `0x04`, and the §9.2 read for a primitive
-  `[3]`; a chain whose leaf `x509-parser` rejects is counted and excluded, not compared; the 0.1 oracle issue verifies its SCT
-  path); the 10⁶-key comparison as a second tier; `index.bin` byte comparison (against `upki`'s `Index::write` over the same filters and file names, which revokt's writer reproduces; #86's golden);
-  canonical JSON against `canonical_json`.
-- **Cross-engine suite** (0.2): chain corpus × generations against both `RevocationEngine`s under
-  the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
-  both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
-  disagreement fails the job.
-- **Content-signature fixtures** (0.2 gates, except the three items tagged [0.3], which need the §6.5 store or a `SYSTEM` source; revision 49, the source revision 53) with mutations; incremental fixtures; a seed with an expired signer
-  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); [0.3] at `start()`, a system cache whose `index.bin` names a log window absent from the filter's coverage → not installed, `STORE_UNREADABLE`; [0.3] at `start()`, a system-cache `index.bin` of 1 MiB + 1 byte → not installed, `STORE_UNREADABLE`, before it is parsed (revision 48; a system cache since revision 53, which leaves a mirror no `index.bin` to fetch); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; (revision 56) a channel with two full filters, or none → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, the previous generation still live, and `SEED_UNREADABLE` for a seed; a delta whose `parent` names no record → placed by its time and installed; a full record without `parent` → loads, and a delta without one → `SYNC_SCHEMA_REJECTED`; a changeset signed by a P-256 leaf (a 64-byte raw pair) → verifies; a changeset whose first `signatures` entry fails and whose second verifies → installs; one with 5 entries, or
-  whose every entry lacks `mode` → `FAILED`, stage `SIGNATURE`; two entries sharing one `x5u` URL → that URL fetched once; one whose `metadata` holds only `signature`, or an empty `signatures` → `FAILED`, stage `SIGNATURE`; an entry with no `mode` is skipped; (revision 57, #198) an entry whose `x5u` or `signature` is `""` is skipped like a missing one;
-  `signatures` of `[null, a valid entry]` → `FAILED`, stage `SIGNATURE`, and `[a valid entry, null]` → installs; a first entry whose
-  `x5u` fetch fails (404) and a second that verifies → installs; a lone entry whose `x5u` fetch fails → `FAILED`, stage
-  `X5U`; a lone entry whose `x5u` body has no `CERTIFICATE` block, or whose chain fails, or whose signature verifier
-  answers `UNSUPPORTED`, or whose records share an `id` → `FAILED`, stage `SIGNATURE`; a `_since` delta signed over the
-  merged records → verifies over the merge, which is what installs, and fails over the delta's `changes` alone; a
-  v3 filter with `approx_m` of 2^32, or a rank of 256 → `FAILED`; signature
-  over records with a tombstone merged vs not merged.
-- **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (c), (e), (f), (h) need the store, mirror, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
-  `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
-  with equal coverage → installs; **newer timestamp with lower coverage → installs and advances the
-  watermark**; a refused rollback leaves `consecutiveFailures` and `lastVerified*` unchanged;
-  `Backoff: 100000000` → next poll ≤ 24 h and `backoffUntilMillis ≤ now + 24 h`; (revision 56, #131) a `CLOCK_SKEW` and
-  a `STORE_FAILED` sync each advance `consecutiveFailures`, the first feed failure waiting 15 min, the second 30 min and
-  the sixth capped at 6 h, while `ROLLBACK_REFUSED`, `BACKOFF` and `DEFERRED` leave the count unchanged; after three
-  failures an `INSTALLED` poll, a clock-behind install, a 304 and a timestamp-match `UNCHANGED` each reset it to 0; a
-  200 with `Backoff: 600` → `backoffUntilMillis = now + 600 s`; a success without the header clears `backoffUntilMillis`; a
-  `FAILED` with `Retry-After: 60` waits 60 s although its computed backoff is 15 min; (revision 56, #190) an absent or
-  malformed `updater.json` beside a live `SIGNED` generation, then a changeset older than that generation by more than
-  `rollbackWindow` → `ROLLBACK_REFUSED`;
-  a live `SIGNED` generation that is `clockBehind` far in the future, then a changeset newer than the stored watermark
-  but older than that generation → installs (the feed does not freeze); (b)
-  `SIGNED` coverage `high` beyond `last_modified + clockSkew` → `FAILED`, stage `INDEX`; `MIRROR` coverage beyond
-  now + `clockSkew` → `FAILED`; (c) mirror precedence: healthy signed source → mirror never installed;
-  signed source failing for 48 h with a stored `SIGNED` generation → mirror still not installed,
-  `signedSourceFailing = true`; no generation at all → mirror installs as `MIRROR`; next `SIGNED` →
-  evicted; an attacker-style mirror with an inverted index against a stored `SIGNED` generation →
-  not installed; (revision 56) a mirror manifest with no files, or whose every filter has an empty coverage → `FAILED`,
-  stage `INDEX`, nothing installed, `NO_DATA` still fires, `SOURCE_EMPTY` naming the source on `SyncResult.warnings`; a
-  system cache likewise → not installed at `start()`, S `SOURCE_EMPTY`; a `MIRROR` generation whose newest
-  coverage end is 3 h ago → `freshness = MANIFEST_LAST_MODIFIED`, `ageMillis` 3 h, and one 1 h ahead → installs,
-  `ageMillis = 0`, `clockBehind = false`; (d) x5u mutations: wrong leaf SAN, missing codeSigning EKU, root not pinned, non-CA
-  certificate as intermediate, name-chaining break, `pathLenConstraint` violation, keyUsage without
-  `keyCertSign`, an x5u URL on a non-allowlisted host, an x5u over 64 KiB, expired intermediate or
-  leaf at live fetch → `CLOCK_SKEW` (stage `X5U`), expired leaf in seed → loads (revision 57: each `FAILED` x5u mutation in this row is at stage
-  `SIGNATURE`, except the non-allowlisted host and the over-cap body, which are fetch failures at stage `X5U`); a pinned SPKI as a non-terminal
-  link → loads with the path truncated there; the pinned terminal expired, or wrapped in a
-  self-signed certificate with another subject → loads; (revision 54, each in the leaf and in the intermediate where both apply) a
-  non-minimal length in the outer structure, a TLV after the SPKI, a second SEQUENCE inside `[3]`, bytes after an
-  `extnValue`, an indefinite-length TBS or outer `signatureAlgorithm`, a constructed unique ID, a `UTCTime` without
-  seconds, a time with a fraction or an offset, a year before 1970, notBefore after notAfter, a `critical` BOOLEAN of
-  `01` and a signature BIT STRING with unused bits → `FAILED` (`PARSE`); (revision 55) trailing bytes inside an
-  extension value revokt reads, a BOOLEAN `cA` of `01`, a non-minimal length inside basicConstraints, keyUsage,
-  extKeyUsage, subjectAltName or nameConstraints, an empty keyUsage BIT STRING (`03 00`) or one with no named-bit byte (`03 01 00`), an empty extKeyUsage
-  SEQUENCE (`30 00`), an extKeyUsage with a non-OID element, and a SAN with an unknown GeneralName tag → `EXTENSION`
-  (the SAN case not `SAN`); a GeneralizedTime before 2050
-  (Mozilla's intermediate's `20150317000000Z`), an explicitly encoded v1 version, an explicit FALSE `critical` or `cA`,
-  an empty Extensions SEQUENCE, a zero or negative serial and a keyUsage with a non-minimal named-bit encoding →
-  loads; a serial with a redundant leading `00` or `FF`, or an empty serial (`02 00`), → `PARSE`; a version INTEGER
-  of 4 → `PARSE`, a version of 3, which is v4 → loads, and an implicit v1 with `[3]` → loads; an issuer with no RDN → `NAME`;
-  an outer `signatureAlgorithm` that differs from the TBS one → `ALGORITHM`, and one that differs only by a NULL
-  against an absent parameter → loads; an EC key with explicit curve parameters, a compressed point or a point one
-  byte short, an `rsaEncryption` key with absent parameters or with NULL parameters that
-  have content, a modulus with a redundant leading `00`, and an SPKI BIT
-  STRING with unused bits → `ALGORITHM`; an ECDSA signature AlgorithmIdentifier with NULL parameters → loads; an
-  extension OID twice, critical or not and understood or not → `EXTENSION`; an empty subjectAltName value →
-  `EXTENSION`, and an empty critical `id-pkix-ocsp-nocheck` → loads; a `pathLenConstraint` of 128 → `EXTENSION`; an
-  unknown critical extension → `EXTENSION`, and the same extension not critical → loads; a critical
-  certificatePolicies → loads; a critical Netscape certificate type with basicConstraints and extKeyUsage → loads,
-  without extKeyUsage → `EXTENSION`, and with an empty value → `EXTENSION`, while an empty non-critical Netscape certificate type → loads; (revision 55) a leaf whose embedded SCT
-  list `extnValue` is an OCTET STRING followed by a byte, or is not an OCTET STRING → `EXTENSION`, and a well-formed
-  one → loads; an intermediate with the TLS feature extension over a leaf without it, or with
-  another value → `EXTENSION`, and the same value on both → loads; a terminal with the TLS feature over an
-  intermediate without it → loads; a leaf with `cA = TRUE` → `LEAF_CA`; a
-  malformed leaf basicConstraints or keyUsage → `EXTENSION`; a leaf extKeyUsage of codeSigning and
-  `id-kp-OCSPSigning` → `EKU`; an intermediate extKeyUsage without codeSigning, or of anyExtendedKeyUsage alone →
-  `EKU`, an intermediate with no extKeyUsage → loads, and a terminal extKeyUsage without codeSigning → loads; a PSS
-  link whose salt is not the hash length, whose MGF1 hash differs from the message hash, whose hash is SHA-224, that
-  encodes `trailerField` explicitly, or whose hash parameters are absent → `ALGORITHM`; an `id-RSASSA-PSS` key on a
-  link → `ALGORITHM`; a chain whose only pinned SPKI is the leaf's → `NOT_PINNED`; the pinned terminal with a
-  non-minimal length → loads; Mozilla's committed chain → loads, its intermediate's non-critical nameConstraints
-  (`content-signature.mozilla.org` and `.content-signature.mozilla.org`) passing for the leaf; nameConstraints on the
-  intermediate, critical or not: a permitted `""` → loads, an excluded `""` → `NAME_CONSTRAINTS`, a permitted
-  `.onecrl.content-signature.mozilla.org` → `NAME_CONSTRAINTS` (a leading dot covers subdomains only), a permitted
-  `ignature.mozilla.org` (a suffix off a label boundary) → `NAME_CONSTRAINTS`, a permitted
-  `CONTENT-SIGNATURE.MOZILLA.ORG` → loads, an excluded `mozilla.org` → `NAME_CONSTRAINTS`, a permitted rfc822Name
-  subtree alone → loads, a leaf outside the permitted subtree → `NAME_CONSTRAINTS`, an encoded `minimum` →
-  `EXTENSION`, a wildcard or absolute base → `EXTENSION`, an empty NameConstraints → `EXTENSION`, and a directoryName
-  subtree → `EXTENSION`; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
-  falls to `previous`, `storeFailures = 1`; a crash before `meta.json` leaves an incomplete directory
-  that prune deletes; a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → migrates within one `READONLY_POLL_INTERVAL`, `storageFallback = false`, the in-memory generation on disk; an empty
-  directory → `storeFailures = 0`; a `MIRROR` `meta.json` reloads as `MIRROR`; a `meta.json` with the
-  other channel → no generation; two instances on one directory in one process → the second throws;
-  a second JVM process on a held lock → read-only start within 1 s, `sync()` → `STORE_LOCKED`, the
-  directory listing is byte-identical before and after its start even with a newer seed configured
-  (served in memory, `fromSeed = true`), it observes the first process's install within
-  `READONLY_POLL_INTERVAL`, and after the owner closes it acquires the lock within one interval and
-  its next `sync()` installs; `close()` then a new instance on the same directory in the same process
-  starts as owner; a directory owned by another uid or group-writable on POSIX → `STORE_UNREADABLE`
-  and no file written for the session; two consecutive syncs whose `engine.prepare()` throws → `live`
-  and `previous` still load, `storeFailures = 2` (sync-time `prepare()` throws count), both syncs `FAILED` with stage `PREPARE`, the two failed directories deleted; stored
-  generation equal to the seed → no verification, `names()` unchanged; a manifest with 257 entries (revision 56; 33 before) or a 17 MiB declared filter → rejected before any
-  body fetch; a manifest naming `.`, `..`, `../x`, `/x`, `a/b`, `META.JSON` or `meta.json.`, or two files whose names
-  are equal ignoring ASCII case (`a.filter`, `A.FILTER`), or a file whose `hash` is 63 or 65 hex characters or holds a
-  non-hex character → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched and nothing written (revision
-  52); a `c2spMirror` URL without a trailing `/` → `manifest.json` and each body fetched from the URL, `/` and the
-  name; a `c2spMirror` URL with a query or a fragment → `build()` throws `IllegalArgumentException`; (revision 56) a
-  manifest without `comment`, or with `filters` for `files` → `FAILED` and installs respectively; a manifest reached
-  through 10 `https` redirects → fetched, through 11 → `FAILED`, a redirect to `http`, to a URL with userinfo, or back to a URL already in the
-  chain → `FAILED`, a hop carrying a query → followed, a fragment → dropped, a 300 or a 305 → `FAILED`, a relative `Location` → resolved against the request URL, a 304 or 200 at
-  the end → the body cap applied to it, and a chain that outlasts 30 s in total → `FAILED`; (revision 58) a hop to an
-  IPv6 literal (`https://[2001:db8::1]/revocation/manifest.json`) → followed, a `Location` of
-  `HTTPS://mirror.example/revocation/manifest.json` → `FAILED`, a redirect carrying two differing `Location` values →
-  `FAILED` and two equal ones → followed, a 302 with no `Location` → `FAILED` with `httpStatus` 302 at the mirror
-  client, and a `Location` whose host is `[1.2.3.4::]` → `FAILED`; a 302 whose body is over the request's cap →
-  `FAILED`; a configured `c2spMirror("https://M.example:443/a/../revocation/")` → the first request is
-  `https://m.example/revocation/manifest.json`; a `Location` with port 0 or 65536 → `FAILED`; a `c2spMirror` URL the
-  hop grammar refuses (`HTTPS://mirror.example/revocation/`) → `build()` throws `IllegalArgumentException`; the
-  manifest request after a
-  live `MIRROR` install carries `If-Modified-Since` as an IMF-fixdate of the time that generation's manifest was stored,
-  and no filter request carries one; a system cache
-  whose `index.bin` starts `upkiidx0` → not installed, `STORE_UNREADABLE`; a manifest name
-  of 33 bytes → installs under its derived name, its body fetched from the base followed by the manifest name, no
-  `index.bin` fetched, and the locally built `index.bin` naming the derived name (revision 53); a mirror whose
-  coverage would make the built `index.bin` over 1 MiB → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no
-  generation directory written (revision 53; revision 58: a built index is always an even size, so not 1 MiB + 1 byte); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
-  `start()` throws on both platforms; stored `MIRROR` with coverage newer than the seed → seed
-  installed, `trustClass = SIGNED`, the `MIRROR` directory pruned; stored `SIGNED` newer than the seed
-  → seed skipped; corrupt `live` with an evicted `MIRROR` still on disk → recovery goes to seed, never
-  to the `MIRROR`; a mutated shipped `index.bin` → `SEED_UNREADABLE`; (g) fetcher: the feed host's own
-  chain revoked in the stored `SIGNED` generation → `BLOCKED_BY_SELF` within the 24 h hold, `blockedSource`, `blockedChainSha256` and `blockedLeafSerial` set,
-  `updateBlockedBySelf = true`, no mirror install while the signed generation exists (after the hold see below); a bootstrap-state
-  `MIRROR` generation whose index marks the feed host revoked → sync proceeds, no `BLOCKED_BY_SELF`;
-  a signed `intermediates` changeset served on the `cert-revocations` URL → `FAILED`,
-  `SYNC_SCHEMA_REJECTED`, cursor, watermark and `lastVerified*` unchanged; a Remote Settings 3xx → `FAILED`; a gzip
-  body inflating past its cap → `FAILED` before the cap is exceeded; a signed attachment whose size
-  exceeds `MAX_FILTER_BYTES` → `FAILED` with `CAP_NEAR_LIMIT`, nothing advanced, not fetched; a signed revocation of the Remote Settings host → `BLOCKED_BY_SELF`; the same hit chain delivered to the public `fetcherTrustManager` by a consumer client → rejected, `feedHostBlock` not written, `updateBlockedBySelf` unchanged, while the same chain on the source's internal instance during its fetch → `BLOCKED_BY_SELF`; two sources with a factory that returns one client built over the first source's `tls` for both → the second source's hit chain, handshaking outside any fetch of the first source, writes nothing; a sync 23 h after the first block (across a process restart) is still `BLOCKED_BY_SELF`; one at 25 h installs with `feedHostRevoked = true` and `FEED_HOST_REVOKED` on `RevoktState.warnings`; the same on a `c2spMirror` host → `BLOCKED_BY_SELF` while its chain is hit (fetcher-trust-manager unit fixture: in M1 a mirror is fetched only with no `SIGNED` generation and evidence comes from `SIGNED`/`BUNDLED` data, so the end-to-end case is M2's denylist); a test engine whose `formats` is `{V4}` with the v3 seed and no fetching source → `start()` throws `SEED_UNREADABLE` in the sole-seed `ENFORCE` configuration (V `FORMAT_UNSUPPORTED` cannot fire first, there is no fetching source); a fetch answered 401 or 407 → `FAILED` with `httpStatus` set, on the JDK fetcher; [0.3] the same on the Android and OkHttp fetchers; the JDK fetcher against a server whose certificate lacks the host's SAN → `FAILED` (endpoint identification); [0.3] the same on the Android fetcher;
-  (h) lifecycle: `close()` with a live client under `STRICT` → subsequent handshakes succeed on the
-  platform verdict, `evaluations` frozen, no events; `close()` before ready → `readyFuture()` fails with
-  `IllegalStateException`; `ready` is false in `CREATED` even with `requiredDatasets` empty; a
-  `trustManager(d)` instance created before `start()` has its snapshot when `start()` returns on both platforms, and
-  its first handshake waits for data only, under `needsData`, up to the flip to `STARTED` + `awaitData` (on the
-  JVM `start()` has already joined the loader up to `awaitData`, so the handshake wait is what
-  remains of it); `trustManager(d)` in `STARTED` with `d.getAcceptedIssuers()` throwing, and with it
-  returning an empty array → `IllegalStateException`, `trustManagerCount` unchanged, `sslContext(d)`
-  propagates it, a later call with a good delegate succeeds (JVM, and Android instrumented with a
-  custom delegate); both platforms, a trust manager created in `CREATED` over an empty or throwing
-  delegate → `start()` throws `IllegalStateException`, lifecycle stays `CREATED`, the store lock is
-  not held and a second `Revokt` on the same directory starts as owner; `start()` over three
-  pre-start instances whose second delegate throws once → the first `start()` throws, the second
-  succeeds and all three report a snapshot; `trustManager(d)` racing `start()` → built by exactly
-  one of the two, never left without a snapshot; a read-only instance (lock held by another
-  process) has `fetcherTrustManager.status().anchorCount > 0` when a fetching source is configured
-  (the build precedes the lock); a seed-only configuration with an empty default trust store →
-  `start()` succeeds, and the same configuration after `revokt.trustManager` was read before `start()` → `start()` throws `IllegalStateException`; `revokt.evaluator.evaluate(...)` in `CREATED` and after `close()` → `IllegalStateException`; Android instrumented on API 26: `close()` with a pending `readyFuture()`, a pending `syncAsync()` and a `resetStateAsync()` → every future completes exceptionally, no `NoSuchMethodError`; `limits { maxTrustManagers = 2 }` → the third distinct delegate throws, and after the second client is dropped and collected the third succeeds without waiting for the `ReferenceQueue`; the `STARTING` racers: a second `start()` entering during the sole-seed decode returns after the first completes and throws iff the first threw, with one `prepare` call on the engine; `close()` entering during the decode → the prepared generation is closed, never activated, the store lock released, lifecycle `CLOSED`, `engine.close()` called once after the decode thread returned; a gap trust manager whose delegate throws → `start()` throws after `activate`, the stored generation is complete, and the retry loads it on the loader without a second seed verification; `refreshAnchors()` succeeds → `anchorSnapshotId` advances on that trust
-  manager and the next handshake for a previously cached chain misses both caches, `pathCacheHits`
-  unchanged; `resetState()` → `anchorSnapshotId` unchanged on every live trust manager, the next
-  handshake is a verdict-cache miss (`generationEpoch`) and a path-cache hit; Android instrumented,
-  wired on the main thread under `StrictMode.detectDiskReads().penaltyDeath()` → no violation on a
-  cold process (the `start()` warm-up), after a trust-store change (the guarded delegate call) and
-  with a Conscrypt `TrustManagerImpl` over `AndroidCAStore` as delegate;
-  `resetState()` on a seeded `DEFAULT` instance → the next handshake is served by the seed, never
-  `NO_DATA`; two listeners registered before the first handshake each receive every event in sequence order; an enqueue racing a drain's
-  flag clear is still delivered without a further handshake.
-- **Verifier**: OID harvest; key-OID gaps; PSS parameters (each `INVALID`: a SHA-1 message hash, the all-default
-  parameters included; a SHA-256 message hash with MGF1 over SHA-1, which the JDK verifies; a mask generation
-  function other than `id-mgf1`; each `UNSUPPORTED` instead under a provider without `id-RSASSA-PSS`); raw-to-DER
-  edge cases; an off-curve point
-  on a supported OID → `INVALID`; [0.2, #172] ECDSA range (revision 54), on P-256, P-384 and P-521 (the brainpool cases under BC
-  were dropped in revision 56 with #175: the check reads n from the key's curve, and BC's path is tested with
-  `revokt-bc`): r or s of 0, of n and of n + 1 → `INVALID` before `Signature` is
-  called; an ECDSA signature on a curve the probe marks unsupported → `UNSUPPORTED`, whatever its r and s; r = s = 0, the CVE-2022-21449 form, → `INVALID` against a stub provider that answers `VERIFIED` to every
-  signature, so the row tests revokt's check and not the JDK's; an `ECDSA-Sig-Value` with trailing bytes, a negative
-  INTEGER, a redundant leading `00`, a non-minimal length or a missing s → `INVALID`; a key whose curve order cannot be
-  read → `INVALID`; a valid signature rewritten to its high s (n − s) → `VERIFIED`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
-- **Parser corpus** and the §9.2 differential parser oracle; **Android instrumented** (API 26, 31,
-  34, 36) including the PKIX fallback (the jvmMain `PkixPathBuilderFallback` through ojluni, JVM-tested in 0.2), the
-  null-host extension-call probe and the §9.2 corpus replay against the
-  platform `CertificateFactory` (a 0.3 gate; pinned system-image revisions, Conscrypt APEX version logged); **live checks**; **benchmarks** on a physical ARM device including
-  verifications per honest handshake.
-- **Walker fixtures**, schema `id | presented (ordered) | snapshot | preload | verifier.unsupported |
-  expected Walk (asserted only in the walker-only harness, revokt-engine's test set; every other path asserts the Finding.Path columns, and revokt-testing's recorded fixtures carry the Walk column as a string) | expected PathStatus / NoIssuerReason / WalkEnd | expected Path fields | verdict
-  relation to the honest chain`, on every platform path (JVM walker, JVM walker with the fallback
-  disabled in the walker-only harness, Android CT-gap path, Android plain delegate, `Revokt.evaluate`; a row whose
-  outcome depends on the fallback states its fallback-disabled expectation, decision step 6, revision 49; every row
-  whose step-5 walk ends `NotFound` or `Budget` with `usedFallback = false` asserts exactly one `FallbackNotUsed` with
-  step 6's reason, revision 50: `DISABLED` on the disabled path, where a row's "fallback skipped" is
-  `FallbackNotUsed(DISABLED)`; else `SKIPPED` above `FALLBACK_MAX_PRESENTED`, as in a row's "fallback skipped"; else
-  `FAILED`. **A row's leaf stays within the keyability profile (K1 to K8) unless the row tests `PRODUCER_UNKEYABLE`**
-  (revision 56, the maintainer's decision). A row cut at step 3 never walks and carries none: the `PARSE_FAILED` leaf, the 70-certificate chain, and
-  the rows over `MAX_PRESENTED` on every trust-manager path and `Revokt.evaluate`, as the step-3 note below says):
-  (a) random-key fake issuer; (b) ECDSA-recovered second key; (c) RSA duplicate-signature key;
-  (d) recovered-key fake with an unsupported own signature, terminating at a real anchor; (e) 8, 16
-  and 63 distinct-key related junk ahead of the real one → `Found`, verdict equals honest; (f)
-  cross-signed chain with both roots in the snapshot → first path in M1, both on exhaustive re-walk;
-  (g) chain omitting the intermediate → walker-harness `NO_ISSUER(NO_CANDIDATE)`; on trust-manager bindings `PLATFORM_ONLY` with `walkerReason = NO_CANDIDATE`; on Android with a warm intermediate index and a host, `Found(PLATFORM)` via step 4; (h) self-signed non-anchor and an
-  A↔B loop; (i) 65 related junk at the leaf → `Budget(RELATED_BUDGET)`, `candidatesExplored = 64`,
-  fallback skipped (chain too long), `PATH_BUDGET_EXCEEDED`; (j) ML-DSA anchor on a JDK without ML-DSA →
-  `ISSUER_UNVERIFIED` in the walker-only harness and `Evaluator.evaluate`; on a trust-manager binding a chain the
-  platform accepted is `NO_ISSUER(PLATFORM_ONLY)` with the same `UnsupportedAlgorithm` finding (revision 57); (j2) brainpool anchor on SunEC (walker harness) → `NO_ISSUER(ALL_CANDIDATES_INVALID)`, no `UnsupportedAlgorithm` (the curve OID is the candidate's); (k) same-key decoy with a garbage
-  signature first, decoy issuer name equal to the root's → `Found`, `verifications = 4`,
-  `candidatesExplored = 5` (the store anchor and the real intermediate are both tried under the
-  decoy's garbage signature before the leaf loop reaches the real intermediate by memo hit; re-derived
-  under the `keyFamily` ordering of `related()`: unchanged, every candidate shares the family);
-  (k2) the same with the decoy carrying an EC key under an RSA-signed leaf → the RSA store candidates
-  are tried first, `verifications = 3`;
-  (l) public cross-certificate to a retired non-anchor root first → `Found`; (m) sound path then 62
-  related junk → `Found`; (n) unsupported candidate on a dead branch with a supported path found →
-  `outcomeDepended = false`; (o) a second certified key verifying the leaf via an attacker-owned
-  constrained sub-CA → both keys in `issuerSpkiSha256s`, `REVOKED`; (p) PrintableString/UTF8String
-  issuer-name mismatch → `Found` via canonical ordering; (q) depth-9 bridge → `Found`; (r) TBS/outer
-  signature OID mismatch → `Found` with the finding, and a NULL-vs-absent pair → `Found` with no finding;
-  **(s1)** (o) plus 62 related junk ahead of the honest key (64 related in total) → `Found`, `pathsFound = 2`,
-  `REVOKED`; **(s2)** (o) plus 63 junk (65 related) → `Budget(RELATED_BUDGET)`, `Rejected` with `rule ∈ {REVOKED,
-  PATH_BUDGET_EXCEEDED}`, and `REVOKED ⇔ honestKey ∈ issuerSpkiSha256s`; **(t)** (o) plus 80 junk → same expectation as (s2); **(i), (e) with 63 junk, (s1), (s2), (t), (y) and (y2) present more than `MAX_PRESENTED` certificates (65 to 68, revision 56 adding (e), (s1) and (y2), which test the walker's 64-related-candidate edge) and are walker-harness only; on every trust-manager path and `Revokt.evaluate` they are cut at step 3: `Budget(EXPLORATION_BUDGET)`, `endDepth = 0`, `PATH_BUDGET_EXCEEDED`, no CRLite query and no `FallbackNotUsed`, as (ag) asserts**;
-  (u) `getAcceptedIssuers()` throws during `refreshAnchors()` → the current snapshot is kept, `anchorSnapshotId` unchanged, the walk proceeds under it (the wiring and `start()` throw cases are lifecycle fixtures, (h));
-  (v) honest chain against a 200-anchor snapshot → `verifications ≤ 4`, `COMPLETE`; (v2) the same
-  with a retired-root cross-certificate presented → `≤ 4`; (w) dense cross-certified mesh (6 roots,
-  12 cross-certs) → `Found`, reported path `leaf → I → anchor`; (x) self-signed anchor as server
-  certificate → `Found([leaf])`, key = the leaf's own; **(y)** honest chain leaf → I1 → I2 → root with the root in the snapshot and 65 presented
-  certificates whose subject equals I2's name and whose keys do **not** verify I1 (one `INVALID` exploration each), placed before I2 →
-  `Budget(RELATED_BUDGET)` at `endDepth = 2` (sub-leaf cap propagates), fallback skipped,
-  `PATH_BUDGET_EXCEEDED`; **(y3)** (M2) leaf whose issuer I has one certificate under OneCRL-listed anchor A and another under a retired root present only in the preload → paths `leaf → I_A → A` (ANCHOR, hit) and `leaf → I_B` (PRELOAD); `ONECRL` fires (the PRELOAD path is not a clean alternative); **(y2)** the same chain with the junk carrying the root's name and the
-  root in the snapshot → `Found`, `verifications = 3` (leaf/I1, I1/I2, I2/root; the junk is never explored because the store root sorts first at I2, which pins store-first ordering); **(z)** `NotFound` where only
-  an unrelated presented certificate has an unsupported key OID → `NO_ISSUER(UNANCHORED)`, no
-  `UnsupportedAlgorithm`; (aa) root-issued leaf with the root also presented → `pathsFound = 1`;
-  (ab) `PARSE_FAILED` leaf with no CRLite generation → `rules = {PARSE_FAILED, NO_DATA}`, `rule = NO_DATA`;
-  (ac) **walker-harness only, custom canonicaliser** (on both default delegates every honest issuer
-  is related, since `X500Principal`'s canonical form hex-encodes TeletexString and both platforms
-  chain by it): issuer unrelated by encoding, the TeletexString difference on the issuer certificate's subject, not
-  on the leaf's issuer field (K5), the leaf carrying a keyIdentifier AKI that matches no candidate, not the
-  issuer-and-serial form (K8; revision 56, the maintainer's decision), and four unrelated junk ahead → `Found`
-  through the unrelated loop, `REVOKED`; (ad) **walker-harness only**: leaf,
-  honest issuer unrelated by encoding, six same-name mutually cross-signing junk certificates ahead →
-  `Budget(EXPLORATION_BUDGET)`, `candidatesExplored = 1024`, `usedFallback = true`,
-  `PATH_BUDGET_EXCEEDED`, `rule = REVOKED`, honest key last in `issuerSpkiSha256s`; with the fallback disabled the
-  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `FallbackNotUsed(DISABLED)`, the honest key (which only the fallback reaches) not in
-  `issuerSpkiSha256s`, so `rule = PATH_BUDGET_EXCEEDED`; (ae) platform
-  accepts, walker `UNANCHORED` and fallback fails → `NO_ISSUER(PLATFORM_ONLY)`,
-  `walkerReason = UNANCHORED`, `FallbackNotUsed(FAILED)`; (af) 9 presented certificates with a link the walker cannot reproduce
-  (custom delegate) → fallback skipped, `PATH_BUDGET_EXCEEDED`; with the fallback disabled → `PATH_BUDGET_EXCEEDED`
-  as well, `usedFallback = false`, `FallbackNotUsed(DISABLED)`; (ag) 70 presented certificates →
-  `Budget(EXPLORATION_BUDGET)` without a walk, no `FallbackNotUsed`; (ah) `VERIFICATION_BUDGET`: 12 presented certificates
-  of distinct RSA duplicate-signature keys each verifying the leaf and recursing into a
-  32-certificate dead-end subtree → `Budget(VERIFICATION_BUDGET)`, `verifications = 256`; (ai) a
-  17-certificate honest path (16 non-terminal plus the anchor) → `Found`; an 18-certificate one →
-  dead end; (aj) **walker-harness only, platform canonicaliser** (revision 48, #98): no related path at the leaf (the
-  leaf's issuer neither presented nor in the snapshot); two unrelated presented certificates U1 and U2 whose keys both
-  verify the leaf, each certified by a snapshot anchor, in both orders, with and without a related candidate ahead that
-  verifies the leaf but is unanchored → `Found`, `leafKeys = {U1, U2}` and `unrelatedExploredAtLeaf = 2` in every
-  case; with the CRLite stub revoking U2 only, `rule = REVOKED` in both orders. **Revision 57** (#196 and #197, the
-  maintainer's decisions; in the first four rows the fallback finds no path, and the label is the same with it failed,
-  `FallbackNotUsed(FAILED)`, or disabled, `FallbackNotUsed(DISABLED)`): (ak) the relabel: `[L]` →
-  `NO_ISSUER(NO_CANDIDATE)`; `[L, D]`, where D is named like the leaf's issuer, verifies the leaf under a recovered key and signs itself with a probe-listed OID under an issuer no
-  candidate matches → `ISSUER_UNVERIFIED`, `walkerReason = UNANCHORED`; `[L, J]`, where J is the same but verifies
-  nothing → `ISSUER_UNVERIFIED`, `walkerReason = ALL_CANDIDATES_INVALID`; under `STRICT` all three are `Rejected`, and
-  an exemption registered on either rule exempts all three alike; on trust-manager bindings and `Revokt.evaluate` all
-  three are `NO_ISSUER(PLATFORM_ONLY)`, each with the walker's reason in `walkerReason` and D's or J's OID in an
-  `UnsupportedAlgorithm(outcomeDepended = false)` finding, and `STRICT` plus `exempt(NO_ISSUER, hostSuffixIn(…) and
-  platformOnly())` accepts each; (al) the leaf deferral: a leaf L2 whose own signature OID is probe-listed, presented
-  alone → `NO_ISSUER(NO_CANDIDATE)`, no `UnsupportedAlgorithm`; `[L2, I]` → `ISSUER_UNVERIFIED`, `walkerReason =
-  ALL_CANDIDATES_INVALID`; on the bindings both `NO_ISSUER(PLATFORM_ONLY)`; (am) a related store anchor that signs
-  itself with a probe-listed OID and does not verify the leaf → `NO_ISSUER(ALL_CANDIDATES_INVALID)`, its OID not
-  recorded; (an) a presented certificate unrelated to the leaf that verifies it and signs itself with a probe-listed
-  OID → its OID recorded, `Walk.NotFound(NO_CANDIDATE)` from the walk and `ISSUER_UNVERIFIED` from `decide`; (ao) the
-  candidate order: an issuer that is itself a self-signed snapshot anchor P, presented beside its cross-certificate
-  under another anchor in both orders → reported path `[L, P]` and `anchorIn([P])` exempts in both; two cross-signed
-  intermediates under two different anchors → the reported path follows the presented order, as Firefox's does;
-  (ap) 64 snapshot anchors named like the leaf's issuer ahead of the presented issuer → `Budget(RELATED_BUDGET)` at
-  `endDepth = 1` with no partial path, `PATH_BUDGET_EXCEEDED`, `usedFallback = true` and only the fallback's key
-  evaluated; with the fallback disabled, `usedFallback = false`, `FallbackNotUsed(DISABLED)` and no key evaluated.
-  Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
-  (z) has a related candidate that verifies but is unanchored; stuffing fixtures present their junk.
-- **Trust-manager invariants**: never accept what the platform rejected (the 3-arg overload's null-host retry only after a socket or engine overload accepted the chain and host); under `DEFAULT` never
-  reject on a step-2 failure alone except `PATH_BUDGET_EXCEEDED`; at most one event per (connection, verdict-cache TTL window) on Android
-  OkHttp (the chain cleaner runs lazily, §5.1 flow step 1); at most two platform validations per 3-arg call, the second only the null-host retry; a direct 3-arg call for a chain and host no socket or engine overload accepted gets no retry; a plain delegate on the JVM throws `IllegalArgumentException` at wiring; an empty or throwing anchor set throws `IllegalStateException`
-  at wiring (`STARTED`) or from `start()` (instances created in `CREATED`) on both platforms and
-  consumes no cap slot; the cap throws at `maxTrustManagers + 1` live instances and instances are collected when their
-  client is dropped; a trust manager that can go past flow step 1 has a snapshot (`fetcherTrustManager` without one never goes past flow step 1); `enforcement = ENFORCE` after the start task found the sole seed unreadable → `IllegalStateException` `NO_DATA_AT_FLIP`, enforcement unchanged; two concurrent
-  `trustManager(d)` calls return the same instance.
-- **API rows** (revision 56; 0.2 gates unless tagged): `Exemptions.and`/`or` as CEL: `broken or true`, `true or
-  broken` → exempt, no finding; `false and broken`, `broken and false` → not exempt, no finding; `broken and true` →
-  not exempt plus one `EngineError(EXEMPTION)`; `broken or broken` → the left operand's error recorded once; a fatal
-  error from either side propagates; `hostIn(["Foo.Example."])` matches the host `foo.example` and not
-  `foo.example.com`; `hostIn` or `hostSuffixIn` with `""`, `"."`, `".x"`, `"*.x"` or `"bücher.de"` →
-  `IllegalArgumentException`; a request host of `"."` → no host, matching nothing; `EvaluationRequest.Builder.build()`
-  with an empty `presented` or an empty `verifiedPath`, a `verifiedPath` of more than `MAX_DEPTH + 1` certificates, or a
-  `verifiedPath` whose first certificate is not byte-equal to `presented[0]` → `IllegalArgumentException` (revision
-  57); a one-certificate `verifiedPath` whose leaf is a snapshot anchor outside the keyability profile → `FOUND` under
-  its own key, `anchorSnapshotId` the entry snapshot's; the same leaf when it is not an anchor →
-  `PARSE_FAILED(PRODUCER_UNKEYABLE)`, never queried; a longer `verifiedPath` → `anchorSnapshotId = 0`, an anchor at its
-  head gated like any leaf; `rule(NO_ISSUER, ALLOW)` on a `STRICT` builder → `outcome(ISSUER_UNVERIFIED) == ALLOW`, and
-  `exempt` or `clearExemption` on either rule → the same exemption, or none, on both (revision 57);
-  `STRICT.newBuilder().build().newBuilder()` keeps `STRICT`'s preset; `rollbackWindowMillis(-1)` and
-  `clockSkew(Duration.ofSeconds(Long.MAX_VALUE))` → `IllegalArgumentException`; a policy that is an `ERROR` under
-  `validate(ENFORCE)` has only `WARNING`s under `validate(OFF)`; a `PresentedChain` whose second certificate does not
-  parse → `size = 2`, `parsed(1) = false`, `der(1)` its bytes and its other fields empty; two `Verdict`s that differ
-  only in `elapsedNanos` or `generationEpoch`, and two `SyncResult`s that differ only in `cause`, are equal;
-  `validate()` with `ioDispatcher = Dispatchers.Unconfined` → V `IO_DISPATCHER_UNCONFINED`, a `WARNING` under both
-  enforcements, and none for `Dispatchers.IO`; `RevoktLoggers.jul()` logs `DEBUG` at `FINE`, `INFO` at `INFO`, `WARN` at `WARNING` and `ERROR` at `SEVERE`;
-  `MozillaRemoteSettings.Builder.build()` with an `x5uHosts` entry, or either side of a rewrite, of `1.2.3.4`, `a.0x7f`,
-  `host.`, a 64-character label, a 254-character name, `host:443`, `user@host`,
-  `host/x`, `host?x`, `host#x`, `[::1]` or a non-ASCII name → `IllegalArgumentException`, while an upper-case entry
-  builds; an x5u URL on
-  `Content-Signature-2.cdn.mozilla.net` against the default allowlist → `FAILED`; [#141] a delta poll's changeset URL carries
-  `_since=<cursor>` bare and `If-None-Match: "<cursor>"`, and before #141 a sync with a stored cursor sends neither
-  (revision 57); decision steps 7 and 8 (#133): a key answered `ENGINE_ERROR`
-  while another is `REVOKED` → `Finding.Crlite(ENGINE_ERROR)` for it and no `EngineError(ENGINE)`; a boundary throw
-  after one exemption ran → that exemption stands, no later one runs, rules = those fired plus `ENGINE_ERROR`; a
-  required dataset the snapshot lacks → `dataStates` entry with `generationId` null and `NO_DATA`; a throwing clock →
-  `ENGINE_ERROR(BOUNDARY)`, `NOT_WALKED`, `ageMillis` null, no `STALE`, `NO_DATA` still computed, no exemption; an
-  engine whose `query` throws on the second key → `ENGINE_ERROR(BOUNDARY)` with `engineName` null, the first key's
-  finding kept and no third query.
-- **`Rule` model tests** (tagged by milestone: **0.1** the enum, preset tables, golden fixture, the `revokt-engine` jvmMain `Rule → BasicReason` map and precedence; **0.2** everything that needs `evaluate` alone; **0.3** exceptions, caches, counters, the shadow policy, the system cache, listeners and the Java compile; revision 49 moved the parts of [0.2] items that need 0.3 machinery to [0.3]): [0.1] both preset tables are total over `Rule.entries`, the two status-map ranges are subsets of it, the `Rule → BasicReason` map is total, and the `RevoktStatus` and `RevoktEvent` rule-keyed maps are zero-filled over `Rule.entries`; `entries == entries.sortedBy { ruleClass }`; the golden growability fixture diff is
-  additive; the `PathStatus → Rule` and `CrliteQueryResult → Rule` tables; `parseFailed` zero-filled over `ParseReason.entries`; [0.2] `Verdict.rule` is the
-  first fired non-exempted `REJECT` rule; a leaf failing K6 →
-  `PARSE_FAILED(PRODUCER_UNKEYABLE)` with `keyabilityClause = TIME` and `crlite == null`, and an issuer candidate
-  outside the profile not dropped; per-dataset
-  `NO_DATA` and `STALE` with a fresh CRLite and a 30-day-old OneCRL generation (M2) fire nothing;
-  `DEFAULT.newBuilder().rule(STALE, REJECT)` with 4-day-old data → `Accepted`, `DataState.stale`,
-  `rules` empty; the same with `rejectStaleAfter(CRLITE, 3 d)` on a generation that is not `fromSeed` (or, when `fromSeed`, after a sync attempt has completed since the seed install: persisted `datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`) → `Rejected(STALE)`, and with `exempt(STALE, anchorIn(privateCa))` a chain under that anchor → `Accepted` with `Finding.Exempted(STALE)`;
-  `dataStates[CRLITE].rules == {STALE}`; a `NO_SCTS` chain under `DEFAULT` → `Accepted`;
-  `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)` over a `SYSTEM` generation (in 0.2 the test hands the evaluator
-  that generation; the system cache is 0.3) and a chain it does not list as revoked → `Accepted` with `UNSIGNED_DATA`
-  in `Verdict.rules` and `dataStates[CRLITE].rules == {UNSIGNED_DATA}` (revision 47); `STRICT` over a `SYSTEM`
-  generation → `Rejected(UNSIGNED_DATA)`;
-  `requiredDatasets = {CRLITE}`, no generation after the start task completed (`pending == false`), and a walker that throws → `Rejected(NO_DATA)` with
-  `rules == {ENGINE_ERROR, NO_DATA}`; the golden fixture accepts the `ALLOW → REJECT` flip exactly
-  once per rule and preset and rejects a second; [0.3] the parts of former [0.2] items that need 0.3
-  machinery (revision 49): `parseFailed.values.sum() == fired[PARSE_FAILED]`; `rejects` sums equal rejection counts; the K6 leaf
-  above on a path-cache hit → the same `PARSE_FAILED(PRODUCER_UNKEYABLE)` clause; a `shadowPolicy = STRICT` under
-  `DEFAULT`/`ENFORCE` with a `NO_SCTS` chain → `Accepted`, `shadowVerdict` is `Rejected(NO_SCTS)`,
-  `shadowWouldRejects[NO_SCTS] == 1`, `rejects` unchanged, one event; `DEFAULT.newBuilder().minTrustClass(CRLITE, SIGNED)`
-  with `SeedSource.none()`, an empty store and a `c2spCache` as the only source → the loader installs the `SYSTEM`
-  generation, and a chain it does not list as revoked gets the [0.2] verdict above with `fired[UNSIGNED_DATA]`
-  advanced; `STRICT` with a `SYSTEM` generation reached through a runtime `policy` flip from `DEFAULT` (§7.3 never
-  installs one under `STRICT`) → `Rejected(UNSIGNED_DATA)` and, through the loader, the generation is not installed
-  while a `SIGNED` one exists; `RevoktCertificateException.cause.reason` equals
-  the declared reason for every rule (`REVOKED` for `REVOKED`, `UNDETERMINED_REVOCATION_STATUS` for `NO_DATA`, …); `Rejected.getRule()`
-  is non-null from Java; every preset passes `validate(ENFORCE)` with no `ERROR` at every release
-  (including the M3/M4 one-minor `ALLOW` rows); ENFORCE with a revoked chain twice within the
-  verdict-cache TTL → two exceptions, `rejects[REVOKED] == 2`, one event; a Java consumer compile that builds a policy with `staleness` and
-  `rejectStaleAfter(Dataset, Duration)`, reads `verdict.getRule()`, implements `Exemption` as a
-  lambda over `ExemptionContext` and `RevoktListener` with only `onVerdict`.
-
-### 9.1 Fuzzing requirement
-
-Mandatory for every component that parses bytes it did not produce; measured by coverage and bug
-yield. **Targets**: v3/v4 filter decoders (differential against `clubcard-crlite`); `index.bin`
-round trip; JSON and canonical JSON (differential against `canonical_json`); the TBS/DER parser and
-SCT list (§9.2); DER ECDSA conversion and `AlgorithmIdentifier`/PSS parameters; seed archive and x5u
-PEM; the path walker (below); [M2] CRX3, zip, `crl-set`, OneCRL, preload DER; [M3] precert TBS, log
-list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput` wrapper;
-`-Xmx256m -rss_limit_mb=1024 -timeout=10` (the §9.2 parser target overrides with `-timeout=1`); `-max_len` = each target's cap + 1 (filters:
-`MAX_FILTER_BYTES + 1`); allocation budgets in each decoder; differential oracles in-process through
-the `revokt-oracle` Rust cdylib and the Panama shim; the Go producer oracle runs **out of process**
-(the CLI, batched over a pipe: one base64 DER per line in; one line per input out, `OK <serial-hex> <spki-sha256-hex> <ct|lax|zc>` or `REJECT <error>` (an empty line, the encoding of an empty input, is answered `REJECT`), with `##` terminating a batch, so the Go CLI and the Kotlin driver are written independently) during fuzzing, since a third set of signal handlers beside the JVM's
-and libFuzzer's is not safe in-process. **Tiers**: PR = committed-corpus
-replay as unit tests, JDK only; nightly = ClusterFuzzLite batch matrix, one job per target; OSS-Fuzz
-once the project has users. **Findings**: any exception other than the declared result, any
-allocation above budget, any timeout, any difference between implementations outside a declared
-equivalence class, any non-idempotent round trip. **Acceptance**: no open continuous-tier crash at
-release; Kover branch coverage of each parser package not regressed, 90 % as the target; committed
-corpus capped at a few MB, overflow in a corpus repository.
-
-**Walker fuzzer** (a 0.2 deliverable: it compiles against `Walk`, `CandidateIndex` and `reconstruct`, which exist from 0.2; the generator, `SymVerifier` and the reference walker are 0.1). Crypto is replaced by `SymVerifier(ok: Set<Pair<CertId, KeyId>>, unsupported:
-Set<Oid>)`, which implements `SignatureVerifier.verify(sigAlg, spki, message, signature)` over bytes with `KeyId = SHA-256(spki)` and `CertId = SHA-256(message)` (the TBS); the generator emits real DER and writes the key id into the SPKI BIT STRING under a private-arc key OID, and `unsupported` is matched against `tbsSigOid`/`keyOid`/`curveOid` exactly as the startup probe does, so recovered and duplicate-signature keys are free to generate. Generator: an honest
-world (1–200 anchors, some with unsupported OIDs; chain depth 0–9, depth = the number of intermediates; cross-signs only between
-snapshot roots), then **world mutations** (`NameEncoding`, `AlgMismatch`, `UnsupportedOwnSig` on
-honest certificates, `DropIntermediate`) and **attacker mutations** (`Recover(child)` with a fresh key
-in `ok`, optionally `CertifiedBy(anchor)`; `SameKeyDecoy`; `CrossCertToNonAnchor`; `Stuff(n ≤ 300,
-related)`; `SelfSignedNonAnchor`; `Loop`; `Permute`; `Duplicate`; `DepthPad`, junk certificates off the honest path that never lengthen it, so P3 is not tripped by a dead end). **Oracle**: a
-**relation-aware, uncapped reference walker** (at every node: related candidates, plus unrelated
-presented certificates only when no related path exists, at the leaf collecting every unrelated issuer's key as §5.1 does; depth ≤ `MAX_DEPTH`; no other limits; the fuzzer runs both walkers with the platform canonicaliser, so the leaf-level custom-canonicaliser clause is inert for P2/P6 and is covered by the walker-harness fixtures instead) →
-`refKeys`; a CRLite stub mapping the honest key to `REVOKED` in half the runs and every other key to `NOT_ENROLLED` (so `rules` is predictable under `Recover(CertifiedBy)`); a fake
-`PathBuilderFallback` equal to the reference. Properties:
-- **P1 soundness**: every returned path's links are in `ok` and not unsupported; terminal bytes in the snapshot.
-- **P2 completeness**: `Found ⇒ leafKeys == refKeys`; `NotFound ⇒ refKeys == ∅`; `Budget ⇒ partialLeafKeys ⊆ refKeys`.
-- **P3 never-improve** (attacker mutations only, under `DEFAULT`, with the CRLite stub always
-  holding data): honest `Rejected ⇒` mutated `Rejected` with `rule ∈ {REVOKED, PATH_BUDGET_EXCEEDED}`;
-  if no limit was hit, `(mutated is Rejected, mutated.rule) == (honest is Rejected, honest.rule)`.
-- **P4 order-independence**: `PathStatus` and `leafKeys` invariant under `Permute` when neither
-  order produced `Budget`; `Budget` in one order ⇒ `Budget` or `Found` with `leafKeys == refKeys` in the other.
-- **P5 budgets**: counters ≤ limits; `Budget ⇒` a limit at its value at `endDepth` (for
-  `RELATED_BUDGET`, `endDepth == 1 ⇒ relatedExploredAtLeaf == 64`; revision 57: not the converse, since a leaf can
-  explore exactly 64 related candidates and the cut come at a deeper node) and the fallback invoked at most
-  once; `verifications` never exceeds `MAX_VERIFICATIONS`.
-- **P6 honest cost**: unmutated world, whose generator never emits two anchors with the same
-  subject name, ⇒ `verifications ≤ depth + 1`.
-- **P7 no throw**: no attacker mutation produces `ENGINE_ERROR`, run with the real `X500Principal`
-  canonicaliser and a verifier that throws on a configurable candidate.
-- **P8 honest acceptance** (goal 3's core guarantee): an unmutated world, or one with only
-  `NameEncoding`/`AlgMismatch`, ⇒ `Found` with `PathStatus.FOUND`, never `Budget`, and
-  `Rejected ⇔ the CRLite stub maps the honest key to REVOKED`; `UnsupportedOwnSig` on a non-anchor certificate ⇒
-  `ISSUER_UNVERIFIED`, never `PATH_BUDGET_EXCEEDED` (an anchor's self-signature is never verified, so the mutation is applied to non-anchors only); `DropIntermediate` ⇒ `NO_ISSUER(NO_CANDIDATE)`
-  (a world mutation under P3: the platform's acceptance of such a chain is the §5.2 residual,
-  outside the fuzzer's model).
-Rounds 1–2 are `Recover` + P3; round 2's OID case is `UnsupportedOwnSig` + P1; round 3 is
-`SameKeyDecoy`/`CrossCertToNonAnchor` + `Permute` + P4; round 4 is `Recover(CertifiedBy)` + `Stuff` +
-P3. Run under Jazzer with the mutation list as the structured input, plus the committed corpus.
-
-### 9.2 Differential parser oracle
-
-**Why it is load-bearing.** Every certificate the trust manager parses has already been accepted by
-the platform: presented chain, platform-built chain, anchors and preloads all arrive as platform
-`X509Certificate`s and are re-read through `getEncoded()` (SunJSSE returns the stored bytes;
-Conscrypt returns `i2d_X509` of the parsed object). **The read fallback**: on the JDK, a certificate whose
-`getEncoded()` is `ParseFailed(STRUCTURE)` is read once more through the **platform canon**, `SEQUENCE {
-getTBSCertificate(), the signature AlgorithmIdentifier TLV located in it, BIT STRING { 00, getSignature() } }` with
-minimal new headers and the padding bits cleared, as `getSignature()` returns them. The locator reads one-octet
-identifiers and definite lengths of at most four octets: after the TBS header it skips a first element with
-identifier `A0`, then one element, and takes the next if its identifier is `30`. The producer's parse needs at least
-that much there (an optional `[0]`, an INTEGER, a SEQUENCE; ct-go, its `lax` retry and zcrypto reject indefinite
-lengths and lengths of 2^31 or more, Appendix A). The platform canon is the bytes the JDK verifies the signature
-over, so a valid signature makes it what the CA signed, however the presented encoding was altered (#49). That covers
-the path the platform verified and, since the walker verifies over the same `Cert.tbs` and `Cert.sig`, every
-certificate on a link the walker verified; an anchor is read as the JDK's own view of it. Where the
-AlgorithmIdentifier cannot be located, `encoded` stays `getEncoded()`: a leaf is `PARSE_FAILED(STRUCTURE)` and a
-candidate is dropped, and a getter that throws has the same outcome and is counted `unavailable` (below). The
-platform canon is defined as its own `canon(encoded)`, and the replay asserts that the reference view, where it
-locates it, yields the same. A certificate so read carries no `AlgorithmIdMismatch` finding unless its TBS
-AlgorithmIdentifier is not minimal DER. Where the bytes read stand for the certificate, and where `getEncoded()`
-still does, is §5.3's. Conscrypt needs no fallback: its TLV parse is strict DER (no indefinite or non-minimal lengths).
-`PARSE_FAILED` on the leaf allows in `DEFAULT` and an unparseable candidate is dropped (decision, §10 item 8). Two
-failure classes matter: (i) a certificate the platform accepts and revokt rejects is unchecked (a leaf) or invisible
-as an issuer (a dropped candidate ends the walk `NO_ISSUER`, which allows in `DEFAULT` for every leaf under that CA),
-and a leaf revokt parses but cannot show producer-keyable is a sub-case, unchecked but never mis-answered (the D8
-gap); (ii) a certificate from which revokt extracts **different bytes** than Mozilla's producer used to form the key
-(`SHA-256(SHA-256(issuer SPKI TLV) ‖ serial content bytes)`) or different SCT timestamps queries the wrong key or the
-wrong coverage, which can hide a revocation or, for a key outside the filter's universe, return an arbitrary answer.
-The oracle bounds both.
-
-**Parser contract under test.** One minimal parse of `Certificate` → `tbsCertificate` producing
-`rawSerial` (INTEGER content bytes as encoded, sign and leading zeros preserved), `rawSpki` (complete
-TLV), `rawSubject`, `rawIssuer` (complete Name TLVs), SKI/AKI, TBS `signature` and outer
-`signatureAlgorithm` TLVs, the extension table (OID, critical, value bytes, offsets), and the SCT
-pairs `(logId, timestamp)` as the **union** over every extension with OID `1.3.6.1.4.1.11129.2.4.2`
-whose list parses under the SCT-list rule here. The rule follows `x509-parser` 0.18.1's `parse_ct_signed_certificate_timestamp_list` (oracle 3a; Appendix A pins it) except at the inner identifier.
-
-- **Inner header.** The extension value must begin with the identifier octet `0x04` (universal, primitive `OCTET STRING`) and a definite length. The length is either short form, or long form `0x81`–`0xFE` followed by that many length octets, with leading zero octets allowed and the value below 2^64 and not past the end of the extension value; `0x80` and `0xFF` fail the list.
-- **Divergence from 3a.** 3a also accepts tag number 4 in any class and in multi-octet form (asn1-rs checks the tag number only). That wider acceptance is the recorded D3 divergence class `3A_HEADER_LAX`. D2 expects no pairs from such an extension, so revokt yielding none is still asserted, never skipped. webpki yields none either, and Firefox rejects the certificate (D3, revision 46).
-- **Items.** The inner content begins with a `u16` list length that must fit the content. Items are read only within that declared region. Each is a `u16`-prefixed item, whose length must fit the region, of: any version byte, 32-byte log id, u64 timestamp, `u16`-prefixed extensions, hash and signature algorithm bytes, `u16`-prefixed signature (a zero-length signature is accepted).
-- **Ignored bytes.** Bytes after the inner `OCTET STRING`, after the declared region and inside an item after its signature are ignored and never parsed as items.
-- **Partial lists.** The list keeps every item before the first item that fails to parse; a later item of length 0 ends the list like any failing item. It fails when its first item fails, which includes an empty list and a first item of length 0. A list that fails contributes nothing.
-
-`NO_SCTS` iff the union is empty (the union is monotone under "one covered SCT
-suffices" and SCTs never enter the key).
-
-**Trailing elements are tolerated at least where the JDK's `X509CertInfo` tolerates them**; ct-go ignores extra elements at the end of a SEQUENCE, and every ignored element puts the leaf outside the keyability profile (K2; oracle 4 records what the producer does, D8). The JDK behaviour was probed on JDK 21 (Appendix A), and each case below is a D7 entry:
-- **After `subjectPublicKeyInfo` in `tbsCertificate`,** the remaining elements are read in turn:
-  - the next is `issuerUniqueID` if it is context tag 1 in either form (its content is not inspected);
-  - then `subjectUniqueID` if it is context tag 2 in either form (likewise);
-  - then `extensions` if it is a constructed context tag 3.
-
-  The first element that does not fit ends the read. It must be a well-formed TLV; it and everything after it are ignored, and the bytes after it are not parsed and need not be TLVs. After `extensions`, the remaining bytes are ignored unparsed.
-- **Inside `[3]`,** the bytes after the `Extensions` SEQUENCE are ignored unparsed.
-- **Inside an `Extension`,** the bytes after `extnValue` are ignored unparsed.
-
-- **Inside `[0]` the parse stays strict:** nothing may follow the version INTEGER, and anything there is `STRUCTURE`. The JDK accepts it, but ct-go's explicit-tag walk does not bound `[0]` by its length (`parseField` advances by the inner element only), so ct-go reads the elements after the INTEGER as the next TBS fields. It rejects most such inputs. One it accepts carries an SPKI and other fields the JDK does not read, which matter when the certificate is an issuer, while the keyed serial comes from the length-bounded stdlib re-parse (Appendix A) and is the JDK's. Whether the producer keys the same bytes therefore depends on crafted content, and the case is excluded by rule: such input is D1-dom (D1 below), never queried. Confirmed by running the producer (Appendix A).
-
-Ignored bytes contribute no field. Their offsets are recorded, and any ignored element makes the leaf unkeyable (K2). For example, `subjectUniqueID` before `issuerUniqueID` ends the read at the second, so the `extensions` after it are not read, as the JDK reads it. A constructed `[1]` then `[3]` yields the JDK's extensions where ct-go's struct walk yields none (outside the profile under K2, and a D8-gap entry where oracle 4 keys it); revokt takes the JDK's view, which only adds extensions and SCTs.
-
-**Where revokt is more lenient than the JDK** (the platform rejects such input first, so D1 is unaffected):
-- revokt does not gate on the version. The JDK rejects a v1 certificate with anything after `subjectPublicKeyInfo`, and a v2 certificate with any element after the unique IDs (a NULL or `extensions`).
-- revokt does not inspect unique-id content. The JDK requires BIT STRING content.
-- revokt's time decoding is more lenient, as follows.
-
-**Times.** `notBefore` and `notAfter` decode at least as the JDK's `DerValue` does:
-- seconds optional;
-- `Z` or `±hhmm` in both `UTCTime` and `GeneralizedTime`;
-- `GeneralizedTime` fractions after `.` or `,` of any length, truncated to milliseconds;
-- a day of 1 to 31 in any month, a day past the month's end rolling into the next month as the JDK's lenient calendar does (2026-02-31 is 2026-03-03, 2026-04-31 is 2026-05-01).
-
-Conscrypt 2.7.0 and 2.8.0 drop a `UTCTime` differential and reject a `GeneralizedTime` one (`CONSCRYPT_TIME_OFFSET`, D2),
-and read a time before 1582-10-15 in the Julian calendar (`CONSCRYPT_TIME_JULIAN`, D2).
-
-revokt also accepts optional minutes, second 60 (the first second of the next minute) and an absent zone, which it takes as UTC. A time outside these forms is null; only platform-rejected input reaches that. A rule that needs a null time fails closed: M4's distrust-after treats a null `notBefore` as after any distrust date.
-
-**The unsigned headers.** The JDK verifies the signature over `DerValue.toByteArray()` of the TBS: its content under
-a minimal definite header, after `DerIndefLenConverter` has re-encoded every indefinite length reachable from the TBS
-through indefinite elements only. `getEncoded()` keeps the presented bytes. So the `tbsCertificate` header is not
-signed, nor is any header on that indefinite chain (JDK 17, 21 and 27; Appendix A). A non-minimal definite header
-inside the TBS, and an indefinite header under a definite parent, break the signature. The parser therefore accepts
-these forms (indefinite lengths only at the first two and on the indefinite chain below them):
-- the `tbsCertificate` header (`30`) in any definite form, or indefinite;
-- the outer `signatureAlgorithm` (`30`) in any definite form, or indefinite; its content is parsed only for the §5.1
-  `AlgorithmIdMismatch` comparison, where any form other than minimal DER counts as a mismatch, and yields no field;
-- `signatureValue` as a primitive BIT STRING (`03`) with a definite length of any form. An indefinite `signatureValue`
-  is `STRUCTURE`: JDK 17, 21 and 27 reject it (JDK 11, below the floor, verifies some; Appendix A).
-
-An indefinite element at these two places is delimited and re-encoded as the JDK's converter does:
-- Each TLV header met in the reading below, other than end-of-contents, is read as the JDK's converter reads it: one
-  tag octet, whatever its low five bits, then a length octet that is `80`, short form, or `81` to `84` followed by
-  that many octets. A definite length must be minimal; a non-minimal length, or any other length octet, is
-  `STRUCTURE`: under the TBS it makes the JDK's message differ from the signed bytes, and under the outer
-  `signatureAlgorithm` the JDK fails to parse the certificate (Appendix A). A multi-octet tag is so misread; it
-  survives in `Cert.tbs` only where the TBS rules after this list leave bytes unparsed.
-- From its first content octet, TLVs are read in turn. Every byte up to its end-of-contents is part of a TLV,
-  including elements the trailing-element rule ignores.
-- `00 00` at a tag position closes the innermost open indefinite element.
-- A TLV whose length octet is `80`, constructed or primitive, opens a nested indefinite element whose content is read
-  the same way.
-- A definite TLV is skipped whole by its length, so `00 00` inside it is never end-of-contents.
-- The re-encoding replaces each indefinite header and its end-of-contents octets with a minimal definite header, and
-  copies every other octet unchanged.
-
-`Cert.tbs` is the TBS so re-encoded, under a minimal definite header; for a definite TBS that is its content byte for
-byte. It is the message the walker verifies, the input of every TBS field and of K1–K8, and the first element of
-`canon(encoded)`. D2 requires it to equal oracle 1's `getTBSCertificate()`. `Cert.sig` is the `signatureValue` content
-after its unused-bits octet u, with the last octet's u low bits cleared, as `DerValue.getBitString` returns it. Forms
-the parser accepts and the JDK rejects are harmless for D1 and are not listed as accepted by the platform: a length of
-five or more octets on the TBS or `signatureValue` header; an empty `signatureValue`, more than 7 unused bits, or
-u > 0 with no further octet; outer AlgorithmIdentifier content the JDK refuses.
-
-**Everywhere else the parse is structurally strict.** Lengths must be definite (except on the indefinite chain under the unsigned headers above), and tags and lengths well-formed (the SCT list's inner length follows the rule above). `Certificate`, `[0]` (exactly its INTEGER), `Validity`, the `Extensions` SEQUENCE and each `Extension` before its `extnValue` hold exactly their elements, and no bytes may follow `Certificate`; **non-minimal definite lengths are
-accepted for extraction**, and the JDK preserves them through `getEncoded()`; whether the leaf is queried is the keyability profile's (below).
-
-**`producerKeyable` is a conservative keyability profile, not a model of the producer.** It is true only when every
-clause K1–K8 holds, and false for everything else, including certificates the producer does key (the D8 gap). It is
-evaluated for the leaf only.
-
-It reads the signed content of `tbsCertificate` alone. Nothing outside that content is signed, so a network attacker
-can re-encode the envelope and the platform still verifies the certificate (Appendix A): the `tbsCertificate` header
-itself, the outer `signatureAlgorithm` in any length form with its NULL parameters flipped, the `signatureValue`
-header in any definite length form, and the RSA signature's unused-bits octet. The producer keyed the bytes
-the CA logged, not the presented envelope. Oracle 4 therefore runs on `canon(encoded)`, which is
-`SEQUENCE { the TBS re-encoded by the unsigned-header rule above, the signature AlgorithmIdentifier TLV taken from
-that re-encoded TBS, a BIT STRING with zero unused bits holding the `signatureValue` content after its unused-bits
-octet, with its padding bits not cleared }`, each located by the reference view (3a, else 3b), the TBS re-encoded by
-3b's implementation of the rule, never by revokt's parser, so `canon` exists for inputs revokt fails to parse; for a
-parsed input its first element is `Cert.tbs` (D2). The new outer SEQUENCE and BIT STRING headers are minimal; the
-re-encoded TBS, and the AlgorithmIdentifier TLV from it, are copied byte for byte.
-
-The producer path is `types.ParseCertificate` (certificate-transparency-go, a `lax` retry, then zcrypto) →
-`NewSerialFromCertificate` (a stdlib `encoding/asn1` re-parse of the raw TBS). It keys on the serial's INTEGER content
-and the SPKI TLV (Appendix A). `types.ParseCertificate` keeps ct-go's certificate whenever ct-go returns one, so each
-clause is stated against ct-go's strict (non-`lax`) parse and the stdlib re-parse only. No clause relies on `lax` or
-zcrypto, and D8 requires the strict path, so dropping either fallback cannot break D8.
-
-The baseline is Go's checks with narrowed value domains, not X.690 DER everywhere. Go keys honest encodings that DER
-forbids, such as an explicit `FALSE` BOOLEAN or an unsorted `SET OF`. A profile stricter there would reject valid
-certificates under `STRICT`.
-- **K1 headers**: every TLV header in the content of `tbsCertificate` (not its own header, which is unsigned) outside
-  an opaque region, read on `Cert.tbs`, has a single-octet tag and a minimal definite length below 2^31.
-  - The opaque regions are the content of each `extnValue` whose OID is not in K8's list: the SCT list, the
-    precertificate poison, the RFC 3779 extensions and every unknown extension. There ct-go either reports errors as
-    non-fatal or does not look. The list is matched on canonical OID content; a non-minimal spelling of a listed OID is
-    opaque here and fails K4.
-  - Inside them only the §9.2 SCT-list rule applies, and only for extraction.
-- **K2 TBS shape**:
-  - `[0]` is absent, or is constructed (`A0`) and holds exactly one INTEGER with content `00`, `01` or `02`; when `[3]`
-    is present, `[0]` is present and holds `02`.
-  - There is no `issuerUniqueID` or `subjectUniqueID`.
-  - `[3]` is absent, or is constructed and holds exactly one non-empty `Extensions` SEQUENCE.
-  - No element is one the trailing-element rule ignores, and no bytes follow an `extnValue`.
-  - Each `AlgorithmIdentifier` is an OID and at most one further TLV. `Validity` holds exactly two times.
-  - Every BIT STRING the profile reads is primitive, and its content is an unused-bits octet u ≤ 7, followed by at
-    least one octet when u > 0, with the last octet's u low bits zero (Go's `parseBitString`; ct-go's keyUsage parse is
-    fatal on anything else, with no `lax` retry).
-  - Each name is a `SEQUENCE OF SET OF SEQUENCE { OID, value }`. Each `Extension` is an OID, an optional BOOLEAN and a
-    primitive `OCTET STRING`. A repeated extension OID is allowed, as ct-go allows it, and each copy is checked on its
-    own (K8).
-- **K3 integers**: the serial's content is non-empty and minimal. Any sign, zero, and any length up to `MAX_CERT_BYTES` are
-  accepted, because the producer keys them, mozilla::pkix and BoringSSL accept them, and private PKI issues them.
-  Every other INTEGER the profile reads is non-empty, minimal and in the range its clause states.
-- **K4 OIDs**: every OID the profile reads is non-empty, with minimal subidentifiers each below 2^31, the first
-  (40X + Y) included. That covers algorithms, attribute types, extension IDs, curves, EKU purposes, policies and access
-  methods. Minimality is stricter than the pinned ct-go, whose `parseBase128Int` keys a leading `80`; where the platform
-  accepts a leaf with such an OID, it is a D8-gap entry by rule, and its record carries a written justification.
-- **K5 names**: each attribute value is one of:
-  - a `PrintableString` in Go's set: letters, digits, space, `'()+,-./:=?`, and the `*` and `&` Go also accepts;
-  - a `UTF8String` that is valid UTF-8;
-  - an `IA5String` of ASCII octets.
-
-  Any other type is outside the profile.
-- **K6 times**: `UTCTime` is `YYMMDDHHMMSSZ` and `GeneralizedTime` is `YYYYMMDDHHMMSSZ` with a year from 1950 to 9999.
-  The month is 1–12 and the day falls within the Gregorian month; a `UTCTime` year below 50 is 20YY, else 19YY. The
-  hour is at most 23, and the minute and second at most 59. revokt's own §9.2 time decoding is more lenient by design,
-  and the profile does not reuse it.
-- **K7 key**: the SPKI is an `AlgorithmIdentifier` and a BIT STRING with zero unused bits. The key is one of:
-  - `rsaEncryption` with NULL parameters and `RSAPublicKey { n > 0, 0 < e < 2^31 }` filling the key, its three headers
-    each with a single-octet tag and a minimal definite length, and both INTEGERs minimal (ct-go parses it out of the BIT
-    STRING, which K1 does not walk);
-  - `id-ecPublicKey` with `namedCurve` P-256, P-384 or P-521 and an uncompressed point `04 ‖ X ‖ Y` of the curve's
-    length, with X and Y below p and on the curve;
-  - Ed25519 with absent parameters and 32 octets.
-
-  Any other algorithm is outside the profile, including those ct-go keys without inspecting them, so ct-go adding a
-  parser later cannot break D8.
-- **K8 extensions**: each extension ct-go parses with a fatal return is walked whole under K1 and must match the
-  table's grammar for its OID:
-  - keyUsage: a BIT STRING under K2's rule (so `03 00` and `03 01 05` are outside the profile);
-  - basicConstraints: `SEQUENCE { cA BOOLEAN optional, pathLen INTEGER 0..2^31−1 optional }`;
-  - subjectAltName: non-empty, with only `dNSName` and `rfc822Name` of ASCII octets and `iPAddress` of 4 or 16 octets;
-  - cRLDistributionPoints: each point `[0] { [0] GeneralNames }`, holding only `[6]` URIs of ASCII octets;
-  - authorityKeyIdentifier: exactly `SEQUENCE { [0] }`, primitive;
-  - extKeyUsage: a non-empty `SEQUENCE OF OID`;
-  - subjectKeyIdentifier: a primitive `OCTET STRING`;
-  - certificatePolicies: `SEQUENCE OF SEQUENCE { OID, … }`;
-  - authorityInfoAccess: non-empty, each entry `SEQUENCE { OID, [6] }` with ASCII octets.
-
-  nameConstraints and subjectInfoAccess put the leaf outside the profile by their presence. A BOOLEAN anywhere is
-  `00` or `FF`.
-
-**The table is the proof.** Each clause's row cites the certificate-transparency-go and Go `encoding/asn1` return sites
-it covers: every fatal return of `ParseCertificate`, `parseCertificate`, `parsePublicKey` and the dispatched extension
-parsers, plus the per-type checks. It is pinned to the producer's toolchain: the `mozilla/crlite` commit, the
-certificate-transparency-go and zcrypto versions, and the Go release (Appendix A). The argument runs:
-1. Under K1 and K2, ct-go's struct walk visits exactly the TLVs revokt reads.
-2. Every visited header is minimal, and every leaf decode maps to a clause.
-3. So ct-go's strict parse succeeds, `lax` never runs and zcrypto is never reached.
-4. The stdlib re-parse then sees minimal headers and an exact `[0]`, so the keyed serial is `rawSerial` and the keyed
-   SPKI is `rawSpki`.
-
-A pin bump re-runs the audit as a diff of those files. Oracle 4 and fuzzing test the table; they do not replace it. A
-violation of D8's gated direction is a P0, fixed by narrowing the profile or adding the missed check, never by
-weakening D8. A widening is allowed only under D8. Extraction is semantically lenient: unknown OIDs, unknown critical extensions, non-DER
-times, any string type, negative or oversize serials and duplicate extensions are accepted and
-reported, never rejected as `ParseFailed`; whether such a leaf is queried is the profile's. Result: `Parsed | ParseFailed(reason)`; no other exception may escape.
-
-**Oracles.** Each is wrapped to `Accept(fields, encoded) | Reject | Crash` by the rules in the table.
-
-| # | Oracle | What it answers | Accept | Reject | Crash |
-|---|---|---|---|---|---|
-| 1 | `CertificateFactory.getInstance("X.509")`, `SUN` provider (the same `X509Factory` SunJSSE's `CertificateMessage` uses), per JDK in the matrix | platform acceptance on the JVM; `encoded = getEncoded()`, or the platform canon where revokt's parse of that is `ParseFailed(STRUCTURE)` (the read fallback above) | `generateCertificate` returns | `CertificateException` | any other `Throwable` |
-| 2 | Conscrypt `CertificateFactory` (BoringSSL): `conscrypt-openjdk-uber` versions in the matrix; the **platform** Conscrypt on the instrumented tier | platform acceptance on Android; `encoded = getEncoded()` (`i2d_X509`) | as above | as above | as above |
-| 3a | `revokt-oracle`: `x509-parser` on one certificate | raw `serial`, SPKI TLV, names, extension table, SCT list or `ParseError` or duplicate-extension error; the TBS TLV re-headed to minimal, its signature AlgorithmIdentifier and the `signatureValue` octets, for `canon` | `Ok` | `Err` | caught panic |
-| 3b | `revokt-oracle`: a minimal independent TLV locator (delimit the `tbsCertificate`, the outer `signatureAlgorithm` and the `signatureValue` (an indefinite `signatureValue` is not located) and re-encode the TBS under the §9.2 unsigned-header rule, implemented independently of revokt; then walk the re-encoded TBS, with `[0]` read bounded as the JDK reads it, the TBS tail under the §9.2 trailing-element rule so extensions the JDK does not read are not located; slice from the re-encoded TBS the serial content, SPKI TLV, subject, issuer, TBS signature AlgorithmIdentifier, extension values by OID, the TLS-encoded `(logId, timestamp)` prefix of each SCT the §9.2 SCT-list rule keeps, under the same header, item and prefix rules; output the re-encoded TBS and the content of a definite `signatureValue` after its unused-bits octet, for `canon`; no other semantics; 3a needs no change, since x509-parser rejects every indefinite length, but its TBS is re-headed to minimal for `canon`) | raw bytes where 3a rejects, and the `canon` parts | located | not located | caught panic |
-| 3c | `revokt-oracle`: webpki through `upki`'s `RevocationCheckInput::from_certificates` on `[cert, syntheticIssuer]` | the `rustls-upki` verifier's (webpki's) view of the certificate, no longer any engine's input (§3.2); **never a precondition** | `Ok` | `Err` | caught panic |
-| 4 | **Producer**: Mozilla's `crlite/go/types` (`ParseCertificate`, `NewSerialFromCertificate`, `RawSubjectPublicKeyInfo`, `IsPreIssuer`) built as a Go CLI, pinned to the `crlite` commit of the filters in the fixture set; always out of process (fuzzing and corpus admission), batched over a pipe | whether the producer can key `canon(encoded)` (above), with which bytes and through which path (`ct` for certificate-transparency-go's strict parse, that is `ParseCertificate` without a `lax` retry returning a certificate, its non-fatal x509 errors included, `lax` for ct-go only through a `lax` retry, `zc` for the zcrypto fallback) | both calls return | a `ParseCertificate` error, or a panic anywhere in the producer (the shim recovers around the whole call) | unrecovered; counts as `Reject` under D8 |
-
-3b's `CANON` reply (its `canon` parts located, its walk failed) is not located for D2's reference and still supplies
-`canon`. A getter that throws on an accepted object (Conscrypt `getPublicKey()` on a damaged modulus is
-common) marks that field `unavailable`: the comparison is skipped and counted. Oracle `Crash`
-never fails revokt's gate, except oracle 4's under D8, where it counts as `Reject`; it is reported upstream. A `Crash` or `unavailable` rate above 0.1 % on
-the secondary corpus fails the job as infrastructure. A Rust or Go abort that kills the JVM is
-attributed by re-running the input through the out-of-process CLI before it is filed against revokt.
-Java field normalisation: `getSerialNumber()` by value (`BigInteger` drops padding and sign-extends);
-`getPublicKey().getEncoded()` by SHA-256 against `rawSpki` with a recorded allow-list of
-re-encoding cases, two rules on the bytes alone: `rawSpki` with every header minimal (Java re-encodes RSA parameters),
-and `rawSpki` with every header minimal and NULL parameters added to an AlgorithmIdentifier that has none, nothing
-else differing (a generic key of an algorithm the platform does not know, revision 41); the getter is never hashed for
-a lookup, since every SPKI hash revokt computes is `SHA-256(rawSpki)`; `getIssuerX500Principal()` and
-`getSubjectX500Principal()` as `X500Principal(raw).getName(CANONICAL)`; `getExtensionValue(oid)`
-unwrapped; `getCriticalExtensionOIDs()`; `getNotBefore()`/`getNotAfter()` in epoch milliseconds against
-`notBefore`/`notAfter`, where oracle 2's difference on a `UTCTime` with a `±hhmm` differential (read from the input
-bytes) is recorded as `CONSCRYPT_TIME_OFFSET` (a `D3_DIVERGENCE` record per Conscrypt version, revision 41) when oracle
-2's value is revokt's plus the signed differential, revokt's being the local time minus the differential ("Times"),
-and, on a matrix run, revokt's equals oracle 1's: Conscrypt drops the differential; oracle 2's difference on a `Z` time
-without fractional seconds before 1582-10-15 is recorded as `CONSCRYPT_TIME_JULIAN` (a `D3_DIVERGENCE` record per
-Conscrypt version, revision 44) when oracle 2's value is the time's fields read in `java.util.GregorianCalendar`'s
-Julian–Gregorian hybrid and revokt's, the proleptic Gregorian reading, equals oracle 1's; on oracle 1,
-`id-pkix-ocsp-nocheck`'s value is expected empty (in effect, presence only), since the JDK reports it empty whatever
-the certificate carries (revision 44). Raw-byte equality is asserted against 3a, else 3b.
-
-**Properties.** For each platform oracle *i* ∈ {1, 2} and each version *v* in the matrix:
-- **D1 leniency (security)**: `Accept_i,v(b)` ⇒ `parse(encoded_i,v)` is `Parsed`, for every input in
-  the D1 domain: platform-accepted and producer-keyable (oracle 4 `Accept` on `canon(encoded)`, through any path (`ct`, `lax` or `zc`), with serial and SPKI equal to the
-  reference view's, 3a else 3b). This is the producer's keyability, not revokt's profile, so the domain includes the D8 gap
-  and every issuer; over its end-entity inputs each is exactly one of: keyable as a leaf (`producerKeyable`), a D8-gap
-  entry, or a D1 violation. An input with any bytes after the version INTEGER inside `[0]` is D1-dom whatever
-  oracle 4 keys. A violation is a P0 and
-  a security advisory class once the input is CA/B-lint clean.
-- **D1-dom (recorded)**: platform-accepted inputs on whose `canon(encoded)` oracle 4 rejects, or accepts with key bytes other than the
-  reference view's, and any input with content after the INTEGER inside `[0]`, excluded by rule (the `[0]`
-  flattening above). That case is excluded conservatively, not because its key is outside the universe. It costs
-  `PARSE_FAILED` for such a leaf and a dropped candidate for such an intermediate, both allowing in `DEFAULT`; such
-  certificates are not CA/B-conformant. Also by rule, a JDK-accepted input for which no platform canon can be built
-  (the read fallback above) is D1-dom: the producer's parse needs at least the forms the locator reads up to the
-  signature AlgorithmIdentifier, so it cannot key a TBS in which the locator finds none. A getter that throws there is
-  counted `unavailable`, not D1-dom: D1 is skipped for that input, which counts toward the 0.1 % infrastructure
-  threshold. For the other D1-dom inputs, no filter can contain such a certificate and its key is outside the filter's
-  universe, so it must never be queried (a query would answer arbitrarily, a false `REVOKED` at about 2^-(rank+1) and
-  with high probability under an inverted issuer block); D8's gated direction enforces that; each entry is kept with
-  the producer's error (a by-rule entry with its rule) so a producer change can be re-evaluated.
-- **D8 producer-keyability (0.1 gate, zero tolerance, one direction)**: `producerKeyable(encoded)` ⇒ oracle 4 on
-  `canon(encoded)` returns `Accept` through certificate-transparency-go's strict parse (`ct`), with serial content equal to
-  `rawSerial` and SPKI equal to `rawSpki`.
-  - It holds for every input where `parse(encoded)` is `Parsed`, platform-accepted or not (on `b` when no platform oracle
-    accepts it), on every corpus (committed,
-    boundary and secondary) and on the fuzz corpus.
-  - An oracle-4 `Crash` counts as `Reject`. Requiring the strict `ct` path means a producer that drops the `lax` retry
-    or the zcrypto fallback cannot break D8.
-  - The predicate has no value on `ParseFailed`. Go ignores trailing `SEQUENCE` elements; revokt ignores them only
-    where the rule above does and elsewhere rejects them as `STRUCTURE`; over-cap inputs never reach the parser.
-    Oracle-4 outcomes on `ParseFailed(STRUCTURE)` inputs outside the D1 domain are recorded as information. Inside the
-    domain they are D1 violations.
-  - The **boundary corpus** is committed inputs at each clause's edge, accept-side unless marked, each with its oracle-4
-    golden:
-    - OID arcs at 2^31 − 1, and a first subidentifier at the limit;
-    - 29 February in 2000 and in 2024, and as `UTCTime` year 52;
-    - the years 1950, 2049, 2050 and 9999;
-    - RSA e = 2^31 − 1, and an EC coordinate of p − 1;
-    - an explicit `FALSE`, a negative serial and a 21-octet serial;
-    - `*` and `&` in a PrintableString;
-    - NIST and JDK-generated EC points, and single-bit flips of them;
-    - the unsigned-header forms: a `tbsCertificate` header with a long-form length carrying leading zero octets, and
-      one with an indefinite length, each with the base certificate's key bytes and a `VERIFIED` link;
-    - reject-side, each outside the profile with its golden: keyUsage `03 00` and `03 01 05`, which only zcrypto keys.
-- **D8 gap (measured)**: end-entity inputs in the D1 domain where `parse(encoded)` is `Parsed` and `producerKeyable`
-  is false. The issuer corpus and CA certificates are never counted, since `producerKeyable` is a leaf predicate.
-  - Each record carries oracle 4's path (`ct`, `lax` or `zc`), the first failing clause and the pinned zlint result,
-    whatever its class; an entry admitted for that reason alone has class `KEYABILITY_GAP`.
-  - They are never queried: `DEFAULT` allows them and `STRICT` rejects them (§10 item 8).
-  - The gap is zero on the committed real end-entity fixtures (the parser's real-certificate test resources).
-  - The PR replay fails on a gap entry in the committed corpora that is not in the recorded baseline, until its record
-    carries a written justification.
-  - A gap entry with no zlint error is a profile defect. It blocks the release until the profile is widened under D8
-    or the entry is justified. Revision 46 keeps K6, K7 and K8 narrow for those found so far (#57): the lint-clean
-    `x509-limbo` entries at SAN, AIA, nameConstraints, extKeyUsage and K7 (and the P-192 key, which zcrypto cannot
-    parse), and the seed corpus's year-0000 and 0001 times; their written justifications stand.
-  - The count by clause over the seed corpus's CT leaves of index issuers is reported in each release's notes and in
-    `docs/dev/status.md`. A leaf is of an index issuer when the test JDK verifies its signature under the key of an
-    issuer-corpus certificate whose SPKI hashes to a key of the fixture generation's indexes and whose subject is the
-    leaf's issuer. The filters hold no revocation of any other issuer's leaf, so a gap entry there leaves no revocation
-    unchecked (revision 45). A gap leaf is `PARSE_FAILED(PRODUCER_UNKEYABLE)` whatever its issuer; a keyable leaf of
-    another issuer would be `NOT_ENROLLED`, which `STRICT` also rejects. The two differ only where `NOT_ENROLLED` is
-    exempted, as under `anchorIn` for a private anchor, since `PARSE_FAILED` is not exemptable; revision 34's caveat for
-    a gap entry under a private anchor (§10 item 8) covers that case.
-  - **Re-decision**: if gap entries among the seed corpus's unexpired CT leaves of index issuers exceed 10^-4 of them
-    once at least 100 000 leaves are pinned (re-evaluated whenever a later pin changes them), exact keyability is
-    reconsidered in a spec revision before 0.1 ships.
-- **D1-raw (informational)**: inputs where `encoded ≠ b`, or `parse(b)` fails while
-  `parse(encoded)` succeeds. This is the `EvaluationRequest.presented` raw-DER surface (§4), documented,
-  not gated.
-- **D2 extraction agreement (security)**: on `parse(encoded_i,v)`: `Cert.tbs` equals `canon(encoded)`'s first element
-  and oracle 1's `getTBSCertificate()`, while a difference from oracle 2's is recorded as a divergence, not a violation
-  (Conscrypt verifies over the presented TBS TLV, so a difference marks an input it cannot verify); `Cert.sig` equals
-  `canon(encoded)`'s signature octets with the last octet's u low bits cleared, u being `encoded`'s unused-bits
-  octet as located by 3a, else 3b;
-  `rawSerial` equals oracle 4's serial bytes and `SHA-256(rawSpki)` equals `SHA-256` of oracle 4's SPKI where `producerKeyable` (implied by D8's gated direction, restated so that a mismatch names the field);
-  `rawSerial`, `rawSpki`, `rawSubject`, `rawIssuer`, extension values and the SCT pair set equal 3a's
-  where 3a accepts, else 3b's. The expected SCT pair set is the union over SCT extensions of a per-extension
-  expectation: the reference's pairs for that extension, or ∅ when the extension value's first octet is not `0x04`.
-  That octet is read by 3b's locator, never by revokt. An extension whose expectation is ∅ while 3a yields pairs is
-  recorded as `3A_HEADER_LAX`, so the comparison substitutes ∅ rather than skipping. Where 3a takes as extensions an
-  element with tag number 3 that is not a constructed context-specific `[3]` (a primitive `[3]`, or tag number 3 in
-  another class; decided by 3b's TBS walk), the reference extension table and SCT pairs are the §9.2 read (∅),
-  recorded as `3A_TBS_LAX`; the normalised Java fields equal oracle *i,v*'s, except that a `notBefore`/`notAfter`
-  difference from oracle 2 meeting the `CONSCRYPT_TIME_OFFSET` or `CONSCRYPT_TIME_JULIAN` condition (Java field
-  normalisation, above) is recorded, not a violation. A violation is a P0.
-  The count of platform-accepted inputs whose `encoded` has no raw-byte reference (3a rejects, and 3b does not locate
-  it: its re-encoding or its walk fails), other than inputs revokt does not parse on whose `canon(encoded)` oracle 4
-  rejects or for which no platform canon can be built, is a gate metric and must be zero on the committed corpora.
-- **D3 SCT classification**: mapping from 3a: no extension → `NO_SCTS`; `ParseError` → `NO_SCTS`
-  (an empty list is a `ParseError`; `x509-parser` 0.18.1 never returns `Ok([])`); `Ok(list)` → pair-set equality (D2), with the per-extension ∅ expectation for an inner identifier other than `0x04` (`3A_HEADER_LAX`); 3a's duplicate-extension error →
-  the union rule, recorded as a divergence class. Firefox's divergences and 3c's errors are
-  recorded as divergence entries, never gate failures. Firefox's decoder fails the whole list on version ≠ 0, trailing
-  bytes in the OCTET STRING and per-item length errors; mozilla::pkix rejects the certificate itself where an
-  end-entity certificate's SCT `extnValue` is not exactly one DER OCTET STRING (a non-minimal length on the inner
-  OCTET STRING, or bytes after it) and where it carries a second SCT extension (revision 46). A divergence is recorded
-  where revokt extracts pairs, so every recorded one is in the more-checking direction (revokt queries where Firefox
-  or the `rustls-upki` verifier would not); where revokt's list fails as well, §10 item 7 applies. Firefox is not an
-  oracle and is not run in CI; its stricter behaviour is argued here, and its divergences are hand-recorded
-  `D3_DIVERGENCE` entries (record schema) in the D7 corpus. A 3c error where revokt yields pairs is recorded, never a gate failure. A 3c pair that
-  revokt does not yield blocks the release until a spec revision resolves it; revokt follows §9.2, never 3c. A
-  further class, also against 3a only, is `3A_TBS_LAX`: 3a takes as extensions an element with tag number 3 that is not
-  a constructed context-specific `[3]` (`x509-parser` checks the tag number only), which the JDK and revokt do not, so
-  D2's reference for that certificate's extension table and SCT pairs is the §9.2 read (∅), asserted, not skipped. A
-  separate class, against 3a only, is `3A_HEADER_LAX`: 3a yields pairs under an inner identifier other than
-  `0x04`; webpki and revokt do not, and Firefox rejects the certificate. revokt's reading is equivalent to issuing without SCTs. For a key outside the filter's universe
-  a query answers arbitrarily. That is the M1 unverified-SCT residual (§10 item 7), unchanged by revision 33,
-  because every pair set revision 33 newly accepts is also produced by some well-formed list.
-- **D4 strictness bound (informational)**: revokt `Parsed` while every oracle rejects; the platform
-  rejects such input first.
-- **D5 crash-freedom and budgets**: no exception other than `ParseFailed`; allocation ≤ budget;
-  `-max_len` = `RevoktLimits.MAX_CERT_BYTES + 1` (262145), so the over-cap behaviour is asserted;
-  parse steps ≤ 8·len + 1024, asserted by a step counter in the replay; `-timeout=1`.
-- **D6 determinism and round trip**: `parse(b) == parse(b)`; offsets of TBS fields index `Cert.tbs` from its tag
-  octet and re-slice it to the reported values, and, shifted by the TBS content's start in `b` less `Cert.tbs`'s header
-  length, also re-slice `b` when the TBS header is definite; `parse(encoded_i,v)` has the same status and fields as
-  `parse(b)` whenever both are `Parsed`, for oracle 1 and for oracle 2 on the uber artifact and on the platform tier.
-- **D7 leniency corpus**: a committed corpus of real-world oddities, each entry carrying the
-  recorded outcome of every oracle version and revokt's required outcome (the SCT-list outcomes named below, which
-  follow from the rule above, and every outcome stated with an entry are normative; for an entry with no stated
-  outcome the corpus is the record): negative serial, serial over 20 bytes, serial with leading
-  zeros, TBS/outer algorithm mismatch (NULL vs absent), `GeneralizedTime` with fractional seconds,
-  `UTCTime` used for a date in 2050 or later, PrintableString/UTF8String/TeletexString/BMPString
-  names, an empty subject, duplicate extension OIDs, **two SCT extensions** (empty list first,
-  covered SCT second → union queries), on which Firefox rejects the certificate (`FIREFOX_SCT_STRICT`), an unknown critical extension, an SCT list whose declared
-  length is longer than its content (the list fails) or shorter (the items that fit extracted), a malformed first SCT followed by valid ones (the list fails), a non-minimal length on the SCT extension's inner OCTET STRING, `81 nn` with nn < 0x80 and `84 00 00 00 nn` (required outcome: `Parsed`, the list's SCTs extracted, `producerKeyable` unaffected because the SCT extension is opaque to the profile, K1), on which Firefox rejects the certificate (`FIREFOX_SCT_STRICT`), an inner length `0x80` or `0xFF` (the list fails), an inner identifier other than `0x04` that is tag number 4 (for example `0x44`, `1F 04`; `3A_HEADER_LAX`: no pairs), a constructed inner OCTET STRING (the list fails), a non-zero SCT version (extracted), a truncated last SCT (the items before it extracted), trailing bytes after the inner OCTET STRING (on which Firefox rejects the certificate), after the declared list region and inside an SCT after its signature (ignored), an SCT hidden in ignored bytes (never extracted), a zero-length signature (extracted),
-  an inner identifier that is not tag number 4, such as `0x30` (the list fails in revokt and 3a alike, not `3A_HEADER_LAX`),
-  the trailing-element cases of the §9.2 rule (bytes after `[3]`; an element between `subjectPublicKeyInfo` and `[3]`,
-  dropping the extensions; `[2]` before `[1]` and `[1]` twice, dropping them; constructed `[1]`/`[2]`; a primitive
-  `[3]`, ignored; an element with tag number 3 in another class or form holding an Extensions SEQUENCE (`03`, `23`,
-  `43`, `63`, `C3`, `E3`), ignored, `Parsed` and outside the profile (K2), `3A_TBS_LAX`; a stop element with a
-  multi-octet identifier (`9f 03` or `bf 03` holding the Extensions SEQUENCE; `9f 01 01 00`, `bf 02 01 00`, or `9f 1f`
-  and 31 octets, before `[3]`), `STRUCTURE`, which JDK 17 and later reject; two `[3]`, the second ignored;
-  bytes after the Extensions SEQUENCE inside `[3]` and after `extnValue`, ignored; anything after the INTEGER
-  inside `[0]`, `STRUCTURE`, with the flattening case whose producer SPKI differs; a zero-length primitive `[3]`
-  (`83 00`), `Parsed` and outside the profile; a constructed `[1]` then `[3]` carrying a non-minimal length, `Parsed`
-  and outside the profile (K1, and K2), a D8-gap entry because ct-go never visits `[3]` there and keys it), the
-  more-lenient-than-JDK cases (a v1 or v2 certificate carrying elements its version does not allow; unique-id content
-  that is not BIT STRING content), times with an offset (on a `UTCTime`, a `CONSCRYPT_TIME_OFFSET` record against oracle
-  2; on a `GeneralizedTime`, oracle 2 rejects), without seconds and with a day past the month's end
-  (2026-02-31, rolling over to 2026-03-03), a 64 KB extension, BER indefinite lengths, non-minimal definite lengths, and
-  a `Certificate` with trailing bytes; the envelope re-encodings (a non-minimal length on the outer `signatureAlgorithm`
-  or `signatureValue` header, the outer NULL parameters flipped, a non-zero unused-bits octet on an RSA
-  `signatureValue`, an indefinite outer `signatureAlgorithm`, an OID header `06 81 08` or a NULL as `05 81 00` inside
-  it, a `tbsCertificate` header with a long-form length carrying leading zero octets or an indefinite length, an
-  indefinite TBS with an indefinite Validity, subject RDN chain, `[0]`, or `[3]` down to an `extnValue` as
-  `04 80 … 00 00`, an outer AlgorithmIdentifier `30 80 <OID> 05 80 00 00 00 00`, an RSA `signatureValue` with
-  unused-bits octet `01` and the padding bit set; required outcome for each: `Parsed`, with
-  the `producerKeyable` and key bytes of the unmodified certificate and a `VERIFIED` link, since the profile reads
-  `Cert.tbs`; an indefinite TBS holding a non-minimal definite child (`02 81 …`, an SPKI `30 83 00 …`), which the
-  JDK accepts and fails to verify (`parse(b)` is `STRUCTURE`; oracle 1's read is `Parsed` through the platform
-  canon); and on the reject side an indefinite outer AlgorithmIdentifier holding a
-  non-minimal OID header (`30 80 06 81 08 … 00 00`), which the JDK rejects, and an indefinite `signatureValue`
-  (`03 80 <content> 00 00`, whether or not its content reads as a chain of minimal TLVs), which JDK 17 and later
-  reject; each `STRUCTURE`); and a CA-signed TBS whose extensions are followed by a trailing element with a
-  multi-octet tag (`9f 01 02 05 00`), presented with a definite and with an indefinite TBS header (`Parsed`, outside
-  the profile (K1, and K2 for the ignored element), the same outcome for both); and the D8-gap examples (a serial with non-minimal INTEGER
-  content, a keyUsage or basicConstraints value only zcrypto accepts, a `UTCTime` without seconds; each `Parsed` and
-  outside the profile).
-
-**Issuer corpus (zero tolerance).** Every certificate in Mozilla's `intermediates` Remote Settings
-collection, the CCADB all-certificate-records export (its PEMs from `AllCertificatePEMsCSVFormat` by `NotBeforeYear`,
-and from crt.sh by fingerprint where that export lacks one), the CCADB `MozillaAllUnexpiredPEMs` report (the source of
-the producer's program set), the JDK `cacerts` store, and Android's system
-store (for 0.1 taken from the AOSP `ca-certificates` sources of the pinned images; the 0.3 instrumented tier replaces it with the device read-back through the platform `X509Certificate.getEncoded()`),
-under D1 and D2 with no tolerated violation; each snapshot is recorded in revokt-corpus with its URL, its retrieval
-time and the SHA-256 of the raw download. The **producer SPKI check** (revision 42) runs against the committed fixture
-generation (`corpus/clubcard`: its full filter and each delta, each with its own index map, §6.2, §6.3). The
-producer's program set is the report's intermediates that zcrypto parses, that are not revoked, that zcrypto verifies
-to a Mozilla root for serverAuth, and that certificate-transparency-go's `ParseCertificate` returns with no error,
-non-fatal included, each keyed by `SHA-256(RawSubjectPublicKeyInfo)`; every index is a subset of the program set the
-producer computed for that generation. Oracle 4 runs on `canon` of each certificate, as everywhere (revision 43):
-on every `ct`-path input its TBS, and so the SPKI it hashes, is the TBS of the DER the producer would read (the PEM-
-or store-decoded DER), since `canon` keeps the TBS content and ct-go's parse requires minimal headers; the envelope
-can differ (an outer `signatureAlgorithm` other than the TBS's, which `canon` replaces and ct-go rejects on the DER),
-which leaves the SPKI unchanged. revokt's `rawSpki` is taken from the DER (and from each platform's `encoded` under
-D2). (1) **SPKI agreement**: for every issuer-corpus certificate oracle 4 parses through
-`ct` (a superset of the program set: it also holds ct-go's non-fatal x509 errors), `SHA-256(rawSpki)` equals oracle
-4's SPKI hash; a difference is a producer/revokt SPKI-byte divergence and fails, and a certificate revokt does not
-parse counts as one where oracle 4's hash is an index key (elsewhere D1 and D1-dom decide). (2) **Index coverage**:
-every key of each index equals oracle 4's `ct` SPKI hash of an issuer-corpus certificate whose `canon` is its DER (one
-the producer could read), and so, by (1), revokt's;
-for a key no snapshot covers (for example, its certificate left the report after the generation), every CA
-certificate CT holds for that SPKI hash is fetched (crt.sh, by `spkisha256`, its id and retrieval time recorded in
-revokt-corpus) and admitted, and a key still uncovered fails.
-
-**Corpus record schema (one for all four kinds; committed).**
-`{sha256, path, revokt: {outcome, rawSerial, spkiSha256, scts[]}, oracles: [{id, version, outcome, read?, holds?,
-fields | unavailable}], class ∈ {D7_LENIENCY, D2_REENCODE_ALLOW, D3_DIVERGENCE, D1_DOM,
-KEYABILITY_GAP, FUZZ_FINDING, ISSUER_CORPUS}, divergence: String? (required for D3_DIVERGENCE: `3A_HEADER_LAX`, `3A_TBS_LAX`, `CONSCRYPT_TBS` (D2: `Cert.tbs` differs from oracle 2's `getTBSCertificate()`), `CONSCRYPT_TIME_OFFSET` (D2: oracle 2 drops a `UTCTime` differential, revision 41), `CONSCRYPT_TIME_JULIAN` (D2: oracle 2 reads a pre-1582 time in the Julian calendar, revision 44), the
-duplicate-extension class, or a named 3c/Firefox class), keyability: {parser, clause, zlint}? (required on every D8-gap entry whatever its class, and on every `KEYABILITY_GAP` record: `parser ∈ {ct, lax, zc}` from oracle 4, `clause` a `KeyabilityClause`, `zlint` the pinned zlint result), justification, added}`. Goldens for 3a/3b/4 are computed at admission
-so the PR replay evaluates D1–D3 and D8 offline, JDK-only. A platform oracle's entry carries `holds` on an oracle-dependent record (`D1_DOM`, `D2_REENCODE_ALLOW`,
-`KEYABILITY_GAP`, the `CONSCRYPT_*` divergences): whether the class holds on that version. Its `version` is the
-matrix's name for it: the JDK feature release, the Conscrypt uber release, or on the platform tier the system-image
-revision, with the Conscrypt APEX version recorded beside it; a JDK patch or an APEX update that changes an outcome
-fails the run until the records are regenerated. Oracle 1's `read` is the SHA-256 of the bytes revokt reads
-for that version where they differ from the input (the read fallback), recorded with their goldens; a matrix job that
-meets a read without goldens fails as infrastructure until they are recorded, never as a violation. The release review
-mechanically lists entries whose oracle version has left the matrix. The seed corpus (≥ 100 000 CT leaves of the
-enrolled CAs, below; the `x509-limbo` vectors, the D7 corpus, the issuer corpus) is pinned by a committed SHA-256
-manifest and a corpus-repository tag.
-
-**The seed corpus's CT leaves** (revision 45) are two sets. The **log sample** reads random entries of every
-CRLite-enrolled log and drops CT test traffic: the leaves whose issuer Name is one of the test issuers of Appendix A,
-which log operators and monitors use to test logs and no root program trusts. The **crt.sh top-up** adds, for each key
-of the fixture generation's indexes, at most 120 of the most recently issued certificates (issued in the last 400 days)
-of the crt.sh CAs whose public key hashes to that key that are valid at the top-up's start and cannot issue
-certificates; crt.sh holds a precertificate and its final certificate as two. Nothing crt.sh sends is trusted: a
-certificate is kept only when it is one DER Certificate with nothing after it, minimal lengths in the headers checked
-(the Certificate, the TBSCertificate's header, the AlgorithmIdentifier and its OID, the BIT STRING) and a v3
-TBSCertificate, whose signature verifies under that key, and a TBSCertificate already kept, in either set, is not kept
-again, so an attacker on the path can withhold certificates, which the recorded per-key counts show, but not add one. A
-leaf counts for an index key only when the test JDK verifies its signature under the key of an issuer-corpus certificate
-whose SPKI hashes to that index key and whose subject is the leaf's issuer; at least 100 000 such leaves are pinned, a
-precertificate and its final certificate counting as two. The index keys are those of the fixture generation's indexes,
-a stand-in for the live filters' issuers, and are taken again whenever the fixture generation changes. An index key with
-no such certificate in crt.sh, or whose crt.sh query timed out, has none from the top-up, recorded per key with the
-counts of certificates returned, rejected, filtered, duplicated and kept and any CA's timeout; its leaves in the log
-sample still count.
-
-**Generators.** (1) Mutational, Jazzer byte-level, seeded from the pinned seed corpus. (2)
-Structure-aware: a DER grammar generator for `Certificate` mutating at TLV level (length forms, tag
-classes, element reorder, duplicate and dropped elements, extension insertion, SCT-list specific
-mutations, serial and SPKI variants, algorithm-identifier parameter variants). (3) Platform-accepted
-bias: a mutant oracle 1 or 2 accepts enters the **secondary corpus** only if it adds revokt-parser
-coverage (`-merge=1` over the accepted set) or is a D1/D2/D3 divergence; hash-keyed, capped by
-entry count and bytes, stored in the corpus repository, re-seeded each run.
-
-**Tiers and matrix.** Fuzzing runs on one pinned JDK ≥ 22 (Panama) with oracle 1 of that JDK, one Conscrypt uber
-artifact and 3a/3b/3c in-process, oracle 4 out of process; one ClusterFuzzLite job per generator. The **version
-matrix** is a replay of the union corpus (committed, secondary, divergence): one job per JDK, each running every
-Conscrypt version of the matrix, with 3a/3b/4 goldens read from the records so no matrix job needs a native oracle.
-Versions are named in a committed matrix file, `gradle/oracle-matrix.properties` (JDK: 17, 21, the current LTS, the
-current feature release, each at its latest patch at run time; the nightly's JDK EA release, rolled by hand; Conscrypt uber: current and previous minor,
-named by their catalog keys; Android system images by revision (from 0.3), with the Conscrypt APEX version logged per
-run since it is updated out of band) with the roll rule "add the new version, keep the old until its support ends",
-except that the bytecode target (JDK 17) stays while it is the target. A nightly job replays the committed corpus
-against the newest JDK EA and fails on any new D1 violation against the recorded baseline. A Conscrypt release newer
-than the matrix's current one fails the nightly, and so blocks a release, until it is admitted like any dependency
-(checksums and signing key verified) and rolled into the matrix, after which every PR replays it; no unverified
-Conscrypt artifact is resolved in CI. A scheduled **producer job** (weekly, on every change to the producer,
-certificate-transparency-go, zcrypto or Go pin, and before each release) builds oracle 4 at the pin and at
-`mozilla/crlite` `main`, replays D8's gated direction over the union corpus with both, and runs at least 100 000 fresh
-entries from CRLite-enrolled logs, precertificates included, through oracles 1 and 4 and the profile. A violation at
-the pin is a P0; one only at `main` is a P0 for the next release and bumps the pin in a spec revision, since live
-filters come from Mozilla's current producer. The sample's gap by clause is published with each release; a new clause,
-or D8-gap entries above 10^-4 of the sample's unexpired entries (precertificates and certificates counted alike),
-needs a recorded decision before the release. This per-release check on fresh entries is separate from the D8 gap's
-re-decision on the pinned seed corpus (§9.2 D8), which can reopen the D8 decision itself.
-
-**Scope limits, stated.** The oracle set is a version matrix, not a proof; platform parsers drift
-and the platform Conscrypt differs per device. `Revokt.evaluate` over raw bytes is outside the
-platform-accepted premise and is documented as such (§4).
-
-**Acceptance.** 0.1 gate: zero D1, D2, D3 and D8 violations on the pinned seed corpus, `x509-limbo`, the D7 corpus and
-the issuer corpus against oracles 1 (every JDK in the matrix), 2 (uber versions in the matrix), 3a/3b and 4; the
-producer SPKI check green; the D8-gap baseline recorded, and zero on the real end-entity fixtures; zero
-platform-accepted inputs without a raw-byte reference, outside the unparsed inputs D2's metric excludes; Kover branch
-coverage of the parser package ≥ 90 % measured over the committed replay (fuzz-run coverage is reported only). 0.3
-gate: the same replay on the platform Conscrypt tier (API 26, 31, 34, 36) at zero tolerance. Continuous: no open D1,
-D2 or D8 finding at any release; the divergence, D1-dom and D8-gap records reviewed at each release with every entry
-justified in writing.
+The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differential parser oracle), is [test-plan.md](test-plan.md), with its section numbers kept.
 
 ## 10. Security considerations
 
@@ -4575,7 +1601,7 @@ justified in writing.
      be classified unrelated; at the leaf it is then explored regardless of a related path (§5.1
      deferral rule, custom canonicaliser), below the leaf only while no related path exists at that
      node (a related path there is itself sound: only the honest key verifies a real certificate and
-     a recovered key cannot reach an anchor), so misclassification alone no longer yields `NotFound`;
+     a recovered key cannot reach an anchor), so misclassification alone never yields `NotFound`;
      what remains is cost and order: the unrelated loop always runs at the leaf (bounded by
      `presented − 1`) and junk ahead of the misclassified issuer can exhaust the budgets first
      (`PATH_BUDGET_EXCEEDED`); the PKIX fallback covers the constraints and verifier residue for
@@ -4588,7 +1614,7 @@ justified in writing.
   2. Divergence between the delegate's constraints and `CertPathBuilder("PKIX")` or the injected
      verifier can leave a chain the platform trusts unchecked in `DEFAULT`; it is reported as
      `NO_ISSUER(PLATFORM_ONLY)` and `STRICT` rejects it.
-  3. **Closed (revision 19).** The anchor snapshot is built synchronously before any handshake can
+  3. **Closed.** The anchor snapshot is built synchronously before any handshake can
      go past flow step 1 on both platforms (inside `start()`, at wiring, or on `fetcherTrustManager`'s
      first handshake), so there is no startup window; the only failed-build states are
      `fetcherTrustManager`'s: its `start()` build (`FETCHER_TRUST_UNAVAILABLE`, syncs `FAILED` without
@@ -4601,23 +1627,23 @@ justified in writing.
      main-thread disk read creates its trust managers before `start()`.
   4. `MAX_RELATED_PER_LEVEL = 64` rejects honest nodes with more than 64 same-name certificates;
      unknown in the Web PKI, possible in bridge PKIs, which are out of scope for TLS clients. Since store anchors come
-     first at every depth (revision 57), 64 snapshot anchors named like a node's issuer push a presented issuer past
+     first at every depth, 64 snapshot anchors named like a node's issuer push a presented issuer past
      the cap at that node, the leaf or below it; the trust store controls that, not the server, as in Firefox, where roots come first.
   5. CRLite's (issuer key, serial) model: a certificate revoked under one issuer key and re-presented
      under a cross-issuing key with a different serial is a data-model limit, not a walker defect.
   6. The named M1 Android residual (§5.2), including any app whose NSC carries a `<domain-config>`, where `RootTrustManager` rejects a null host: the plain-delegate binding and any path where the
      null-host extension call is unavailable.
-  7. **Decided (revision 11): kept; revision 33 narrows the Firefox match.** A certificate issued without
+  7. **Kept, narrower than Firefox.** A certificate issued without
      embedded SCTs, or whose every SCT list fails under §9.2 (for example an empty list, a first item that fails, an inner identifier other than `0x04`; §9.2 states every case), yields `NO_SCTS`, which allows in `DEFAULT`: an issuance-time
      opt-out from checking. Firefox skips CRLite without usable SCT timestamps and falls to OCSP, which
      revokt does not do. Firefox rejects the certificate outright where the SCT extension's `extnValue` is not exactly
-     one DER OCTET STRING, as with an inner identifier other than `0x04` (revision 46). `STRICT` rejects; the `rustls-upki` verifier rejects a malformed list (§3.2
+     one DER OCTET STRING, as with an inner identifier other than `0x04`. `STRICT` rejects; the `rustls-upki` verifier rejects a malformed list (test-plan.md §9.3
      divergence). A list §9.2 accepts in part, which Firefox and webpki fail whole, is queried, so `STRICT`
      then sees the CRLite answer, not `NO_SCTS`. A list in an inner OCTET STRING with a non-minimal length, or followed
-     by bytes in `extnValue`, is also queried, and so are two SCT extensions; Firefox rejects such a certificate
-     (revision 46). SCTs are not verified in M1: a forged covered SCT on a key
-     outside a filter's universe gets an arbitrary answer, a residual that predates revision 33.
-  8. **Decided (revision 11): kept; revision 34 widens `PRODUCER_UNKEYABLE`.** `PARSE_FAILED` on the leaf allows in
+     by bytes in `extnValue`, is also queried, and so are two SCT extensions; Firefox rejects such a certificate.
+     SCTs are not verified in M1: a forged covered SCT on a key
+     outside a filter's universe gets an arbitrary answer, a residual.
+  8. **Kept, with `PRODUCER_UNKEYABLE` widened.** `PARSE_FAILED` on the leaf allows in
      `DEFAULT`, so a leaf encoding the platform accepts and the Kotlin parser rejects is unchecked. The subscriber
      controls leaf content only at issuance, under CA linting, and the §9.2 differential parser oracle (D1, a 0.1
      gate) and, on the JDK, the §9.2 read fallback are the mitigation.
@@ -4633,7 +1659,7 @@ justified in writing.
      controls. `STRICT` rejects a gap leaf even when it is valid. The gap is measured per release (§9.2 D8 gap). No
      entry of a 200 230-entry CT sample on 2026-10-23 fell outside a strict DER profile, and its 159 270 RFC 6962
      entries showed no K5 type or K8 shape outside the profile (Appendix A); the full K1–K8 gap is first measured on
-     the pinned seed corpus's leaves of index issuers (revision 45: 0 of 117 603 unexpired leaves, Appendix A).
+     the pinned seed corpus's leaves of index issuers (0 of 117 603 unexpired leaves, Appendix A).
 
      The profile reads only the signed content of `tbsCertificate`, and the parser accepts every unsigned header form
      the JDK verifies (§9.2), including the indefinite chain the JDK re-encodes and the cleared signature padding,
@@ -4643,14 +1669,14 @@ justified in writing.
      Firefox has no keyability notion. mozilla::pkix rejects most gap encodings before CRLite, and accepts the serial
      forms (negative, zero, long) and the explicit `FALSE` that the profile also accepts.
 
-     Considered and not adopted (revision 34): deciding keyability at the query, after the walk. That would make the
+     Considered and not adopted: deciding keyability at the query, after the walk. That would make the
      outcome exemptable under `anchorIn`, and `NOT_ENROLLED` under an unenrolled issuer. The profile already accepts
      the private-PKI serial forms, so the remaining unkeyable leaves are encodings that mozilla::pkix and BoringSSL
      also reject. This reopens if a gap entry under a private anchor is reported.
   9. Walker CPU per uncached connection is bounded by `MAX_VERIFICATIONS`, about 250 ms of RSA-4096
      on a mid-range ART device, and both caches are defeated by one varying junk byte per connection;
      `MAX_PRESENTED` bounds parsing (counted over the raw chain, before dropping). The PKIX fallback's build is outside
-     these budgets (revision 57, from the #134 review record): `CertPathBuilder` has no candidate budget and backtracks through every name-matching
+     these budgets: `CertPathBuilder` has no candidate budget and backtracks through every name-matching
      candidate (§5.1 "PKIX fallback contract", Appendix A). It runs at most once per uncached decision, only after a
      walk `NotFound` or `Budget`, and only on a chain of at most `FALLBACK_MAX_PRESENTED` (8) presented certificates,
      which bounds what a server can stuff in front of it; its result is cached under the path key, which the same
@@ -4670,17 +1696,7 @@ justified in writing.
      `CertPathBuilder` (and the delegate itself) fetches AIA issuers over the network inside the
      handshake; the fallback may then find a path the walker called `NO_CANDIDATE`; revokt neither sets
      nor clears the property (unverified beyond `sun.security.provider.certpath.Builder.USE_AIA`).
-  14. **`ISSUER_UNVERIFIED` relabelling (revision 57)**: a server can turn `NO_ISSUER` into `ISSUER_UNVERIFIED` off
-     the bindings, by presenting a related certificate whose own signature algorithm is unsupported, even one that
-     verifies nothing. The relabel is verdict-neutral under the presets and the built-in exemptions: the two rules
-     share one outcome and one exemption; `hostIn`, `hostSuffixIn` and `anchorIn` cannot tell the labels apart; and
-     on a trust-manager binding (and `Revokt.evaluate`) every walk `NotFound` whose fallback failed or is disabled is
-     `NO_ISSUER(PLATFORM_ONLY)`,
-     so `hostSuffixIn(…) and platformOnly()` matches either way. Off the bindings (`Evaluator.evaluate`, the
-     walker-only harness) the label still differs, so a consumer's own exemption that reads `rule` or `path.status`
-     there can still tell the two apart; that is consumer code, not a revokt verdict. A candidate's key or curve OID
-     never counts. `anchorIn` never matches on an empty reported path (§4).
-  15. **Keyability is a prediction.** The producer keys the logged precertificate (about half of CT entries). It also
+  14. **Keyability is a prediction.** The producer keys the logged precertificate (about half of CT entries). It also
      needs the logged `chain[0]` to parse, and `chain[1]` behind a precertificate signing certificate. revokt sees
      only the final certificate, so `producerKeyable` predicts the producer's result through RFC 6962's identical-TBS
      rule.
@@ -4691,6 +1707,15 @@ justified in writing.
       - **Two SPKI encodings**: two enrolled issuer certificates carry one key with different SPKI encodings, for
         example RSA with and without NULL parameters. A query under the encoding Mozilla did not key falls outside the
         universe.
+  15. **Constrained sub-CA.** A holder of a CA key under a real anchor can certify a recovered key, and the walker then
+     reports only that benign key as long as the honest intermediate is not presented. This includes a technically
+     constrained sub-CA whose `pathLenConstraint`, name constraints or EKU should forbid it: the walker checks
+     `cA = TRUE` on an issuer and enforces none of `pathLenConstraint`, keyUsage `keyCertSign`, name constraints or EKU
+     nesting there. So the holder of a `pathLen 0` sub-CA S under a real root can sign C, a CA certificate for a key
+     recovered from a revoked leaf's signature, and `[L, C, S]` walks to `Found([L, C, S, R])` with C's benign key as
+     the only leaf-issuer key; x509-limbo's `pathlen::intermediate-violates-pathlen-0` likewise walks to `Found`. On
+     the bindings the platform validates the chain first (step 1), and a chain that breaks those constraints does not
+     reach the walker.
 - Feed authenticity: `SIGNED` by Mozilla/Google signatures; `MIRROR`/`SYSTEM` by TLS or the OS,
   **bootstrap only** (§7.3): never displaces a higher-class generation, evicted by the first signed
   one; `BUNDLED` is project-attested and availability-only. The §7.3 residual: a fresh install without a
@@ -4706,30 +1731,28 @@ justified in writing.
   staleness always visible; no ceiling in `DEFAULT` (upki's model); `rejectStaleAfter` is the
   optional ceiling; a changeset dated beyond local now + `clockSkew` is refused while a generation that is not itself `clockBehind` exists, and installed without advancing the watermark or cursor when none does or the live one is `clockBehind` (§6.3), so a single
   future-dated signed record cannot pin the watermark in either case; a future-dated seed installs with the watermark at its signed timestamp, which only a newer signed changeset can pass, as for any seed. The effective watermark is never below the live `SIGNED`
-  generation's timestamp unless that generation is `clockBehind` (§6.3, revision 56), so losing `updater.json` reopens
+  generation's timestamp unless that generation is `clockBehind` (§6.3), so losing `updater.json` reopens
   no rollback. After `resetState()` the rollback bound is the
   seed's timestamp once the start task has swapped the live generation; until then the watermark floor still holds it
-  at the old live generation's timestamp, which is stricter (revision 57, from the #190 review; residual:
-  `updater.json` is deleted with the store).
+  at the old live generation's timestamp, which is stricter (residual: `updater.json` is deleted with the store).
 - Self-lockout bounded: a signed revocation of the signed source's own certificate holds fetches 24 h and is
   then reported as `feedHostRevoked` while fetches proceed (the payload is authenticated end to end, so
   TLS authenticity to that host protects nothing an attacker could exploit); a TLS-only mirror's host is
   blocked while its current chain is hit (`updateBlockedBySelf`); this is the one deliberate departure from Firefox's behaviour on the feed path; untrusted bytes hardened per C2SP with allocation budgets and per-kind download caps,
   so an unsigned manifest cannot exhaust the heap; disk and metered bandwidth per sync are bounded only by the count
-  and per-file caps, about 4 GiB from a malicious mirror, since there is no per-sync total (revision 57, the
-  maintainer's decision on #137, as in upki and Firefox); its names are checked and each request
+  and per-file caps, about 4 GiB from a malicious mirror, since there is no per-sync total (as in upki and Firefox); its names are checked and each request
   is the configured mirror URL followed by a checked name (§7.3), so an unsigned name never names a path outside its
   generation directory and adds nothing to a URL but that name; redirects are followed only by the shared
   `RedirectingFetcher` under §7.3's per-hop rules (each hop read by the strict grammar shared with the x5u URL, IP
   literals allowed, and fetched as revokt re-serialises it, `FetcherTls` and the §8 host checks on every hop, at most
-  10 and no loops, one deadline, credentials dropped across origins and kept dropped, stricter than reqwest; revisions 56 and 58),
+  10 and no loops, one deadline, credentials dropped across origins and kept dropped, stricter than reqwest),
   and a manifest or generation with no filters or no coverage is refused, so an empty mirror cannot turn `NO_DATA`'s
   reject into an allow; residual: a mirror's `If-Modified-Since` comes from the local clock, so a clock running ahead
   can draw a false 304 and keep an older mirror generation, as with upki;
-  x5u allowlisted, capped and path-validated, following mozilla::pkix's chain checks (§7.1, revision 54); the
+  x5u allowlisted, capped and path-validated, following mozilla::pkix's chain checks (§7.1); the
   TLS parser is at least as lenient as the platforms,
   verified differentially (§9.2), and `PARSE_FAILED` applies to the leaf only.
-- Crypto never implemented in Kotlin except the raw-to-DER ECDSA conversion, the `ECDSA-Sig-Value` decode and the r and s range comparison (§3, revision 54) and the §9.2 profile's EC on-curve check (public field arithmetic over P-256, P-384 and P-521, no secret data); `UNSUPPORTED` is decided
+- Crypto never implemented in Kotlin except the raw-to-DER ECDSA conversion, the `ECDSA-Sig-Value` decode and the r and s range comparison (§3) and the §9.2 profile's EC on-curve check (public field arithmetic over P-256, P-384 and P-521, no secret data); `UNSUPPORTED` is decided
   by a startup probe, never by a server-chosen exception; provider exceptions never escape the
   trust manager.
 - Privacy: no per-connection lookups. Blast radius mitigated by `Enforcement.OBSERVE`, `shadowPolicy`, the runtime
@@ -4751,8 +1774,8 @@ APIs outside the promise, the growability contract in §4.
 | Release | Scope | Estimate |
 |---|---|---|
 | 0.1 | engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3; the walker fuzzer itself is 0.2, with the walker); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8 (gated direction; D8 gap reported)); JSON tree and canonical JSON (§7.1; the content-signature payload builder is 0.2); clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; oracle CI | 5 weeks |
-| 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists; `start()` over an empty or throwing default trust store succeeds, and `evaluator.evaluate` throws `IllegalStateException` until an index exists; `sync()`, `syncAsync()` and `syncBlocking()` are internal and the updater syncs only on its schedule, while `SyncResult`, `SyncOutcome` and `SyncStage` ship public; each source's `FetcherTls` carries the platform `fetcherDelegate` only, so the §8 fetcher policy does not run in 0.2); candidate index and walker per §5.1, the PKIX fallback (the jvmMain `PkixPathBuilderFallback`, which Android also runs through ojluni, tested on the JVM; the Android instrumented run is 0.3), the §9.2 read fallback in the JVM binding, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3) with the §9 `Rule` model's [0.2] tests and the §9 API rows (revision 56); **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation (the §9 content-signature fixtures less the three tagged [0.3]); CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its Android and OkHttp fetcher halves; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
-| 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2 (`BLOCKED_BY_SELF`, `MIRROR`, and the Android and OkHttp fetcher halves); the §9 content-signature fixtures tagged [0.3] (the restart with the clock behind, and the two system-cache `index.bin` items); caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; the fetcher trust managers (`fetcherTrustManager` and the per-source instances in `FetcherTls`) with the §8 fetcher policy, `FETCHER_TRUST_UNAVAILABLE` and the `BLOCKED_BY_SELF` hold; public `sync()`, `syncAsync()` and `syncBlocking()`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `shadowPolicy`, `status()` and `state`, with the §9 `Rule` model's [0.3] tests; Android instrumented suite including the PKIX fallback, the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (revision 38's Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
+| 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists; `start()` over an empty or throwing default trust store succeeds, and `evaluator.evaluate` throws `IllegalStateException` until an index exists; `sync()`, `syncAsync()` and `syncBlocking()` are internal and the updater syncs only on its schedule, while `SyncResult`, `SyncOutcome` and `SyncStage` ship public; each source's `FetcherTls` carries the platform `fetcherDelegate` only, so the §8 fetcher policy does not run in 0.2); candidate index and walker per §5.1, the PKIX fallback (the jvmMain `PkixPathBuilderFallback`, which Android also runs through ojluni, tested on the JVM; the Android instrumented run is 0.3), the §9.2 read fallback in the JVM binding, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3) with the §9 `Rule` model's [0.2] tests and the §9 API rows; **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation (the §9 content-signature fixtures less the three tagged [0.3]); CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its Android and OkHttp fetcher halves; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
+| 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2 (`BLOCKED_BY_SELF`, `MIRROR`, and the Android and OkHttp fetcher halves); the §9 content-signature fixtures tagged [0.3] (the restart with the clock behind, and the two system-cache `index.bin` items); caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; the fetcher trust managers (`fetcherTrustManager` and the per-source instances in `FetcherTls`) with the §8 fetcher policy, `FETCHER_TRUST_UNAVAILABLE` and the `BLOCKED_BY_SELF` hold; public `sync()`, `syncAsync()` and `syncBlocking()`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `shadowPolicy`, `status()` and `state`, with the §9 `Rule` model's [0.3] tests; Android instrumented suite including the PKIX fallback, the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (the Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
 
 About 14 weeks. **M2** (0.4, then 1.0): preloading as a second candidate set, exhaustive re-walk on L1/L2
 hits, OneCRL including anchors, denylist, CRLSet, `NOT_ENROLLED` split, the §5.2 residual closed,
@@ -4761,25 +1784,11 @@ per-anchor distrust over every walker path. **M5**: MTC through `Evaluator.evalu
 
 ## 12. Approach 1 vs approach 2 for crema
 
-| | Approach 1 (embed upki via FFI) | Approach 2 (revokt) |
-|---|---|---|
-| CRLite engine | upstream `upki` (Rust) | our port, two oracles end to end, plus upki as a CI-only second engine |
-| What the FFI provides | three functions; config file; no fetch; no Android prebuilt | n/a |
-| Still written in Kotlin either way | trust managers, walker, signed fetch, canonical JSON, seeds, policy, Android lifecycle, OneCRL, CRLSet, M3–M5 | same |
-| APK impact | ~+320 KB `.so` per ABI, 16 KB page alignment, cargo-ndk matrix | ~+100–150 KB dex; plus the bundled seed in both approaches (1.6 MB `compat`, 6 MB `default`, incompressible) |
-| Per-check cost | opens files per check | in-memory columns |
-| Failure mode | native crash takes the process | Kotlin exception |
-
-Recommendation: ship **Phase 0 in crema now**; build revokt with the Kotlin engine, which stays
-published regardless. **Publication trigger** for `revokt-engine-upki`: if upki's library API
-(`RevocationCheckInput::new`, `Store::check`) is stable, the `upki` crate builds for Android targets
-under cargo-ndk, and upki gains verify-time CT or MTC evaluation before M3 starts, publish
-`revokt-engine-upki` with `revokt-upki-shim` as a separately licensed artifact and re-evaluate a
-separate CT/MTC evaluator seam backed by upki for M3 onward; `RevocationEngine` stays CRLite-only (the query ABI is ours, so upki's C ABI is no longer a condition).
+Not normative: [docs/design/crema-approach.md](../design/crema-approach.md).
 
 ## 13. Naming and publishing
 
-**Decision (revision 11): `revokt`.** Verified 2026-10-21: Maven Central `dev.revokt` free;
+**Decision: `revokt`.** Verified 2026-10-21: Maven Central `dev.revokt` free;
 `revokt.dev`, `.io`, `.org` free; GitHub handle `Revokt` taken (inactive since 2023); `revokt.com` is
 a live SaaS called "Revokt" (registered 2026-03-12), unrelated field. Consequences:
 1. Register `revokt.dev` and claim `dev.revokt` on Central before the first tag; the repository lives
@@ -4806,582 +1815,4 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
 
 ## Appendix A. Verification log (2026-10-21, additions 2026-10-22)
 
-- Remote Settings `monitor/changes`: `cert-revocations` 1792598222216, `intermediates`
-  1792465022155, `onecrl` 1792274405312, `ct-logs` 1792002263015.
-- `cert-revocations`: 18 records, 9 per channel = 1 full (effective 2026-10-17) + 8 deltas through
-  2026-10-21. Signed by `onecrl_202402`; x5u chain leaf P-384 (2026-09-06 to 2026-11-25) →
-  `Content Signing Intermediate` (P-384) → `root-ca-production-amo` (RSA-4096, 2024-02-01, SHA-256 `C8A80E9A…A106DB`).
-- **`root-ca-production-amo`, the §7.1 pinned root** (revision 49, verified 2026-11-05): SPKI SHA-256 (over the DER
-  `SubjectPublicKeyInfo` TLV) `3317FA45154AC7DA55694D3782316056471FC147C04AED3E03FFE99565B1E2E7`; certificate SHA-256
-  `C8A80E9AFAEF4E219B6FB5D7A71D0F101223BAC5001AC28F9B0D43DC59A106DB`; self-signed, subject `C=US, O=Mozilla
-  Corporation, OU=Mozilla AMO Production Signing Service, CN=root-ca-production-amo`, RSA-4096, valid 2024-02-01 to
-  2200-12-03. Two independent sources give byte-identical DER:
-  - the terminal certificate of the live x5u chain the `cert-revocations` changeset names (signer `onecrl_202402`,
-    `content-signature-2.cdn.mozilla.net/g/chains/202402/onecrl.content-signature.mozilla.org-2026-12-15-22-12-40.chain`),
-    a rotated chain: its leaf is valid 2026-09-26 to 2026-12-15, where the bullet above recorded 2026-09-06 to
-    2026-11-25. Its leaf and `Content Signing Intermediate` verify up to it under `openssl verify`;
-  - Firefox's built-in content-signature production root, `security/manager/ssl/content-signature-prod.pem` in
-    `mozilla-firefox/firefox` at `cac25a6` (the file last changed in `3ad0ffc`, bug 1914064), the anchor of
-    `nsIContentSignatureVerifier.ContentSignatureProdRoot`.
-
-  application-services' Remote Settings client pins the same certificate SHA-256 (`ROOT_CERT_SHA256_HASH_PROD`,
-  `components/remote_settings/src/client.rs` at `9ef6d76`). The SPKI hash was computed twice with OpenSSL 4.1.0: from
-  `openssl x509 -pubkey` re-encoded as DER, and from the SPKI TLV cut out of the certificate at its DER offset.
-- `onecrl`: 1,901 records; 645 `enabled = false`.
-- Filters begin `03 00` (v3) on both channels; `default` 6,006,419 B, `compat` 1,574,015 B.
-- Firefox: `crlite_channel` `"compat"` on Android; `crlite_mode` 2; `crlite_timestamps_for_coverage` 1;
-  OCSP fallback when CRLite is stale or absent.
-- C2SP `upki-revocation@v1.0.0`: the spec says v4; `clubcard-crlite` (the crate upki depends on, `bincode` feature) decodes version bytes 3 and 4, so upki reads Mozilla's v3 filters as served (verified 2026-10-22 in rustls/upki `Cargo.toml` and clubcard-crlite `Encoding::read`); aggregation over covering filters only; selection goes through `index.bin`'s log directory (`Index::check` binary-searches it per SCT and loads only the named filters). **Closed in revision 56** (the 0.2 verification of overlapping windows): upki v1.0.1's `Index::write` (`upki/src/revocation/index.rs`, from line 156) pushes, for each manifest file and each `(log, interval)` of its coverage, one entry, so a full and its deltas sharing boundary timestamps are separate entries per (log, filter); the §3.2 selection-equivalence check admits them. **The index magic** (revision 56): upki v1.0.1 reads `upkiidx1` and the legacy `upkiidx0` (`index.rs`, the header read); revokt reads `upkiidx1` only and rejects `upkiidx0` (§3.2).
-- C2SP `upki-revocation@v1.0.0` filenames, read 2026-11-04 at the pinned commit `7e6ded4` (`upki-revocation.md`, "Revocation cache directory layout", "Header" and "Filename table"): filter filenames "MUST be between 1 and 32 bytes long and MUST consist only of the ASCII characters `A`–`Z`, `a`–`z`, `0`–`9`, hyphen (`-`), period (`.`), and underscore (`_`)"; "The names `.` and `..` MUST NOT be used"; an index naming a file that violates these is malformed; each name slot is 32 bytes, zero-padded; `num_filenames` limits an index to 65535 files. The spec states no uniqueness rule for filenames, does not reserve `index.bin` as a filter name, and sets no size cap on `index.bin`: revokt's derived names (§6.5), its `index.bin` reservation (§6.3) and its 1 MiB cap (§3.2) are its own rules (revision 48), as are a mirror manifest's checks of reserved names and of uniqueness ignoring ASCII case, and its ban on a trailing `.` (§7.3, revision 52). `C2spIndex.isFilename` implements exactly the filename rule.
-- `upki.rustls.dev`: GitHub Pages, `default` only, v4 transcode; `upki-mirror` verifies the
-  attachment hash, not the content signature. `upki-mirror` writes only `manifest.json` and the filter files;
-  `upki fetch` builds `index.bin` locally from the manifest's files in its cache directory (v1.0.1
-  `upki/src/revocation/fetch.rs`, `PlanStep::SaveIndex` → `Index::write`, read 2026-11-06 at tag v1.0.1, commit
-  `9821cce`; `upki-mirror` there names no `index.bin`). For a filename over 32 bytes, `Index::write` returns no
-  index; revokt instead gives the file its §6.5 derived name
-  and builds the index under it (§7.3, revision 53). upki FFI: three functions; no Android prebuilt.
-  `rustls_upki::Policy` defaults: `missing_data = Error`, `cert_not_covered = Allowed`, `cert_has_no_scts = Allowed`.
-- **Producer key bytes** (`mozilla/crlite` `main`): `PrepareSetMember` in `go/storage/certdatabase.go` (about line 278) calls
-  `types.NewSerialFromCertificate`, which unmarshals the raw TBS with Go `encoding/asn1` into a
-  `RawValue` and keeps `SerialNumber.Bytes` (the INTEGER content bytes, no normalisation); the issuer
-  key is `RawSubjectPublicKeyInfo` (the SPKI TLV); certificates are parsed by `ctx509.ParseCertificate`
-  (certificate-transparency-go, `"lax"` fallback that allows non-minimal integers) with a zcrypto
-  fallback. Go's stdlib `asn1` rejects non-minimal lengths and BER; ct-go and zcrypto reject them first, in
-  `ParseCertificate`, and a TBS that passes `ParseCertificate` but fails the stdlib re-parse panics in
-  `NewSerialFromCertificate` (killing ct-fetch's insert worker). Neither reaches a filter. A fatal `ParseCertificate` makes both ct-fetch workers' `storeLogEntry` return an error: the RFC 6962 worker sleeps and retries the same range, and the tiled worker halts (`tiled.go`: "(false, err) indicates a fatal error that should halt log ingestion"), so an unparseable entry stalls that log's ingestion rather than being skipped (verified 2026-10-23 at `0082998`). Trillian's CTFE rejects certificate-transparency-go fatal errors at submission (`trillian/ctfe/cert_checker.go`, `x509.IsFatal`, v1.3.2), so a zcrypto-only certificate cannot enter a log running it. `rust-query-crlite` uses `x509-parser`'s
-  `raw_serial()`; webpki's `serial()` is also the raw content.
-- **upki** (`rustls/upki` tag v1.0.1, whose `Cargo.toml` says 1.0.1; crates.io's latest `upki`/`rustls-upki` is 1.0.0, 2026-10-05; `RevocationCheckInput::new`, `from_certificates`, `Store::check` and `Store::from_config` are `pub` at both; the stock FFI, not used for queries since revision 21, §3.2): `ffi.rs` `upki_check_revocation` wraps `catch_unwind`,
-  builds `RevocationCheckInput::from_certificates` (end entity first; `find_issuer` by byte-equal
-  subject name among the rest, parsed with `anchor_from_trusted_cert`; `TooFewCertificates` below 2);
-  `revocation/index.rs` `Index::check` takes no clock and, with no SCT timestamps, returns
-  `NotCoveredByRevocationData`; `rustls-upki` applies `cert_has_no_scts` only in its own verifier and
-  fails the handshake on a malformed SCT list (`sct_error`). `revocation/mod.rs`:
-  `RevocationCheckInput::new(CertSerial, IssuerSpkiHash, Vec<CtTimestamp>)` and `Store::check` are
-  public, which is what `revokt-upki-shim` calls.
-- Crates: `clubcard` 0.3.4, `clubcard-crlite` 0.6.2 (MPL-2.0, Exhibit A only); `upki`/`rustls-upki`
-  1.0.x; `canonical_json` 0.7.0; the oracle-3a reference crates are pinned exactly when oracle 3a lands with the 0.1
-  oracle issue, by `=` requirements in `revokt-oracle/Cargo.toml` and the workspace `native/Cargo.lock`:
-
-  | Crate | Version | sha256 |
-  |---|---|---|
-  | `x509-parser` | 0.18.1 | `d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202` |
-  | asn1-rs | 0.7.2 | `b7f43a50ac4fdca5df8e885c21b835997f0a1cdee65494a6847694a98652d9d8` |
-  | nom | 7.1.3 | `d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a` |
-
-  The `x509-parser` behaviour §9.2 relies on was probed (the SCT list on 2026-10-22, the TBS tail on 2026-10-24),
-  and each part comes from one place in the code:
-  - `parse_extension0` discards each extension parser's rest;
-  - `map_parser(take(len), …)` discards the rest of the declared region, and `map_parser(length_data(be_u16), …)` the rest of each item;
-  - `many1(complete(item))` keeps the items before the first failure;
-  - asn1-rs `Header::from_der` takes any long-form length;
-  - asn1-rs `TryFrom<Any> for &[u8]` checks the tag number only;
-  - `parse_extensions` checks only the tag number of the element after the SPKI: the real extensions of
-    `letsencrypt.org-1` under each of `03`, `23`, `43`, `63`, `83`, `C3` and `E3` give 3a its 10 extensions, while
-    JDK 11 and 21 parse each and read none (probed 2026-10-24, the review of #37).
-
-  That behaviour becomes a committed `revokt-oracle` test with one case per §9.2 sentence and per D7 SCT entry, landing
-  with oracle 3a. The same cases, with §9.2's expected outcomes (∅ on the `3A_HEADER_LAX` and `3A_TBS_LAX` rows), run against
-  3b's SCT and TBS walks, so a misreading of §9.2 in either walk fails a case rather than passing as agreement. A bump of any of the three crates is a spec revision. It re-runs that test. If a case changes,
-  §9.2 is re-derived, every 3a golden is recomputed, and the diff is reviewed as D2/D3 entries. revokt's rule
-  changes only through §9.2, never by following the crate.
-- JDK `X509CertInfo` trailing-element behaviour, probed 2026-10-22 on JDK 21 (SUN `CertificateFactory`, each input
-  `getEncoded()`-identical).
-  - **Accepted:**
-    - a trailing NULL or non-TLV bytes after `[3]`;
-    - a NULL between `subjectPublicKeyInfo` and `[3]`, which drops the extensions;
-    - a NULL, or non-TLV bytes, after the `Extensions` SEQUENCE inside `[3]` and after `extnValue`;
-    - a trailing element, or non-TLV bytes, inside `[0]` (revokt keeps `[0]` strict: ct-go flattens `[0]`, reading
-      the elements after the INTEGER as TBS fields, while the stdlib serial re-parse is bounded; confirmed below);
-    - a stopping element with a non-minimal header (`05 81 00`);
-    - a v2 certificate with only `[1]`;
-    - constructed `[1]`/`[2]`;
-    - `[2]` before `[1]`, or `[1]` twice, either of which drops the extensions;
-    - a primitive `[3]`, ignored;
-    - two `[3]` elements, the second ignored.
-  - **Rejected:**
-    - an element after `signatureValue` ("signed overrun");
-    - a trailing element in `Validity`;
-    - a non-`Extension` element in the `Extensions` SEQUENCE;
-    - an element between an extension's OID and its value;
-    - a malformed element where the read stops;
-    - a v1 certificate with anything after `subjectPublicKeyInfo` ("no more data allowed for version 1 certificate");
-    - a v2 certificate with any element after the unique IDs, a NULL or `extensions` ("Extensions not allowed in v2
-      certificate");
-    - day 00, month 13, hour 24 and second 60 in a time (the day past a month's end is accepted and rolls over);
-    - unique-id content `00`, `08 00` or `09 00` (an empty BIT STRING, or padding bits outside 0 to 7).
-
-- Producer `[0]` behaviour, run 2026-10-23 with `mozilla/crlite` `go/types` at `008299826177078097b2539a57564b7926916a2c`
-  (Go 1.27.3, certificate-transparency-go v1.3.2, zcrypto `v0.0.0-20260109180747-df961ee46a6c`):
-  - a NULL after the version INTEGER inside `[0]` is rejected ("SerialNumber: tags don't match"), so ct-go read the
-    NULL as the serial, which shows that the explicit `[0]` is not bounded;
-  - a `[0]` holding a fake serial `0f ac` and a complete fake TBS prefix, followed by the real serial `0e a1`, is
-    accepted and keyed `0ea1`, the outer serial and the JDK's (`getSerialNumber()` = `0xea1`);
-  - a `[0]` holding a complete fake TBS prefix with a different SPKI is accepted. The producer keys the outer serial, the JDK's (the
-    `RawValue` re-parse is bounded), but records the inner SPKI as `RawSubjectPublicKeyInfo`, which the JDK does not
-    read. As an issuer, such a certificate's children would be keyed under an SPKI the platform never sees.
-  - The producer rejects a zero-length explicit `[3]` (`83 00`, `a3 00`): "explicit tag has no child".
-
-  These are the first oracle-4 records; the part-3 issue (#11) commits the CLI and its goldens.
-
-  The probe is committed as the parser's JDK cross-check (`CertificateParserJdkTest` and its `certs/variants/`, on
-  `feat/9-der-tbs-parser`, PR #16). `DerValue`'s time forms are stated in §9.2.
-- Ktor 3.6.0; CIO 2-arg, TLS 1.2 only. OkHttp 5.5.0 at `lysine-dev/okhttp`; the Android cleaner
-  calls the 3-arg method with `"RSA"`; builder TLS fields are `internal`.
-- Conscrypt: hostname-only path passes null OCSP/SCT data; `checkCT` only when `host != null &&
-  isCTVerificationRequired`; `ConscryptEngineSocket` forwards to the Socket overload;
-  `TrustManagerImpl` does not cache validated paths; its intermediate index accepts chains omitting
-  the intermediate; `TrustManagerImpl.getAcceptedIssuers()` clones an array computed at construction,
-  except over an `AndroidCAStore` KeyStore, where `acceptedIssuers` is null and the `TrustedCertificateStore`
-  (the cacerts directories) is re-enumerated on every call.
-- AOSP NSC (frameworks/base, not Conscrypt): `RootTrustManager.checkServerTrusted(certs, authType, hostname)` throws `CertificateException("Domain specific configurations require that the hostname be provided")` when `hostname == null` and the config has any `<domain-config>`, which is what `X509TrustManagerExtensions` reaches, so the null-host retry of decision step 4 is unavailable for such apps; `RootTrustManager.getAcceptedIssuers()` delegates to the
-  default config's `NetworkSecurityTrustManager`, which computes `mIssuers` lazily from
-  `DirectoryCertificateSource` (directory listing and `CertificateFactory` reads on the first call per
-  process, process-wide singletons for the system and user sources; `NetworkSecurityConfig` also
-  caches `mAnchors`) and clones the cached array thereafter. On a trust-store change the system pushes
-  `handleTrustStorageUpdate()` into every running process (`ApplicationConfig` → config, sources,
-  `NetworkSecurityTrustManager` and `TrustManagerImpl`), clearing those caches; no app receiver is
-  involved, and `android.security.STORE_CHANGED` is a protected broadcast.
-- SunJSSE: `SSLContextImpl.chooseTrustManager` wraps a plain `X509TrustManager` in
-  `AbstractTrustManagerWrapper` (algorithm constraints on both paths, endpoint identification on the
-  engine path); `X500Name.equals` and BoringSSL `X509_NAME_cmp` compare canonicalised names;
-  SunJSSE's `AlgorithmId` normalises NULL parameters; SunEC pure Java since JDK 16, no brainpool since 15.
-- Crypto: ECDSA public-key recovery (SEC 1 §4.1.6); RSA duplicate-signature key selection
-  (Blake–Smart; SunRsaSign accepts any exponent for moduli ≤ 3072); ML-DSA in X.509 is RFC 9881;
-  JDK 24 ships ML-DSA (backported in 17.0.21 and 21.0.13). No provider of JDK 17.0.21, 21.0.13 or 27 registers
-  SLH-DSA or a composite OID (revision 51). A composite signature is not one operation of the JDK's providers, so
-  only a provider registering the composite OID verifies one.
-  - **Conscrypt uber 2.7.0 and 2.8.0** (revision 51; both register the same set). Probed on JDK 17.0.21 and 21.0.13
-    with a single-file Java program over the Gradle-cached jars. It lists the provider's `Signature`, `KeyFactory`
-    and `KeyPairGenerator` services and their `Alg.Alias` entries, then looks each algorithm up by name, bare OID and
-    `OID.`-prefixed OID.
-    - **ML-DSA-44, -65 and -87:** registered by name and by both OID aliases. Each verifies a signature the JDK's
-      `SUN` provider made, with the key decoded from the JDK's SPKI encoding, and rejects it with one bit flipped.
-    - **SLH-DSA-SHA2-128s:** registered by name only, with no OID alias for 2.16.840.1.101.3.4.3.20 (the OID its
-      own keys encode). It also registers a HashSLH-DSA `SLH-DSA-SHA2-128S-WITH-SHA384`, by name only. Only a
-      Conscrypt-made signature was checked, since none of those JDKs makes one.
-    - **15 composite ML-DSA OIDs** of draft-ietf-lamps-pq-composite-sigs: `1.3.6.1.5.5.7.6.37`–`.46`, `.48`,
-      `.49` and `.52`–`.54` (not `.47`, `.50` or `.51`). Each is registered for `Signature`, `KeyFactory` and
-      `KeyPairGenerator` under a name such as `MLDSA44-RSA2048-PSS-SHA256`, with a bare OID alias but no
-      `OID.`-prefixed one. Each round-trips a Conscrypt-made key and signature, and the key's SPKI
-      carries the OID. **Unverified:** whether Conscrypt's composite key and signature encodings match draft -19.
-      The round trip shows only that Conscrypt agrees with itself; no draft test vector or other implementation
-      was checked.
-    - **PSS:** there is no `RSASSA-PSS` `Signature` or `KeyFactory` and no `id-RSASSA-PSS` alias. PSS is registered
-      only as `SHA1withRSA/PSS` to `SHA512withRSA/PSS`.
-    - **`JcaSignatureVerifier` over Conscrypt** (at `5d419cc`): a scratch `jvmTest` on 21.0.13 ran under both
-      releases. Printed in full, `unsupportedOids()` is exactly the 21 OIDs §3's "From OID to JCA service" lists,
-      identical under both releases. ML-DSA-44/65/87,
-      SLH-DSA-SHA2-128s and the 15 composites each give `VERIFIED` for a Conscrypt-made key and signature, and
-      `INVALID` with one bit flipped. A SHA-1 PSS signature is `UNSUPPORTED` over Conscrypt and `INVALID` over the
-      JDK's providers, which verify it themselves.
-    - **Not probed:** the platform Conscrypt on Android, whose version is the device's.
-  - **PSS salt on the JDK** (revision 51, a scratch `jvmTest` at `5d419cc` on 21.0.13, 2048-bit key, SHA-256 and MGF1
-    with SHA-256): `RSASSA-PSS` throws `InvalidAlgorithmParameterException` for salts of 2,048 and 2,049 bytes, and
-    `ArithmeticException` from 2,147,483,614 up to `Int.MAX_VALUE`. The verifier gives `INVALID` for each.
-- Kotlin: `kotlin.time.Clock` stable since 2.3; `kotlin.concurrent.atomics` still experimental;
-  kotlinx-serialization-json cannot reject duplicate keys.
-- Fuzzing: ClusterFuzzLite and OSS-Fuzz need a static entry point; OSS-Fuzz admission requires usage.
-- MTC: `draft-ietf-plants-merkle-tree-certs` -05; Chrome rollout with Cloudflare since Feb 2026.
-- Mozilla producer keyability, verified 2026-10-22 in `mozilla/crlite` `go/types.go` (package `types`) and `certificate-transparency-go` `asn1/asn1.go`, `x509/x509.go` (master): `ParseCertificate` tries ct-go then zcrypto and keeps whichever returns a certificate; `NewSerialFromCertificate` re-parses `RawTBSCertificate` with stdlib `encoding/asn1` into `{Raw RawContent; Version RawValue "optional,explicit,default:0,tag:0"; SerialNumber RawValue}` and **panics** on failure (so a certificate the re-parse rejects never reaches a filter), keying on `SerialNumber.Bytes`; ct-go's `parseTagAndLength` rejects non-minimal tags, indefinite lengths, superfluous leading length zeros, long-form lengths under 128 and lengths ≥ 2^31 regardless of `lax`; `lax` relaxes `checkInteger` (non-minimal INTEGER content), OID and PrintableString parsing; Go's struct parse ignores trailing SEQUENCE elements; ct-go's SCT-list branch (`asn1.Unmarshal(e.Value, &out.RawSCT)` then `tls.Unmarshal`) reports every error through `NonFatalErrors`, `ParseCertificate` returns the certificate when `ctCert != nil`, and both ct-fetch workers (`rfc6962.go` `storeLogEntry`, `tiled.go`) log "Nonfatal parsing error" and continue to `PrepareSetMember`; zcrypto's only length leniency is `AllowPermissiveParsing`, which crlite never sets.
-- Revision 34 probes, run 2026-10-23 against the oracle-4 binary at `0082998` (the cohort's scripts and outputs are kept
-  with the #11 records). Every JDK probe below ran on JDK 17.0.21, 21.0.13 and 27 `SUN`. The verdicts and, where
-  recorded, the `getTBSCertificate()` outputs agree across the three, except where noted; the JDK 11 results are
-  the last item. The matrix replay re-checks them once the D7 entries land:
-  - **Envelope re-encodings**, applied to an RSA and an EC leaf. In each case `generateCertificate` accepts the
-    certificate, `getEncoded()` returns the input bytes and `verify(issuerKey)` passes:
-    - a non-minimal length on the outer `signatureAlgorithm` header (`30 0a` → `30 81 0a`);
-    - a non-minimal length on the `signatureValue` header (`03 47` → `03 82 00 47`);
-    - the outer NULL parameters flipped;
-    - for RSA only, an unused-bits octet of 1, with or without the padding bit set (the JDK clears it before
-      verifying).
-
-    Also verifying and kept by `getEncoded()`: the `tbsCertificate` header as `30 83 00 03 94`, `30 84 00 00 03 94` or
-    indefinite closed by `00 00` (the JDK verifies over the TBS re-encoded with a minimal header), and the outer
-    AlgorithmIdentifier indefinite (including `30 80 <OID> 05 80 00 00 00 00`) or with `06 81 08` or `05 81 00`
-    inside a definite one. Under an indefinite TBS, an indefinite header on any element whose ancestors up to the TBS
-    are all indefinite verifies, primitive ones included (Validity, a subject RDN chain, `[0]`, `[3]` down to an
-    `extnValue` as `04 80 … 00 00`), because `DerIndefLenConverter` re-encodes it; a non-minimal definite header
-    there, or anywhere in the TBS, breaks the signature, and so does an indefinite header under a definite parent
-    (JDK 17 and 21 reject some of these in `generateCertificate` and the rest fail `verify`; JDK 27 parses them all
-    and `verify` fails).
-    An indefinite outer AlgorithmIdentifier holding a non-minimal OID header (`30 80 06 81 08 … 00 00`) is rejected by
-    `generateCertificate` ("Too short"), and one holding `05 81 00` is rejected ("extra data").
-    The re-encoding rule of §9.2 reproduces `getTBSCertificate()` on every input the JDK verifies. Every probed JDK
-    rejects a constructed `signatureValue`, and JDK 17, 21 and 27 an indefinite one; the JDK rejects a fourth
-    `Certificate` element and a high-tag signature OID, and normalises the outer `Certificate` header and trailing
-    bytes away in `getEncoded()`. Conscrypt was not probed; BoringSSL parses strict DER lengths and tags (it accepts a
-    `UTCTime` differential, revision 41).
-
-    Oracle 4 rejects the two header cases ("non-minimal length", "superfluous leading zeros"). The NULL flip is keyed
-    through zcrypto only, because ct-go rejects "mismatching signature algorithm identifiers". The JDK re-encodes the
-    outer `Certificate` header, so that header is not a vector.
-  - **Content the JDK accepts and the producer rejects**: non-zero padding bits in the `signatureValue` or
-    `subjectPublicKey` BIT STRING; a day past the month's end ("day out of range"); a `GeneralizedTime` fraction;
-    invalid UTF-8 in a `UTF8String`; a BOOLEAN `01`; an EC point off the curve; secp256k1; RSA e < 0 and e longer than
-    64 bits. The producer also rejects an OID arc of 2^31 or more, including in an unknown extension ID, and a
-    constructed `extnValue` (JDK acceptance of these two not probed).
-  - **Content certificate-transparency-go keys outside X.690 DER**: a negative serial, a 21-octet serial, an explicit
-    `critical FALSE` and `cA FALSE`, an explicit v1, `*` and `&` in a PrintableString, and an unsorted multi-valued
-    RDN. ct-go also keys SPKIs it does not parse (RSA-PSS, ML-DSA, X25519) without inspecting them.
-  - **CT sample**: 200 230 entries from 14 RFC 6962 and 4 static-CT CRLite-enrolled logs, comprising 104 800
-    precertificates and 95 430 final certificates under 296 issuer CNs (153 532 unexpired). All were keyed through
-    ct-go, none only through zcrypto, and none deviated from a strict DER profile; the revision-34 consistency round's re-scan of the 159 270 RFC 6962
-    entries found no K5 attribute type, repeated extension or K8 SAN, AKI, CRLDP, AIA, nameConstraints or
-    subjectInfoAccess shape outside the profile. That puts a 95 % upper bound of about 2·10^-5 per unexpired entry.
-  - **Precertificates**: `rfc6962.go` (`storeLogEntry`, `types.ParseCertificate(rawLogEntry.Cert.Data)`, which holds
-    the precertificate for a precert entry) and `tiled.go` (`logEntry.PreCertificate`) parse the logged
-    precertificate, not the final certificate.
-  - **JDK 11.0.32** `SUN` (below the floor since revision 38; kept as the record), on the same JDK probe sets: it
-    verifies 31 of the 69 inputs JDK 17 verifies, and none that JDK 17 does not (revision 35 found one form outside
-    these sets that it alone verifies, below). On each of the 31, `getTBSCertificate()` is byte-identical to JDK 17's.
-    - Under a definite TBS, `generateCertificate` rejects every non-minimal definite length ("Redundant length bytes
-      found", "Should use short form for length"): the `tbsCertificate`, outer `Certificate`, `signatureAlgorithm`
-      and `signatureValue` headers, and every probed TBS field header. Under an indefinite TBS, a non-minimal serial
-      or SPKI header inside it parses and fails `verify`, as on JDK 17.
-    - `generateCertificate` rejects an indefinite element on the indefinite chain below an indefinite TBS (the
-      Validity, subject, `[0]` and `[3]` chains), and an indefinite NULL inside an indefinite outer
-      AlgorithmIdentifier.
-    - Still verifying: the `tbsCertificate` header indefinite; the outer AlgorithmIdentifier indefinite with definite
-      content; the outer NULL parameters flipped; an RSA unused-bits octet of 1, with or without the padding bit;
-      and an indefinite outer `Certificate` header or trailing bytes, which `getEncoded()` normalises away.
-    - Of the indefinite headers under a definite parent, it rejects only an indefinite `[3]` in
-      `generateCertificate`; the rest, including those JDK 17 and 21 reject, parse and fail `verify`.
-- The trailing-element rule's stop element with a multi-octet identifier, probed 2026-10-24 on JDK 11.0.32, 17, 21
-  and 27 (the review of #41, #42):
-  - The inputs: `9f 01 00`, `1f 01 00`, `9f 01 01 00`, `bf 02 01 00`, or `9f 1f` followed by 31 octets, each placed
-    before the `[3]` of `letsencrypt.org-1`; and `9f 03` or `bf 03` holding its Extensions SEQUENCE.
-  - JDK 17, 21 and 27 reject each one ("Tag number over 30 … is not supported"), and revokt rejects each with
-    `STRUCTURE`.
-  - JDK 11 reads the identifier as one octet and accepts each, with no extensions. It rejects such an element whose
-    length is non-minimal, has five length octets, is indefinite, or runs past the TBS.
-  - Oracle 4 rejects the forms whose tag number is below 31 ("non-minimal tag") and keys `9f 1f`.
-  - 3a reads extensions from `9f 03`, `bf 03`, `9f 01 01 00` and `bf 02 01 00` (taking the last two as unique IDs).
-  - These forms are why the floor moved to 17 in revision 38, rather than the parser being loosened for JDK 11.
-- Revision 35 probe, run 2026-10-24 (the independent review of #24, then the maintainer's follow-up), on JDK 11.0.32
-  `SUN` unless noted. JDK 11 is below the floor since revision 38, and these results are kept as the record:
-  - An indefinite `signatureValue` (`03 80 … 00 00`) verifies when its content, read from the unused-bits octet on, is
-    a chain of TLVs with minimal headers: 17 of 4 000 and 7 of 1 500 P-256 signatures re-signed over the
-    `letsencrypt.org-1` TBS, 0 of 1 500 RSA-2048. `getEncoded()` keeps it. JDK 17, 21 and 27 verified 0 of 4 000.
-  - Writing that chain's first header non-minimally (`00 81 30` for `00 30`) does not verify (3 of 3).
-  - A constructed `signatureValue`, definite or indefinite, is rejected by `generateCertificate` on JDK 11 and 17
-    ("not a bit string").
-- Revision 39 probe, run 2026-10-25 over the committed replay corpus (1 803 inputs) on JDK 17, 21 and 27 `SUN`, each
-  input's `verify` run against its issuer from the fixture chain:
-  - On all three JDKs, `generateCertificate` accepts an indefinite TBS holding a non-minimal serial header (`02 81`,
-    `02 84 00 00 00`) or SPKI header (`30 83 00 …`), on each of the three leaves the D7 envelope cases use. `verify`
-    fails ("Signature does not match"), and neither 3a nor 3b locates them: 3b fails with "non-minimal length under an
-    indefinite element".
-  - JDK 27 also accepts a definite TBS holding an indefinite Validity, on the same three leaves. `verify` fails, 3a
-    rejects it, and 3b's walk does not locate it. Oracle 4 rejects its `canon` ("Validity: indefinite length found
-    (not DER)").
-  - Read through the platform canon (§9.2 revision 39), each of the nine parses, has a raw-byte reference and passes
-    D1 and D2 on JDK 17, 21, 25 and 27 (the replay; JDK 25's `verify` was not probed, and it accepts the same three
-    inputs as JDK 27); oracle 4 rejects the platform canon of the three that JDK 25 and 27 accept, which are
-    D1-dom.
-  - No other platform-accepted input lacks a raw-byte reference. `getEncoded()` differs from the input on 18 inputs: a
-    non-minimal outer `Certificate` header, re-encoded minimally, and trailing bytes, dropped.
-- Revision 41 probes, run 2026-10-25:
-  - JDK 17.0.20.1+1 and 17.0.20+8 have no ML-DSA `KeyFactory`; `getPublicKey()` on an ML-DSA leaf is a generic
-    `X509Key` whose `getEncoded()` is `30 82 05 34 30 0d 06 09 60 86 48 01 65 03 04 03 11 05 00 …` where the
-    certificate's SPKI is `30 82 05 32 30 0b 06 09 … 03 82 05 21 …`; 17.0.21+9 and 21.0.13 return a named ML-DSA key
-    with the presented bytes.
-  - Conscrypt uber 2.7.0 and 2.8.0 read `UTCTime` `261022134530+0100` and `261022134530-0130` both as
-    2026-10-22T13:45:30Z, where the JDK reads 12:45:30Z and 15:15:30Z; both reject a `GeneralizedTime` with `+0100`,
-    and both they and the JDK reject a differential of `+2400` or `+0099`.
-- Revision 42 probe, run 2026-10-25: the pinned producer (`mozilla/crlite` go `0082998`, `rootprogram/issuers.go`)
-  loads `https://ccadb.my.salesforce-sites.com/ccadb/Report?Name=MozillaAllUnexpiredPEMs`; it requires
-  `zcx509.ParseCertificate` to succeed, skips revoked rows (a `Revocation_Status__c` other than empty or "Not
-  Revoked"), uses roots only as verification anchors (never enrols them), keeps the intermediates zcrypto verifies to a
-  Mozilla root with serverAuth at the run's time, re-parses each with `ctx509.ParseCertificate`, dropping it on any
-  error, non-fatal included, and keys it by `types.NewIssuer`'s `SHA-256(RawSubjectPublicKeyInfo)`
-  (`LoadEnrolledIssuers` re-parses with `ctx509.ParseCertificate` and fails the whole load on any error). Run over that
-  day's report (2 662 rows, 2 544 intermediates), it admits 1 852 issuer keys: exactly the distinct SPKIs of the
-  `intermediates` collection's 1 903 certificates. The live full filter that day was the `20261017-1` compat generation
-  (the committed fixture): its index has 1 033 keys, all 32 octets, and the committed `20261021-1` delta's has 1 030, 2
-  of them not in the full filter's (both in that day's report). 1 017 of the full filter's keys are in the program set;
-  the other 16 are in neither the report nor the collection, under any parse path, and crt.sh finds an unexpired CA
-  certificate for each by `spkisha256` (intermediates under UniTrust, NAVER and emSign roots; one checked was issued by
-  "emSign Root TLS CA - G3", itself absent from that day's report), consistent with their leaving the report after the
-  generation. Of the `intermediates` records, 1 020 (modified 2019-06-07 to 2024-10-21) carry `crlite_enrolled: false`
-  and the 883 since 2024-11-09 omit it; none marks it true.
-- Revision 43 probe, run 2026-10-25 over the issuer corpus (10 347 distinct certificates; the revision 42 snapshots
-  with the CCADB `AllCertificatePEMsCSVFormat` export by `NotBeforeYear`, the 15 records-export certificates that
-  export lacks from crt.sh by fingerprint, the matrix JDKs' `cacerts` and AOSP `ca-certificates`): every key of the
-  fixture generation's two indexes (1 035) is `SHA-256(rawSpki)` of one of them, so no certificate was fetched by SPKI
-  hash for coverage; 10 343 parse through oracle 4's `ct` path and all agree with revokt. On 5 of
-  those, `canon` differs from the DER only in the outer `signatureAlgorithm` (sha1WithRSAEncryption where the TBS
-  names ecdsa-with-SHA384 or sha384WithRSAEncryption); their TBS is the DER's, and ct-go rejects their DER
-  ("mismatching signature algorithm identifiers", `x509/x509.go`). None of their SPKIs is an index key. The records
-  export lists 15 certificates the PEM export lacks (10 "Bayerische SSL-CA-20xx", 4 "Dell Inc. Enterprise CA", "DPDHL
-  TLS CA I3", all revoked and not trusted), fetched from crt.sh. The CT seed pilot (22 559 leaves, 80 of the 81
-  CRLite-enrolled logs; Let's Encrypt Oak2026h2 did not answer `get-sth`) has 19 846 unexpired leaves JDK 21 accepts,
-  all in the D1 domain, and no D8-gap entry among them.
-- Revision 44, the CT seed corpus, collected 2026-10-25T23:56:38Z to 2026-10-26T00:22:38Z by revokt-corpus
-  `tools/ct-seed/collect.py` (seed 20261026: five random data tiles of each static-ct-api log, eight random 256-entry
-  `get-entries` batches of each RFC 6962 log, paged until complete): 118 528 entries read and 110 043 distinct
-  certificates as logged, from 80 of the 81 CRLite-enrolled logs (Let's Encrypt Oak2026h2 did not answer `get-sth`).
-  91 345 of them are unexpired and accepted on each matrix JDK, all in the D1 domain; 6 are D8-gap leaves, all issued
-  by eMudhra's "EM DV TLS CA - G3B" for subjects under `Shelikhoo.kkdev.org.invalid`, logged at indices near 2 000 of
-  GoDaddy's Aquamarine2027h2 and Aquamarine2028h2: 4 with a `notBefore` of 0000-01-01 or 0001-01-01 (GeneralizedTime;
-  K6, zlint clean) and 2 with ordinary times outside the profile at EXTENSION (zlint: a SAN `uniformResourceIdentifier`,
-  nameConstraints in a leaf, an invalid TLD, among others). Conscrypt 2.7.0 and 2.8.0 report the four `notBefore` as
-  -62167392000000 (year 0000) and -62135769600000 (year 0001) ms, exactly `java.util.GregorianCalendar`'s lenient hybrid
-  reading, two days before the proleptic Gregorian -62167219200000 and -62135596800000 that the JDK and revokt give. JDK
-  21 reports `id-pkix-ocsp-nocheck` empty on 2 leaves that carry `05 00`, both eMudhra's: a leaf of "EM DV TLS CA -
-  G3B" and an OCSP responder certificate of "emSign Root TLS CA - G1".
-- Revision 45, the CT seed corpus at revokt-corpus `v5`. The log sample is revision 44's without the leaves whose issuer
-  Name (as DER, by SHA-256) is a CT test issuer, dropped by `tools/ct-seed/drop-test-issuers.py`: C=GB, ST=London,
-  O=Google UK Ltd., OU=Certificate Transparency, CN=Merge Delay Intermediate 1 (`83dafb70…`, 35 447 leaves); O=Geomys,
-  CN=CT Uptime Test Root (`f4097973…`, 7 407); CN=DigiCert CT Monitor, C=US, ST=UT, L=Lehi City, O=DigiCert, Inc.
-  (`8d070279…`, 1 598); C=CN, O=TrustAsia Technologies, Inc., CN=TrustAsia DV TLS ECC Test CA G4 (`11bcaeb7…`, 2, in no
-  CCADB snapshot). 65 589 leaves remain, 60 427 of which JDK 21 verifies under an index key, of 201 keys. The top-up was
-  read from crt.sh's public database (`certwatch`, as `guest`) by `tools/ct-seed/topup.py` from 2026-10-29T14:02:24Z to
-  2026-10-29T23:06:44Z, the end of the last run that queried it (`crtsh.json`'s `finished` is a later run that only
-  rewrote the outputs from the cache; `crtsh-ca.json` is the cache's map of keys to crt.sh CAs): 1 034 of the 1 035
-  index keys hash the public key of a crt.sh CA (1 036 CAs; "Telia CA EC QWAC R1", valid from 2026, has none), 71 629
-  certificates were returned, 0 rejected (structure or signature), 0 filtered (not valid at the start, or a CA), 15
-  duplicates of a TBSCertificate kept, 0 past the cap, and 71 614 kept, for 927 keys. The queries of 49 CAs reached
-  crt.sh's statement timeout on every try, among them CAs that seem to have stopped issuing (Amazon RSA 2048 M03,
-  Cloudflare TLS Issuing RSA CA 1) and some of the largest (Sectigo Public Server Authentication CA DV E36, Encryption
-  Everywhere DV TLS CA - G2); the log sample covers 44 of their 49 keys. JDK 21 verifies 60 427 log-sample leaves under
-  201 index keys and all 71 614 top-up leaves under 927, 132 041 leaves of 975 keys, 118 159 distinct index keys and
-  serials. 117 603 of them are unexpired at the top-up's start and accepted on each matrix JDK (104 033 distinct index
-  keys and serials), all in the D1 domain, with no D8-gap entry; the 6 gap leaves of revision 44 stay in the log sample,
-  outside the count (their issuer is not an index issuer). crt.sh's server certificate (CN=crt.sh, Sectigo) had expired
-  on 2026-06-21, and its `ca.last_not_after` showed no update after 2026-10-24 (both seen on 2026-10-29), so CAs were
-  selected by key, not by recorded activity.
-- **Revision 54, the ECDSA range check** (§3, #172): SEC 1 v2 §4.1.4 ("Verifying Operation") step 1 rejects a
-  signature unless r and s are integers in [1, n − 1]. CVE-2022-21449 is the JDK skipping it, so that r = s = 0
-  verified under any key.
-  - **Affected versions:** the reporter's write-up (Neil Madden, "Psychic Signatures in Java", 2022-04-19, read
-    2026-11-07) gives Java 15 to 18 before the April 2022 Critical Patch Update, since JDK 15 rewrote ECDSA in Java;
-    the 15 to 18 range rests on it. Oracle's advisory (`cpuapr2022.html`) still lists "Oracle Java SE: 17.0.2, 18"
-    in its risk matrix; its revision log records Rev 2 (2022-04-21), "Updated the affected versions for
-    CVE-2022-21449", and Rev 4, "Note Removed". NVD (CVE-2022-21449, read 2026-11-07) lists only the then-supported
-    versions: "Oracle Java SE: 17.0.2 and 18; Oracle GraalVM Enterprise Edition: 21.3.1 and 22.0.0.2". The fix is in
-    17.0.3 and 18.0.1. Within revokt's JVM 17+ target that is 17.0.0 to 17.0.2 and 18 GA. Every JDK revokt tests on
-    (17.0.21, 21, 25 and 27) has the fix; revokt checks the range itself, so neither an older JDK nor an injected
-    provider can bring the gap back.
-  - **SunEC reads a negative INTEGER as unsigned** (checked 2026-11-07 on Temurin 17.0.21, 21.0.13 and 27 with a
-    single-file Java program, not committed): for 20 P-256 `SHA256withECDSA` signatures each, an r re-encoded without
-    its required leading `00`, so that it reads as negative, still verified (20 of 20 on each JDK), while an r with a
-    redundant leading `00` did not (0 of 20). revokt's profile rejects both, so it is stricter than SunEC there.
-  - **High s:** the #163 review found Mozilla's `ct-logs` collection signature with s > n/2; SEC 1 and NSS accept a
-    high s, so revokt does too.
-  - **Composite owners range-check their ECDSA component** (revision 55, §3), read at each project's main branch on
-    2026-11-07, not at the versions revokt tests:
-    - BC: bc-java `core/src/main/java/org/bouncycastle/crypto/signers/ECDSASigner.java` `verifySignature` returns
-      false unless 1 ≤ r ≤ n − 1 and 1 ≤ s ≤ n − 1 ("r in the range [1,n-1]");
-    - BoringSSL: `crypto/fipsmodule/ecdsa/ecdsa.cc.inc` lines 74 to 81 reject a zero r or s (`ec_scalar_is_zero`),
-      and `crypto/fipsmodule/ec/scalar.cc.inc` `ec_scalar_from_bytes` (lines 73 to 85) rejects a value ≥ n.
-- **Revision 54, the x5u chain follows mozilla::pkix at Firefox `cac25a6fa321b0051932359b84c4e2fe3caabdc5`**
-  (tag `FIREFOX_BETA_161_BASE`, 2026-11-05), with rustls-webpki consulted, read 2026-11-07 (Firefox through the
-  GitHub contents API; webpki from the local cargo registry). That reading used 0.103.15; upki at 9821cce builds paths
-  with 0.104.0-alpha.7 (`upki/Cargo.toml:32`), and the rows that depend on webpki were re-read against it on
-  2026-11-16 (#217, `docs/decisions/DIVERGENCES.md`):
-  - `pkixcert.cpp` `BackCert::RememberExtension` understands keyUsage, subjectAltName, basicConstraints,
-    nameConstraints, certificatePolicies, policyConstraints, extKeyUsage, inhibitAnyPolicy, authorityInfoAccess, the
-    TLS feature extension, the embedded SCT list and qcStatements, plus `id-pkix-ocsp-nocheck` (whose value may be
-    empty) and the Netscape certificate type only when critical. Any other critical extension is
-    `ERROR_UNKNOWN_CRITICAL_EXTENSION` (`pkixder.h` `OptionalExtensions`, and `pkixcert.cpp` line 161 for the
-    Netscape type, understood only when basicConstraints and extKeyUsage are both present). An understood
-    extension with an empty value is `ERROR_EXTENSION_VALUE_INVALID`.
-  - `pkixder.h`: `Boolean` takes `00` or `FF` only; `OptionalBoolean` accepts an explicit FALSE; `OptionalExtensions`
-    accepts an empty Extensions SEQUENCE (bug 997994); `CertificateSerialNumber` accepts a negative or zero serial;
-    `OptionalInteger` reads 0 to 127 only, which bounds `pathLenConstraint`. `pkixder.cpp` `OptionalVersion` accepts
-    0 to 3 and an explicitly encoded v1 (bug 1031093); `TimeChoice` reads `YYMMDDHHMMSSZ` and `YYYYMMDDHHMMSSZ`
-    for either type, with no year rule between them, and rejects a year before 1970. `pkixcert.cpp` parses the
-    extensions of v1 and v2 certificates as of v3. `pkixcheck.cpp` `ParseValidity` rejects notBefore > notAfter (line 170), and
-    `CheckKeyUsage` reads the keyUsage bits without requiring the minimal named-bit encoding.
-  - `pkixcheck.cpp`: `ERROR_SIGNATURE_ALGORITHM_MISMATCH` compares the parsed outer and TBS algorithms, so a NULL and
-    an absent parameter are equal (line 82); `ERROR_EMPTY_ISSUER_NAME` for an issuer with no RDN (line 143);
-    `ERROR_CA_CERT_USED_AS_END_ENTITY` (line 705); `CheckExtendedKeyUsage` requires the purpose in every present
-    extKeyUsage, anyExtendedKeyUsage not counting, and rejects `id-kp-OCSPSigning` in an end entity (line 864);
-    `CheckSubjectPublicKeyInfo` takes a namedCurve P-256, P-384 or P-521 with an uncompressed point of exact length,
-    or `rsaEncryption` with NULL parameters and positive modulus and exponent, and a BIT STRING without unused bits;
-    `CheckTLSFeatures` (line 885) requires a child to carry its issuer's TLS feature value.
-  - `pkixder.cpp` accepts `id-RSASSA-PSS` only with one of three parameter encodings, matched byte for byte (lines
-    186 to 250, NULL hash parameters and no explicit `trailerField`), and NULL or absent parameters for the other
-    signature algorithms (line 259).
-  - `pkixbuild.cpp` checks an issuer's nameConstraints whenever they are present, critical or not (line 173), and
-    `pkixnames.cpp` matches a dNSName subtree on label boundaries, ignoring case, with `""` matching every name; it
-    rejects an empty NameConstraints, an encoded `minimum` or `maximum` and an invalid base, and applies a permitted
-    subtree only to names of its own type.
-  - **Revision 55:** at the same commit, `pkixbuild.cpp` lines 218 to 229 extract an end entity's embedded SCT list
-    with `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` (lines 312 to 322:
-    `ExpectTagAndGetValueAtEnd(extnValue, OCTET_STRING, …)`), and a failure fails every path through the
-    certificate, as revision 46 recorded at `86136a5`.
-  - **webpki's divergences**, consulted and not followed (at 0.104.0-alpha.7, upki's version; re-read for #217): its
-    understood critical set is only id-ce 15, 17, 19, 30, 31 and 37 (keyUsage, subjectAltName, basicConstraints,
-    nameConstraints, cRLDistributionPoints, extKeyUsage) and the SCT list (`cert.rs` lines 319 to 347); it does not
-    require keyCertSign on a CA, reading keyUsage only for CRL checks (`verify_cert.rs` lines 151 and 171); it requires
-    v3 (`UnsupportedCertVersion`, `cert.rs` lines 276 to 291); it compares the outer and TBS algorithms by bytes
-    (`SignatureAlgorithmMismatch`, `cert.rs` lines 90 to 92); and it checks every descendant's names against
-    nameConstraints. Unique IDs, which 0.103.15 rejected, are skipped (`cert.rs` lines 123 to 139), as mozilla::pkix
-    and revokt do.
-  - **Differences from mozilla::pkix that remain, each by §7.1's own text:** the terminal is its pinned SPKI only
-    (Firefox matches the root's DER and checks it), so the terminal's nameConstraints are never read, and neither is its
-    TLS feature, which Firefox also checks against the anchor's child; the path is the
-    x5u order with no depth cap (both references build by name, at most six sub-CAs); name chaining also accepts the
-    canonical form; the leaf SAN is exactly one dNSName and its EKU must be present; RSA size counts significant bits
-    (Firefox rounds to bytes); a seed's chain validity is checked at its signed time; links are not checked against
-    OneCRL; nameConstraints are checked against the leaf's name only, where mozilla::pkix and webpki check every
-    descendant.
-  - **Stricter than mozilla::pkix:** any repeated extension OID fails (RFC 5280's MUST NOT), where mozilla::pkix
-    rejects only a repeated extension it understands; a nameConstraints with a directoryName subtree fails closed,
-    where mozilla::pkix checks it against the subject. (mozilla::pkix's check of the subject's emailAddress against
-    rfc822Name subtrees runs only for a certificate with no subjectAltName, so it cannot apply to the leaf, which
-    must carry one.) Mozilla's `Content Signing Intermediate` carries a
-    non-critical nameConstraints with two dNSName subtrees only (`content-signature.mozilla.org` and
-    `.content-signature.mozilla.org`), which the leaf satisfies.
-- **Revision 56 sources** (read 2026-11-12 unless a date is given: Firefox at
-  `cac25a6fa321b0051932359b84c4e2fe3caabdc5` through the GitHub contents API, cel-spec at `21ec6f4`, upki v1.0.1's
-  `revocation/mod.rs`, `revocation/fetch.rs`, `revocation/index.rs` and `lib.rs` and upki-mirror's `mozilla-crlite.rs`
-  in the cargo git checkout of tag `v1.0.1` (`9821cce`), and the crates below from the local cargo registry):
-  - **The attachments base URL:** `https://firefox-settings-attachments.cdn.mozilla.net/` is
-    `capabilities.attachments.base_url` of `https://firefox.settings.services.mozilla.com/v1/`, with its trailing
-    `/`, read 2026-11-06/07 in the review of #177 and again on 2026-11-12 (kinto-attachment 9.0.1). §7.1 makes it the
-    default.
-  - **`buildIndex` against Firefox and upki-mirror:** Firefox's `RemoteSecuritySettings.sys.mjs` at
-    `cac25a6fa321b0051932359b84c4e2fe3caabdc5` (lines 645 to 659) takes the records' full filters, refuses unless
-    there is exactly one ("expected 1"), and takes every incremental record beside it, reading no `parent`; revokt's
-    `buildIndex` does the same (§6.5). upki-mirror v1.0.1's `mozilla-crlite.rs` instead maps each record by its `parent`
-    (line 47, a `HashMap`, so of two records with one parent only the last is kept) and walks from the `default`
-    channel's full filter with no `parent` (lines 54 to 66). The two differ only on unusual data: a delta outside the
-    chain (revokt places it; it can only add revocations), two deltas with one parent (revokt places both; upki-mirror
-    follows one), or two fulls (revokt refuses; upki-mirror takes the first it finds).
-  - **The changeset `<ts>`, `_since` and `metadata.signatures`:** Firefox's `RemoteSettingsClient.sys.mjs` at
-    `cac25a6fa321b0051932359b84c4e2fe3caabdc5` builds the signed payload from the changeset's `timestamp`
-    (`_fetchChangeset` reads it from the envelope at line 1354, and `validateCollectionSignature`, from line 1076,
-    canonicalises the records with it), requires a non-empty `metadata.signatures` array and accepts the first entry
-    that verifies (from line 1097); `Utils.sys.mjs` sends
-    `_since` bare (`params._since = lastEtag`, line 518). Each entry gives `x5u`, `signature` and `mode`; an entry
-    missing `x5u` or `signature`, or with a `mode` other than `p384ecdsa`, is skipped with a warning (line 1103), and
-    when none verifies the first error is thrown (line 1132). revokt reads `signatures[]` the same way (§7.1),
-    with four differences: it also skips an entry with no `mode` (a deliberate narrowing); it tries at most 4 entries
-    and fails a changeset with more, where Firefox tries them all; it reuses an `x5u` already fetched and validated in
-    the same sync, and does not retry one that failed; and when none verifies it reports the last entry's error, where
-    Firefox throws the first.
-  - **CEL's logical operators**, the model for `Exemptions.and`/`or` (§4): cel-spec `doc/langdef.md` at
-    `21ec6f4e52e8d694687ff9ed7408d3eccbb955d7`, "Logical Operators": "if any of their operands uniquely determines the
-    result (`false` for `&&` and `true` for `||`) the other operand may or may not be evaluated, and if that
-    evaluation produces a runtime error, it will be ignored. This makes those operators commutative". revokt
-    evaluates left to right and absorbs the other side's error exactly when one side decides.
-  - **The mirror protocol** (§7.3): upki v1.0.1 `revocation/mod.rs` (`Manifest`: `generated_at: u64`, `comment:
-    String`, `files` with the serde alias `filters`; `ManifestFile`: `filename`, `size`, `hash` as hex) and
-    `revocation/fetch.rs` (the manifest URL `<fetch_url>manifest.json`, `If-Modified-Since` and the 304 reuse, a file
-    URL `<remote_url><filename>`, `REQUEST_TIMEOUT` of 30 s, one client timeout for the whole request, redirects
-    included); upki's redirect limit is reqwest's default, `Policy::limited(10)` (`src/redirect.rs`) in reqwest 0.13.0,
-    the version upki v1.0.1's `Cargo.lock` pins; upki does not set `https_only`, so reqwest would follow an
-    `https`-to-`http` hop, which revokt refuses (§7.3). The live mirror listed 40 files (1 full and 39 deltas, 14.3 MB)
-    on 2026-11-06. reqwest 0.13.0's `remove_sensitive_headers` (`src/redirect.rs`) drops `Authorization`, `Cookie`,
-    `cookie2`, `Proxy-Authorization` and `WWW-Authenticate` on a hop to another host or port; §7.3's
-    `RedirectingFetcher` strips the same headers on such a hop, but keeps them stripped where reqwest re-sends them
-    (revision 58 sources).
-  - **The memory figures** (§6.4): the live `cert-revocations` changeset
-    (`/v1/buckets/security-state/collections/cert-revocations/changeset?_expected=0`), read 2026-11-12, `timestamp`
-    1794499022363, 106 records; per channel 1 full and 52 deltas; the signed `attachment.size` values sum to 8,558,354
-    bytes on `compat` (full 1,574,015) and 18,593,366 on `default` (full 6,006,419). The committed fixtures hold no
-    whole changeset, so the live one was measured. Its `metadata` carried both `signature` and a one-entry
-    `signatures`.
-  - **upki `c2ba5e3`** (main, 2026-10-21, "mirror: convert CRLite v3 filters to v4", read through the GitHub API): its
-    upki-mirror re-encodes a filter whose version byte differs from the configured encoding with
-    `CRLiteClubcard::to_bytes(encoding)` and then sorts the encoded coverage entries by log ID, since
-    `clubcard-crlite` writes them in `HashMap` order; v1.0.1 has no such step. revokt's oracle leg (§3.2) is the bare
-    `to_bytes(V4)` without the sort.
-  - **`rustls-pki-types` 1.15.1** (upki v1.0.1's pin), `src/pem.rs` and `src/base64.rs`: the labels it knows
-    (`CERTIFICATE`, `PUBLIC KEY`, `RSA PRIVATE KEY`, `PRIVATE KEY`, `EC PRIVATE KEY`, `X509 CRL`, `CERTIFICATE
-    REQUEST`, `ECHCONFIG`), `-----BEGIN ` and `-----END ` line matching, and a decoder that skips whitespace and
-    accepts missing padding; `X5uPem` reproduces it (§7.1).
-  - **upki's cache roots** (§4 `c2spCache`): upki v1.0.1 `upki/src/lib.rs`, `Config::try_default` (the user cache from
-    `ProjectDirs::from("dev", "rustls", "upki")`, else the system cache when the user cache does not exist and the
-    system one does) and `platform::system_cache_dir` (`/var/cache/upki` on Unix, `/Library/Caches/dev.rustls.upki`
-    on Apple, `%ProgramData%\rustls\upki\cache` on Windows), with `revocation` appended
-    (`revocation_cache_dir`).
-- **Revision 57 sources** (Firefox at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`):
-  - **`Backoff` and `Retry-After`** (§7.1), read 2026-11-14 through the GitHub contents API: `Utils.sys.mjs`
-    `fetchLatestChanges` throws on a status of 500 or more (lines 529 to 531), on a non-JSON `Content-Type` (lines 537
-    to 540) and on JSON without a `changes` member (lines 549 to 560) before it reads `Backoff` (lines 570 to 576), and `remote-settings.sys.mjs` persists that value as the
-    `server.backoff` pref (lines 507 to 516). Neither file reads `Retry-After`. kinto-http reads both headers on every
-    response, but `RemoteSettingsClient.sys.mjs` builds its kinto-http client with only a `fetchFunc` (lines 391 to
-    395), so no listener takes kinto-http's backoff and no retry follows a `Retry-After` (the 2026-11-13 decision
-    audit read kinto-http's side). revokt honours both on every response, so it is stricter than Firefox, not equal
-    to it.
-  - **The `signatures[]` loop** (§7.1), `RemoteSettingsClient.sys.mjs` lines 1100 to 1132, read 2026-11-14 through the
-    GitHub contents API: `const { x5u, signature, mode } = sig` (line 1102) throws on a `null` element; `!x5u ||
-    !signature` (line 1103) skips an empty string as a missing one; `(await Utils.fetch(x5u)).text()` (line 1109) reads
-    the body without checking the status, so a 404 or 5xx body goes to verification, which fails, and the loop moves
-    on (the #198 review), while a rejected fetch (a network error, timeout or abort) leaves the loop at once. revokt
-    moves on after any failed fetch, a fifth difference beside the four listed under revision 56.
-  - **Issuer labels and candidate order** (§5.1 decision step 6, `related()`, §8), as the maintainer's decisions of
-    2026-11-13 and 2026-11-14 on #196 record them (not re-read for this revision): mozilla::pkix runs
-    `CheckIssuerIndependentProperties` (`pkixcheck.cpp`, line 993; `pkixbuild.cpp`, lines 106 to 117) before it
-    verifies the link's signature, and defers an end-entity error until an issuer is found (`pkixbuild.cpp`, lines
-    281 to 292 and 354 to 357); `SSLServerCertVerification.cpp` (lines 247 to 252) puts both errors in one override category;
-    `CertVerifier.cpp` (lines 312 to 315) applies the anchor-dependent CT rules to the one chain it built; and
-    `NSSCertDBTrustDomain` `FindIssuer` offers roots first, then the presented certificates, then the preloaded
-    intermediates. upki takes one webpki `VerifiedPath` (rustls-upki `lib.rs`, lines 95 to 127), the model for
-    `EvaluationRequest.verifiedPath` (§4).
-- **Revision 58 sources** (§7.3 "Redirects", read 2026-11-15):
-  - **reqwest 0.13.0 and tower-http 0.6.11**, the versions upki v1.0.1's `Cargo.lock` pins (read through the GitHub
-    contents API), from the local cargo registry. reqwest follows redirects through tower-http's `FollowRedirect`:
-    `follow_redirect/mod.rs` follows only 301, 302, 303, 307 and 308 and returns any other status as it came (lines
-    273 to 293); it takes the response's first `Location` (`HeaderMap::get`, which returns the first of several values,
-    http 1.5.0 `src/header/map.rs` lines 786 to 790) and returns the response unchanged when there is none or it does
-    not resolve against the request URI (lines 301 to 309). So reqwest returns a 3xx with no `Location`, as revokt does,
-    and follows the first of two differing `Location`s, where revokt fails, as Necko does. reqwest's
-    `TowerRedirectPolicy::redirect` (`src/redirect.rs`, lines 306 to 334) refuses a hop only for a scheme other than
-    `http` or `https` (and `http` under `https_only`), so a hop to an IP literal host is followed: url 2.5.8's `Host` is
-    `Domain`, `Ipv4` or `Ipv6` (`src/host.rs`, lines 46 to 64). `Policy::limited(10)` is the default (lines 160 to
-    164) and only counts: it errors once the URLs already requested, the initial one included, exceed 10 (lines 131
-    to 141), so it follows 10 redirects as revokt does, and has no loop check of its own; revokt's is its own rule.
-    tower-http rebuilds each hop's headers from the original request's (`follow_redirect/mod.rs` line 327,
-    `*req.headers_mut() = this.headers.clone()`), and reqwest's `on_request` then strips the five credential headers from
-    that copy only when the next host or port differs from the previous URL's (`src/redirect.rs`, lines 239 to 250 and
-    336 to 338), so on a chain A → B → B reqwest strips them for the first hop to B and sends them again on the second;
-    revokt keeps them stripped. The same `on_request` adds a `Referer` when `referer` is set (lines 339 to 345), which
-    reqwest's `ClientBuilder` defaults to true (`src/async_impl/client.rs` line 308); upki's client (`fetch.rs`, lines
-    50 to 58) does not turn it off, so upki sends one on every hop, and revokt sends none.
-  - **Firefox's Necko** at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, `netwerk/protocol/http/`, read through the
-    GitHub contents API. `nsHttpChannel.cpp` processes 301, 302, 303, 307 and 308 as redirects, 305 being disabled
-    (lines 3371 to 3378). `AsyncProcessRedirection` returns `NS_ERROR_FAILURE` when there is no `Location` ("carry on as
-    though this were a normal response", lines 6929 to 6933), and `NS_ERROR_CORRUPTED_CONTENT` for a `Location` that
-    does not parse (lines 6953 to 6958); the caller then renders the 3xx as a normal response unless the error is one
-    of `DoNotRender3xxBody`'s (lines 3397 to 3409; `nsHttpChannel.h`, lines 533 to 537), which `NS_ERROR_FAILURE` is
-    not and `NS_ERROR_CORRUPTED_CONTENT` is. `nsHttpHeaderArray::SetHeaderFromNet` fails a response whose second value
-    of a header differs from the first with `NS_ERROR_CORRUPTED_CONTENT` when `IsSuspectDuplicateHeader` names the
-    header (`nsHttpHeaderArray.cpp`, lines 192 to 196), and it names `Content-Length`, `Content-Disposition` and
-    `Location` (`nsHttpHeaderArray.h`, lines 300 to 304); an equal second value is kept as one. That Necko follows a
-    hop to an IP literal host is not cited here.
-  - **upki v1.0.1's failure split** (§7.3 "Stages"), `upki/src/revocation/fetch.rs` in the cargo git checkout of tag
-    `v1.0.1` (`9821cce`): a manifest request that fails to send or has an error status is `FetchError::HttpFetch`
-    carrying the manifest URL (lines 82 to 93), and a body that is not a manifest is `FetchError::FileDecode` with no
-    path (lines 95 to 104). A file download that fails to send, has an error status or fails while its body is read
-    is the same `FetchError::HttpFetch`, carrying the file's URL (lines 290 to 310), and a body whose SHA-256 differs
-    is `FetchError::HashMismatch` with the local path (lines 317 to 319). upki has no stage, so only the URL in the
-    error tells a manifest fetch from a file fetch; revokt's `CHANGESET` and `ATTACHMENT` make that split explicit.
-- Revision 46, mozilla::pkix at Firefox `86136a5faf970e59063cd07b822717f6fd03a958` (main, 2026-10-29), read
-  2026-10-30: `pkixcert.cpp` `ExtractSignedCertificateTimestampListFromExtension` reads the SCT extension's
-  `extnValue` with `der::ExpectTagAndGetValueAtEnd(extnValue, der::OCTET_STRING, …)`, which requires the tag `0x04`
-  and then `der::End` (`include/pkix/pkixder.h`, lines 234 to 248), so nothing may follow the OCTET STRING;
-  `pkixder.cpp` `ReadTagAndGetValue` rejects a high tag number, a non-minimal length (`81 nn` with nn < 128, `82`
-  below 256) and every other length form (`0x80`, `0x83` and above), minimal or not, as `ERROR_BAD_DER`;
-  `pkixbuild.cpp` (lines 218 to 229), for a `MustBeEndEntity` certificate, records a failure of that extraction as
-  one where "all paths through it will fail" and stops building. `pkixcert.cpp` `BackCert::RememberExtension` (lines
-  295 to 303) rejects a second SCT extension, as any duplicate extension it understands, with
-  `ERROR_EXTENSION_VALUE_INVALID`.
-- Remote Settings base paths, verified 2026-10-22: `https://firefox.settings.services.mozilla.com/v1/` is the Kinto API (`http_api_version 1.23`, Firefox's `services.settings.server`); `/v2/` is a distinct newer server (`project_version 0.0.1`, built 2026-10-22, 235 `monitor/changes` entries) serving the same `changeset` shape and the same attachments base URL; both answered the `cert-revocations` changeset with 200. `metadata.signature` carries `ref`, `x5u`, `mode`, `type`, `signature`, `signer_id`, `public_key`.
-- Android toolchain fact, verified 2026-10-24: a library built with Kotlin 2.4 needs AGP 8.5.2 or later
-  (developer.android.com, "AGP, D8, and R8 versions required for Kotlin versions"), and D8 from AGP 8.8.1 is tested
-  against OpenJDK up to 23 (the AGP 8.8 release notes). That D8 from AGP 8.5.2 to 8.8.0 dexes Java 17 class files is
-  not sourced here: a consumer fixture built with AGP 8.5.2 confirms it with the 0.3 Android modules, and if it fails,
-  the stated floor for Android consumers rises to the first AGP that passes. The 0.3 Android instrumented tier runs the
-  artifacts on every API level it covers.
-- Android API facts, verified 2026-10-22: `CompletableFuture.completeAsync`, `orTimeout`, `completeOnTimeout`, `failedFuture` and `delayedExecutor` were added at API 31 (API-31 diff page), outside core-library desugaring; libcore's `java.net.HttpURLConnection` declares no `setAuthenticator`; `ApplicationConfig.getTrustManager()` creates one `RootTrustManager` per config under `ensureInitialized()` and `RootTrustManagerFactorySpi.engineGetTrustManagers` returns that instance; `ApplicationConfig.getConfigForHostname` lowercases and strips a trailing dot; NSC pins are `NetworkSecurityTrustManager.checkPins` on every overload, absent without a `<domain-config>`.
-- OkHttp (master `ConnectPlan.kt`, `RealConnection.kt`, `CertificatePinner.kt`): the `Handshake` is built with a lazy lambda around `certificateChainCleaner.clean(peerCertificates, host)`, `CertificatePinner.check` returns before invoking it when no pin matches, and `RealConnection.supportsUrl`/`certificateSupportHost` read `handshake.peerCertificates` for HTTP/2 coalescing; `isEligible` refuses coalescing unless the address's `hostnameVerifier === OkHostnameVerifier`.
-- eMudhra: fixture URLs live; CVE-2026-111943; Go 1.27.3; Firefox 158.0.1; NSS 3.131.1.
-- Names: §13; `repo1.maven.org` was the authority.
-- Path validation: both SunJSSE and BoringSSL enforce RFC 5280 name chaining; AKI↔SKI is mandatory
-  for Web PKI certificates under the CA/Browser Forum Baseline Requirements; `SunCertPathBuilder` has
-  no candidate budget and backtracks through all name-matching candidates; `CertPath.getCertificates()`
-  excludes the trust anchor.
+The verification log is [references.md](references.md).

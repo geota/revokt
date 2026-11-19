@@ -12,8 +12,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * [StrictUrl]'s narrow grammar against the JDK's URL parsers (spec §7.1 "the parsed URI host", #177; §7.3's redirect
- * hops, #192): every x5u URL [X5uUrl] lets through is one `java.net.URI` and `java.net.URL`, which
+ * [StrictUrl]'s narrow grammar against the JDK's URL parsers (spec §7.1 "the parsed URI host" and "The x5u URL
+ * grammar", #177; the redirect hops of #192): every x5u URL [X5uUrl] lets through is one `java.net.URI` and `java.net.URL`, which
  * `HttpsURLConnection` connects with, read as https to the allowlisted host on port 443 with no userinfo, and every
  * redirect hop [HopUrl] resolves is read by both as https to the host and port [HopUrl] checked, so no fetcher can be
  * pointed at another host than the one checked.

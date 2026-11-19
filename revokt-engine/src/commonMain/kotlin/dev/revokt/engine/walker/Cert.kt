@@ -21,8 +21,8 @@ import okio.ByteString.Companion.toByteString
  *   `AlgorithmIdentifier` is not an OID with at most one parameter or the OID does not decode: no family and no
  *   probe entry matches `""`. [curveOid] is the SPKI parameters' OID when they are one (the named curve of
  *   `id-ecPublicKey`).
- * - [canonicalSubject] is computed once, at construction, and [canonicalIssuer] at most once, on first use (§5.1
- *   "Caches"); a canonicaliser that returns null or throws gives null, which matches nothing, so raw-byte and SKI
+ * - [canonicalSubject] is computed once, at construction, and [canonicalIssuer] at most once, on first use
+ *   (docs/design/trust-managers.md, "Caches"); a canonicaliser that returns null or throws gives null, which matches nothing, so raw-byte and SKI
  *   matching still apply (§5.1 decision list); only a fatal error ([isFatal], §5.5) is rethrown, and an
  *   `InterruptedException` keeps the thread's interrupt flag ([absorb]). The canonicaliser gets a copy of the name.
  * - [algorithmIdMismatch] is §5.1's per-certificate `AlgorithmIdMismatch`, computed by the parser after NULL/absent
