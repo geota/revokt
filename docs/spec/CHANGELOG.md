@@ -5,6 +5,26 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 60 (in progress)
+
+- **#218, the trust-class cut:**
+  - No MIRROR or SYSTEM source. `TrustClass`, `UNSIGNED_DATA`, `minTrustClass`, the bootstrap-only rule,
+    `MANIFEST_LAST_MODIFIED`, `MAX_MANIFEST_ENTRIES` and the diagnostics `MIRROR_WITH_SEED_NEVER_INSTALLED`,
+    `LOWER_CLASS_SOURCE_NEVER_INSTALLED` and `SOURCE_EMPTY` are gone.
+  - The goals: §2 goal 2 is "authenticated data only".
+  - §3.2: the loader builds every index it installs, and only a seed's is byte-compared.
+  - §4: the API sketch, the validation bullets and the golden fixture's columns.
+  - §5.1: the seed rule loses its class condition.
+  - §6.3: the coverage bound applies to every generation.
+  - §6.5: `meta.json` always carries the signed members; `records.json` is in every generation; `previous` has no
+    rank rule.
+  - §7: the source table and §7.3's stub. §7.3's hop grammar and the R diagnostic for a `c2spMirror` URL went with
+    the source, and so did `StrictUrl`'s IP-literal mode.
+  - §8: the `UNSIGNED_DATA` row and floor.
+  - §10: the bootstrap-only and mirror bullets.
+  - §11: the mirror and system-cache deliverables.
+  - The test plan: data-path fixture (c) and the MIRROR, SYSTEM and `UNSIGNED_DATA` items.
+
 ### Changes in revision 59 (the spec split of #216, and the deltas of #209, #234, #242 and #244, 2026-11-18)
 
 - **The split.** `revokt-spec.md` is the normative core. §9 is now `test-plan.md` (section numbers kept), with the
