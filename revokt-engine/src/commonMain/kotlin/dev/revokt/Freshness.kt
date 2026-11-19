@@ -11,9 +11,6 @@ public enum class Freshness {
     /** M2 OneCRL and intermediates: the last verified poll. */
     LAST_VERIFIED_POLL,
 
-    /** A C2SP manifest's last modification (`MIRROR`, `SYSTEM`). */
-    MANIFEST_LAST_MODIFIED,
-
     /** A seed's signed timestamp. */
     SEED_SIGNED_TIME,
 

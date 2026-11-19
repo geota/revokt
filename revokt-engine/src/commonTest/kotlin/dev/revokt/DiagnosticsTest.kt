@@ -47,8 +47,8 @@ class DiagnosticsTest {
             .Builder()
             .outcome(SyncOutcome.BLOCKED_BY_SELF)
             .atMillis(1_700_000_000_000)
-            .sourceId("c2spMirror")
-            .blockedSource("c2spMirror")
+            .sourceId("private-remote-settings")
+            .blockedSource("private-remote-settings")
             .blockedChainSha256(ByteArray(32) { 7 })
             .blockedLeafSerial(byteArrayOf(1, 2, 3))
             .build()
@@ -77,13 +77,13 @@ class DiagnosticsTest {
             "METERED_DEFERRED, CLOCK_BEHIND, NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, " +
                 "STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, " +
                 "ENGINE_SELF_CHECK_FAILED, FEED_HOST_REVOKED, FETCHER_TRUST_UNAVAILABLE, " +
-                "MIRROR_WITH_SEED_NEVER_INSTALLED, IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, " +
+                "IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, " +
                 "EXEMPTION_ON_EVIDENCE_RULE, NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, STALE_REJECTS_WITHOUT_THRESHOLD, " +
                 "SEED_PAST_REJECT_THRESHOLD, EXEMPT_ON_ALLOW, UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP, " +
                 "STRICT_ON_ANDROID_WITHOUT_NO_ISSUER_EXEMPTION, BUDGET_ALLOWS, EVIDENCE_LOWERED_BELOW_PRESET, " +
-                "LOWER_CLASS_SOURCE_NEVER_INSTALLED, STALENESS_CLEARED_FOR_REQUIRED_DATASET, SEED_UNREADABLE, " +
+                "STALENESS_CLEARED_FOR_REQUIRED_DATASET, SEED_UNREADABLE, " +
                 "SEED_CHANNEL_MISMATCH, STORE_UNREADABLE, STORE_LOCKED, CHANNEL_UNSET, PLATFORM_TRUST_MISMATCH, " +
-                "CAP_NEAR_LIMIT, SYNC_FAILED, SYNC_SCHEMA_REJECTED, SOURCE_EMPTY, IO_DISPATCHER_UNCONFINED"
+                "CAP_NEAR_LIMIT, SYNC_FAILED, SYNC_SCHEMA_REJECTED, IO_DISPATCHER_UNCONFINED"
         assertEquals(spec.split(", "), DiagnosticCode.entries.map { it.name })
         // Spec §4: NOT_STARTED is the unevaluated counter, never a diagnostic.
         assertTrue(DiagnosticCode.entries.none { it.name == "NOT_STARTED" })
@@ -270,7 +270,7 @@ class DiagnosticsTest {
         val outcomes = SyncOutcome.entries - SyncOutcome.BLOCKED_BY_SELF
         val each =
             listOf<SyncResult.Builder.() -> SyncResult.Builder>(
-                { blockedSource("c2spMirror") },
+                { blockedSource("private-remote-settings") },
                 { blockedChainSha256(ByteArray(32)) },
                 { blockedLeafSerial(byteArrayOf(1)) },
             )

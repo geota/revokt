@@ -1,6 +1,6 @@
 # revokt: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec, revision 59** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-18
+Status: **draft spec, revision 60** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-19
 
 > **Name: `revokt`.** Maven group `dev.revokt`, GitHub repository under the maintainer's own account, domain
 > `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub handle `Revokt` is taken; §13 gives the
@@ -37,16 +37,16 @@ stack, one line into OkHttp and every Ktor engine.
 
 **Goals for M1 (0.x until M2)**
 1. **CRLite leaf revocation** from Mozilla's signed filters, both channels, both encodings, C2SP
-   `upki-revocation@v1.0.0` conformant, able to read a system upki cache.
-2. **Authenticated data with an explicit trust class per dataset**; policy can require signed data.
+   `upki-revocation@v1.0.0` conformant: the store keeps every generation as a directory image any C2SP reader accepts.
+2. **Authenticated data only.** Every generation the engine installs is Mozilla-signed, from the feed or from a seed
+   whose signed records are re-verified, so a generation's age is the only data-quality dimension.
 3. **Additive-only rejection.** The platform verdict runs first and is final for acceptance. revokt
    never rejects because of its own failures (`NO_ISSUER`, `PARSE_FAILED`,
    `ENGINE_ERROR` in `DEFAULT`). **Two stated exceptions**: `PATH_BUDGET_EXCEEDED` rejects in
    `DEFAULT`; it is reachable only by a chain carrying more same-name or same-key-identifier
    candidates for one certificate, or more verifying junk overall, than any honest chain has (§5.1).
    And `NO_DATA` rejects in `DEFAULT`, only after the consumer has promised local data and
-   `validate()`/`start()` have confirmed it is loadable (§4; an unreadable sole seed fails `start()`; an
-   unreadable sole `c2spCache` rejects loudly after a `STORE_UNREADABLE` warning, which is why the seed is the default).
+   `validate()`/`start()` have confirmed it is loadable (§4; an unreadable sole seed fails `start()`).
 4. **Pure-Kotlin engine**, `commonMain`, enforced by a CI-only native compile; 1.0 ships `jvm()` only.
 5. **Per-handshake cost**: p95 under 1 ms with the JIT warm and the chain's path cached; first
    contact with an honest chain performs at most depth + 1 signature verifications (§5.1).
@@ -114,8 +114,8 @@ interface RevoktStorage {                                   // flat key space; t
 expect class FetcherTls                                     // linuxX64 gate: an empty actual stub, as for canonicalSubject. jvmMain actual: val sslSocketFactory: SSLSocketFactory; val trustManager: X509TrustManager /* that source's internal fetcher trust manager (§5.1 "Anchor snapshot"), never the public fetcherTrustManager */. Hostname verification is binding-owned, never a FetcherTls member (the JDK has no public RFC 6125 verifier): the JDK and Android fetchers rely on HttpsURLConnection's endpoint identification ("HTTPS", set by HttpsClient; a §9 fixture asserts a SAN mismatch is FAILED), the OkHttp fetcher keeps the base client's hostnameVerifier and build() throws IllegalArgumentException when it is not OkHttp's default (a replaced verifier is both a regression and non-coalescable), the Ktor fetchers keep their engine's
 class FetchRequest private constructor(…) {   // @RevoktTestingApi Builder, so fetcher tests can construct requests; val url: String; val headers: Map<String, String> /* engine sets User-Agent and If-None-Match, the latter synthesised as the quoted verified cursor ("<lastVerifiedLastModified>"), never an echoed server ETag (a persisted ETag the transport rejects would fail every later request); a 304 is UNCHANGED and updates lastAttemptAtMillis only; never Accept-Encoding */; val maxBodyBytes: Long /* min(attachment.size, MAX_FILTER_BYTES) for a SIGNED body, else the per-kind RevoktLimits cap */; val timeoutMillis: Long /* enforced by the engine: each fetch runs under Future.get(timeoutMillis) on ioDispatcher; expiry is FAILED and the next sync proceeds, so a hung injected fetcher cannot block later syncs */ }
 class FetchResponse private constructor(…) { class Builder { fun status(status: Int): Builder; fun header(name: String, value: String): Builder; fun headers(headers: Map<String, List<String>>): Builder; fun body(body: ByteArray): Builder; fun build(): FetchResponse }; companion object { @JvmStatic fun of(status: Int, headers: Map<String, List<String>>, body: ByteArray): FetchResponse }   // public, not testing-API: an HttpFetcher must construct one
-    val status: Int; val headers: Map<String, List<String>>; val body: ByteArray /* decoded, buffered; the fetcher stops at maxBodyBytes while inflating (gzip bomb) and throws; a fetcher never follows a 3xx and returns it as is; a C2SP mirror source's fetcher is wrapped in the shared internal RedirectingFetcher, which follows redirects under §7.3's rules; for every other source a 3xx is FAILED; the engine re-checks and hashes */ }
-fun interface HttpFetcher { fun fetch(request: FetchRequest): FetchResponse /* synchronous; one HttpFetcher per configured source, created by one Factory.create(tls) call per source at build() with that source's FetcherTls (a throwing factory propagates from build()); the contract: every TLS handshake the returned fetcher performs goes through the given tls and nothing else, one factory call serves one source only, and the shipped factories are the supported ones (§8 fetcher policy); runs on ioDispatcher, never the loader; never follows a redirect, its underlying client configured not to (redirects are followed above it, for C2SP mirror sources only, by the shared RedirectingFetcher, §7.3); must honour thread interruption so a timed-out fetch does not pile up; the body is handed to the loader, which alone writes the store; any Throwable = SyncOutcome.FAILED for that sync; a 401 or 407 is FAILED on every platform and no fetcher ever answers a challenge */; fun interface Factory { fun create(tls: FetcherTls): HttpFetcher } }   // a fetcher-policy reject and a 401/407 carry the stage of the fetch they interrupted (CHANGESET, X5U or ATTACHMENT)
+    val status: Int; val headers: Map<String, List<String>>; val body: ByteArray /* decoded, buffered; the fetcher stops at maxBodyBytes while inflating (gzip bomb) and throws; a fetcher never follows a 3xx and returns it as is, and a 3xx is FAILED; the engine re-checks and hashes */ }
+fun interface HttpFetcher { fun fetch(request: FetchRequest): FetchResponse /* synchronous; one HttpFetcher per configured source, created by one Factory.create(tls) call per source at build() with that source's FetcherTls (a throwing factory propagates from build()); the contract: every TLS handshake the returned fetcher performs goes through the given tls and nothing else, one factory call serves one source only, and the shipped factories are the supported ones (§8 fetcher policy); runs on ioDispatcher, never the loader; never follows a redirect, its underlying client configured not to, and nothing above it follows one either; must honour thread interruption so a timed-out fetch does not pile up; the body is handed to the loader, which alone writes the store; any Throwable = SyncOutcome.FAILED for that sync; a 401 or 407 is FAILED on every platform and no fetcher ever answers a challenge */; fun interface Factory { fun create(tls: FetcherTls): HttpFetcher } }   // a fetcher-policy reject and a 401/407 carry the stage of the fetch they interrupted (CHANGESET, X5U or ATTACHMENT)
 // jvmMain (JVM types, so not in commonMain):
 interface PlatformTrust {
     fun defaultDelegate(): X509TrustManager
@@ -265,8 +265,8 @@ interface RevocationEngine : AutoCloseable {
 interface PreparedGeneration : AutoCloseable { val generationId: String; fun query(q: CrliteQuery): CrliteQueryResult }   // inactive; close() without activate() discards it; after activate() the engine owns it and close() is a no-op. RevocationEngine.close() is idempotent; an engine instance may be injected into one Revokt only (R: build() throws on a second, identity registry)
 enum class FilterFormat { V3, V4 }                                                             // growable
 enum class CrliteQueryResult { NOT_REVOKED, REVOKED, NOT_COVERED, NOT_ENROLLED, NO_SCTS, NO_DATA, ENGINE_ERROR }   // growable; the only CRLite status type
-class GenerationFiles internal constructor(…) {                      // always C2SP layout: "index.bin" plus the files it names; @RevoktTestingApi Builder; jvmMain: object JvmGenerationFiles { @RevoktTestingApi @JvmStatic fun fromDirectory(dir: java.nio.file.Path, dataset: Dataset, trustClass: TrustClass, format: FilterFormat): GenerationFiles }, so a third-party engine is testable against the §9 corpus images from revokt-engine alone
-    val generationId: String; val dataset: Dataset; val trustClass: TrustClass; val format: FilterFormat   // the full filter's encoding; each filter is read in its own (mixed encodings allowed), and every one is in the engine's formats (§6.5 format check)
+class GenerationFiles internal constructor(…) {                      // always C2SP layout: "index.bin" plus the files it names; @RevoktTestingApi Builder; jvmMain: object JvmGenerationFiles { @RevoktTestingApi @JvmStatic fun fromDirectory(dir: java.nio.file.Path, dataset: Dataset, format: FilterFormat): GenerationFiles }, so a third-party engine is testable against the §9 corpus images from revokt-engine alone
+    val generationId: String; val dataset: Dataset; val format: FilterFormat   // the full filter's encoding; each filter is read in its own (mixed encodings allowed), and every one is in the engine's formats (§6.5 format check)
     val names: Set<String>; fun bytes(name: String): ByteArray /* fresh copy; a disk-backed implementation later is not a break */; fun sha256(name: String): ByteArray /* content hash, computed once by the loader */; val sourceTimestampMillis: Long }
 class CrliteSct private constructor(…) { val logId: ByteArray /* 32 bytes */; val timestampMillis: Long /* RFC 6962 u64 carried in Long; compared with java.lang.Long.compareUnsigned */ }   // @RevoktTestingApi Builder
 class CrliteQuery private constructor(…) {                           // growable value-semantics class (builder, @RevoktTestingApi); a field added in a minor does not break engines
@@ -277,22 +277,18 @@ class CrliteQuery private constructor(…) {                           // growab
 defaults to the Kotlin engine (`formats = {V3, V4}`, `name = "kotlin"`). The
 updater builds `index.bin` itself for Remote Settings generations (the channel's one full filter and every delta,
 ordered by time, with their coverage; `parent` is not read, §6.5), so every `GenerationFiles` is a directory image any C2SP reader accepts; the
-only engine-specific property is `format`. **`index.bin` consistency, verified by the loader before
-`prepare()` for every generation whose `index.bin` it reads rather than builds** (`SYSTEM`, a seed's rebuilt index being
-byte-compared instead; a `MIRROR` generation's index is built by the loader, §7.3): **selection equivalence**: for every log id and every timestamp (inclusive at both
+only engine-specific property is `format`. **`index.bin` consistency.** The loader builds every `index.bin` it
+installs, so each is **selection-equivalent** by construction: for every log id and every timestamp (inclusive at both
 ends, overlapping windows allowed), the set of filters the `index.bin` log directory names for that
-(log id, timestamp) must equal the set of referenced filters whose own coverage map contains it, i.e. every
-directory entry lies within its filter's window and every filter's window is exactly covered by its entries;
-a mismatch installs nothing, and its outcome is per source: `STORE_UNREADABLE` for a system cache, and
-`SEED_UNREADABLE` for a seed's byte-compare. **Every `index.bin` revokt's loader reads, whatever its
-source (a system cache's, a seed's, a stored generation's), is at most 1 MiB, checked before it is parsed; revokt
-never fetches an `index.bin`** (the seed's cap, §6.5, applied to every source; a mirror has no `index.bin`
-fetch; an injected engine's own reads are its concern), with the
-same outcome as a mismatch (`STORE_UNREADABLE` for a system cache, `SEED_UNREADABLE` for a seed); a stored generation whose `index.bin` is over the cap is a failed load in the §6.5
-recovery chain (`STORE_UNREADABLE`). **An `index.bin` the loader builds** (a Remote Settings or `MIRROR` generation's)
+(log id, timestamp) equals the set of referenced filters whose own coverage map contains it, i.e. every
+directory entry lies within its filter's window and every filter's window is exactly covered by its entries. A
+seed's `index.bin` is rebuilt and byte-compared, and a mismatch installs nothing (`SEED_UNREADABLE`). **Every
+`index.bin` revokt's loader reads (a seed's, a stored generation's) is at most 1 MiB, checked before it is parsed;
+revokt never fetches an `index.bin`** (the seed's cap, §6.5, applied to every source; an injected engine's own reads
+are its concern): over the cap, a seed is `SEED_UNREADABLE`, and a stored generation is a failed load in the §6.5
+recovery chain (`STORE_UNREADABLE`). **An `index.bin` the loader builds** (a Remote Settings generation's)
 that is over 1 MiB fails the install before the generation directory is written: `SyncOutcome.FAILED` with
-`INDEX_INCONSISTENT`, stage `INDEX`, so the loader never writes a generation it could not reload (a
-mirror's coverage, which sizes its index, is unsigned). **revokt's index reader takes only the magic `upkiidx1`**
+`INDEX_INCONSISTENT`, stage `INDEX`, so the loader never writes a generation it could not reload. **revokt's index reader takes only the magic `upkiidx1`**
 (C2SP `upki-revocation@v1.0.0`); the legacy `upkiidx0` that upki v1.0.1 also reads is rejected as malformed, with the
 outcome of a mismatch (Appendix A). This is what makes the Kotlin engine's
 coverage-driven filter selection (§6.2, every filter consulted by its own coverage) equal to C2SP's
@@ -344,7 +340,7 @@ val revokt = Revokt {
     signatureVerifier = JcaSignatureVerifier()
     revocationEngine = KotlinRevocationEngine()           // default; §3.2 seam
     clock = Clock.System                                // Java: clock(java.time.Clock); timeSource(TimeSource) for the monotonic deadlines (testable)
-    sources { remoteSettings(MozillaRemoteSettings.DEFAULT); c2spMirror("https://upki.rustls.dev/revocation/") /* with a seed this trips MIRROR_WITH_SEED_NEVER_INSTALLED; shown for completeness */; c2spCache("/var/cache/upki/revocation"); seed(SeedSource.fromResource("/revokt/seed-compat.zip")) }   // seed default when none is configured: SeedSource.bundled(), resolved at build(): /revokt/seed-<channel>.zip from the revokt-seed-<channel> artifact (§6.5; the quickstarts declare it); absent from the classpath → no seed source, and validate() emits NO_DATA_REJECTS_WITHOUT_LOCAL_DATA; present but unreadable → SEED_UNREADABLE at start() (§4 S bullet); seed(SeedSource.none()) opts out explicitly. No fetching source is configured by default (a library never opens the network unasked); a required dataset with local data and no fetching source is V NO_FETCHING_SOURCE, a WARNING under both enforcements (the instance updates only through sync()'s seed re-check, below; air-gapped seed-by-deploy fleets are legitimate). R: every source URL (baseUrl, attachmentBaseUrl, x5uHosts) is https with no userinfo, and a c2spMirror URL is read by §7.3's hop grammar (https:// in lowercase, no userinfo, a DNS host name or an IP literal, a port of 1 to 65535), else build() throws (NSC blocks cleartext on API 28+, the JVM does not). c2spCache takes the directory that holds index.bin, upki's <cache root>/revocation; upki's built-in default (Config::try_default) is the user cache, ProjectDirs("dev", "rustls", "upki") (Linux $XDG_CACHE_HOME/upki or ~/.cache/upki, macOS ~/Library/Caches/dev.rustls.upki, Windows %LOCALAPPDATA%\rustls\upki\cache), when it exists; else the system cache (Linux /var/cache/upki, macOS /Library/Caches/dev.rustls.upki, Windows %ProgramData%\rustls\upki\cache) when that exists; else the user cache. A upki config file's cache directory overrides both. revokt has no helper for this: the caller passes the directory.
+    sources { remoteSettings(MozillaRemoteSettings.DEFAULT); seed(SeedSource.fromResource("/revokt/seed-compat.zip")) }   // seed default when none is configured: SeedSource.bundled(), resolved at build(): /revokt/seed-<channel>.zip from the revokt-seed-<channel> artifact (§6.5; the quickstarts declare it); absent from the classpath → no seed source, and validate() emits NO_DATA_REJECTS_WITHOUT_LOCAL_DATA; present but unreadable → SEED_UNREADABLE at start() (§4 S bullet); seed(SeedSource.none()) opts out explicitly. No fetching source is configured by default (a library never opens the network unasked); a required dataset with local data and no fetching source is V NO_FETCHING_SOURCE, a WARNING under both enforcements (the instance updates only through sync()'s seed re-check, below; air-gapped seed-by-deploy fleets are legitimate). R: every source URL (baseUrl, attachmentBaseUrl, x5uHosts) is https with no userinfo, else build() throws (NSC blocks cleartext on API 28+, the JVM does not).
     meteredNetwork { false }                             // BooleanSupplier; revokt-android: RevoktAndroid.meteredNetwork(context) over ConnectivityManager.isActiveNetworkMetered(); sampled once per sync before a full download; a throw reads as false (§7.2)
     logger = RevoktLoggers.jul()                        // RevoktLogger; default auto-detected (§3)
     policy = RevoktPolicy.DEFAULT                       // or STRICT; RevoktPolicy.DEFAULT.newBuilder().rule(Rule.NO_SCTS, REJECT).exempt(Rule.NO_SCTS, …).staleness(Dataset.CRLITE, Staleness.ofMillis(3.days.inWholeMilliseconds, null))
@@ -352,14 +348,14 @@ val revokt = Revokt {
     awaitData(2.seconds)                                // Java: awaitData(java.time.Duration) / awaitDataMillis(long); defaults RevoktLimits.AWAIT_DATA_<CHANNEL>
     caches { pathEntries = 256; verdictEntries = 1024 }
     ioDispatcher = Dispatchers.IO                       // fetch I/O; Java: ioExecutor(Executor). The loader dispatcher is internal, single-parallelism. The dispatcher or executor must not run tasks inline (Dispatchers.Unconfined, Executor { it.run() }, Guava's directExecutor()): an inline one runs each fetch on the loader thread, which blocks before the per-fetch timeout (FetchRequest.timeoutMillis) can be applied
-    limits { maxFilterBytes = 32 * MiB; maxTrustManagers = 64 }   // MiB = 1 shl 20 (a RevoktLimits constant); download and record caps (MAX_FILTER_BYTES, MAX_JSON_BYTES, MAX_X5U_BYTES, MAX_MANIFEST_ENTRIES, MAX_CHANGESET_RECORDS) are overridable upward only (R: a lower value throws IllegalArgumentException from build()); maxTrustManagers in both directions, ≥ 1; walker budgets are constants. MAX_FILTER_BYTES also caps SIGNED bodies (limits table below), so raising it is the recovery for a larger Mozilla filter; maxTrustManagers is the multi-tenant case (per-tenant trust stores), one CandidateIndex and two small caches per instance
+    limits { maxFilterBytes = 32 * MiB; maxTrustManagers = 64 }   // MiB = 1 shl 20 (a RevoktLimits constant); download and record caps (MAX_FILTER_BYTES, MAX_JSON_BYTES, MAX_X5U_BYTES, MAX_CHANGESET_RECORDS) are overridable upward only (R: a lower value throws IllegalArgumentException from build()); maxTrustManagers in both directions, ≥ 1; walker budgets are constants. MAX_FILTER_BYTES also caps SIGNED bodies (limits table below), so raising it is the recovery for a larger Mozilla filter; maxTrustManagers is the multi-tenant case (per-tenant trust stores), one CandidateIndex and two small caches per instance
     http = OkHttpFetcher.Factory(baseClient)             // default on the JVM: JdkHttpFetcher.Factory (ProxySelector.getDefault() and a per-connection HttpURLConnection.setAuthenticator that answers RequestorType.PROXY only, JDK 9+, so a trusted intercepting proxy cannot harvest default credentials; a 401/407 is FAILED; revokt configures no proxy; Basic auth to an HTTPS tunnel is disabled by the JDK unless jdk.http.auth.tunneling.disabledSchemes is cleared; proxy-authenticated fleets use OkHttpFetcher.Factory with proxyAuthenticator; setInstanceFollowRedirects(false)). Default on Android (AndroidPlatformTrust): OkHttpFetcher.Factory over a fresh OkHttpClient() when revokt-okhttp resolves (detected by class name), else AndroidHttpFetcher.Factory from revokt-android (HttpURLConnection.setAuthenticator does not exist in Android's libcore, so JdkHttpFetcher is never used there; Android's HttpsURLConnection answers a 407 from the VM-global Authenticator.getDefault() with no per-connection suppression, the §10 residual, which is why the OkHttp fetcher is preferred). OkHttp: sslSocketFactory and x509TrustManager are replaced from FetcherTls unconditionally, the base client's hostnameVerifier is kept (R: must be OkHttp's default), and followRedirects(false), followSslRedirects(false), authenticator(NONE), cookieJar(NO_COOKIES) and cache(null) are forced (a consumer disk cache would serve the first ETag-less request, on a fresh install or after resetState(), from its own max-age) (§7.1 "redirects are never followed" holds at the transport); proxy, dns, interceptors and certificatePinner are inherited and consumer-owned: application and network interceptors see every revokt request, so the consumer must not attach credential-adding interceptors to the base client (the README warns)
 }
 revokt.start(); revokt.close()                          // Revokt : AutoCloseable; Java entry Revokt.builder(); DSL vars carry @get:JvmSynthetic @set:JvmSynthetic; idempotent; lifecycle CREATED → STARTED → CLOSED (§5.1). start() throws IllegalStateException on a validate() ERROR, SEED_CHANNEL_MISMATCH, a consumer trust manager's pre-start anchor snapshot build failure (fetcherTrustManager's is the FETCHER_TRUST_UNAVAILABLE warning), a second instance on the same storage identity in this process, a call from a thread holding the factory lock, or, under ENFORCE with outcome(NO_DATA) == REJECT, SEED_UNREADABLE when the seed is the only local data source (verified synchronously inside start() in that configuration, §4 S bullet); stays CREATED and may be retried. close() on the loader thread throws IllegalStateException (listener executors are never the loader; syncAsync(), resetStateAsync() and readyFuture() are completed by `ioExecutor.execute { future.complete(v) }` / `completeExceptionally(t)`, the Java 8 shape (never `CompletableFuture.completeAsync`, `orTimeout` or any other API-31+ member: minSdk is 26, core-library desugaring does not cover them, and an API-26 instrumented fixture plus an Android Lint `NewApi` check on a minSdk-26 consumer of revokt-jsse guard it), so dependent stages never run on the loader; each call returns a fresh dependent future (`internal.thenApply { it }`), so a consumer's cancel()/complete() cannot corrupt readiness; close() completes a pending syncAsync()/resetStateAsync() exceptionally as it does readyFuture()); a start() whose loader join observes CLOSED returns normally on a CLOSED instance whose readyFuture() has failed
 suspend fun Revokt.awaitReady(); fun readyFuture(): CompletableFuture<Void>          // completes when RevoktState.ready first becomes true; no internal deadline; close() completes it exceptionally with IllegalStateException("closed") and the suspend form throws CancellationException
 fun interface Revokt.Provider { fun revokt(): Revokt }       // may return a CREATED or STARTED instance (the WorkManager worker starts a CREATED one itself, §3; a CLOSED one is Result.failure()); a direct sync() in CREATED or CLOSED throws IllegalStateException
 suspend fun Revokt.sync(): SyncResult; fun syncAsync(): CompletableFuture<SyncResult>; fun syncBlocking(): SyncResult   // with no fetching source configured, sync() re-opens the seed source and, when the seed is newer than the live generation, installs it under the seed-vs-stored rule with writes (an air-gapped refresh: replace the seed artifact, call sync(); the watermark is intact), else UNCHANGED; either way it is a completed attempt (§8 STALE gate, datasetLastAttemptAtMillis)
-suspend fun resetState(); fun resetStateBlocking(); fun resetStateAsync(): CompletableFuture<Void>   // STARTED only; read-only → IllegalStateException; runs on the loader after any in-flight install; deletes every key names() lists except store.version (never `.lock`; updater.json included: the rollback watermark restarts from the seed's timestamp, or from zero with SeedSource.none(), §10) while the published generation and the engine's installed generation stay live (DataState.pending stays false while a generation is published), re-runs the loader start task (seed, system cache) and swaps old → new atomically (generationEpoch++ then); only when no local source yields a generation does it publish the empty snapshot (generationEpoch++) and **then** engine.clear(), in that order, so a handshake holding the old snapshot still finds data in the engine (step 7 never queries without a generation); a concurrent handshake is never NO_DATA while the previous generation existed; schedules the first sync before completing; anchor snapshots are untouched
+suspend fun resetState(); fun resetStateBlocking(); fun resetStateAsync(): CompletableFuture<Void>   // STARTED only; read-only → IllegalStateException; runs on the loader after any in-flight install; deletes every key names() lists except store.version (never `.lock`; updater.json included: the rollback watermark restarts from the seed's timestamp, or from zero with SeedSource.none(), §10) while the published generation and the engine's installed generation stay live (DataState.pending stays false while a generation is published), re-runs the loader start task (the seed) and swaps old → new atomically (generationEpoch++ then); only when no local source yields a generation does it publish the empty snapshot (generationEpoch++) and **then** engine.clear(), in that order, so a handshake holding the old snapshot still finds data in the engine (step 7 never queries without a generation); a concurrent handshake is never NO_DATA while the previous generation existed; schedules the first sync before completing; anchor snapshots are untouched
 var revokt.enforcement: Enforcement                     // @Volatile, read once per handshake (that one value drives step 0, step 4 and RevoktEvent.enforced); the enforcement and policy setters serialise under one lock and validate the (enforcement, policy) pair that will be published; setter runs validate(); throws IllegalStateException with the same messages; allowed in any lifecycle state, takes effect at the next handshake in STARTED; in STARTED a flip to ENFORCE with outcome(NO_DATA) == REJECT and a required dataset whose DataState has generationId == null, pending == false and a SEED_UNREADABLE/STORE_UNREADABLE warning for its sole local source is refused with ERROR NO_DATA_AT_FLIP (V bullet below); while pending == true the flip is accepted
 var revokt.policy: RevoktPolicy                         // runtime-replaceable with the enforcement setter's contract (runs validate(enforcement), throws on ERROR, any lifecycle state, next handshake); the per-rule kill switch for non-exemptable rules; the setter runs the NO_DATA_AT_FLIP check against (current enforcement, new policy) and is refused under the same conditions; the setter recomputes and publishes RevoktState.ready (awaitReady() must not hang after a change that empties requiredDatasets); flow step 0's needsData is recomputed at the next handshake; the setter publishes (policy, policyEpoch) as one @Volatile pair, read once per handshake (at flow step 0 when it runs, else at step 2) and threaded through steps 3, 7, 8, the exemptions and the cache put, like enforcement; policyEpoch (public on RevoktEvent; process-local, not stable across processes, like AnchorSnapshot.id) is part of the verdict-cache key, so a change is a cache miss and OBSERVE would-rejects can be attributed across it
 var revokt.shadowPolicy: RevoktPolicy?                  // builder shadowPolicy(p) too; default null. The measurement path from DEFAULT to STRICT (or to a new rule's REJECT) without OBSERVE: on every verdict-cache miss, after the enforced verdict is final, decision steps 7–8 are re-run under the shadow policy over the same path status, CRLite results and generation snapshot (no second walk, no second engine query; the shadow policy's own requiredDatasets, staleness map, outcomes and exemptions apply; a throwing shadow exemption is not exempt plus a shadow-only EngineError), yielding RevoktEvent.shadowVerdict (cached beside the verdict, so hits count too) and RevoktStatus.shadowWouldRejects: Map<Rule, Long> keyed by the shadow verdict's rule; the shadow never throws, never waits (step 0 is the enforced policy's) and never changes the enforced verdict; shadowPolicyEpoch is part of the verdict-cache key; the (shadowPolicy, shadowPolicyEpoch) pair is published and read exactly as the policy pair (one @Volatile pair, read at flow step 0 or 2 beside it, threaded through step 3 and the cache put); every setter call bumps shadowPolicyEpoch, setting null included; the setter takes the same lock as the two setters; the shadow is validated under OBSERVE semantics (its diagnostics are WARNINGs, never thrown and never copied to RevoktState.warnings, logged at WARN through RevoktLogger by the setter: a shadow must be measurable on a fleet that has not yet shipped the seed STRICT would require); the shadow runs under ENFORCE and OBSERVE (not OFF, where steps 2–4 do not run), after the enforced catch boundary has closed, under its own boundary (§5.5), and touches nothing but shadowWouldRejects and RevoktEvent.shadowVerdict (never fired, exempted, the per-dataset maps or event priority); it computes its own data rules from the same generation snapshot under its own requiredDatasets and staleness map
@@ -370,7 +366,7 @@ fun addListener(listener: RevoktListener, executor: Executor); fun removeListene
 val revokt.trustManager: RevoktTrustManager               // the single memoised instance over platformTrust.defaultDelegate(); the delegate is captured at build(), the RevoktTrustManager is created on the first read of this property or the first null-delegate wiring (lazily, under the factory lock; in STARTED with its snapshot), so a seed-only configuration over an empty default trust store starts (fixture (h)) and throws only once something asks for the instance
 fun revokt.trustManager(delegate: X509TrustManager): RevoktTrustManager   // RevoktTrustManager is a final class extending X509ExtendedTrustManager. In STARTED builds the anchor snapshot synchronously inside the factory lock (§5.1 "Anchor snapshot"); a plain delegate (JVM) → IllegalArgumentException; a throwing getAcceptedIssuers() or an empty anchor set → IllegalStateException; nothing registered in either case
 val revokt.evaluator: Evaluator; fun Revokt.Builder.pkixFallback(enabled: Boolean): Builder   // Evaluator.evaluate walks against revokt.trustManager's anchor snapshot (created lazily as above; one @Volatile read at entry, its id reported as anchorSnapshotId) and shares no path or verdict cache; outside STARTED it throws IllegalStateException (there is no step 1 to fall back to)
-val revokt.fetcherTrustManager: RevoktTrustManager          // created at build() over fetcherDelegate; snapshot attempted inside start() when a fetching source (remoteSettings, c2spMirror) is configured (a failure is S FETCHER_TRUST_UNAVAILABLE, a WARNING: syncs return FAILED until the build succeeds, retried per sync; never a start() throw), else under the factory lock on its first checkServerTrusted in STARTED (§5.1 "Anchor snapshot"); status() reports null snapshot fields until then
+val revokt.fetcherTrustManager: RevoktTrustManager          // created at build() over fetcherDelegate; snapshot attempted inside start() when a fetching source (remoteSettings) is configured (a failure is S FETCHER_TRUST_UNAVAILABLE, a WARNING: syncs return FAILED until the build succeeds, retried per sync; never a start() throw), else under the factory lock on its first checkServerTrusted in STARTED (§5.1 "Anchor snapshot"); status() reports null snapshot fields until then
 expect class SeedSource internal constructor(…) { companion object { fun none(): SeedSource } }   // commonMain; internal open(): okio.Source? (Okio never appears in a public signature)
 // jvmMain: fun interface SeedOpener { fun open(): java.io.InputStream? }   // one functional type, usable from Java as a lambda; the actual companion adds @JvmStatic fun of(opener: SeedOpener): SeedSource /* asset packs, a downloaded seed; re-opened on every start task and sync() seed re-check; wrapped into okio internally */, @JvmStatic fun fromResource(path: String): SeedSource and @JvmStatic fun bundled(): SeedSource /* resolve through SeedSource::class.java.classLoader, then the thread context loader, in that order (app servers) */
 // jvmMain: object JvmSeedSource { @JvmStatic fun fromPath(path: java.nio.file.Path): SeedSource }   // mirrors JvmStorage
@@ -405,18 +401,17 @@ enum class Rule(val ruleClass: RuleClass, val layer: Layer?, val exemptable: Boo
     PARSE_FAILED(UNEVALUABLE, PATH, false), NO_ISSUER(UNEVALUABLE, PATH, true),
     NOT_ENROLLED(NON_ANSWER, CRLITE, true), NO_SCTS(NON_ANSWER, CRLITE, true), NOT_COVERED(NON_ANSWER, CRLITE, false),
                                                                         /* M2: ISSUER_UNKNOWN_TO_MOZILLA(NON_ANSWER, PATH, true); M3: CT_UNVERIFIED */
-    STALE(DATA_QUALITY, null, true), UNSIGNED_DATA(DATA_QUALITY, null, true);   // Rule.NO_DATA is driven by requiredDatasets, never by CrliteQueryResult.NO_DATA. The three data rules (NO_DATA, STALE, UNSIGNED_DATA) are exemptable: under STRICT a feed outage must not take down traffic under a private anchor the operator already exempted from CRLite; ExemptionContext carries path.anchorSha256 and host for the data rules too (the walk still runs)
+    STALE(DATA_QUALITY, null, true);   // Rule.NO_DATA is driven by requiredDatasets, never by CrliteQueryResult.NO_DATA. The two data rules (NO_DATA, STALE) are exemptable: under STRICT a feed outage must not take down traffic under a private anchor the operator already exempted from CRLite; ExemptionContext carries path.anchorSha256 and host for the data rules too (the walk still runs)
     companion object { @JvmField val PRECEDENCE: List<Rule> = entries }                 // declaration order; a test asserts entries == entries.sortedBy { it.ruleClass }
 }
 enum class Outcome { ALLOW, REJECT }                     // closed
 enum class Enforcement { ENFORCE, OBSERVE, OFF }         // closed. OFF: platform only; steps 2–4 do not run; no events; evaluations does not advance, unevaluated[OFF] does
-enum class TrustClass(val rank: Int) { SIGNED(300), MIRROR(200), SYSTEM(150), BUNDLED(100) }   // growable; the floor rule compares rank, never ordinal, so a value can be inserted later
 enum class Severity { WARNING, ERROR }                   // closed
-enum class DiagnosticCode /* one per validate()/start()/sync/setter bullet */ { METERED_DEFERRED, CLOCK_BEHIND, NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, ENGINE_SELF_CHECK_FAILED, FEED_HOST_REVOKED, FETCHER_TRUST_UNAVAILABLE, MIRROR_WITH_SEED_NEVER_INSTALLED, IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, EXEMPTION_ON_EVIDENCE_RULE, NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, STALE_REJECTS_WITHOUT_THRESHOLD, SEED_PAST_REJECT_THRESHOLD, EXEMPT_ON_ALLOW, UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP, STRICT_ON_ANDROID_WITHOUT_NO_ISSUER_EXEMPTION, BUDGET_ALLOWS, EVIDENCE_LOWERED_BELOW_PRESET, LOWER_CLASS_SOURCE_NEVER_INSTALLED, STALENESS_CLEARED_FOR_REQUIRED_DATASET, SEED_UNREADABLE, SEED_CHANNEL_MISMATCH, STORE_UNREADABLE, STORE_LOCKED, CHANNEL_UNSET, PLATFORM_TRUST_MISMATCH, CAP_NEAR_LIMIT, SYNC_FAILED, SYNC_SCHEMA_REJECTED, SOURCE_EMPTY, IO_DISPATCHER_UNCONFINED }   // growable
+enum class DiagnosticCode /* one per validate()/start()/sync/setter bullet */ { METERED_DEFERRED, CLOCK_BEHIND, NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, ENGINE_SELF_CHECK_FAILED, FEED_HOST_REVOKED, FETCHER_TRUST_UNAVAILABLE, IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, EXEMPTION_ON_EVIDENCE_RULE, NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, STALE_REJECTS_WITHOUT_THRESHOLD, SEED_PAST_REJECT_THRESHOLD, EXEMPT_ON_ALLOW, UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP, STRICT_ON_ANDROID_WITHOUT_NO_ISSUER_EXEMPTION, BUDGET_ALLOWS, EVIDENCE_LOWERED_BELOW_PRESET, STALENESS_CLEARED_FOR_REQUIRED_DATASET, SEED_UNREADABLE, SEED_CHANNEL_MISMATCH, STORE_UNREADABLE, STORE_LOCKED, CHANNEL_UNSET, PLATFORM_TRUST_MISMATCH, CAP_NEAR_LIMIT, SYNC_FAILED, SYNC_SCHEMA_REJECTED, IO_DISPATCHER_UNCONFINED }   // growable
 enum class EngineErrorProducer { BOUNDARY, ENGINE, EXEMPTION }   // growable; exactly these three in M1
 enum class Layer { PATH, CRLITE }                        // growable; M2: ONECRL, CRLSET, DENYLIST (L1/L2); M3: CT (L4); M4: DISTRUST (L5)
 enum class Dataset { CRLITE /* M2: INTERMEDIATES, ONECRL, CRLSET, DENYLIST; M3: CT_LOGS; M4: DISTRUST */ }   // growable; the freshness rule per dataset and source is §7.2 prose
-enum class Freshness { RECORD_LAST_MODIFIED, LAST_VERIFIED_POLL, MANIFEST_LAST_MODIFIED /* MIRROR and SYSTEM: the newest coverage end, §7.2; the name is historical */, SEED_SIGNED_TIME, SEQUENCE_TIME, ARTIFACT_DATE }   // growable; what a generation's sourceTimestamp means
+enum class Freshness { RECORD_LAST_MODIFIED, LAST_VERIFIED_POLL, SEED_SIGNED_TIME, SEQUENCE_TIME, ARTIFACT_DATE }   // growable; what a generation's sourceTimestamp means
 enum class PathStatus { FOUND, NO_ISSUER, PATH_BUDGET_EXCEEDED, PARSE_FAILED, NOT_WALKED }   // growable; M5: NOT_APPLICABLE
 enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable; parseReason != null ⇔ path.status == PARSE_FAILED (§5.1 step 3, §9.2 D8)
 enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; keyabilityClause != null ⇔ parseReason == PRODUCER_UNKEYABLE
@@ -428,7 +423,7 @@ enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
 enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
 enum class ChainSource { PLATFORM, RECONSTRUCTED, PRESENTED /* reserved; produced by no M1 path */ }   // growable; PLATFORM: a platform-verified chain, §5.1 decision step 4 or EvaluationRequest.verifiedPath; M2: MIXED (paths from both a PLATFORM chain and the re-walk)
 enum class SyncOutcome { INSTALLED, UNCHANGED, DEFERRED /* a metered-deferred full (§7.2); not UNCHANGED, which reads as healthy */, FAILED, CLOCK_SKEW, ROLLBACK_REFUSED, BACKOFF, STORE_FAILED, STORE_LOCKED, BLOCKED_BY_SELF }   // growable
-enum class SyncStage { FETCHER_TRUST, CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: FETCHER_TRUST = the §5.1 build retry failed (no fetch); CHANGESET = the changeset fetch or its last_modified CLOCK_SKEW, and a mirror's manifest fetch or a malformed or over-cap manifest (§7.3); X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), any x5u PEM or chain failure other than validity (which is CLOCK_SKEW at X5U), or the content signature (§7.1); ATTACHMENT = a body fetch or the over-cap signed record, and a mirror file's fetch or a body whose size or SHA-256 differs from the manifest's (§7.3); each producing bullet names its stage
+enum class SyncStage { FETCHER_TRUST, CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: FETCHER_TRUST = the §5.1 build retry failed (no fetch); CHANGESET = the changeset fetch or its last_modified CLOCK_SKEW; X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), any x5u PEM or chain failure other than validity (which is CLOCK_SKEW at X5U), or the content signature (§7.1); ATTACHMENT = a body fetch or the over-cap signed record, and a mirror file's fetch or a body whose size or SHA-256 differs from the manifest's (§7.3); each producing bullet names its stage
 
 /** jvmMain. Time fields are stored as millis. Java: *Millis properties and java.time.Duration accessors/factories (API 26+). Kotlin: kotlin.time.Duration via @JvmSynthetic extensions. No inline value class on the surface. commonMain sees only an internal PolicyTable these compile to. */
 class Staleness private constructor(…) { val staleAfterMillis: Long; val rejectStaleAfterMillis: Long?   // staleAfter: loud threshold only (DataState.stale). rejectStaleAfter: the only threshold at which Rule.STALE fires; null = STALE never fires for this dataset
@@ -436,7 +431,7 @@ class Staleness private constructor(…) { val staleAfterMillis: Long; val rejec
     companion object { @JvmStatic fun ofMillis(staleAfter: Long, rejectStaleAfter: Long?): Staleness; @JvmStatic fun of(staleAfter: java.time.Duration, rejectStaleAfter: java.time.Duration?): Staleness } }
 class PolicyDiagnostic private constructor(…) { val code: DiagnosticCode; val severity: Severity; val rule: Rule?; val dataset: Dataset?; val message: String }   // tests and consumers match on code, never on message
 class RevoktPolicy private constructor(…) {           // newBuilder() on any policy, keeping the preset it derives from; no from-scratch builder; companion object { @JvmField val DEFAULT; @JvmField val STRICT }; fun exemption(rule: Rule): Exemption?
-    fun outcome(rule: Rule): Outcome; val requiredDatasets: Set<Dataset>; fun staleness(dataset: Dataset): Staleness?; fun minTrustClass(dataset: Dataset): TrustClass
+    fun outcome(rule: Rule): Outcome; val requiredDatasets: Set<Dataset>; fun staleness(dataset: Dataset): Staleness?
     val rollbackWindowMillis: Long; val clockSkewMillis: Long; val signedSourceFailingAfterMillis: Long   // plus java.time accessors
     class Builder {                                      // every method returns Builder; build() returns RevoktPolicy and runs the build()-time checks below; every duration and millis argument is ≥ 0, else IllegalArgumentException, and so is a java.time.Duration whose milliseconds overflow Long
         fun rule(rule: Rule, outcome: Outcome): Builder                       //
@@ -445,7 +440,6 @@ class RevoktPolicy private constructor(…) {           // newBuilder() on any p
         fun requiredDatasets(set: Set<Dataset>): Builder
         fun staleness(dataset: Dataset, s: Staleness): Builder; fun clearStaleness(dataset: Dataset): Builder   // clearing a required dataset's entry → validate() WARNING STALENESS_CLEARED_FOR_REQUIRED_DATASET
         fun rejectStaleAfter(dataset: Dataset, d: java.time.Duration?): Builder; fun rejectStaleAfterMillis(dataset: Dataset, millis: Long?): Builder   // null clears only the reject threshold; the loud flag stays; on a dataset with no entry, creates one with staleAfter = rejectStaleAfter
-        fun minTrustClass(dataset: Dataset, floor: TrustClass): Builder       // UNSIGNED_DATA fires for the dataset iff DataState.trustClass is below floor
         fun rollbackWindow(d: java.time.Duration): Builder; fun rollbackWindowMillis(millis: Long): Builder
         fun clockSkew(d: java.time.Duration): Builder; fun clockSkewMillis(millis: Long): Builder
         fun signedSourceFailingAfter(d: java.time.Duration): Builder; fun signedSourceFailingAfterMillis(millis: Long): Builder
@@ -478,13 +472,13 @@ sealed class Finding {
         @RevoktInternalApi val walkStats: WalkStats      // @RevoktInternalApi class WalkStats(val verifications: Int, val candidatesExplored: Int, val relatedExploredAtLeaf: Int, val unrelatedExploredAtLeaf: Int), annotated at class level so it stays out of the dump; walker internals, opt-in
         val credentialType: CredentialType               // growable enum, X509 in M1; M5 adds MTC (reserved now so M5 lands additively) }
     class Crlite : Finding() { val result: CrliteQueryResult; val issuerSpkiSha256: ByteArray?; val coverageEndMillis: Long? }
-    class DataState : Finding() { val dataset: Dataset; val trustClass: TrustClass? /* null ⇔ generationId == null; UNSIGNED_DATA never fires on null */; val generationId: String?   // SIGNED: "<changeset timestamp>/<last applied record id>", the last filter in buildIndex placement order (the full, then deltas by (effectiveTimestamp, id)); MIRROR/SYSTEM: manifest hash; seed: seed id; null ⇔ no generation
+    class DataState : Finding() { val dataset: Dataset; val generationId: String?   // "<changeset timestamp>/<last applied record id>", the last filter in buildIndex placement order (the full, then deltas by (effectiveTimestamp, id)); seed: seed id; null ⇔ no generation
         val freshness: Freshness?; val fromSeed: Boolean; val sourceTimestampMillis: Long?; val ageMillis: Long?
-        val pending: Boolean                             // true while the loader's start task has not passed the seed and system-cache steps for this dataset (in-process; the §8 STALE gate is the persisted one); false at the end of the start task whatever it found, a fetching source configured or not; Rule.NO_DATA never fires while pending (§5.1 overload table)
+        val pending: Boolean                             // true while the loader's start task has not passed the seed step for this dataset (in-process; the §8 STALE gate is the persisted one); false at the end of the start task whatever it found, a fetching source configured or not; Rule.NO_DATA never fires while pending (§5.1 overload table)
         val clockBehind: Boolean                         // sourceTimestampMillis > now + clockSkew, recomputed at every publish (a load after restart included) and never persisted (a future-dated seed, or a changeset installed under the §6.3 clock-behind rule): ageMillis is clamped at 0 and the CLOCK_BEHIND warning is on RevoktState.warnings while any dataset has it
         val seedFormat: Int?                             // when fromSeed
         val stale: Boolean                               // loud flag: ageMillis > staleAfter
-        val rules: Set<Rule>                             // the data rules that fired for this dataset: NO_DATA, STALE, UNSIGNED_DATA }
+        val rules: Set<Rule>                             // the data rules that fired for this dataset: NO_DATA, STALE }
     /* M2, reserved shape: class PathHit : Finding() { val rule: Rule; val dataset: Dataset; val certSha256: ByteArray; val onReportedPath: Boolean; val recordId: String? }  // M4: certSha256 == anchorSha256 */
     class UnsupportedAlgorithm : Finding() { val oid: String; val where: Layer; val outcomeDepended: Boolean }
     class VerifierError : Finding() { val oid: String; val message: String }   // a verifier or algorithm failure only: oid is the signature algorithm whose verification failed; never the PKIX fallback, which is FallbackNotUsed
@@ -567,7 +561,7 @@ reuses the first walk's memo under its own fresh budgets; a `Budget` on the re-w
 the first walk's `Found`: the rule is evaluated over the paths found so far (the hit path plus any
 clean path the re-walk completed), the re-walk's `WalkEnd` is recorded on `Finding.Path.rewalkEnd`,
 and `PATH_BUDGET_EXCEEDED` fires only from the first walk; the §9.1 properties cover the re-walk from 0.4. **Data
-rules (`NO_DATA`, `STALE`, `UNSIGNED_DATA`)** are map lookups over the generation snapshot taken at
+rules (`NO_DATA`, `STALE`)** are map lookups over the generation snapshot taken at
 flow step 2, computed **before** the catch boundary and merged into every verdict,
 `ENGINE_ERROR` included.
 
@@ -583,26 +577,23 @@ skipping the `ALLOW` minor sees the flip without warning); a new `Dataset` never
 within a major; `fired` contains every rule including ones a custom policy never set; `ordinal` is
 not stable, persist `name`. **Enforced by a golden fixture** `(rule, class, layer, exemptable, emptyPath, basicReason,
 introducedIn, flippedIn, DEFAULT outcome, STRICT outcome, requiredDatasets, staleness map,
-minTrustClass map, three time fields, precedence)` whose CI diff accepts only: a new rule with
+three time fields, precedence)` whose CI diff accepts only: a new rule with
 `ALLOW` when `introducedIn == current minor`; a preset outcome `ALLOW → REJECT` when
 `introducedIn == current minor − 1` and `flippedIn` is null, setting `flippedIn = current minor`
 (at most once per rule and preset); `exemptable` false → true; existing precedence entries
 remaining a subsequence.
 
 **`build()`, `validate(enforcement)` and `start()`**
-- V `NO_DATA_REJECTS_WITHOUT_LOCAL_DATA`: `requiredDatasets.isNotEmpty() && outcome(NO_DATA) == REJECT && no local data source` (a seed, or a
-  `c2spCache` only when the policy can install it: its rank ≥ `minTrustClass` or `outcome(UNSIGNED_DATA) == ALLOW`):
+- V `NO_DATA_REJECTS_WITHOUT_LOCAL_DATA`: `requiredDatasets.isNotEmpty() && outcome(NO_DATA) == REJECT && no local data source` (a seed):
   a `WARNING` under `OBSERVE`, an `ERROR` under `ENFORCE`, emitted once per required dataset with no
   local source (`PolicyDiagnostic.dataset` set); the setter throws iff any `ERROR`;
   `validate(enforcement)` returns the diagnostics. With `requiredDatasets` empty, `NO_DATA` can never
   fire and readiness never waits for data; V `NO_REQUIRED_DATASETS`: a CRLite source configured and
   `CRLITE ∉ requiredDatasets` → `WARNING` (data loss would be silent). V `IN_MEMORY_STORE_WITH_FETCHING_SOURCE`:
   `RevoktStorage.inMemory()` with a fetching source → `WARNING` (a full re-download per restart, no crash recovery).
-  V `MIRROR_WITH_SEED_NEVER_INSTALLED`: a `c2spMirror` configured with any seed source → `WARNING` under both
-  enforcements (bootstrap-only, §7.3; the supported offline path is a `SIGNED` private mirror, §7.1).
-  V `FORMAT_UNSUPPORTED`: a `remoteSettings` source while `V3 ∉ revocationEngine.formats`, or a `c2spMirror`
-  while `V4 ∉ formats` → `WARNING` under `OBSERVE`, `ERROR` under `ENFORCE` (Mozilla serves v3, `upki.rustls.dev` v4; both shipped engines list both, so it fires only for a third-party engine). V `NO_FETCHING_SOURCE`: a required dataset with a local data source and no fetching source → `WARNING` under both enforcements (the instance updates only through `sync()`'s seed re-check, §4). `minTrustClass(dataset)` for a dataset with no entry is
-  the preset floor, which therefore applies to datasets added later.
+  V `FORMAT_UNSUPPORTED`: a `remoteSettings` source while `V3 ∉ revocationEngine.formats` → `WARNING` under
+  `OBSERVE`, `ERROR` under `ENFORCE` (Mozilla serves v3; both shipped engines list it, so it fires only for a
+  third-party engine). V `NO_FETCHING_SOURCE`: a required dataset with a local data source and no fetching source → `WARNING` under both enforcements (the instance updates only through `sync()`'s seed re-check, §4).
 - **Under `Enforcement.OFF` every V diagnostic is a `WARNING`**, so an `ERROR` can never block the switch
   to the kill switch; this binds every `ERROR`-capable V code, the ones `validate()` adds in `revokt-jsse` included.
 - Each diagnostic names its `DiagnosticCode` and the call that emits it: **B** = `RevoktPolicy.Builder`
@@ -639,18 +630,13 @@ remaining a subsequence.
   `Dispatchers.Unconfined` → `WARNING` under both enforcements (fetches would run on the loader thread, defeating the
   per-fetch timeout, §4). Other inline executors are covered by §4's sentence only.
 - R: `outcome(NO_ISSUER) == ALLOW` with the PKIX fallback disabled (§5.1: the fallback is load-bearing).
-- V `LOWER_CLASS_SOURCE_NEVER_INSTALLED`: a `MIRROR` or `SYSTEM` source configured for a dataset
-  whose `minTrustClass` is above that class while `outcome(UNSIGNED_DATA) == REJECT` → `WARNING`
-  (the loader will never install it, §7.3).
 - (not a diagnostic) An empty anchor set, a throwing `getAcceptedIssuers()` or a failed index build throws `IllegalStateException` from `trustManager(delegate)` in `STARTED` and from `start()` for consumer trust managers created in `CREATED`, on both platforms (§5.1 "Anchor snapshot"); `fetcherTrustManager`'s failure is the S `FETCHER_TRUST_UNAVAILABLE` warning instead.
-- S `SOURCE_EMPTY`: the system cache holds no filters or no coverage, so it is not installed (§7.3).
-- S `SEED_UNREADABLE` / `SEED_CHANNEL_MISMATCH` / `STORE_UNREADABLE` / `STORE_MIGRATED` / `STORE_NEWER_LAYOUT` (per §6.5) / `STORE_LOCKED` (per §5.1 read-only mode); S→`ERROR` thrown by `start()` under `ENFORCE` with `outcome(NO_DATA) == REJECT` when the seed is the only local data source and is unreadable: **in that configuration, and only when the synchronous `meta.json` read finds no complete stored generation (first run, a rebuild, corruption), the seed's verification, `index.bin` rebuild, `prepare`, the §6.5 self-check and `activate` run synchronously inside `start()` on the calling thread, before the flip and before any loader task exists (the one exception to "loader dispatcher only"; a self-check failure is `SEED_UNREADABLE` and throws here; the factory lock is released around this work, §5.1 lifecycle)**; with a complete stored generation the loader decodes it as §5.1 states (falling to `previous`, then the seed, so a readable store masks a bad seed and the common cold start never decodes on the calling thread), otherwise on the loader task (a loud failure in `CREATED`, platform-only, instead of a silent reject-all); `STORE_UNREADABLE` never throws (§6.5), and an unreadable sole `c2spCache` is a `STORE_UNREADABLE` warning with the dataset `NO_DATA` once the start task completes, which is why the seed is the default; a seed
+- S `SEED_UNREADABLE` / `SEED_CHANNEL_MISMATCH` / `STORE_UNREADABLE` / `STORE_MIGRATED` / `STORE_NEWER_LAYOUT` (per §6.5) / `STORE_LOCKED` (per §5.1 read-only mode); S→`ERROR` thrown by `start()` under `ENFORCE` with `outcome(NO_DATA) == REJECT` when the seed is the only local data source and is unreadable: **in that configuration, and only when the synchronous `meta.json` read finds no complete stored generation (first run, a rebuild, corruption), the seed's verification, `index.bin` rebuild, `prepare`, the §6.5 self-check and `activate` run synchronously inside `start()` on the calling thread, before the flip and before any loader task exists (the one exception to "loader dispatcher only"; a self-check failure is `SEED_UNREADABLE` and throws here; the factory lock is released around this work, §5.1 lifecycle)**; with a complete stored generation the loader decodes it as §5.1 states (falling to `previous`, then the seed, so a readable store masks a bad seed and the common cold start never decodes on the calling thread), otherwise on the loader task (a loud failure in `CREATED`, platform-only, instead of a silent reject-all); `STORE_UNREADABLE` never throws (§6.5); a seed
   channel mismatch is an `ERROR` thrown synchronously by `start()` on both platforms (the `seed.json`
   header is read synchronously).
 - `NOT_STARTED` is not a warning: a trust manager or `sslContext()` obtained before `start()` runs step 1 only until `start()` and counts `unevaluated[NOT_STARTED]` (creating trust managers before `start()` is the recommended main-thread pattern, so it cannot be a stuck alert).
 - R `CHANNEL_UNSET`: no `channel` configured while a CRLite source (a seed included) is. R `PLATFORM_TRUST_MISMATCH`: Android runtime with a non-Android `platformTrust`. R `STORAGE_UNSET`: `AndroidPlatformTrust` with no explicit `storage` (§3).
-- R: a `c2spMirror` URL that §7.3's hop grammar refuses (IP literals allowed), or one with a query or a fragment (§7.3: every mirror URL is the base followed by a name).
-- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body, record count or manifest above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2's over-cap built index, §6.5's index-name collision, and §7.3's manifest names), `SOURCE_EMPTY` (§7.3: a mirror with no filters or no coverage, with `FAILED` at stage `INDEX`; also an S code for a system cache at `start()`), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
+- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body or record count above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `METERED_DEFERRED` (§7.2, with `SyncOutcome.DEFERRED`), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2's over-cap built index and §6.5's index-name collision), `FORMAT_UNSUPPORTED` (§3.2), `FEED_HOST_REVOKED` (§8) and `CLOCK_BEHIND` (§6.3). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
 
 ## 5. Trust manager [M1]
 
@@ -677,8 +663,8 @@ remaining a subsequence.
 | `EVENT_RING_CAPACITY` / `REJECTED_QUEUE_CAPACITY` | 64 / 4,096 | |
 | `MAX_TRUST_MANAGERS` | 16 | live instances per `Revokt`, builder-overridable in both directions, ≥ 1 (`limits { maxTrustManagers }`); live referents are counted through `WeakReference`, and before the cap throws every entry whose referent has cleared is evicted regardless of `ReferenceQueue` delivery, so a rebuilt client's dropped instance never counts |
 | `MAX_CERT_BYTES` | 262144 | per-certificate DER size (measured max over the seed corpus with margin), of `getEncoded()` before any parse and again of the bytes read (§5.3, §9.2); a larger certificate is a dropped candidate (`candidatesDropped`; leaf: `PARSE_FAILED(OVERSIZE)`); §9.2 fuzzes to the cap + 1 and asserts the over-cap behaviour |
-| `MAX_FILTER_BYTES`, `MAX_JSON_BYTES`, `MAX_X5U_BYTES` | 16 MiB, 4 MiB, 64 KiB | caps for **unsigned** bodies (mirror and system-cache files, the changeset JSON itself, x5u; a system cache's `index.bin` is read only up to 1 MiB, §3.2); for a `SIGNED` attachment the cap is `min(attachment.size, MAX_FILTER_BYTES)` (hash and size both verified; a signed record declaring more is `SyncOutcome.FAILED` with `CAP_NEAR_LIMIT` (stage `ATTACHMENT`) and advances nothing: a 16 MiB freeze is recoverable by raising the cap, a crash loop from one bad signed record is not); enforced while inflating; bodies are fetched, verified and written **one at a time**, so heap peak is one body plus its decode |
-| `MAX_MANIFEST_ENTRIES`, `MAX_CHANGESET_RECORDS` | 256 (Remote Settings listed 53 records a channel on 2026-11-12), 256 | manifest cap over C2SP attachments to fetch; record cap per changeset after channel filtering; a manifest or changeset over its cap is rejected before any body fetch. There is no per-sync total (neither upki nor Firefox has one), so a sync is bounded by these counts and the per-file caps, about 4 GiB from a malicious mirror (256 × 16 MiB), which is accepted |
+| `MAX_FILTER_BYTES`, `MAX_JSON_BYTES`, `MAX_X5U_BYTES` | 16 MiB, 4 MiB, 64 KiB | caps for **unsigned** bodies (the changeset JSON itself, x5u; a stored or seed `index.bin` is read only up to 1 MiB, §3.2); for a `SIGNED` attachment the cap is `min(attachment.size, MAX_FILTER_BYTES)` (hash and size both verified; a signed record declaring more is `SyncOutcome.FAILED` with `CAP_NEAR_LIMIT` (stage `ATTACHMENT`) and advances nothing: a 16 MiB freeze is recoverable by raising the cap, a crash loop from one bad signed record is not); enforced while inflating; bodies are fetched, verified and written **one at a time**, so heap peak is one body plus its decode |
+| `MAX_CHANGESET_RECORDS` | 256 (Remote Settings listed 53 records a channel on 2026-11-12) | record cap per changeset after channel filtering; a changeset over it is rejected before any body fetch. There is no per-sync total (neither upki nor Firefox has one), so a sync is bounded by these counts and the per-file caps, about 4 GiB from a malicious mirror (256 × 16 MiB), which is accepted |
 | `READONLY_POLL_INTERVAL` | 60 s | a read-only instance's pointer re-read and lock retry |
 | `MAX_BACKOFF` | 24 h | cap on honoured `Backoff`/`Retry-After` and on persisted `backoffUntilMillis`; computed failure backoff ≤ the 6 h poll interval |
 | `AWAIT_DATA_COMPAT`, `AWAIT_DATA_DEFAULT` | measured (§6.4) on Android; a fixed 2 s on the JVM (§11) | readiness deadline per channel |
@@ -782,7 +768,7 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      path evaluated, a walk `Found`, and every exit before step 5 carry none. It never changes the path status or a
      rule.
 7. Data: the data rules (`NO_DATA` for each required dataset with no generation and not `pending`,
-   never with a generation installed from a seed or a system cache for that dataset; `STALE`; `UNSIGNED_DATA`) were computed from the generation
+   never with a generation installed from a seed for that dataset; `STALE`) were computed from the generation
    snapshot (read at flow step 2) before decision step 1, outside the catch boundary (the one clock read is itself guarded: a
    throwing consumer `Clock` is `ENGINE_ERROR(BOUNDARY)`, never an escape), and are merged into every verdict whatever
    the path status or any exception. Then evaluate CRLite once per distinct leaf-issuer key; `REVOKED` wins; every evaluated key
@@ -800,7 +786,7 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    - **`Verdict.dataStates`** covers `requiredDatasets` ∪ the snapshot's configured datasets, independent of the path.
      A required dataset the snapshot lacks gets `generationId` null, so `NO_DATA` fires.
    - **A throwing consumer clock** gives `ENGINE_ERROR(BOUNDARY)`, the path `NOT_WALKED`, `ageMillis` null and
-     `stale` false everywhere (no `STALE`); `NO_DATA` and `UNSIGNED_DATA` are still computed, and no exemption runs.
+     `stale` false everywhere (no `STALE`); `NO_DATA` is still computed, and no exemption runs.
    - **`engine.query` throwing** (a breach of its never-throws contract) is caught at the boundary: producer
      `BOUNDARY`, `engineName` null. Keys answered before it keep their findings and rules, and later keys are not
      queried.
@@ -813,7 +799,7 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
 |---|---|---|---|
 | `(chain, authType, Socket)` | OkHttp, HttpsURLConnection, Ktor OkHttp/Android; Conscrypt's `ConscryptEngineSocket` forwards here | yes | waits |
 | `(chain, authType, String host)` 3-arg | OkHttp's Android chain cleaner, lazily after the socket overload (flow step 1) | yes | its step 1 is defined at flow step 1: the extension call with host', with the null-host retry only for a chain and host a socket or engine overload already accepted (acceptance memo entry present, flow step 1; never a path-cache lookup); at most two platform validations per call, the second only the null-host retry, the last one's returned list being the call's return value and its step-4 result; declared on the final `RevoktTrustManager` in `revokt-jsse` (`revokt-android` cannot subclass it); on the JVM, where `verifiedChain` is null, it returns the presented chain as a list |
-| `(chain, authType, SSLEngine)` | `java.net.http`, Netty, Ktor Java | no | seed if loaded; while the start task has not passed the seed and system-cache steps the dataset is `pending` and `NO_DATA` does not fire (allow), so the Android seed load never rejects on a non-waiting overload; `NO_DATA` only once the start task found nothing local; the anchor snapshot always exists in `STARTED` |
+| `(chain, authType, SSLEngine)` | `java.net.http`, Netty, Ktor Java | no | seed if loaded; while the start task has not passed the seed step the dataset is `pending` and `NO_DATA` does not fire (allow), so the Android seed load never rejects on a non-waiting overload; `NO_DATA` only once the start task found nothing local; the anchor snapshot always exists in `STARTED` |
 | `(chain, authType)` 2-arg | Ktor CIO, casts to `X509TrustManager` | no | as above; step 5 runs via `reconstruct` |
 
 **Lifecycle.** `RevoktLifecycle`: `CREATED → STARTED → CLOSED`; `start()` and `close()` are
@@ -871,10 +857,9 @@ task, discards the snapshots it built in that call (no handshake can have keyed 
 the cause is fixed, when it rebuilds every pre-start instance; a pre-start instance whose delegate
 keeps failing therefore fails every retry until the consumer drops it and it is collected. Then **one loader task**: decode the stored generation (unless `start()` found none synchronously and installed the seed instead; failure →
 `previous` → nothing, each `storeFailures++`), verify and install the seed (unless `start()` already did so synchronously, §4 S bullet) **unless the stored
-generation is `SIGNED` and not older than the seed** (a stored lower-class generation is always
-evicted and pruned, §7.3; the watermark becomes `max(watermark, seed timestamp)` taken from the
+generation is not older than the seed** (the watermark becomes `max(watermark, seed timestamp)` taken from the
 verified `records.json`; a blob whose key exists and re-hashes to its name is never rewritten (a mismatch is rewritten from the seed, `storeFailures++`, §6.5); a complete directory that already
-exists is `UNCHANGED`), read the system cache (§7.3), schedule the first sync (under a persisted `backoffUntilMillis` it runs at once and completes as `BACKOFF`, setting `lastSync` and both `lastAttemptAtMillis` fields (per source and `datasetLastAttemptAtMillis`), then reschedules at the backoff). The JVM `start()`
+exists is `UNCHANGED`), schedule the first sync (under a persisted `backoffUntilMillis` it runs at once and completes as `BACKOFF`, setting `lastSync` and both `lastAttemptAtMillis` fields (per source and `datasetLastAttemptAtMillis`), then reschedules at the backoff). The JVM `start()`
 joins that task up to `awaitData` (after the factory lock is released) and then returns (the
 readiness future covers the rest); Android returns after the synchronous part without joining the
 loader and its waiting bindings cover the gap; while `STARTED`
@@ -1054,7 +1039,7 @@ policy (§8); the internal instances never count toward `maxTrustManagers` and n
 `RevoktStatus.trustManagerCount`; the public `fetcherTrustManager` is the consumer-facing instance that
 never has a fetch in flight. The shared
 snapshot is attempted inside `start()` when a
-fetching source (`remoteSettings`, `c2spMirror`) is configured; a failure there is the
+fetching source (`remoteSettings`) is configured; a failure there is the
 `FETCHER_TRUST_UNAVAILABLE` warning, never a `start()` throw (an app that starts revokt in
 `Application.onCreate` must not crash-loop where without revokt it would merely fail TLS): each sync
 first retries the build on the loader and, while it fails, is `FAILED` **without a fetch** (stage `FETCHER_TRUST`; counting
@@ -1069,7 +1054,7 @@ platform verdict (flow step 1 only, as in `CREATED`), the failure is not memoise
 retries, so goal 3 holds without exception; reading the property or `status()` builds nothing
 (`status()` reports null snapshot fields until then). It does not count toward
 `maxTrustManagers` (nor do the per-source instances), wraps `fetcherDelegate` (default `platformTrust.defaultDelegate()`), uses the fixed
-fetcher policy (§8), never waits, and runs step 2 from M1 against `SIGNED`/`BUNDLED` generations only.
+fetcher policy (§8), never waits, and runs step 2 from M1 against the installed generation.
 
 `checkClientTrusted` and `getAcceptedIssuers` delegate to the platform unchanged.
 
@@ -1167,13 +1152,13 @@ Detect the encoding from the 2-byte prefix `[version, reserved0 = 0]`:
 and no other v4 limit is imposed on v3; the sorted-index and distinct-log-id MUSTs are checked. The resulting decode-only asymmetries against upki are recorded in the cross-engine suite as `FAILED`-vs-loaded, never as verdict classes.
 - **Observed 2026-10-21:** Mozilla serves v3 on both channels; `upki.rustls.dev` serves a v4 transcode.
 - **Validated 2026-10-21:** prototype matched `clubcard-crlite 0.6.2` on 43,510 / 43,510 queries.
-- **Coverage sanity at install, trust-class-aware**: `SIGNED`: coverage `high` later than the signed
+- **Coverage sanity at install**: coverage `high` later than the signed
   record's `last_modified` + `clockSkew` is rejected (`SyncOutcome.FAILED`, stage `INDEX`; cursor and watermark unchanged); **inside the rollback window** (changeset
-  `timestamp ≤ watermark`; **the effective watermark** is max(the stored watermark, the live `SIGNED` generation's
+  `timestamp ≤ watermark`; **the effective watermark** is max(the stored watermark, the live generation's
   `sourceTimestampMillis`), except while that generation is `clockBehind`, when the stored one alone applies,
   so a malformed or absent `updater.json` beside a live
-  `SIGNED` generation cannot reopen a rollback, and a far-future `clockBehind` generation cannot freeze the feed) a
-  maximum coverage below the active `SIGNED` generation's is
+  generation cannot reopen a rollback, and a far-future `clockBehind` generation cannot freeze the feed) a
+  maximum coverage below the active generation's is
   `ROLLBACK_REFUSED`; a changeset with `timestamp > watermark` installs and advances the watermark
   whatever its coverage (signed, server-timestamped and newer than anything seen; a Mozilla rebuild
   from an earlier snapshot must not freeze clients), **but a changeset whose signed `last_modified` exceeds
@@ -1195,9 +1180,7 @@ and no other v4 limit is imposed on v3; the sorted-index and distinct-log-id MUS
   `sourceTimestampMillis > now + clockSkew`, never read from the last publish, so a clock corrected
   between publishes closes the carve-out at once). The timestamp compared everywhere here (watermark, coverage
   bound, `CLOCK_SKEW`) is the signed `<ts>`, the value the verified payload was built from (§7.1; a live sync's
-  envelope `timestamp`, a seed's `records.json` value), never `monitor/changes`' unsigned `last_modified`. `MIRROR`/`SYSTEM`: later than local now +
-  `clockSkew` is rejected; installs only under the §7.3 bootstrap rule and never reads or writes the watermark. A `SIGNED` generation always
-  evicts a `MIRROR` or `SYSTEM` one.
+  envelope `timestamp`, a seed's `records.json` value), never `monitor/changes`' unsigned `last_modified`.
 
 **Hardening**: every length and offset checked before allocation with an explicit allocation budget
 per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (today's attachment names are 31 characters; a three-digit daily index must not fail the rule; a name longer than C2SP's 32 bytes is renamed in `index.bin`, §6.5) and never a reserved name (`index.bin`, `meta.json`, `records.json`, `current`, `updater.json`, `store.version`, `.lock`; `index.bin` among them since a filter of that name cannot sit beside the index in a C2SP image; a mirror's manifest names are compared with them ignoring ASCII case, §7.3); downloads capped at `min(attachment.size, MAX_FILTER_BYTES)` for signed bodies and at the per-kind fixed cap for unsigned bodies (§5.1 limits).
@@ -1214,7 +1197,7 @@ The measured column is the sum of the signed `attachment.size` values per channe
 `cert-revocations` changeset of 2026-11-12 (`timestamp` 1794499022363, 106 records: per channel 1 full and 52 deltas;
 deltas average 134 KB on `compat` and 242 KB on `default`; Appendix A). The delta count varies: 8 per channel on
 2026-10-21, 52 per channel on 2026-11-12.
-`MAX_MANIFEST_ENTRIES` (256) admits a full and 255 deltas, about 68 MB at `default`'s ~242 KB a delta; no per-sync
+`MAX_CHANGESET_RECORDS` (256) admits a full and 255 deltas, about 68 MB at `default`'s ~242 KB a delta; no per-sync
 total caps it, only the count and the per-file caps.
 
 Baseline Profile covering the decoder, seed verification, the TBS parser, the walker and `evaluate`,
@@ -1226,15 +1209,15 @@ are a fixed 2 s.
 
 **Layout over `RevoktStorage`'s key space** (each generation is materialisable into a C2SP directory
 image). **A file's name in a generation** is derived from its §6.3-validated Remote Settings
-`attachment.filename`, or in a `MIRROR` generation from its §7.3-checked `manifest.json` filename: the
+`attachment.filename`: the
 filename itself when it is at most 32 bytes (a C2SP filename: 1 to 32 bytes of
 `[A-Za-z0-9._-]`), otherwise its first 15 characters, `-` and the first 16 lowercase hex characters of the SHA-256 of
-the filename's ASCII bytes (not `attachment.hash` or the manifest's hash), 32 characters in all, since §6.3 admits names of up to 64
+the filename's ASCII bytes (not `attachment.hash`), 32 characters in all, since §6.3 admits names of up to 64
 characters and C2SP up to 32. That name is the file's name everywhere in a generation: `index.bin`,
 `GenerationFiles.names`, the generation directory and `meta.json`. The attachment filename appears only in the signed
-records (`records.json`), and a manifest filename only in the manifest and its body's URL (§7.3); a seed's
+records (`records.json`); a seed's
 `attachments/<f>` entry keeps the attachment filename f, is looked up by it (Seed archive, below) and is mapped by this
-rule at load. Two attachments or manifest files that map to one name (for a mirror, one name ignoring ASCII case, §7.3)
+rule at load. Two attachments that map to one name
 fail the generation before any body is fetched: `SyncOutcome.FAILED` with
 `INDEX_INCONSISTENT`, stage `INDEX`, and `SEED_UNREADABLE` for a seed (`buildIndex` refuses it). `meta.json` maps each
 name to its blob. Path segments for dataset and channel are lowercase enum names; persisted enum
@@ -1244,27 +1227,30 @@ values are names, never ordinals:
   (`STORE_MIGRATED` warning, a planned migration, not a corruption alert, `storeFailures` unchanged; the rebuild writes `store.version` first, then deletes every other key `names()` lists, then runs the start task as on an empty store, so an older co-tenant cannot mistake a half-written new layout for its own empty store and no old-layout `current` or `updater.json` survives), never an error and never `NO_DATA` beyond what an
   empty store already implies; a **higher** version is `STORE_NEWER_LAYOUT` and follows the storage's `NewerLayout` (§3): `IN_MEMORY` (the `JvmStorage` default: a newer co-tenant's store is left untouched, the store lock taken by `start()` is released, the identity deregistered, and the instance runs on the in-memory fallback, `RevoktState.storageFallback`, which for this code is never retried) or `REBUILD` (the `AndroidStorage` default: one package owns its directory and Android kills every process of the package on replace, so a higher version there is a rollback of the binary and is rebuilt exactly as a lower one).
 - `<dataset>/<channel>/current`: a small pointer file `{live, previous}` naming generation
-  directories; `previous` is only ever a complete generation of the same or higher trust class as
-  `live`, so recovery never falls to a lower class than the one being replaced.
+  directories, read strictly: a JSON object of `live` and an optional `previous` and no other member, anything else
+  being malformed. `previous` is only ever a complete generation that reads back as the loader reads one
+  (`records.json` included), so recovery never falls to a generation that cannot load; a candidate that does not read
+  back counts a store failure.
   **Beside a `current` that is present but malformed**, which may name any directory, a generation directory whose
   `meta.json` is present is held: a complete one is compared, reused when it holds this generation, and never
   reopened, rewritten or deleted; one whose `meta.json` is malformed (a torn write, or another `metaVersion`) is
   kept, and the sync is `STORE_FAILED` at that `<ts>`, which a new `<ts>` heals. Only a directory with no
   `meta.json` (incomplete, or not yet written) is staged. When an install flips beside a malformed pointer, the new
   pointer's `previous` is the generation the running loader's engine held live, if that generation is complete, is
-  another directory, and is of the same or a higher trust class; a fresh loader has no `previous`.
+  and is another directory; a fresh loader has no `previous`. A flip that heals a
+  malformed pointer is not followed by a prune, so nothing the damaged pointer named is deleted; the next install over
+  a valid pointer prunes.
 - `<dataset>/<channel>/gen-<timestamp>-<hash16>/` (`timestamp` = `sourceTimestampMillis` zero-padded to
   13 digits so lexical order is chronological; `hash16` = the first 16 lowercase hex characters of
-  `SHA-256(generationId)`; `generationId` itself may contain `/`): immutable; `index.bin`, delta files, `records.json` for `SIGNED`, and `meta.json` **written last as
+  `SHA-256(generationId)`; `generationId` itself may contain `/`): immutable; `index.bin`, delta files, `records.json`, and `meta.json` **written last as
   the completeness marker** (engine's own JSON tree): `metaVersion`, `dataset`, `channel`,
-  `trustClass`, `generationId`, `format` (the full filter's encoding; each filter is read in its own, so a channel
+  `generationId`, `format` (the full filter's encoding; each filter is read in its own, so a channel
   may mix encodings, as Firefox's cert_storage and upki allow),
   `freshness`, `sourceTimestampMillis`, `collection`, a map from
-  each full-filter name to `blobs/<sha256>`, for `SIGNED` the changeset timestamp, signer leaf
-  SHA-256 and signature bytes (the raw pair, any non-empty even length, since §7.1 admits any EC leaf curve), and for `MIRROR` the local time its manifest was stored, which is §7.3's
-  `If-Modified-Since`. A
-  `MIRROR` generation reloads as `MIRROR`, never as `SIGNED`; a `channel` mismatch is no generation.
-  A `SIGNED` generation directory also holds `records.json`, the full verified record set (the same bytes as the seed's `records.json`: the canonical-JSON signed payload), so a
+  each full-filter name to `blobs/<sha256>`, and the changeset timestamp, signer leaf
+  SHA-256 and signature bytes (the raw pair, any non-empty even length, since §7.1 admits any EC leaf curve), all
+  three required: a `meta.json` without them is malformed. A `channel` mismatch is no generation.
+  A generation directory also holds `records.json`, the full verified record set (the same bytes as the seed's `records.json`: the canonical-JSON signed payload), so a
   `_since` changeset can be verified against it (tombstones merged) without a full re-fetch. A `_since` changeset is
   merged over the pointed generation's `records.json`; the whole collection, fetched with no cursor, is verified as
   served.
@@ -1272,8 +1258,8 @@ values are names, never ordinals:
   `meta.json`; when the key exists the stored blob is re-hashed and reused on a match (a mismatch rewrites it, `storeFailures++`; on the delta path, where the full is not being fetched, the full attachment is fetched again in the same sync, subject to the metered rule), so a daily delta install never rewrites the 6 MB full and a bit-rotted blob is never decoded; prune removes unreferenced
   blobs. The upki CI adapter materialises a C2SP directory image from a generation (it already
   copies into a fresh directory, §3.2).
-- `<dataset>/<channel>/updater.json`: **the rollback watermark is per dataset and channel, stored once outside the per-source map** (the effective watermark is floored by the live `SIGNED` generation's timestamp unless it is `clockBehind`, §6.3; a malformed file's dataset-level members are read as absent and count a store failure, so the floor applies) together with `seedInstalledAtMillis` (written with the watermark when the seed install flips the pointer) and a dataset-level `datasetLastAttemptAtMillis` (written at the end of every sync whatever its outcome, with two exceptions: `STORE_LOCKED`, and a sync whose read of
-  `updater.json` threw, which writes nothing; the §8 `STALE` gate; the loader evaluates the gate when it writes this file and carries the boolean in the published `DataState`, internal field, so handshakes read the snapshot only, never the store) (a changeset installs only if its timestamp passes the dataset watermark, whichever source delivered it, so a relabelled `sourceId` on a private mirror cannot start a fresh watermark and roll back; the coverage-monotonic bound is the live `SIGNED` generation's maximum coverage, read from the published generation, never from this file); the per-source map is keyed by a **stable source id** (not the URL, so overriding a
+- `<dataset>/<channel>/updater.json`: **the rollback watermark is per dataset and channel, stored once outside the per-source map** (the effective watermark is floored by the live generation's timestamp unless it is `clockBehind`, §6.3; a malformed file's dataset-level members are read as absent and count a store failure, so the floor applies) together with `seedInstalledAtMillis` (written with the watermark when the seed install flips the pointer) and a dataset-level `datasetLastAttemptAtMillis` (written at the end of every sync whatever its outcome, with two exceptions: `STORE_LOCKED`, and a sync whose read of
+  `updater.json` threw, which writes nothing; the §8 `STALE` gate; the loader evaluates the gate when it writes this file and carries the boolean in the published `DataState`, internal field, so handshakes read the snapshot only, never the store) (a changeset installs only if its timestamp passes the dataset watermark, whichever source delivered it, so a relabelled `sourceId` on a private mirror cannot start a fresh watermark and roll back; the coverage-monotonic bound is the live generation's maximum coverage, read from the published generation, never from this file); the per-source map is keyed by a **stable source id** (not the URL, so overriding a
   base URL keeps the cursor): `lastVerifiedLastModified` (the `_since` cursor),
   `lastVerifiedAtMillis`, `lastAttemptAtMillis`, `backoffUntilMillis` (clamped to now + `MAX_BACKOFF` on write and again on read, so a clock that was far ahead at write time cannot leave a years-long backoff),
   `consecutiveFailures`, `feedHostBlock: {sinceMillis, chainSha256s}` (the §8 signed-source hold, **per source, not per chain**: `sinceMillis` is set on the first `BLOCKED_BY_SELF` of any host of the source and cleared only by a hit-free sync that completes after `sinceMillis + FEED_HOST_HOLD`, never earlier and never by an install alone, so an episode lasts at least the hold and expires exactly once (an alternating hit/clean chain cannot reset it); `chainSha256s` is the set of hit chains, for reporting; the hold is measured from the persisted value, so restarts do not extend it; with `RevoktStorage.inMemory()` it restarts per process); written atomically. A sync whose read of `updater.json` throws
@@ -1288,17 +1274,17 @@ values are names, never ordinals:
   file.
 - **Prune keeps exactly the directories the pointer names** (`live`, `previous`) and deletes every
   other directory, complete or not, and every unreferenced blob; it runs at `start()` and after every `INSTALLED`
-  sync, never after a failed one; on a failed `prepare()`, self-check or `activate()` the loader deletes
+  sync but one whose flip healed a malformed pointer, never after a failed one; on a failed `prepare()`, self-check or `activate()` the loader deletes
   the directory it was given before returning (blobs stay, content-addressed); an interrupted install
   (process death; no `meta.json`) is deleted by prune at the next `start()`; a sync-time `prepare()`/`activate()`
   throw and a self-check mismatch increment `storeFailures` and are `SyncOutcome.FAILED` (stage `PREPARE`, `ACTIVATE` or `SELF_CHECK`; cursor and watermark do not advance, so the same changeset is retried under backoff); a store write or pointer-flip failure during an install is `SyncOutcome.STORE_FAILED` (stage `STORE`, `storeFailures++`); "newest" is pointer order, never directory timestamp.
 **Order of an install** (an *install* anywhere in this document means this whole sequence): fetch, verify and write **one body at a time** (hash against the signed
-record or the manifest, write the blob unless the key exists, drop the body) → build `index.bin` (≤ 1 MiB, §3.2) → the format check (on every placed filter, the full
+record, write the blob unless the key exists, drop the body) → build `index.bin` (≤ 1 MiB, §3.2) → the format check (on every placed filter, the full
 and each delta, each in its own encoding; a filter whose encoding the engine does not list fails the install,
 `FAILED`, `FORMAT_UNSUPPORTED`, stage `PREPARE`, §3.2, the previous generation stays live, and nothing is offered to
 `prepare`) →
 write the generation
-directory (`meta.json` last) → the §3.2 `index.bin` consistency check for a generation the loader did not build (a `SYSTEM` one; `STORE_UNREADABLE`, §3.2) → `prepared = engine.prepare(files)` (validates and decodes into an inactive
+directory (`meta.json` last) → `prepared = engine.prepare(files)` (validates and decodes into an inactive
 state; the live generation is untouched) → **engine self-check on `prepared.query`** (deterministic,
 never probabilistic, every input named: the absent issuer hash is `SHA-256("revokt-self-check")`,
 incremented in its last byte until absent from every filter's index; the inside SCT is (`logId`, `low`)
@@ -1327,9 +1313,9 @@ after a successful plan and Firefox drops old deltas when a new full installs). 
 engine for a dataset whose snapshot has no generation; `CrliteQueryResult.NO_DATA` from an engine
 while the snapshot holds a generation for that dataset is reported as `ENGINE_ERROR(ENGINE)`, never
 as nothing, so an injected engine's install failure is visible, not silent (in `DEFAULT` it allows, loudly). **Every loader task catches `Throwable`**: an `OutOfMemoryError` during an install is `SyncOutcome.FAILED` for that sync, `storeFailures++`; nothing escapes the loader thread. **Crash recovery at
-`start()`**: `live` → `previous` → seed (per the §5.1 rule) → system cache → nothing, each failure
+`start()`**: `live` → `previous` → seed (per the §5.1 rule) → nothing, each failure
 counted. **The store is trusted
-at the OS level**: a stored `SIGNED` generation is not re-verified at load (the seed is, since it
+at the OS level**: a stored generation is not re-verified at load (the seed is, since it
 ships inside the APK); `JvmStorage` enforces ownership and owner-only write permission on POSIX. Temp
 names carry pid and random bytes and are excluded from `names()`; only the owning loader writes, under
 the lock `start()` holds; readers re-read the pointer once on a missing key. Install-time memory peak
@@ -1368,12 +1354,10 @@ every `seedFormat` the oldest supported minor lists, in the filter format Mozill
 
 ## 7. Data sources
 
-| Class | Sources | Integrity | Authenticity |
-|---|---|---|---|
-| `SIGNED` | Mozilla Remote Settings (CRLite [M1]; intermediates, OneCRL [M2]; ct-logs [M3]; root-store distrust-after dates and CCADB export [M4]); Chrome CRLSet [M2]; seeds [M1] | signed record hash / CRX proof | Mozilla content-signature roots / Google CRX key |
-| `MIRROR` | C2SP manifest mirrors [M1] | `manifest.json` SHA-256 per file | TLS to the mirror only |
-| `SYSTEM` | read-only C2SP cache directory [M1] | none | OS package management |
-| `BUNDLED` | denylist artifact [M2] | reproducible from signed public inputs, attested | project-attested, availability-only |
+| Sources | Integrity | Authenticity |
+|---|---|---|
+| Mozilla Remote Settings (CRLite [M1]; intermediates, OneCRL [M2]; ct-logs [M3]; root-store distrust-after dates and CCADB export [M4]); Chrome CRLSet [M2]; seeds [M1] | signed record hash / CRX proof | Mozilla content-signature roots / Google CRX key |
+| denylist artifact [M2] | reproducible from signed public inputs, attested | project-attested, availability-only |
 
 ### 7.1 Mozilla Remote Settings protocol and verification [M1]
 All constants live in `MozillaRemoteSettings` (per source, overridable), including the pinned root
@@ -1389,7 +1373,7 @@ payload does not bind the collection id**, and every security-state collection s
 before any state change every record is schema-validated for the requested collection (CRLite:
 `channel`, `incremental`, `attachment.{filename,hash,size,location}` (the filename under §6.3's rule), `effectiveTimestamp`, and `parent` on deltas only, since live full records carry none; M2
 schemas likewise); a verified changeset whose records fail validation is `SyncOutcome.FAILED` with
-`SYNC_SCHEMA_REJECTED` (stage `SCHEMA`), counts as a feed failure, and advances nothing. Remote Settings redirects are never followed (a mirror's, §7.3, up to 10). **JSON**: the
+`SYNC_SCHEMA_REJECTED` (stage `SCHEMA`), counts as a feed failure, and advances nothing. Redirects are never followed. **JSON**: the
 engine's own tree and tokenizer; duplicate keys and unpaired surrogates rejected; keys sorted by code
 point. **Content signature**: each entry's `mode` is read and must equal `p384ecdsa` for the entry to be tried (an entry with none is skipped), a deliberate narrowing: Firefox accepts an entry with no `mode`; the algorithm is never derived from it; the attachment
 base URL pinned in `MozillaRemoteSettings`, never taken from the server root response. **x5u chain**: the body is
@@ -1507,13 +1491,11 @@ downloads. **Seeds** verified like a live fetch except x5u validity at the seed'
 build-time plugin. **Freshness per dataset** (`Freshness`, reported on `DataState`): CRLite ages from the filter
 record's `last_modified`; OneCRL and intermediates (M2) age from the last **verified poll**, since
 their content changes only when a CA is listed; CRLSet from its sequence time; the denylist from the
-artifact date; seeds from their signed timestamp; a `MIRROR` or `SYSTEM` generation (`MANIFEST_LAST_MODIFIED`) from
-its newest coverage end: `sourceTimestampMillis` is the newest `high` over its filters, so `ageMillis` = now − that;
-an end within (now, now + `clockSkew`] installs with `ageMillis = 0` and `clockBehind` false, and an end beyond now +
-`clockSkew` is rejected at install (§6.3).
+artifact date; seeds from their signed timestamp.
 
-### 7.3 C2SP manifest mirrors and system cache [M1]
-Not normative: [docs/design/mirror-and-system-cache.md](../design/mirror-and-system-cache.md). Only the Remote Settings source is configurable.
+### 7.3 C2SP manifest mirrors and system cache
+Cut: not a source. [docs/design/mirror-and-system-cache.md](../design/mirror-and-system-cache.md) keeps the design. Only
+the Remote Settings source and seeds are configurable; the store's generation directories stay a C2SP image (§6.5).
 
 ### 7.4 Mozilla intermediate preloading [M2]
 Not normative before M2: [docs/design/m2-sources.md](../design/m2-sources.md).
@@ -1541,7 +1523,6 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
 | `NO_SCTS` | non-answer | allow | reject (exemptable) | → OCSP | n/a | allow | CRLite |
 | `NOT_COVERED` | non-answer | allow | allow | → OCSP | n/a | allow | CRLite (the coverage gap: a certificate issued after the live filter's coverage `high` is unchecked by every preset; §10) |
 | `STALE` | data quality | allow; never fires (`rejectStaleAfter` null; loud via `DataState.stale` and `RevoktStatus.stale`) | reject at 30 d, after a sync attempt has completed since the seed was installed (persisted gate, bullet below; exemptable) | → OCSP | drops an expired CRLSet | keeps old data | `DataState`, per dataset |
-| `UNSIGNED_DATA` | data quality (goal 2) | allow; never fires (floor `BUNDLED`) | reject (floor `SIGNED`; M2: `DENYLIST` floor `BUNDLED`; exemptable) | n/a | n/a | n/a | `DataState`, per dataset: `trustClass` below `minTrustClass` |
 | [M2] `DENYLIST`, `ONECRL`, `CRLSET` | evidence (`ONECRL` exemptable per anchor through `ExemptionContext.path.anchorSha256`, the enterprise-CA case; `CRLSET`, `DENYLIST` not exemptable) | reject | reject | reject (OneCRL) | reject (CRLSet) | n/a | L1/L2 (the 0.4 → 1.0 transition; not subject to the one-minor rule) |
 | [M2] `ISSUER_UNKNOWN_TO_MOZILLA` | non-answer | allow | reject (exemptable) | n/a | n/a | n/a | preload |
 | [M3] `CT` | evidence | allow | reject (ships `ALLOW` for one minor in `STRICT`) | reject | reject | n/a | L4: CT policy verified and not met |
@@ -1549,13 +1530,11 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
 | [M4] `DISTRUST` | evidence | reject (ships `ALLOW` for one minor in both presets) | reject (same; exemptable per anchor) | reject | reject | n/a | L5 |
 
 - **Data rules are per dataset.** `NO_DATA` fires for a dataset in `requiredDatasets` with no
-  generation and `DataState.pending == false` (the start task has passed the seed and system-cache steps; `pending` is false at the end of the start task whether or not a fetching source is configured, with `generationEpoch++` when it clears without a generation, so a seed-only configuration can never sit in `pending`); presets' `requiredDatasets` is `{CRLITE}`. `STALE` fires for a dataset present in the staleness map
+  generation and `DataState.pending == false` (the start task has passed the seed step; `pending` is false at the end of the start task whether or not a fetching source is configured, with `generationEpoch++` when it clears without a generation, so a seed-only configuration can never sit in `pending`); presets' `requiredDatasets` is `{CRLITE}`. `STALE` fires for a dataset present in the staleness map
   (presets: `CRLITE` only) iff `rejectStaleAfter != null && ageMillis > rejectStaleAfter`;
   `DataState.stale` (the loud flag) is `ageMillis > staleAfter` and never fires a rule.
-  `UNSIGNED_DATA` fires for a dataset iff `DataState.trustClass` is below `minTrustClass(dataset)`
-  (`DEFAULT`: `BUNDLED` for every dataset; `STRICT`: `SIGNED`, M2 `DENYLIST` `BUNDLED`). In `DEFAULT`, `STALE` and
-  `UNSIGNED_DATA` allow: setting a `rejectStaleAfter` or raising `minTrustClass` makes the rule fire
-  and report, and rejecting takes `rule(…, REJECT)` as well. `ageMillis = now − sourceTimestampMillis` per the dataset's
+  In `DEFAULT`, `STALE` allows: setting a `rejectStaleAfter` makes the rule fire and report, and rejecting takes
+  `rule(…, REJECT)` as well. `ageMillis = now − sourceTimestampMillis` per the dataset's
   `Freshness`. Preset defaults: `CRLITE` `staleAfter` 3 d, `rejectStaleAfter` null in `DEFAULT`, 30 d
   in `STRICT`. **Stated plainly:** `DEFAULT` with stale data is "reject what the stale filter says is
   revoked, allow the rest", with `STALE` never firing; `DEFAULT.newBuilder().rule(STALE, REJECT)`
@@ -1574,7 +1553,7 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
   future bound), `signedSourceFailingAfter` (24 h). `wouldRejects` advances only under `OBSERVE` and
   `rejects` only under `ENFORCE`, so the two columns compare cleanly after a flip.
 - **`ENGINE_ERROR` allows in `DEFAULT`** and rejects in `STRICT`.
-- **Exemptions** register per exemptable rule and run after policy mapping for fired `REJECT` rules only. **Enterprise-CA recipe under `STRICT`**: exempt `NO_SCTS`, `NOT_ENROLLED` **and the data rules** (`NO_DATA`, `STALE`, `UNSIGNED_DATA`) with the same `anchorIn(privateCa)` (`RevoktPolicy.Builder.exemptAnchors(sha256s)` does exactly that, §4), and `NO_ISSUER` with `hostSuffixIn(corpDomains) and platformOnly()` (it fires only on an empty reported path, where `anchorIn` never matches; `platformOnly()` alone would exempt every chain the §5.2 intermediate-omission residual produces on Android, for every host, turning `STRICT` into `DEFAULT` for a revoked public leaf presented without its intermediate), so a feed outage never takes down traffic CRLite cannot evaluate anyway ( on the JVM the supported private-CA delegate is a `TrustManagerFactory` over a merged `KeyStore`, never a hand-written `X509ExtendedTrustManager` composite, which passes `requiresExtendedDelegate()` but drops SunJSSE's constraints; call `refreshAnchors()` on rotation).
+- **Exemptions** register per exemptable rule and run after policy mapping for fired `REJECT` rules only. **Enterprise-CA recipe under `STRICT`**: exempt `NO_SCTS`, `NOT_ENROLLED` **and the data rules** (`NO_DATA`, `STALE`) with the same `anchorIn(privateCa)` (`RevoktPolicy.Builder.exemptAnchors(sha256s)` does exactly that, §4), and `NO_ISSUER` with `hostSuffixIn(corpDomains) and platformOnly()` (it fires only on an empty reported path, where `anchorIn` never matches; `platformOnly()` alone would exempt every chain the §5.2 intermediate-omission residual produces on Android, for every host, turning `STRICT` into `DEFAULT` for a revoked public leaf presented without its intermediate), so a feed outage never takes down traffic CRLite cannot evaluate anyway ( on the JVM the supported private-CA delegate is a `TrustManagerFactory` over a merged `KeyStore`, never a hand-written `X509ExtendedTrustManager` composite, which passes `requiresExtendedDelegate()` but drops SunJSSE's constraints; call `refreshAnchors()` on rotation).
 - **`outcomeDepended`** (M1): `outcomeDepended = (noIssuerReason == UNSUPPORTED_ALGORITHM)` (§5.1 "Findings"): the
   walk recorded an own signature OID and the result is `NO_ISSUER(UNSUPPORTED_ALGORITHM)`; false on `Found`, `Budget` and, on the
   bindings, `NO_ISSUER(PLATFORM_ONLY)`.
@@ -1716,39 +1695,28 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      the only leaf-issuer key; x509-limbo's `pathlen::intermediate-violates-pathlen-0` likewise walks to `Found`. On
      the bindings the platform validates the chain first (step 1), and a chain that breaks those constraints does not
      reach the walker.
-- Feed authenticity: `SIGNED` by Mozilla/Google signatures; `MIRROR`/`SYSTEM` by TLS or the OS,
-  **bootstrap only** (§7.3): never displaces a higher-class generation, evicted by the first signed
-  one; `BUNDLED` is project-attested and availability-only. The §7.3 residual: a fresh install without a
-  seed, on-path, with a platform-trusted certificate for the mirror host, runs on attacker data until
-  Mozilla is reachable; shipping a seed closes it and `validate()` says so.
+- Feed authenticity: every generation is verified against Mozilla's content-signature roots, from the feed or from a
+  seed (§7.1); there is no unsigned source. The M2 denylist is project-attested and availability-only.
 - Rollback and freeze: a persisted non-decreasing watermark with a 24 h tolerance and a
   coverage-monotonic rule inside that window; a newer signed changeset always installs and the
   pinned terminal's validity is never checked; **no signed record can freeze the signed source**: a
   signed revocation of the feed host holds fetches for at most 24 h, then they proceed with
-  `feedHostRevoked` loud, while `BLOCKED_BY_SELF` has no time bound only for TLS-only sources (§8); handshakes are attributed structurally (one internal trust manager per source), so a consumer's unrelated traffic on the public `fetcherTrustManager` can neither start the hold nor inherit `feedHostRevoked`; the cursor and watermark move only on a
+  `feedHostRevoked` loud; handshakes are attributed structurally (one internal trust manager per source), so a consumer's unrelated traffic on the public `fetcherTrustManager` can neither start the hold nor inherit `feedHostRevoked`; the cursor and watermark move only on a
   successful install after collection-schema validation, so a replayed sibling-collection changeset
   cannot freeze them; the content signature binds neither bucket nor collection, so a party the fetcher's TLS trusts (a private mirror) can serve `security-state-preview`'s `cert-revocations` as production data (residual: Mozilla data pending review, low impact; recorded beside the collection-id note); unsigned transport headers cannot persist a backoff beyond 24 h;
   staleness always visible; no ceiling in `DEFAULT` (upki's model); `rejectStaleAfter` is the
   optional ceiling; a changeset dated beyond local now + `clockSkew` is refused while a generation that is not itself `clockBehind` exists, and installed without advancing the watermark or cursor when none does or the live one is `clockBehind` (§6.3), so a single
-  future-dated signed record cannot pin the watermark in either case; a future-dated seed installs with the watermark at its signed timestamp, which only a newer signed changeset can pass, as for any seed. The effective watermark is never below the live `SIGNED`
+  future-dated signed record cannot pin the watermark in either case; a future-dated seed installs with the watermark at its signed timestamp, which only a newer signed changeset can pass, as for any seed. The effective watermark is never below the live
   generation's timestamp unless that generation is `clockBehind` (§6.3), so losing `updater.json` reopens
   no rollback. After `resetState()` the rollback bound is the
   seed's timestamp once the start task has swapped the live generation; until then the watermark floor still holds it
   at the old live generation's timestamp, which is stricter (residual: `updater.json` is deleted with the store).
 - Self-lockout bounded: a signed revocation of the signed source's own certificate holds fetches 24 h and is
   then reported as `feedHostRevoked` while fetches proceed (the payload is authenticated end to end, so
-  TLS authenticity to that host protects nothing an attacker could exploit); a TLS-only mirror's host is
-  blocked while its current chain is hit (`updateBlockedBySelf`); this is the one deliberate departure from Firefox's behaviour on the feed path; untrusted bytes hardened per C2SP with allocation budgets and per-kind download caps,
-  so an unsigned manifest cannot exhaust the heap; disk and metered bandwidth per sync are bounded only by the count
-  and per-file caps, about 4 GiB from a malicious mirror, since there is no per-sync total (as in upki and Firefox); its names are checked and each request
-  is the configured mirror URL followed by a checked name (§7.3), so an unsigned name never names a path outside its
-  generation directory and adds nothing to a URL but that name; redirects are followed only by the shared
-  `RedirectingFetcher` under §7.3's per-hop rules (each hop read by the strict grammar shared with the x5u URL, IP
-  literals allowed, and fetched as revokt re-serialises it, `FetcherTls` and the §8 host checks on every hop, at most
-  10 and no loops, one deadline, credentials dropped across origins and kept dropped, stricter than reqwest),
-  and a manifest or generation with no filters or no coverage is refused, so an empty mirror cannot turn `NO_DATA`'s
-  reject into an allow; residual: a mirror's `If-Modified-Since` comes from the local clock, so a clock running ahead
-  can draw a false 304 and keep an older mirror generation, as with upki;
+  TLS authenticity to that host protects nothing an attacker could exploit); this is the one deliberate departure
+  from Firefox's behaviour on the feed path; untrusted bytes (the changeset JSON, the x5u chain) are hardened with
+  allocation budgets and per-kind download caps, so an unsigned body cannot exhaust the heap; no fetch follows a
+  redirect (§7.1);
   x5u allowlisted, capped and path-validated, following mozilla::pkix's chain checks (§7.1); the
   TLS parser is at least as lenient as the platforms,
   verified differentially (§9.2), and `PARSE_FAILED` applies to the leaf only.
@@ -1774,8 +1742,8 @@ APIs outside the promise, the growability contract in §4.
 | Release | Scope | Estimate |
 |---|---|---|
 | 0.1 | engine scaffold, `RevocationEngine`, `Rule`/precedence model with the one-to-one tests, purity gate, BCV, POM assertions; `SymVerifier`, the reference walker and the §9.1 chain generator in `revokt-engine`'s test source set (they move to the published `revokt-testing` in 0.3; the walker fuzzer itself is 0.2, with the walker); TBS/SCT parser (incl. `producerKeyable`, `notBefore`/`notAfter`) with the D7 corpus, the issuer corpus and the §9.2 differential parser oracle (0.1 gate: oracles 1, 2 uber, 3a/3b, 4, properties D1–D3, D5, D6, D8 (gated direction; D8 gap reported)); JSON tree and canonical JSON (§7.1; the content-signature payload builder is 0.2); clubcard port (v3 + v4); the C2SP `index.bin` reader/writer and `GenerationFiles` (`KotlinRevocationEngine.prepare` needs them); the `revokt-engine` jvmMain `Rule → BasicReason` map; oracle CI | 5 weeks |
-| 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists; `start()` over an empty or throwing default trust store succeeds, and `evaluator.evaluate` throws `IllegalStateException` until an index exists; `sync()`, `syncAsync()` and `syncBlocking()` are internal and the updater syncs only on its schedule, while `SyncResult`, `SyncOutcome` and `SyncStage` ship public; each source's `FetcherTls` carries the platform `fetcherDelegate` only, so the §8 fetcher policy does not run in 0.2); candidate index and walker per §5.1, the PKIX fallback (the jvmMain `PkixPathBuilderFallback`, which Android also runs through ojluni, tested on the JVM; the Android instrumented run is 0.3), the §9.2 read fallback in the JVM binding, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3) with the §9 `Rule` model's [0.2] tests and the §9 API rows; **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation (the §9 content-signature fixtures less the three tagged [0.3]); CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` and `MIRROR` items and its Android and OkHttp fetcher halves; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
-| 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); C2SP bootstrap-only mirror and system cache; the §9 data-path fixtures (c), (e), (f), (h) and the (g) items deferred from 0.2 (`BLOCKED_BY_SELF`, `MIRROR`, and the Android and OkHttp fetcher halves); the §9 content-signature fixtures tagged [0.3] (the restart with the clock behind, and the two system-cache `index.bin` items); caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; the fetcher trust managers (`fetcherTrustManager` and the per-source instances in `FetcherTls`) with the §8 fetcher policy, `FETCHER_TRUST_UNAVAILABLE` and the `BLOCKED_BY_SELF` hold; public `sync()`, `syncAsync()` and `syncBlocking()`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `shadowPolicy`, `status()` and `state`, with the §9 `Rule` model's [0.3] tests; Android instrumented suite including the PKIX fallback, the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (the Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
+| 0.2 | a minimal `Revokt` (`build()`, a synchronous `start()` that builds one `CandidateIndex` over `platformTrust.anchors(platformTrust.defaultDelegate())`, loads the seed, runs the in-memory updater on the loader dispatcher and publishes the generation reference, `close()`; no readiness future, caches, factory lock, per-delegate instances or `state`; start diagnostics returned from `start()` as `List<PolicyDiagnostic>` until `state` exists; `start()` over an empty or throwing default trust store succeeds, and `evaluator.evaluate` throws `IllegalStateException` until an index exists; `sync()`, `syncAsync()` and `syncBlocking()` are internal and the updater syncs only on its schedule, while `SyncResult`, `SyncOutcome` and `SyncStage` ship public; each source's `FetcherTls` carries the platform `fetcherDelegate` only, so the §8 fetcher policy does not run in 0.2); candidate index and walker per §5.1, the PKIX fallback (the jvmMain `PkixPathBuilderFallback`, which Android also runs through ojluni, tested on the JVM; the Android instrumented run is 0.3), the §9.2 read fallback in the JVM binding, the walker-only harness, `Evaluator.evaluate` over that one index (decision steps 2–3 and 5–8, walker reason reported directly; `Revokt.evaluate(…, delegate)` is 0.3) with the §9 `Rule` model's [0.2] tests and the §9 API rows; **the §9.1 walker fuzzer is built and runs against the implementation here (P1–P8 gate)** and the walker's adversarial review precedes it; Remote Settings protocol and content-signature verification with x5u path validation (the §9 content-signature fixtures less the three tagged [0.3]); CRLite updater and the updater record over `RevoktStorage.inMemory()` (the §6.5 key layout in memory; durability, `store.version`, pointer flip, crash recovery and the lock are 0.3); seeds with `seed.json`; data artifacts job; coverage sanity and rollback; the §9 data-path fixtures (a), (b), (d) and (g) less its `BLOCKED_BY_SELF` item and its Android and OkHttp fetcher halves; CI-only upki engine and the cross-engine suite (the issuer taken from the corpus chain's presented order, no walk needed); benchmarks | 4 weeks |
+| 0.3 | §6.5 store (`store.version`, `meta.json`, pointer flip, crash recovery, lock); the §9 data-path fixtures (e), (f), (h) and the (g) items deferred from 0.2 (`BLOCKED_BY_SELF`, and the Android and OkHttp fetcher halves); the §9 content-signature fixtures tagged [0.3] (the restart with the clock behind); caches; per-delegate trust managers and `Revokt.evaluate(…, delegate)`; the fetcher trust managers (`fetcherTrustManager` and the per-source instances in `FetcherTls`) with the §8 fetcher policy, `FETCHER_TRUST_UNAVAILABLE` and the `BLOCKED_BY_SELF` hold; public `sync()`, `syncAsync()` and `syncBlocking()`; lifecycle state machine and readiness future; OkHttp and per-engine Ktor bindings; `OBSERVE` events, `shadowPolicy`, `status()` and `state`, with the §9 `Rule` model's [0.3] tests; Android instrumented suite including the PKIX fallback, the null-host probe and the main-thread wiring probe under `StrictMode.detectDiskReads` on API 26/31/34/36, cold process and after a trust-store change (induced by `am broadcast -a android.security.STORE_CHANGED` as root on AOSP userdebug images, or by installing a user CA through `KeyChain.createInstallIntent()` under UiAutomator on images without root; the mirrored image matrix carries a userdebug variant for this); a consumer fixture built with AGP 8.5.2 that dexes the published artifacts (the Android floor; Appendix A); Baseline Profile and measured `AWAIT_DATA` (JVM default 2 s); WorkManager (`RevoktSyncWorker`, `Revokt.Provider`); system images mirrored into project storage for the emulator matrix; `revokt-testing`; optional `revokt-bc` | 5 weeks |
 
 About 14 weeks. **M2** (0.4, then 1.0): preloading as a second candidate set, exhaustive re-walk on L1/L2
 hits, OneCRL including anchors, denylist, CRLSet, `NOT_ENROLLED` split, the §5.2 residual closed,

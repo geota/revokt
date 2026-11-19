@@ -13,7 +13,7 @@ import java.time.Duration
 
 /**
  * The policy (spec §4, §8): an [outcome] for every [Rule], per-rule exemptions, [requiredDatasets], a per-dataset
- * staleness map, a per-dataset `minTrustClass` floor and three time fields, stored as milliseconds with
+ * staleness map and three time fields, stored as milliseconds with
  * `java.time.Duration` accessors. There are two presets, [DEFAULT] and [STRICT], and no from-scratch builder:
  * [newBuilder] starts from this policy's values and keeps the preset it derives from (§4 "Growability contract"), so a
  * rule added in a minor takes that preset's row. Compiles to the internal commonMain form decide and evaluate read.
@@ -37,9 +37,6 @@ public class RevoktPolicy private constructor(
 
     /** [dataset]'s staleness thresholds, or null when the dataset has no entry (then `STALE` never fires for it). */
     public fun staleness(dataset: Dataset): Staleness? = form.staleness(dataset)?.let(Staleness::of)
-
-    /** The floor below which `UNSIGNED_DATA` fires for [dataset]; the preset's floor for a dataset with no entry. */
-    public fun minTrustClass(dataset: Dataset): TrustClass = form.minTrustClass(dataset)
 
     public fun rollbackWindow(): Duration = Duration.ofMillis(rollbackWindowMillis)
 
@@ -76,7 +73,6 @@ public class RevoktPolicy private constructor(
         private val exemptions = LinkedHashMap(from.exemptions)
         private var requiredDatasets: Set<Dataset> = from.requiredDatasets
         private val staleness = LinkedHashMap(from.staleness)
-        private val minTrustClass = LinkedHashMap(from.minTrustClassEntries)
         private var rollbackWindowMillis = from.rollbackWindowMillis
         private var clockSkewMillis = from.clockSkewMillis
         private var signedSourceFailingAfterMillis = from.signedSourceFailingAfterMillis
@@ -144,12 +140,6 @@ public class RevoktPolicy private constructor(
                 }
             }
 
-        /** `UNSIGNED_DATA` fires for [dataset] iff its generation's `trustClass` ranks below [floor]. */
-        public fun minTrustClass(
-            dataset: Dataset,
-            floor: TrustClass,
-        ): Builder = apply { minTrustClass[dataset] = floor }
-
         public fun rollbackWindow(d: Duration): Builder = rollbackWindowMillis(durationMillis("rollbackWindow", d))
 
         public fun rollbackWindowMillis(millis: Long): Builder =
@@ -182,7 +172,6 @@ public class RevoktPolicy private constructor(
                     exemptions = exemptions,
                     requiredDatasets = requiredDatasets,
                     staleness = staleness,
-                    minTrustClass = minTrustClass,
                     rollbackWindowMillis = rollbackWindowMillis,
                     clockSkewMillis = clockSkewMillis,
                     signedSourceFailingAfterMillis = signedSourceFailingAfterMillis,

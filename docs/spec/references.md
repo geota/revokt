@@ -474,10 +474,10 @@ Appendix A of the spec: what was verified against live sources and reference cod
     URL `<remote_url><filename>`, `REQUEST_TIMEOUT` of 30 s, one client timeout for the whole request, redirects
     included); upki's redirect limit is reqwest's default, `Policy::limited(10)` (`src/redirect.rs`) in reqwest 0.13.0,
     the version upki v1.0.1's `Cargo.lock` pins; upki does not set `https_only`, so reqwest would follow an
-    `https`-to-`http` hop, which revokt refuses (§7.3). The live mirror listed 40 files (1 full and 39 deltas, 14.3 MB)
+    `https`-to-`http` hop, which the cut mirror design refused (`docs/design/mirror-and-system-cache.md`). The live mirror listed 40 files (1 full and 39 deltas, 14.3 MB)
     on 2026-11-06. reqwest 0.13.0's `remove_sensitive_headers` (`src/redirect.rs`) drops `Authorization`, `Cookie`,
-    `cookie2`, `Proxy-Authorization` and `WWW-Authenticate` on a hop to another host or port; §7.3's
-    `RedirectingFetcher` strips the same headers on such a hop, but keeps them stripped where reqwest re-sends them
+    `cookie2`, `Proxy-Authorization` and `WWW-Authenticate` on a hop to another host or port; the cut mirror's
+    `RedirectingFetcher` stripped the same headers on such a hop, but kept them stripped where reqwest re-sends them
     (revision 58 sources).
   - **The memory figures** (§6.4): the live `cert-revocations` changeset
     (`/v1/buckets/security-state/collections/cert-revocations/changeset?_expected=0`), read 2026-11-12, `timestamp`
@@ -494,7 +494,7 @@ Appendix A of the spec: what was verified against live sources and reference cod
     (`CERTIFICATE`, `PUBLIC KEY`, `RSA PRIVATE KEY`, `PRIVATE KEY`, `EC PRIVATE KEY`, `X509 CRL`, `CERTIFICATE
     REQUEST`, `ECHCONFIG`), `-----BEGIN ` and `-----END ` line matching, and a decoder that skips whitespace and
     accepts missing padding; `X5uPem` reproduces it (§7.1).
-  - **upki's cache roots** (§4 `c2spCache`): upki v1.0.1 `upki/src/lib.rs`, `Config::try_default` (the user cache from
+  - **upki's cache roots** (the cut `c2spCache`, `docs/design/mirror-and-system-cache.md`): upki v1.0.1 `upki/src/lib.rs`, `Config::try_default` (the user cache from
     `ProjectDirs::from("dev", "rustls", "upki")`, else the system cache when the user cache does not exist and the
     system one does) and `platform::system_cache_dir` (`/var/cache/upki` on Unix, `/Library/Caches/dev.rustls.upki`
     on Apple, `%ProgramData%\rustls\upki\cache` on Windows), with `revocation` appended
