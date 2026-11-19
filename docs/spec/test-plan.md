@@ -18,7 +18,7 @@ tests; **live checks** are informational.
   per-extension ∅ expectation as D2 for an inner identifier other than `0x04`, and the §9.2 read for a primitive
   `[3]`; a chain whose leaf `x509-parser` rejects is counted and excluded, not compared; the 0.1 oracle issue verifies its SCT
   path); the 10⁶-key comparison as a second tier; `index.bin` byte comparison (against `upki`'s `Index::write` over the same filters and file names, which revokt's writer reproduces; #86's golden);
-  canonical JSON against `canonical_json`.
+  canonical JSON against `canonical_json`, with three declared differences: duplicate keys, which revokt rejects; every non-integer number `canonical_json` accepts, which revokt refuses (`RECORDS`); and the 60 recorded inputs both refuse, `canonical_json` with "number out of range" (any other oracle error beside a non-integer number fails); a `deleted` of `1e-400` is a tombstone, removed by `merge` (zero is lexical, where Python's `float()` underflows to `0.0`).
 - **Cross-engine suite** (0.2): chain corpus × generations against both `RevocationEngine`s under
   the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class

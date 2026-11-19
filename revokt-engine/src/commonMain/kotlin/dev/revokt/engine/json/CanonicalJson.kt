@@ -6,10 +6,13 @@ package dev.revokt.engine.json
 /**
  * Canonical JSON exactly as `canonical_json` 0.7.0 (`mozilla-services/canonicaljson-rs`, `to_string` over serde_json
  * 1.x) writes it, the serialisation the content-signature payload is hashed in (spec §7.1, §9): no whitespace; object
- * keys in code point order; integers in decimal; a [JsonDouble] as Rust's shortest round-trip `{:e}` with a capital
- * `E` (`2.31E1`, `1E21`, `-0E0`); in strings `\"`, `\\`, `\b`, `\t`, `\n`, `\f`, `\r`, `\u00xx` for every other control
+ * keys in code point order; integers in decimal; in strings `\"`, `\\`, `\b`, `\t`, `\n`, `\f`, `\r`, `\u00xx` for every other control
  * character, printable ASCII (0x20 to 0x7E) as itself, and every other UTF-16 unit as `\u` and four lowercase hex
  * digits, so a character above U+FFFF is its surrogate pair. The output is ASCII.
+ *
+ * A [JsonDecimal] has no canonical form here: [write] throws [NonIntegerNumberException] (#227, fail closed). Every
+ * number of a signed Remote Settings payload is an integer, so a payload holding another cannot be the one Mozilla
+ * signed, and is refused rather than printed as `canonical_json` would.
  */
 internal object CanonicalJson {
     fun write(value: JsonValue): ByteArray = StringBuilder().also { write(value, it) }.toString().encodeToByteArray()
@@ -35,8 +38,8 @@ internal object CanonicalJson {
                 out.append(if (value.negative) "-" else "").append(value.magnitude.toString())
             }
 
-            is JsonDouble -> {
-                out.append(ShortestDouble.exponential(value.value))
+            is JsonDecimal -> {
+                throw NonIntegerNumberException()
             }
 
             is JsonArray -> {
@@ -111,3 +114,6 @@ internal object CanonicalJson {
         out.append('"')
     }
 }
+
+/** A value holds a [JsonDecimal], which [CanonicalJson] never serialises (#227). */
+internal class NonIntegerNumberException : Exception("a number that is not an integer has no canonical form (#227)")
