@@ -421,7 +421,7 @@ jobs:
           total=0
           for dir in "$CORPUS"/* "$CORPUS"/.[!.]*; do
             [ -e "$dir" ] || continue
-            [ -d "$dir" ] && [ ! -L "$dir" ] || fail "an entry that is not a directory"
+            if [ ! -d "$dir" ] || [ -L "$dir" ]; then fail "an entry that is not a directory"; fi
             base=${dir##*/}
             name=${base#fuzz-corpus-}
             [[ $base == fuzz-corpus-* && $name =~ ^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$ ]] || fail "an artifact name"
