@@ -58,8 +58,9 @@ jobs:
   # github.token may do (a PR it may not: "Actions may not create or approve pull requests"), and closes the issue once
   # the files match again; the committed files change in an ordinary PR. The rulesets' bypass list is readable only
   # with RULESETS_AUDIT_TOKEN (a fine-grained token with Administration: read on this repository, kept in the audit
-  # environment), and so are most merge settings. rulesets_compare.sh leaves a member out only where the live export
-  # lacks it or holds null, and names each one, so a member the token can read is always compared.
+  # environment), and so are seven merge settings. rulesets_compare.sh leaves out only those allow-listed members, only
+  # when they come back absent or null without the token, and names each one; any other absent or null member, a
+  # removed protection included, is a difference, and so is an allow-listed one that is unreadable with the token.
   rulesets-audit:
     name: rulesets-audit
     if: >-
@@ -78,6 +79,7 @@ jobs:
       - name: export and compare
         env:
           GH_TOKEN: ${{ secrets.RULESETS_AUDIT_TOKEN || github.token }}
+          ADMIN: ${{ secrets.RULESETS_AUDIT_TOKEN != '' }}
           NEWS: ${{ runner.temp }}/audit.md
         run: |
           set -euo pipefail
