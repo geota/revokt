@@ -110,7 +110,7 @@ internal class StoreLayout(
         deltas: Map<String, ByteArray>,
         records: ByteArray,
     ): String {
-        requireConsistent(meta, index, deltas.keys, records, storage.names())
+        requireConsistent(meta, index, deltas.keys, storage.names())
         check(meta(meta.directory) == null) { "${meta.directory} is complete and immutable" }
         for ((name, bytes) in deltas) stageFile(meta.directory, name, bytes)
         return completeGeneration(meta, index, deltas.mapValues { it.value.toByteString().sha256() }, records)
@@ -178,7 +178,7 @@ internal class StoreLayout(
         records: ByteArray,
     ): String {
         val keys = storage.names()
-        requireConsistent(meta, index, deltas.keys, records, keys)
+        requireConsistent(meta, index, deltas.keys, keys)
         val directory = meta.directory
         check(meta(directory) == null) { "$directory is complete and immutable" }
         val prefix = fileKey(directory, "")
@@ -323,7 +323,7 @@ internal class StoreLayout(
 }
 
 /**
- * [meta], [index], the delta names [deltas] and [records] describe one generation of [meta]'s dataset and channel for a
+ * [meta], [index] and the delta names [deltas] describe one generation of [meta]'s dataset and channel for a
  * [StoreLayout] whose store holds [keys]: [index] names exactly the blobs and deltas, none of them a reserved name, and
  * every blob is stored.
  */
@@ -331,7 +331,6 @@ private fun StoreLayout.requireConsistent(
     meta: GenerationMeta,
     index: ByteArray,
     deltas: Set<String>,
-    records: ByteArray,
     keys: Set<String>,
 ) {
     require(

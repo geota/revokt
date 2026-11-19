@@ -68,8 +68,7 @@ public class GenerationFiles internal constructor(
             sourceTimestampMillis == other.sourceTimestampMillis &&
             hashes == other.hashes
 
-    override fun hashCode(): Int =
-        listOf(generationId, dataset, format, sourceTimestampMillis, hashes).hashCode()
+    override fun hashCode(): Int = listOf(generationId, dataset, format, sourceTimestampMillis, hashes).hashCode()
 
     override fun toString(): String =
         "GenerationFiles(generationId=$generationId, dataset=$dataset, format=$format, " +
