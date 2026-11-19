@@ -186,3 +186,18 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
 - 2026-11-16 (lead, #237): the walker enforces pathLenConstraint and name constraints on issuers (both references); keyCertSign when keyUsage is present (mozilla::pkix and the JDK's KeyChecker; webpki ignores it on purpose, so this is stricter than webpki); and EKU on issuers by webpki's rule (none passes, one present must include the request's purpose, internal, default serverAuth).
 - 2026-11-16 (lead, #237 R1/R2/R6/R7): the anchor's nameConstraints apply; webpki's name-constraint rule exactly (directoryName/URI fail closed, CN fallback a residual); all issuer checks apply to fallback-path intermediates; a 250,000-comparison name-constraint budget per walk, as webpki's default.
 - 2026-11-16 (lead, #235 follow-up): one seed-load rule. (a) A valid pointer whose live generation reads and is not older: Skipped. (b) Otherwise, adopt the newest complete re-verifying directory if it is newer than the seed (flip only), else install the seed; a same-generation seed-named directory is installed as it stands (compared on everything except freshness and signed); a (b) load never prunes or deletes. A valid seed always leaves a live generation.
+- 2026-11-19 (lead, #235 third review): a seed adopt never goes below the generation the engine serves; the adopted
+  directory must be newer than the seed, not the watermark. An adopt writes `updater.json` with the watermark at its
+  max, and re-verifies the signature when the signer leaf matches the seed's. A same-name directory that fails
+  re-verification is rewritten from the verified seed, and a rejected directory counts once.
+- 2026-11-19 (lead, #249): when a flip fails after activation, the next install's `previous` is the generation the
+  engine served before it (when that one qualifies and differs from the new live), not the stale pointer's live, so
+  prune never deletes the served generation. It matches #242's malformed-pointer branch. Neither reference keeps a
+  fallback generation, so there is nothing to compare with.
+- 2026-11-19 (maintainer, #215): trust PGP key 18CD85CBC5C1DB1684C5E59FA8E3B39F19E1CCE7 (Henry Coles, ed25519,
+  2023-01-03 to 2029-01-01), scoped to `org.pitest` `pitest`, `pitest-entry` and `pitest-junit5-plugin`; the lead
+  verified good signatures on the Central jars. Pitest runs through a `pitest-entry` runner (the Gradle plugin does not
+  handle KMP, and the CLI pulls an unsigned jar and a DSA-1024 key), weekly or on dispatch, never as a PR gate.
+- 2026-11-19 (lead, #256 from r256): a heal flip (the pointer `Malformed` before the install) never prunes; the next
+  install with a valid pointer prunes. Nothing a damaged pointer may have named is deleted by a heal, the same as the
+  seed's (b) loads.
