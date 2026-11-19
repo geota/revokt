@@ -1001,5 +1001,5 @@ list parses under §9.2 (otherwise it queries the items §9.2 keeps) and `PARSE_
 in the oracle path); (ii) `MIRROR` v4 generations as fetched from `upki.rustls.dev`; (iii) the v3
 generations re-encoded as v4 by `revokt-oracle`, a bare `clubcard-crlite` `to_bytes(V4)` (upki-mirror
 v1.0.1 does not transcode; upki main added one in `c2ba5e3`, which also sorts the coverage, so the bytes may differ
-from the live mirror's, while verdicts cannot), a third leg; every generation whose `index.bin` revokt did not write passes the `index.bin` consistency check above before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
+from the live mirror's, while verdicts cannot), a third leg; every generation whose `index.bin` revokt did not write passes the `index.bin` consistency check of the spec's §3.2 before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
 engine-side type above is public from 0.1.

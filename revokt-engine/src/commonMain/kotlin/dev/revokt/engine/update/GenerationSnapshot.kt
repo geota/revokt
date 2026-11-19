@@ -13,7 +13,7 @@ import dev.revokt.TrustClass
  * of §4 S, the `start()` caller before any loader task exists. A handshake reads it once and threads it through the
  * walk, the engine query and the data rules, so the store is never read on the handshake path.
  *
- * [generationEpoch] is the verdict-cache key's generation part (§5.1 "Caches"): it advances on every install and when
+ * [generationEpoch] is the verdict-cache key's generation part (spec §6.5 install order, §8): it advances on every install and when
  * a dataset leaves `pending` without a generation. Process-local, never persisted. [coverageEndMillis] is the engine's
  * `RevocationEngine.coverageEndMillis` for the generation it holds, null when the engine cannot tell.
  */

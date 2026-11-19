@@ -39,7 +39,7 @@ internal sealed class StrictUrlRead {
 
 /**
  * The one strict URL grammar every URL revokt fetches from an unsigned or configured string is read by: the x5u URL
- * ([X5uUrl], spec §7.1) and every URL of a mirror's redirect chain ([HopUrl], §7.3). It is deliberately narrow, so no
+ * ([X5uUrl], spec §7.1 "The x5u URL grammar") and every URL of a mirror's redirect chain ([HopUrl], #192). It is deliberately narrow, so no
  * URL parser downstream can see another host than the one checked: `https://` (lowercase), an authority with no
  * userinfo that is a host and an optional port, then the rest. The host is a DNS host name ([isHostName]: labels of
  * ASCII letters, digits and `-`, no trailing dot, a last label that is not a number), and, only when the caller allows

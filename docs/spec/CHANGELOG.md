@@ -27,6 +27,10 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
 - **#209 (#231):** a sync whose `updater.json` read throws writes nothing: no attempt, no `consecutiveFailures`, no
   backoff, and it is not an attempt for the §8 `STALE` gate; `storeFailures` is the only signal.
 - **#244:** its corrections of fact (the webpki pin, the reference columns) are recorded here.
+- **Kept in the core from §7.3:** the x5u URL grammar (DNS host names only, port 443, lowercase `https://`, `pchar` path
+  and query, the fragment rule, `FAILED` at stage `X5U`, never repaired) is stated in §7.1; the design note keeps only
+  the hop variant. `MAX_EXPLORED` counts a candidate the CA check refuses; §7.1's feed-failure list carries #209's
+  exception.
 
 ### Changes in revision 58 (the redirect and URL grammar of #192, 2026-11-15)
 The maintainer approved this revision on 2026-11-15. It writes in only the redirect and URL grammar decided on #192
