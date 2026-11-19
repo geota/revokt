@@ -123,8 +123,16 @@ internal class StoreLayout(
      * as it is, so a caller that mistakes a pointed generation for an orphan fails loudly rather than deleting it. It
      * fails closed: a pointer that is present but malformed may name any directory, so nothing is reopened then either
      * (a pointer that cannot be read at all throws from the read).
+     *
+     * [unloadable] when the caller found [directory] unloadable as it stands (its stored files do not re-verify) and
+     * completes it again as the same generation from verified data (the seed's rule (b), #138): it is then reopened
+     * whatever the pointer says, its files kept to be re-hashed, so a rotted file is the only one re-staged.
      */
-    fun reopen(directory: String) {
+    fun reopen(
+        directory: String,
+        unloadable: Boolean = false,
+    ) {
+        if (unloadable) return storage.delete(fileKey(directory, META))
         val named =
             when (val read = pointer()) {
                 StoreRead.Absent -> emptySet()
@@ -243,6 +251,21 @@ internal class StoreLayout(
             }
         return StoredGeneration(directory, meta, image)
     }
+
+    /**
+     * The generation directories under this dataset and channel that hold any key, complete or not, by name: for a
+     * reader that cannot trust the pointer to tell it which generations exist (#138).
+     */
+    val directories: Set<String>
+        get() {
+            val prefix = "$root/"
+            return storage
+                .names()
+                .filter { it.startsWith(prefix) }
+                .mapNotNullTo(LinkedHashSet()) { key ->
+                    key.removePrefix(prefix).substringBefore('/', "").takeIf(GenerationNames::isDirectory)
+                }
+        }
 
     /**
      * Deletes every key in [directory], `meta.json` first (the reverse of the write order), so an interrupted delete

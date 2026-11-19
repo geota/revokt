@@ -5,7 +5,24 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
-### Changes in revision 60 (the trust-class cut of #218, #246, and the Mozilla constants of #223)
+### Changes in revision 61 (in progress)
+
+- **#223 (audit A-1), Mozilla constants:**
+  - §7.1 tries the first 4 `metadata.signatures` entries and ignores the rest, where more than 4 failed the changeset.
+  - §5.1 raises `MAX_CHANGESET_RECORDS` from 256 to 1,024.
+  - §4 and §7.1: `allowedDomains` (default `cdn.mozilla.net`, a suffix rule on a label boundary) replaces the exact
+    `x5uHosts`. `attachmentBaseUrl` is nullable and null by default: the base is then the server root's
+    `capabilities.attachments.base_url`, read once per sync before the first attachment fetch, under the x5u URL
+    grammar and `allowedDomains`, and anything else is `FAILED` at `ATTACHMENT` with no fallback.
+  - §7.1: an absent or `null` `mode` is tried, as Firefox does, reversing #163's "`mode` required"; a present
+    `mode` other than `p384ecdsa` is still skipped.
+  - §7.1: the leaf SAN may hold several dNSNames, one equal to the signer name with ASCII case ignored, with no
+    wildcard match and no other name form; nameConstraints are checked against every dNSName. An absent leaf
+    extKeyUsage passes.
+  - §7.1 states why the x5u order is the path (no path search over an unsigned body).
+  - The test plan's content-signature row, (d) and API rows cover each change.
+
+### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 
 - **#218, the trust-class cut:**
   - No MIRROR or SYSTEM source. `TrustClass`, `UNSIGNED_DATA`, `minTrustClass`, the bootstrap-only rule,
@@ -26,20 +43,7 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
   - The test plan: data-path fixture (c) and the MIRROR, SYSTEM and `UNSIGNED_DATA` items.
 - **#246:** §6.5 reads `current` strictly (an unknown or duplicate member is malformed); `previous` must read back as
   the loader reads it, `records.json` included; a heal flip is not followed by a prune (the lead's decision on r256).
-- **#223 (audit A-1), Mozilla constants:**
-  - §7.1 tries the first 4 `metadata.signatures` entries and ignores the rest, where more than 4 failed the changeset.
-  - §5.1 raises `MAX_CHANGESET_RECORDS` from 256 to 1,024.
-  - §4 and §7.1: `allowedDomains` (default `cdn.mozilla.net`, a suffix rule on a label boundary) replaces the exact
-    `x5uHosts`. `attachmentBaseUrl` is nullable and null by default: the base is then the server root's
-    `capabilities.attachments.base_url`, read once per sync before the first attachment fetch, under the x5u URL
-    grammar and `allowedDomains`, and anything else is `FAILED` at `ATTACHMENT` with no fallback.
-  - §7.1: an absent or `null` `mode` is tried, as Firefox does, reversing #163's "`mode` required"; a present
-    `mode` other than `p384ecdsa` is still skipped.
-  - §7.1: the leaf SAN may hold several dNSNames, one equal to the signer name with ASCII case ignored, with no
-    wildcard match and no other name form; nameConstraints are checked against every dNSName. An absent leaf
-    extKeyUsage passes.
-  - §7.1 states why the x5u order is the path (no path search over an unsigned body).
-  - The test plan's content-signature row, (d) and API rows cover each change.
+- **#138 (#235):** §6.5 states the seed-load rule (a)/(b) with adopt, never-prune and never-delete, the `seed.json` encoding, the zip the loader reads, the `signature` cap of 64 KiB and the 256 MiB archive cap, the canonical `records.json` and the seed's generation id; §5.1's loader task cites the rule; the test plan's (f) replaces the `MIRROR` eviction rows with the rule's rows.
 
 ### Changes in revision 59 (the spec split of #216, and the deltas of #209, #234, #242 and #244, 2026-11-18)
 
