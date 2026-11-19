@@ -43,6 +43,11 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
 - **#255 (#249):** §6.5 states the order of the new `previous`: the generation the engine served before the install,
   then the old `live`, then the old `previous`, skipping the new `live`. It also fixes the malformed-pointer sentence that revision 60's merge
   left broken.
+- **#228 (phase 1):**
+  - §3: `KotlinRevocationEngine` and its CRLite evaluation move from `revokt-engine` common to `jvmMain`, with the
+    `AtomicInt32` and `awaitDrain` expect/actual pairs and their linuxX64 stubs. The native compile checks the common
+    parts only.
+  - §4 states why `RevoktPolicy` (jvmMain, `java.time`) and `PolicyTable` (commonMain, the rules' input) stay split.
 
 ### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 
