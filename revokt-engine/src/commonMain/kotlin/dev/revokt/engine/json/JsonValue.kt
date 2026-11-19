@@ -4,9 +4,9 @@
 package dev.revokt.engine.json
 
 /**
- * A value of the engine's own immutable JSON tree (spec §7.1 "JSON"; no JSON library, §3). Numbers keep the three
- * kinds `canonical_json` 0.7.0 serialises differently, as serde_json reads them: [JsonInteger] for an integer literal
- * in `[-2^63, 2^64 - 1]` other than `-0`, and [JsonDouble] for every other number.
+ * A value of the engine's own immutable JSON tree (spec §7.1 "JSON"; no JSON library, §3). Numbers are of two kinds, as
+ * serde_json reads them: [JsonInteger] for an integer literal in `[-2^63, 2^64 - 1]` other than `-0`, and [JsonDecimal]
+ * for every other number, which revokt never serialises (#227).
  */
 internal sealed interface JsonValue
 
@@ -54,12 +54,21 @@ internal data class JsonInteger(
     }
 }
 
-/** A finite double: a number with a fraction or an exponent, `-0`, or an integer outside [JsonInteger]'s range. */
-internal data class JsonDouble(
-    val value: Double,
+/**
+ * A number that is not a [JsonInteger]: one with a fraction or an exponent, `-0`, or an integer outside its range. No
+ * signed Remote Settings payload carries one (every number of the corpus's `cert-revocations` changeset is an integer,
+ * #113, #227), so revokt keeps only whether it is [zero], the one property a record's `deleted` reads (Python
+ * truthiness), and never serialises one: [CanonicalJson] refuses it, so a signed payload that holds one fails
+ * verification, closed. One instance per value: [ZERO] and [NONZERO].
+ */
+internal class JsonDecimal private constructor(
+    val zero: Boolean,
 ) : JsonValue {
-    init {
-        require(value.isFinite()) { "JSON has no NaN or infinity" }
+    override fun toString(): String = if (zero) "JsonDecimal(zero)" else "JsonDecimal(non-zero)"
+
+    companion object {
+        val ZERO = JsonDecimal(true)
+        val NONZERO = JsonDecimal(false)
     }
 }
 

@@ -25,9 +25,6 @@ internal enum class JsonError {
     /** Not RFC 8259 number syntax (a leading zero, a bare `-`, `1.`, `1e`). */
     INVALID_NUMBER,
 
-    /** A number whose magnitude rounds to infinity as a double. */
-    NUMBER_OUT_OF_RANGE,
-
     /** A backslash not followed by one of `"\/bfnrt` or by `u` and four hex digits. */
     INVALID_ESCAPE,
 
@@ -61,10 +58,10 @@ internal class JsonParseException(
 /**
  * The engine's JSON tokenizer and parser (spec §7.1 "JSON"): RFC 8259 over UTF-8 bytes, rejecting duplicate keys and
  * unpaired surrogates. The size cap is checked before anything is read and the depth before each container is
- * allocated; every string, array and object is bounded by the bytes it was read from. Numbers follow serde_json, the
- * parser `canonical_json` 0.7.0 is used with: an integer literal is a [JsonInteger] within `u64` (non-negative) or
- * `i64` (negative, not `-0`), every other number the nearest [JsonDouble] (ties to even), computed exactly by
- * [DecimalDouble], never by the platform's `String.toDouble()`.
+ * allocated; every string, array and object is bounded by the bytes it was read from. Numbers follow serde_json's
+ * classification, the parser `canonical_json` 0.7.0 is used with: an integer literal is a [JsonInteger] within `u64`
+ * (non-negative) or `i64` (negative, not `-0`), and every other number a [JsonDecimal], which keeps only whether it is
+ * zero (#227: signed payloads carry no such number, and revokt never serialises one).
  *
  * Allocation (spec §6.5, #99): at most 4·len + 64 KiB on Remote Settings–shaped input (a changeset or `records.json`)
  * and 20·len + 64 KiB on any input, measured after one warm-up decode, on the same thread, of a fixed small document
@@ -73,8 +70,7 @@ internal class JsonParseException(
  * and counts toward that parse. The bounds assume compressed oops (4-byte references), the HotSpot default below a
  * 32 GiB heap. So containers collect their members on one scratch stack per parse and are
  * copied out at exact size, objects are sorted parallel arrays, a one-item array holds its item, the integers 0 to 1023
- * and short strings are shared within a parse, and decimals are converted without a `String`, in buffers
- * reused across the parse.
+ * and short strings are shared within a parse, and a decimal is one of two shared values.
  */
 internal object Json {
     /** serde_json's recursion limit: it rejects the 128th nested container, so the oracle and revokt agree on depth. */
@@ -94,7 +90,6 @@ private class Parser(
 ) {
     private var pos = 0
     private val strings = Strings(b)
-    private var decimal: DecimalDouble? = null
     private var smallIntegers: Array<JsonInteger?>? = null
 
     /** The members of every open container, innermost last; [keys] holds the open objects' keys. */
@@ -234,7 +229,7 @@ private class Parser(
         return table[value] ?: JsonInteger(false, value.toULong()).also { table[value] = it }
     }
 
-    /** RFC 8259 number syntax, then serde_json's classification: an integer literal in range, else a double. */
+    /** RFC 8259 number syntax, then serde_json's classification: an integer literal in range, else a decimal. */
     private fun number(): JsonValue {
         val start = pos
         val negative = skip('-')
@@ -248,24 +243,25 @@ private class Parser(
         val intEnd = pos
         val fraction = skip('.')
         if (fraction) digits()
+        val mantissaEnd = pos
         val exponent = skip('e') || skip('E')
         if (exponent) {
             if (!skip('+')) skip('-')
             digits()
         }
         if (!fraction && !exponent) integer(negative, intStart, intEnd)?.let { return it }
-        return double(start, intStart, negative)
+        return decimal(intStart, mantissaEnd)
     }
 
-    /** The double of the number lexeme from [start], its digits from [digitsStart]. */
-    private fun double(
-        start: Int,
-        digitsStart: Int,
-        negative: Boolean,
-    ): JsonDouble {
-        val magnitude = (decimal ?: DecimalDouble().also { decimal = it }).parse(b, digitsStart, pos)
-        if (magnitude.isInfinite()) fail(JsonError.NUMBER_OUT_OF_RANGE, start)
-        return JsonDouble(if (negative) -magnitude else magnitude)
+    /** The decimal whose mantissa is the bytes from [mantissaStart] to [mantissaEnd]: zero when every digit is `0`. */
+    private fun decimal(
+        mantissaStart: Int,
+        mantissaEnd: Int,
+    ): JsonDecimal {
+        for (i in mantissaStart until mantissaEnd) {
+            if (b[i] != '0'.code.toByte() && b[i] != '.'.code.toByte()) return JsonDecimal.NONZERO
+        }
+        return JsonDecimal.ZERO
     }
 
     /** Consumes [c] when it is next. */
