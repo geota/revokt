@@ -43,6 +43,11 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
 - **#255 (#249):** §6.5 states the order of the new `previous`: the generation the engine served before the install,
   then the old `live`, then the old `previous`, skipping the new `live`. It also fixes the malformed-pointer sentence that revision 60's merge
   left broken.
+- **#228 (phase 1):**
+  - §3: `KotlinRevocationEngine` and its CRLite evaluation move from `revokt-engine` common to `jvmMain`, with the
+    `AtomicInt32` and `awaitDrain` expect/actual pairs and their linuxX64 stubs. The native compile checks the common
+    parts only.
+  - §4 states why `RevoktPolicy` (jvmMain, `java.time`) and `PolicyTable` (commonMain, the rules' input) stay split.
 - **The nightly fuzzing tier** is `fuzz.yml`, every target for 300 s, one job per target, with each night's corpus
   added to the private corpus repository, in place of ClusterFuzzLite (#119, superseded), until OSS-Fuzz (test plan
   §9.1 "Tiers", §9.2 "Tiers and matrix").

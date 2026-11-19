@@ -10,8 +10,8 @@ plugins {
 }
 
 kotlin {
-    // The engine's AtomicInt32 is an internal expect class (Beta in Kotlin 2.4), in place of the experimental
-    // kotlin.concurrent.atomics on the query path.
+    // Expect classes (Beta in Kotlin 2.4): SeedSource, and the internal LruMap and ReadWriteGuard, until #266 moves
+    // their packages to jvmMain.
     compilerOptions { freeCompilerArgs.add("-Xexpect-actual-classes") }
     sourceSets {
         commonMain.dependencies {
