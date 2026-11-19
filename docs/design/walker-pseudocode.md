@@ -3,13 +3,13 @@
 
 # The `reconstruct` pseudocode
 
-Not normative. Moved out of the spec's §5.1 at revision 59 (#216), as it stood at revision 58; milestone: 0.2 (explanatory). A note is promoted into the spec when its milestone starts, and edited there.
+Not normative. Moved out of the spec's §5.1 at revision 59 (#216), as it stood at revision 58, with revision 59's CA check on issuers; milestone: 0.2 (explanatory). A note is promoted into the spec when its milestone starts, and edited there.
 
 ```kotlin
 // Declarations the walker and the §9.1 harness compile against. Walk, WalkPath, Cert, CandidateIndex and reconstruct are `internal`
 // to revokt-engine; the walker-only harness and the Jazzer walker fuzzer live in revokt-engine's own test source set; revokt-testing's
 // reference walker takes List<ByteArray> and returns the Set<String> of lowercase-hex leaf-issuer SPKI hashes (value equality), so it needs no internal type.
-internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray /* the TBS re-encoded by the §9.2 unsigned-header rule: the verified message and the input of every TBS field */, val sig: ByteArray /* signatureValue content after the unused-bits octet, padding bits cleared (§9.2) */, val tbsSigAlg: ByteArray, val tbsSigOid: String, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long? /* null when the time does not decode (§9.2; every JDK-accepted form decodes) */, val notAfter: Long?, val producerKeyable: Boolean, val keyabilityClause: KeyabilityClause? /* null ⇔ producerKeyable (§9.2 K1–K8); evaluated for the leaf at decision step 3 only */, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
+internal class Cert(val der: ByteArray, val bytesHash: ByteString, val tbs: ByteArray /* the TBS re-encoded by the §9.2 unsigned-header rule: the verified message and the input of every TBS field */, val sig: ByteArray /* signatureValue content after the unused-bits octet, padding bits cleared (§9.2) */, val tbsSigAlg: ByteArray, val tbsSigOid: String, val isCa: Boolean /* basicConstraints cA = TRUE; absent, FALSE, malformed or duplicated is false */, val spki: ByteArray /* rawSpki TLV */, val spkiHash: ByteString, val keyOid: String, val curveOid: String?, val keyFamily: KeyFamily, val subjectRaw: ByteArray, val issuerRaw: ByteArray, val canonicalSubject: String?, val ski: ByteArray?, val akiKeyId: ByteArray?, val serial: ByteArray, val scts: List<CrliteSct>, val notBefore: Long? /* null when the time does not decode (§9.2; every JDK-accepted form decodes) */, val notAfter: Long?, val producerKeyable: Boolean, val keyabilityClause: KeyabilityClause? /* null ⇔ producerKeyable (§9.2 K1–K8); evaluated for the leaf at decision step 3 only */, val findings: List<Finding>)   // the §5.5/§9.2 parser's output; one object per certificate
 internal class WalkPath(val certs: List<Cert>, val terminal: TerminalKind)   // leaf → … → terminal; distinct from Finding.Path
 internal sealed interface Walk {                          // every variant carries unsupportedOids (the probe-listed own signature OIDs of explored related non-anchors, unrelated-loop nodes, and the leaf once it had a related candidate; revision 57), findings and stats: WalkStats (verifications, candidatesExplored, relatedExploredAtLeaf, unrelatedExploredAtLeaf), built at the three return sites
     class Found(val paths: List<WalkPath>, val leafKeys: Set<ByteString>, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
@@ -55,6 +55,7 @@ internal fun reconstruct(presented: List<Cert>, index: CandidateIndex, verifier:
             if (explored >= MAX_EXPLORED) { endDepth = path.size; return EXPLORATION_BUDGET }
             explored++
             if (isRelated) { if (isLeaf && child.tbsSigOid in probe) unsupported += child.tbsSigOid; if (!index.isAnchorBytes(cand) && cand.tbsSigOid in probe) unsupported += cand.tbsSigOid }   // pkix order: issuer-independent before the link; the leaf deferred until it has an issuer; a key or curve OID never counts (decision step 6)
+            if (!index.isAnchorBytes(cand) && !cand.isCa) return null   // before verifyOnce, as pkix checks the issuer before VerifySignedData
             when (verifyOnce(child, cand) ?: run { endDepth = path.size; return VERIFICATION_BUDGET }) {
                 INVALID -> return null
                 UNSUPPORTED -> return null

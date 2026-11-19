@@ -40,7 +40,7 @@ stack, one line into OkHttp and every Ktor engine.
    `upki-revocation@v1.0.0` conformant, able to read a system upki cache.
 2. **Authenticated data with an explicit trust class per dataset**; policy can require signed data.
 3. **Additive-only rejection.** The platform verdict runs first and is final for acceptance. revokt
-   never rejects because of its own failures (`NO_ISSUER`, `ISSUER_UNVERIFIED`, `PARSE_FAILED`,
+   never rejects because of its own failures (`NO_ISSUER`, `PARSE_FAILED`,
    `ENGINE_ERROR` in `DEFAULT`). **Two stated exceptions**: `PATH_BUDGET_EXCEEDED` rejects in
    `DEFAULT`; it is reachable only by a chain carrying more same-name or same-key-identifier
    candidates for one certificate, or more verifying junk overall, than any honest chain has (§5.1).
@@ -103,7 +103,7 @@ fun interface RevoktLogger { fun log(level: LogLevel, message: String, cause: Th
 enum class LogLevel { DEBUG, INFO, WARN, ERROR }   // closed
 enum class OwnershipCheck { STRICT, OWNER_OR_GROUP }   // growable
 interface RevoktStorage {                                   // flat key space; the engine owns the layout (§6.5)
-    fun read(name: String): ByteArray?
+    fun read(name: String): ByteArray?                     // null = absent; a read that fails throws, never returns null
     fun write(name: String, bytes: ByteArray)              // atomic replace, durable (fsync) before return; visible to read() only when complete
     fun delete(name: String); fun names(): Set<String>     // keys: segments of [A-Za-z0-9._-]{1,96} joined by '/', never '.' or '..'; a key resolving outside the root is rejected; delete() removes directories left empty; names() excludes the lock and temp keys
     fun identity(): String? = null                         // stable key for the per-process single-instance registry; JvmStorage: the canonical absolute directory; null = not registered (inMemory)
@@ -452,7 +452,7 @@ enum class RuleClass { EVIDENCE, UNEVALUABLE, NON_ANSWER, DATA_QUALITY }
 enum class Rule(val ruleClass: RuleClass, val layer: Layer?, val exemptable: Boolean) {   // RuleClass.* and Layer.* are imported; constants below are unqualified for brevity
     REVOKED(EVIDENCE, CRLITE, false),                                   /* M2: DENYLIST, ONECRL, CRLSET; M3: CT; M4: DISTRUST */
     PATH_BUDGET_EXCEEDED(UNEVALUABLE, PATH, false), NO_DATA(UNEVALUABLE, null, true), ENGINE_ERROR(UNEVALUABLE, null, false),
-    PARSE_FAILED(UNEVALUABLE, PATH, false), ISSUER_UNVERIFIED(UNEVALUABLE, PATH, true), NO_ISSUER(UNEVALUABLE, PATH, true),
+    PARSE_FAILED(UNEVALUABLE, PATH, false), NO_ISSUER(UNEVALUABLE, PATH, true),
     NOT_ENROLLED(NON_ANSWER, CRLITE, true), NO_SCTS(NON_ANSWER, CRLITE, true), NOT_COVERED(NON_ANSWER, CRLITE, false),
                                                                         /* M2: ISSUER_UNKNOWN_TO_MOZILLA(NON_ANSWER, PATH, true); M3: CT_UNVERIFIED */
     STALE(DATA_QUALITY, null, true), UNSIGNED_DATA(DATA_QUALITY, null, true);   // Rule.NO_DATA is driven by requiredDatasets, never by CrliteQueryResult.NO_DATA. The three data rules (NO_DATA, STALE, UNSIGNED_DATA) are exemptable: under STRICT a feed outage must not take down traffic under a private anchor the operator already exempted from CRLite; ExemptionContext carries path.anchorSha256 and host for the data rules too (the walk still runs)
@@ -467,11 +467,11 @@ enum class EngineErrorProducer { BOUNDARY, ENGINE, EXEMPTION }   // growable; ex
 enum class Layer { PATH, CRLITE }                        // growable; M2: ONECRL, CRLSET, DENYLIST (L1/L2); M3: CT (L4); M4: DISTRUST (L5)
 enum class Dataset { CRLITE /* M2: INTERMEDIATES, ONECRL, CRLSET, DENYLIST; M3: CT_LOGS; M4: DISTRUST */ }   // growable; the freshness rule per dataset and source is §7.2 prose
 enum class Freshness { RECORD_LAST_MODIFIED, LAST_VERIFIED_POLL, MANIFEST_LAST_MODIFIED /* MIRROR and SYSTEM: the newest coverage end, §7.2; the name is historical */, SEED_SIGNED_TIME, SEQUENCE_TIME, ARTIFACT_DATE }   // growable; what a generation's sourceTimestamp means
-enum class PathStatus { FOUND, NO_ISSUER, ISSUER_UNVERIFIED, PATH_BUDGET_EXCEEDED, PARSE_FAILED, NOT_WALKED }   // growable; M5: NOT_APPLICABLE
+enum class PathStatus { FOUND, NO_ISSUER, PATH_BUDGET_EXCEEDED, PARSE_FAILED, NOT_WALKED }   // growable; M5: NOT_APPLICABLE
 enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable; parseReason != null ⇔ path.status == PARSE_FAILED (§5.1 step 3, §9.2 D8)
 enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; keyabilityClause != null ⇔ parseReason == PRODUCER_UNKEYABLE
 enum class TerminalKind { ANCHOR /* M2: PRELOAD */ }   // growable; the reported path's terminal (§5.1 invariant)
-enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
+enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, UNSUPPORTED_ALGORITHM, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
 enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and found no path: build returned null or threw; a thrown result is neither path- nor verdict-cached */ }   // growable; why decision step 6 evaluated no fallback path (§5.1)
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
 enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
@@ -489,9 +489,9 @@ class RevoktPolicy private constructor(…) {           // newBuilder() on any p
     fun outcome(rule: Rule): Outcome; val requiredDatasets: Set<Dataset>; fun staleness(dataset: Dataset): Staleness?; fun minTrustClass(dataset: Dataset): TrustClass
     val rollbackWindowMillis: Long; val clockSkewMillis: Long; val signedSourceFailingAfterMillis: Long   // plus java.time accessors
     class Builder {                                      // every method returns Builder; build() returns RevoktPolicy and runs the build()-time checks below; every duration and millis argument is ≥ 0, else IllegalArgumentException, and so is a java.time.Duration whose milliseconds overflow Long
-        fun rule(rule: Rule, outcome: Outcome): Builder                       // on NO_ISSUER or ISSUER_UNVERIFIED it sets both: the two share one outcome and one exemption (as Firefox puts both errors in one override category); a policy cannot hold a split pair, so no V diagnostic exists for one
-        fun exempt(rule: Rule, exemption: Exemption): Builder                 // a second call for the same rule replaces the first; clearExemption(rule); exempt and clearExemption on NO_ISSUER or ISSUER_UNVERIFIED apply to both
-        fun exemptAnchors(sha256s: Collection<ByteArray>): Builder             // = exempt(rule, anchorIn(sha256s)) for every exemptable rule that is not EVIDENCE, is not marked "empty path" in the §8 table, and whose outcome in the builder at this call is REJECT; applied at its call position over the rule set as it stands then (a later rule() or exempt() on the same builder wins, so a narrower explicit exempt() written after it is kept): EVIDENCE rules (M2 ONECRL, M4 DISTRUST) need an explicit exempt(), so an M1 call never widens to evidence on upgrade, while a non-EVIDENCE rule that flips to REJECT in a later minor (M3 CT_UNVERIFIED) is covered by a call made after the flip, as a private CA wants; the "empty path" rules (NO_ISSUER, ISSUER_UNVERIFIED; a column of the golden fixture, so a future rule must declare it) fire only on an empty reported path, where anchorIn can never match (use hostSuffixIn, platformOnly), whereas M2's ISSUER_UNKNOWN_TO_MOZILLA fires on a Found path and is covered; sha256s are of each anchor's DER as revokt reads it (§5.3), which is getEncoded() unless the §9.2 read fallback applies
+        fun rule(rule: Rule, outcome: Outcome): Builder                       //
+        fun exempt(rule: Rule, exemption: Exemption): Builder                 // a second call for the same rule replaces the first; clearExemption(rule)
+        fun exemptAnchors(sha256s: Collection<ByteArray>): Builder             // = exempt(rule, anchorIn(sha256s)) for every exemptable rule that is not EVIDENCE, is not marked "empty path" in the §8 table, and whose outcome in the builder at this call is REJECT; applied at its call position over the rule set as it stands then (a later rule() or exempt() on the same builder wins, so a narrower explicit exempt() written after it is kept): EVIDENCE rules (M2 ONECRL, M4 DISTRUST) need an explicit exempt(), so an M1 call never widens to evidence on upgrade, while a non-EVIDENCE rule that flips to REJECT in a later minor (M3 CT_UNVERIFIED) is covered by a call made after the flip, as a private CA wants; the "empty path" rule (NO_ISSUER; a column of the golden fixture, so a future rule must declare it) fire only on an empty reported path, where anchorIn can never match (use hostSuffixIn, platformOnly), whereas M2's ISSUER_UNKNOWN_TO_MOZILLA fires on a Found path and is covered; sha256s are of each anchor's DER as revokt reads it (§5.3), which is getEncoded() unless the §9.2 read fallback applies
         fun requiredDatasets(set: Set<Dataset>): Builder
         fun staleness(dataset: Dataset, s: Staleness): Builder; fun clearStaleness(dataset: Dataset): Builder   // clearing a required dataset's entry → validate() WARNING STALENESS_CLEARED_FOR_REQUIRED_DATASET
         fun rejectStaleAfter(dataset: Dataset, d: java.time.Duration?): Builder; fun rejectStaleAfterMillis(dataset: Dataset, millis: Long?): Builder   // null clears only the reject threshold; the loud flag stays; on a dataset with no entry, creates one with staleAfter = rejectStaleAfter
@@ -594,7 +594,7 @@ managers' verdicts (public and per-source) neither count in `evaluations` nor em
 |---|---|
 | `FOUND`, `NOT_WALKED` | nothing |
 | `NO_ISSUER` (any reason, including `PLATFORM_ONLY`) | `NO_ISSUER` |
-| `ISSUER_UNVERIFIED`, `PATH_BUDGET_EXCEEDED`, `PARSE_FAILED` | the same-named rule |
+| `PATH_BUDGET_EXCEEDED`, `PARSE_FAILED` | the same-named rule |
 
 | `CrliteQueryResult` | fires |
 |---|---|
@@ -678,7 +678,7 @@ remaining a subsequence.
   exemption is `ALLOW` by another name). A
   preset's own `ALLOW` rows (a new evidence rule in its one-minor grace) never fire it: **every preset passes `validate(ENFORCE)` with no `ERROR` at every
   release** (a §9 test).
-- S `UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP`: `outcome(ISSUER_UNVERIFIED) == REJECT && unsupportedOids() ∩ classicalOids ≠ ∅` → `WARNING`; `classicalOids` = RSA PKCS#1 with SHA-256/384/512, ECDSA P-256/P-384 with SHA-2, Ed25519.
+- S `UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP`: `outcome(NO_ISSUER) == REJECT && unsupportedOids() ∩ classicalOids ≠ ∅` → `WARNING`; `classicalOids` = RSA PKCS#1 with SHA-256/384/512, ECDSA P-256/P-384 with SHA-2, Ed25519.
 - S `RULE_FLIPPED_THIS_MINOR`: for every rule with `flippedIn == current minor` whose outcome in the consumer's policy is `REJECT` by inheritance → `WARNING` on `RevoktState.warnings` (a runtime signal that this build enforces a newly flipped rule; a rule in its grace minor is visible only in `fired`).
 - S `FETCHER_TRUST_UNAVAILABLE`: `fetcherTrustManager`'s snapshot build failed in `start()` → `WARNING` (cleared by the first successful build); each sync first retries the build on the loader (under the factory lock) and, while it fails, is `FAILED` without a fetch (stage `FETCHER_TRUST`, `sourceId` null, every configured fetching source's `consecutiveFailures` advancing; counting toward `signedSourceFailing` and the failure backoff as any `FAILED`); with a fetching source configured the public instance never attempts the lazy build itself, a handshake on it counts `unevaluated[FETCHER_SNAPSHOT_UNAVAILABLE]` until the loader's retry succeeds.
 - V `NO_DATA_AT_FLIP` (the one state-dependent V code): in `STARTED`, `validate(ENFORCE)` (the enforcement setter, and the policy setter against the current enforcement) returns `ERROR` when `outcome(NO_DATA) == REJECT` and a required dataset has `generationId == null`, `pending == false` and a `SEED_UNREADABLE`/`STORE_UNREADABLE` warning for its sole local source; while `pending == true` the flip is accepted and the dataset becomes `NO_DATA` if the start task finds nothing, which `validate()` cannot see.
@@ -786,7 +786,9 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    with and without a `<domain-config>`, it does not establish availability.
 5. `walk = reconstruct(presented, index)`; `Found` → step 7.
 6. `fallback = pathBuilder.build(presented, anchors, now)` if the fallback is enabled and `presented.size ≤ FALLBACK_MAX_PRESENTED`,
-   cached under the path key; a `build` that returns null or throws is a **failed** fallback. A throw is caught here
+   cached under the path key; a `build` that returns null, throws, or returns a path decide cannot use (empty, holding a
+   null element, not starting with the presented leaf's bytes, with an intermediate that does not parse or is not a
+   CA, or with a leaf-issuer key that cannot be read) is a **failed** fallback. A throw is caught here
    and is never an engine error, except that every `VirtualMachineError` other than `StackOverflowError` is rethrown,
    as at §5.5's catch boundary. A result produced by a throw is **not** cached, neither in the path cache nor, through
    its verdict, in the verdict cache (flow step 3a), so a transient error is not remembered; a null return is:
@@ -799,7 +801,7 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`, whatever the walk recorded: the platform trusts a chain neither revokt's
      walker nor its PKIX builder can reproduce (divergent canonicalisation, constraints, verifier or anchors). The
      walker's own reason is kept in `Finding.Path.walkerReason`, and every recorded OID in an `UnsupportedAlgorithm`
-     finding. In the walker-only harness and `Evaluator.evaluate` it is `ISSUER_UNVERIFIED` when the walk recorded an
+     finding. In the walker-only harness and `Evaluator.evaluate` it is `NO_ISSUER(UNSUPPORTED_ALGORITHM)` when the walk recorded an
      own signature OID (`tbsSigOid`) in `unsupportedOids()`, in mozilla::pkix's order (`CheckIssuerIndependentProperties`
      runs before `VerifySignedData`):
      - every related candidate that is not an anchor, when explored, whether or not it verifies its child;
@@ -808,7 +810,8 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
        alone is `NO_ISSUER(NO_CANDIDATE)`.
 
      A candidate's key or curve OID never counts. Otherwise it is `NO_ISSUER` with the walker's reason. A server can
-     relabel `NO_ISSUER` as `ISSUER_UNVERIFIED` there, so the two rules share one outcome and one exemption (§4, §8).
+     steer the reason there, which is why it is a reason of one rule and not a rule of its own; `walkerReason` keeps
+     the walk's reason.
      Unlike pkix, there is no collapse to one error when candidates fail differently.
    - walk `Budget`: the fallback path's issuer key (appended last) and the walk's partial leaf keys
      are evaluated in step 7 **only so that `REVOKED` is reported when reachable**; the path status
@@ -819,9 +822,9 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      (`SKIPPED` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
      as with the fallback enabled, with only the walk's partial leaf keys evaluated and `usedFallback = false`; walk
      `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE`,
-     whether or not step 1 ran; any other walk `NotFound` → `ISSUER_UNVERIFIED` or `NO_ISSUER` under the
+     whether or not step 1 ran; any other walk `NotFound` → `NO_ISSUER`, its reason under the
      fallback-failed branch's rule. On a trust-manager binding any such walk `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`,
-     whatever the label: the platform trusts a chain the walker cannot reproduce, and no PKIX builder ran;
+     whatever the reason: the platform trusts a chain the walker cannot reproduce, and no PKIX builder ran;
      `walkerReason` keeps the walker's reason.
    - **The fallback finding**: exactly one `Finding.FallbackNotUsed` when the walk ended `NotFound` or
      `Budget` and no fallback path was evaluated (`usedFallback = false`), on every branch above: `DISABLED` with the
@@ -989,15 +992,20 @@ budgets, shared memo, never demoting the first walk's `Found`). **Any limit exce
 aborts the whole walk with `Budget`**; only `MAX_DEPTH` is a local dead end. `Found` is returned
 only when the walk completed without exhaustion; a `Budget` may carry partial paths.
 
-*Why this is sound.* Recovered or substituted keys cannot chain to a real anchor (rounds 1–2). An
-`UNSUPPORTED` link is never trusted (round 2). Nothing is excluded for a shared property, so a
+*Why this is sound.* Every path member below the leaf that is not an anchor must be a CA: its one basicConstraints
+extension reads `cA = TRUE`. An absent, FALSE or unreadable basicConstraints is a dead end before the link is
+verified, as webpki (`EndEntityUsedAsCa`) and mozilla::pkix (`CheckBasicConstraints`, `ERROR_CA_CERT_INVALID`)
+require of an issuer. Anyone can obtain an end-entity certificate under a real anchor, and its key can sign a
+certificate for any other key, a recovered one included; the CA check removes that route. A recovered key can then
+terminate only through a certificate chain that a holder of a CA key under a real anchor signed. An
+`UNSUPPORTED` link is never trusted. Nothing is excluded for a shared property, so a
 same-key decoy or a cross-certificate to a non-anchor listed first cannot hide the real certificate,
-which is related and is explored (round 3). The honest issuer's key is the only key that verifies a
-real leaf's signature other than a recovered key, and a recovered key terminates only if certified
-under a real anchor, which the attacker cannot obtain; so a `Found` carrying only benign keys is
-unreachable for a real revoked leaf. Stuffing related junk past the cap, or verifying junk past the
+which is related and is explored. The honest issuer's key is the only key that verifies a
+real leaf's signature, other than a recovered key. A recovered key terminates only through CA certificates up to a
+real anchor, so a `Found` carrying only benign keys needs the cooperation of some CA key holder under a real anchor
+(§10 residual "constrained sub-CA"). Stuffing related junk past the cap, or verifying junk past the
 guards, yields `Budget`, which rejects; an exhaustion in any subtree also yields `Budget`, so a
-stuffed subtree cannot starve the honest key out of a `Found` (round 4). Every terminating
+stuffed subtree cannot starve the honest key out of a `Found`. Every terminating
 leaf-issuer key is evaluated and `REVOKED` wins. The PKIX fallback covers one residue the walker
 does not: a `NotFound` on a chain of at most `FALLBACK_MAX_PRESENTED` certificates whose honest link
 the walker could not reproduce (a custom delegate's constraints or verifier divergence; canonicalisation alone never yields `NotFound`, §10 residual 1). Beyond the
@@ -1030,7 +1038,7 @@ The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walk
   the `Walk`; its `oid` is the child's TBS signature OID, `""` when the TBS AlgorithmIdentifier does
   not decode.
   `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` is emitted once per OID in `Walk.unsupportedOids`
-  on **every** outcome, with `outcomeDepended = (status == ISSUER_UNVERIFIED)`; fixture (n) asserts the
+  on **every** outcome, with `outcomeDepended = (noIssuerReason == UNSUPPORTED_ALGORITHM)`; fixture (n) asserts the
   `false` case on a `Found`.
 - **PKIX fallback contract** (`PathBuilderFallback`; the fallback re-parses the snapshot's anchors' `getEncoded()` with `CertificateFactory` once per `AnchorSnapshot.id`, memoised, and its `CollectionCertStore` holds every presented certificate): result lists the leaf first and **appends the
   trust anchor's certificate**; the leaf must be in the `CollectionCertStore`; one base
@@ -1038,7 +1046,10 @@ The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walk
   call; `setRevocationEnabled(false)`, `setPolicyQualifiersRejected(false)`, `setDate(now)`,
   `X509CertSelector().apply { certificate = leaf }`; Android resolves to ojluni's `SunCertPathBuilder`
   with Conscrypt doing signatures. The builder verifies every link under the platform's providers,
-  so its path satisfies the invariant's intent; `jdk.certpath.disabledAlgorithms` and provider
+  so its path satisfies the invariant's intent. Every certificate of a returned path between the leaf and the anchor must
+  be a CA under RFC 5280 basicConstraints (`cA = TRUE`), as `CertPathBuilder("PKIX")` requires; decision step 6
+  checks it again, so a path with an intermediate that does not parse or is not a CA is a failed build,
+  `FallbackNotUsed(FAILED)` (the JDK's builder already enforces it, so only a consumer builder is affected); `jdk.certpath.disabledAlgorithms` and provider
   divergence from the delegate fail the build, and like every failed build (null or a throw) are reported as
   `Finding.FallbackNotUsed(FAILED)` and surface as `PLATFORM_ONLY` on a walk `NotFound` at a trust-manager binding.
   It is skipped above `FALLBACK_MAX_PRESENTED` presented certificates (no candidate
@@ -1279,6 +1290,13 @@ values are names, never ordinals:
 - `<dataset>/<channel>/current`: a small pointer file `{live, previous}` naming generation
   directories; `previous` is only ever a complete generation of the same or higher trust class as
   `live`, so recovery never falls to a lower class than the one being replaced.
+  **Beside a `current` that is present but malformed**, which may name any directory, a generation directory whose
+  `meta.json` is present is held: a complete one is compared, reused when it holds this generation, and never
+  reopened, rewritten or deleted; one whose `meta.json` is malformed (a torn write, or another `metaVersion`) is
+  kept, and the sync is `STORE_FAILED` at that `<ts>`, which a new `<ts>` heals. Only a directory with no
+  `meta.json` (incomplete, or not yet written) is staged. When an install flips beside a malformed pointer, the new
+  pointer's `previous` is the generation the running loader's engine held live, if that generation is complete, is
+  another directory, and is of the same or a higher trust class; a fresh loader has no `previous`.
 - `<dataset>/<channel>/gen-<timestamp>-<hash16>/` (`timestamp` = `sourceTimestampMillis` zero-padded to
   13 digits so lexical order is chronological; `hash16` = the first 16 lowercase hex characters of
   `SHA-256(generationId)`; `generationId` itself may contain `/`): immutable; `index.bin`, delta files, `records.json` for `SIGNED`, and `meta.json` **written last as
@@ -1291,15 +1309,20 @@ values are names, never ordinals:
   `If-Modified-Since`. A
   `MIRROR` generation reloads as `MIRROR`, never as `SIGNED`; a `channel` mismatch is no generation.
   A `SIGNED` generation directory also holds `records.json`, the full verified record set (the same bytes as the seed's `records.json`: the canonical-JSON signed payload), so a
-  `_since` changeset can be verified against it (tombstones merged) without a full re-fetch.
+  `_since` changeset can be verified against it (tombstones merged) without a full re-fetch. A `_since` changeset is
+  merged over the pointed generation's `records.json`; the whole collection, fetched with no cursor, is verified as
+  served.
 - `<dataset>/<channel>/blobs/<sha256>` (64 lowercase hex): content-addressed full-filter files referenced from
   `meta.json`; when the key exists the stored blob is re-hashed and reused on a match (a mismatch rewrites it, `storeFailures++`; on the delta path, where the full is not being fetched, the full attachment is fetched again in the same sync, subject to the metered rule), so a daily delta install never rewrites the 6 MB full and a bit-rotted blob is never decoded; prune removes unreferenced
   blobs. The upki CI adapter materialises a C2SP directory image from a generation (it already
   copies into a fresh directory, §3.2).
-- `<dataset>/<channel>/updater.json`: **the rollback watermark is per dataset and channel, stored once outside the per-source map** (the effective watermark is floored by the live `SIGNED` generation's timestamp unless it is `clockBehind`, §6.3; a malformed file's dataset-level members are read as absent and count a store failure, so the floor applies) together with `seedInstalledAtMillis` (written with the watermark when the seed install flips the pointer) and a dataset-level `datasetLastAttemptAtMillis` (written at the end of every sync whatever its outcome, `STORE_LOCKED` excepted; the §8 `STALE` gate; the loader evaluates the gate when it writes this file and carries the boolean in the published `DataState`, internal field, so handshakes read the snapshot only, never the store) (a changeset installs only if its timestamp passes the dataset watermark, whichever source delivered it, so a relabelled `sourceId` on a private mirror cannot start a fresh watermark and roll back; the coverage-monotonic bound is the live `SIGNED` generation's maximum coverage, read from the published generation, never from this file); the per-source map is keyed by a **stable source id** (not the URL, so overriding a
+- `<dataset>/<channel>/updater.json`: **the rollback watermark is per dataset and channel, stored once outside the per-source map** (the effective watermark is floored by the live `SIGNED` generation's timestamp unless it is `clockBehind`, §6.3; a malformed file's dataset-level members are read as absent and count a store failure, so the floor applies) together with `seedInstalledAtMillis` (written with the watermark when the seed install flips the pointer) and a dataset-level `datasetLastAttemptAtMillis` (written at the end of every sync whatever its outcome, with two exceptions: `STORE_LOCKED`, and a sync whose read of
+  `updater.json` threw, which writes nothing; the §8 `STALE` gate; the loader evaluates the gate when it writes this file and carries the boolean in the published `DataState`, internal field, so handshakes read the snapshot only, never the store) (a changeset installs only if its timestamp passes the dataset watermark, whichever source delivered it, so a relabelled `sourceId` on a private mirror cannot start a fresh watermark and roll back; the coverage-monotonic bound is the live `SIGNED` generation's maximum coverage, read from the published generation, never from this file); the per-source map is keyed by a **stable source id** (not the URL, so overriding a
   base URL keeps the cursor): `lastVerifiedLastModified` (the `_since` cursor),
   `lastVerifiedAtMillis`, `lastAttemptAtMillis`, `backoffUntilMillis` (clamped to now + `MAX_BACKOFF` on write and again on read, so a clock that was far ahead at write time cannot leave a years-long backoff),
-  `consecutiveFailures`, `feedHostBlock: {sinceMillis, chainSha256s}` (the §8 signed-source hold, **per source, not per chain**: `sinceMillis` is set on the first `BLOCKED_BY_SELF` of any host of the source and cleared only by a hit-free sync that completes after `sinceMillis + FEED_HOST_HOLD`, never earlier and never by an install alone, so an episode lasts at least the hold and expires exactly once (an alternating hit/clean chain cannot reset it); `chainSha256s` is the set of hit chains, for reporting; the hold is measured from the persisted value, so restarts do not extend it; with `RevoktStorage.inMemory()` it restarts per process); written atomically. **The cursor, `lastVerified*`
+  `consecutiveFailures`, `feedHostBlock: {sinceMillis, chainSha256s}` (the §8 signed-source hold, **per source, not per chain**: `sinceMillis` is set on the first `BLOCKED_BY_SELF` of any host of the source and cleared only by a hit-free sync that completes after `sinceMillis + FEED_HOST_HOLD`, never earlier and never by an install alone, so an episode lasts at least the hold and expires exactly once (an alternating hit/clean chain cannot reset it); `chainSha256s` is the set of hit chains, for reporting; the hold is measured from the persisted value, so restarts do not extend it; with `RevoktStorage.inMemory()` it restarts per process); written atomically. A sync whose read of `updater.json` throws
+  writes nothing to it: no attempt is recorded, `consecutiveFailures` does not rise and no backoff is written;
+  `storeFailures` is the only signal. **The cursor, `lastVerified*`
   and the watermark advance only after the pointer flip of a successful install** (one carve-out: the §6.3 clock-behind install advances `lastVerifiedAtMillis` only); a failure-path
   write (`consecutiveFailures`, `backoffUntilMillis`) leaves those three untouched; [0.3] `UNCHANGED`
   against the pointed generation rewrites the file (repairing a crash between flip and write); in 0.2, whose store is
@@ -1558,8 +1581,7 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
 | `NO_DATA` | unevaluable | **reject** (exemptable) | reject (exemptable) | → OCSP: no filter is `Success` | n/a | reject: `missing_data = Error` | decision step 7, per required dataset |
 | `ENGINE_ERROR` | unevaluable | allow | reject | reject: `FATAL_ERROR_LIBRARY_FAILURE` | n/a | reject: a hard error, and rustls-upki fails closed | boundary, engine result, exemption throw |
 | `PARSE_FAILED` | unevaluable (goal 3) | allow | reject | n/a | n/a | n/a | decision step 3 |
-| `ISSUER_UNVERIFIED` | unevaluable | allow | reject (exemptable; **empty path**; shares its outcome and exemption with `NO_ISSUER`) | n/a | n/a | n/a | decision step 6 |
-| `NO_ISSUER` | unevaluable (goal 3) | allow | reject (exemptable; **empty path**: `anchorIn` never matches; reason on `Finding.Path`, including `PLATFORM_ONLY`; shares its outcome and exemption with `ISSUER_UNVERIFIED`) | n/a | n/a | n/a | decision step 6 |
+| `NO_ISSUER` | unevaluable (goal 3) | allow | reject (exemptable; **empty path**: `anchorIn` never matches; reason on `Finding.Path`, including `UNSUPPORTED_ALGORITHM` and `PLATFORM_ONLY`) | n/a | n/a | n/a | decision step 6 |
 | `NOT_ENROLLED` | non-answer | allow | reject (exemptable) | not compared | n/a | collapsed into `NOT_COVERED` (allow) | CRLite |
 | `NO_SCTS` | non-answer | allow | reject (exemptable) | → OCSP | n/a | allow | CRLite |
 | `NOT_COVERED` | non-answer | allow | allow | → OCSP | n/a | allow | CRLite (the coverage gap: a certificate issued after the live filter's coverage `high` is unchecked by every preset; §10) |
@@ -1586,7 +1608,7 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
   generation is `fromSeed` until a sync attempt has completed since the seed was installed** (the persisted
   `updater.json.datasetLastAttemptAtMillis ≥ updater.json.seedInstalledAtMillis`, both per dataset (§6.5), never the in-process `lastSync`; the loader carries the boolean in the published `DataState`;
   a read-only instance (§5.1) makes no attempt and writes nothing, so its in-memory seed stays gated until it
-  promotes itself to writer and the owner start task's first sync completes, `STORE_LOCKED` results not being attempts; a backoffed
+  promotes itself to writer and the owner start task's first sync completes, `STORE_LOCKED` results and a sync whose `updater.json` read threw (§6.5) not being attempts; a backoffed
   first sync completes at once as `BACKOFF`, §5.1, and `FETCH_TIMEOUT` bounds "completed", so an on-path
   attacker answering `503 + Retry-After` cannot keep the gate shut across restarts),
   or at once when no fetching source is configured (there is no fetch to race; `sync()`'s seed re-check is still an attempt; `SEED_PAST_REJECT_THRESHOLD` is still emitted), because installs happen months after a build and the first
@@ -1597,9 +1619,9 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
   future bound), `signedSourceFailingAfter` (24 h). `wouldRejects` advances only under `OBSERVE` and
   `rejects` only under `ENFORCE`, so the two columns compare cleanly after a flip.
 - **`ENGINE_ERROR` allows in `DEFAULT`** and rejects in `STRICT`.
-- **Exemptions** register per exemptable rule and run after policy mapping for fired `REJECT` rules only. **Enterprise-CA recipe under `STRICT`**: exempt `NO_SCTS`, `NOT_ENROLLED` **and the data rules** (`NO_DATA`, `STALE`, `UNSIGNED_DATA`) with the same `anchorIn(privateCa)` (`RevoktPolicy.Builder.exemptAnchors(sha256s)` does exactly that, §4), and `NO_ISSUER` with `hostSuffixIn(corpDomains) and platformOnly()`, one `exempt` that covers `ISSUER_UNVERIFIED` too, since the two share one exemption (they fire only on an empty reported path, where `anchorIn` never matches; `platformOnly()` alone would exempt every chain the §5.2 intermediate-omission residual produces on Android, for every host, turning `STRICT` into `DEFAULT` for a revoked public leaf presented without its intermediate), so a feed outage never takes down traffic CRLite cannot evaluate anyway ( on the JVM the supported private-CA delegate is a `TrustManagerFactory` over a merged `KeyStore`, never a hand-written `X509ExtendedTrustManager` composite, which passes `requiresExtendedDelegate()` but drops SunJSSE's constraints; call `refreshAnchors()` on rotation).
-- **`outcomeDepended`** (M1): `outcomeDepended = (status == ISSUER_UNVERIFIED)` (§5.1 "Findings"): the
-  walk recorded an own signature OID and the result is `ISSUER_UNVERIFIED`; false on `Found`, `Budget` and, on the
+- **Exemptions** register per exemptable rule and run after policy mapping for fired `REJECT` rules only. **Enterprise-CA recipe under `STRICT`**: exempt `NO_SCTS`, `NOT_ENROLLED` **and the data rules** (`NO_DATA`, `STALE`, `UNSIGNED_DATA`) with the same `anchorIn(privateCa)` (`RevoktPolicy.Builder.exemptAnchors(sha256s)` does exactly that, §4), and `NO_ISSUER` with `hostSuffixIn(corpDomains) and platformOnly()` (it fires only on an empty reported path, where `anchorIn` never matches; `platformOnly()` alone would exempt every chain the §5.2 intermediate-omission residual produces on Android, for every host, turning `STRICT` into `DEFAULT` for a revoked public leaf presented without its intermediate), so a feed outage never takes down traffic CRLite cannot evaluate anyway ( on the JVM the supported private-CA delegate is a `TrustManagerFactory` over a merged `KeyStore`, never a hand-written `X509ExtendedTrustManager` composite, which passes `requiresExtendedDelegate()` but drops SunJSSE's constraints; call `refreshAnchors()` on rotation).
+- **`outcomeDepended`** (M1): `outcomeDepended = (noIssuerReason == UNSUPPORTED_ALGORITHM)` (§5.1 "Findings"): the
+  walk recorded an own signature OID and the result is `NO_ISSUER(UNSUPPORTED_ALGORITHM)`; false on `Found`, `Budget` and, on the
   bindings, `NO_ISSUER(PLATFORM_ONLY)`.
 - **Established connections**: a rejection applies to new handshakes; pooled connections already established are not torn down (the README says so); an HTTP/2 connection coalesced onto another host inherits that host's verdict (§5.1).
 - **What `OBSERVE` yields**: `wouldRejects` over `evaluations` by rule from `status()`; by host, policy epoch,
@@ -1719,17 +1741,7 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      `CertPathBuilder` (and the delegate itself) fetches AIA issuers over the network inside the
      handshake; the fallback may then find a path the walker called `NO_CANDIDATE`; revokt neither sets
      nor clears the property (unverified beyond `sun.security.provider.certpath.Builder.USE_AIA`).
-  14. **`ISSUER_UNVERIFIED` relabelling**: a server can turn `NO_ISSUER` into `ISSUER_UNVERIFIED` off
-     the bindings, by presenting a related certificate whose own signature algorithm is unsupported, even one that
-     verifies nothing. The relabel is verdict-neutral under the presets and the built-in exemptions: the two rules
-     share one outcome and one exemption; `hostIn`, `hostSuffixIn` and `anchorIn` cannot tell the labels apart; and
-     on a trust-manager binding (and `Revokt.evaluate`) every walk `NotFound` whose fallback failed or is disabled is
-     `NO_ISSUER(PLATFORM_ONLY)`,
-     so `hostSuffixIn(…) and platformOnly()` matches either way. Off the bindings (`Evaluator.evaluate`, the
-     walker-only harness) the label still differs, so a consumer's own exemption that reads `rule` or `path.status`
-     there can still tell the two apart; that is consumer code, not a revokt verdict. A candidate's key or curve OID
-     never counts. `anchorIn` never matches on an empty reported path (§4).
-  15. **Keyability is a prediction.** The producer keys the logged precertificate (about half of CT entries). It also
+  14. **Keyability is a prediction.** The producer keys the logged precertificate (about half of CT entries). It also
      needs the logged `chain[0]` to parse, and `chain[1]` behind a precertificate signing certificate. revokt sees
      only the final certificate, so `producerKeyable` predicts the producer's result through RFC 6962's identical-TBS
      rule.
@@ -1740,6 +1752,15 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
       - **Two SPKI encodings**: two enrolled issuer certificates carry one key with different SPKI encodings, for
         example RSA with and without NULL parameters. A query under the encoding Mozilla did not key falls outside the
         universe.
+  15. **Constrained sub-CA.** A holder of a CA key under a real anchor can certify a recovered key, and the walker then
+     reports only that benign key as long as the honest intermediate is not presented. This includes a technically
+     constrained sub-CA whose `pathLenConstraint`, name constraints or EKU should forbid it: the walker checks
+     `cA = TRUE` on an issuer and enforces none of `pathLenConstraint`, keyUsage `keyCertSign`, name constraints or EKU
+     nesting there. So the holder of a `pathLen 0` sub-CA S under a real root can sign C, a CA certificate for a key
+     recovered from a revoked leaf's signature, and `[L, C, S]` walks to `Found([L, C, S, R])` with C's benign key as
+     the only leaf-issuer key; x509-limbo's `pathlen::intermediate-violates-pathlen-0` likewise walks to `Found`. On
+     the bindings the platform validates the chain first (step 1), and a chain that breaks those constraints does not
+     reach the walker.
 - Feed authenticity: `SIGNED` by Mozilla/Google signatures; `MIRROR`/`SYSTEM` by TLS or the OS,
   **bootstrap only** (§7.3): never displaces a higher-class generation, evicted by the first signed
   one; `BUNDLED` is project-attested and availability-only. The §7.3 residual: a fresh install without a

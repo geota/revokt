@@ -213,7 +213,7 @@ tests; **live checks** are informational.
   (g) chain omitting the intermediate → walker-harness `NO_ISSUER(NO_CANDIDATE)`; on trust-manager bindings `PLATFORM_ONLY` with `walkerReason = NO_CANDIDATE`; on Android with a warm intermediate index and a host, `Found(PLATFORM)` via step 4; (h) self-signed non-anchor and an
   A↔B loop; (i) 65 related junk at the leaf → `Budget(RELATED_BUDGET)`, `candidatesExplored = 64`,
   fallback skipped (chain too long), `PATH_BUDGET_EXCEEDED`; (j) ML-DSA anchor on a JDK without ML-DSA →
-  `ISSUER_UNVERIFIED` in the walker-only harness and `Evaluator.evaluate`; on a trust-manager binding a chain the
+  `NO_ISSUER(UNSUPPORTED_ALGORITHM)` in the walker-only harness and `Evaluator.evaluate`; on a trust-manager binding a chain the
   platform accepted is `NO_ISSUER(PLATFORM_ONLY)` with the same `UnsupportedAlgorithm` finding (revision 57); (j2) brainpool anchor on SunEC (walker harness) → `NO_ISSUER(ALL_CANDIDATES_INVALID)`, no `UnsupportedAlgorithm` (the curve OID is the candidate's); (k) same-key decoy with a garbage
   signature first, decoy issuer name equal to the root's → `Found`, `verifications = 4`,
   `candidatesExplored = 5` (the store anchor and the real intermediate are both tried under the
@@ -269,23 +269,35 @@ tests; **live checks** are informational.
   maintainer's decisions; in the first four rows the fallback finds no path, and the label is the same with it failed,
   `FallbackNotUsed(FAILED)`, or disabled, `FallbackNotUsed(DISABLED)`): (ak) the relabel: `[L]` →
   `NO_ISSUER(NO_CANDIDATE)`; `[L, D]`, where D is named like the leaf's issuer, verifies the leaf under a recovered key and signs itself with a probe-listed OID under an issuer no
-  candidate matches → `ISSUER_UNVERIFIED`, `walkerReason = UNANCHORED`; `[L, J]`, where J is the same but verifies
-  nothing → `ISSUER_UNVERIFIED`, `walkerReason = ALL_CANDIDATES_INVALID`; under `STRICT` all three are `Rejected`, and
-  an exemption registered on either rule exempts all three alike; on trust-manager bindings and `Revokt.evaluate` all
+  candidate matches → `NO_ISSUER(UNSUPPORTED_ALGORITHM)`, `walkerReason = UNANCHORED`; `[L, J]`, where J is the same but verifies
+  nothing → `NO_ISSUER(UNSUPPORTED_ALGORITHM)`, `walkerReason = ALL_CANDIDATES_INVALID`; under `STRICT` all three are `Rejected`, and
+  a `NO_ISSUER` exemption exempts all three alike; on trust-manager bindings and `Revokt.evaluate` all
   three are `NO_ISSUER(PLATFORM_ONLY)`, each with the walker's reason in `walkerReason` and D's or J's OID in an
   `UnsupportedAlgorithm(outcomeDepended = false)` finding, and `STRICT` plus `exempt(NO_ISSUER, hostSuffixIn(…) and
   platformOnly())` accepts each; (al) the leaf deferral: a leaf L2 whose own signature OID is probe-listed, presented
-  alone → `NO_ISSUER(NO_CANDIDATE)`, no `UnsupportedAlgorithm`; `[L2, I]` → `ISSUER_UNVERIFIED`, `walkerReason =
+  alone → `NO_ISSUER(NO_CANDIDATE)`, no `UnsupportedAlgorithm`; `[L2, I]` → `NO_ISSUER(UNSUPPORTED_ALGORITHM)`, `walkerReason =
   ALL_CANDIDATES_INVALID`; on the bindings both `NO_ISSUER(PLATFORM_ONLY)`; (am) a related store anchor that signs
   itself with a probe-listed OID and does not verify the leaf → `NO_ISSUER(ALL_CANDIDATES_INVALID)`, its OID not
   recorded; (an) a presented certificate unrelated to the leaf that verifies it and signs itself with a probe-listed
-  OID → its OID recorded, `Walk.NotFound(NO_CANDIDATE)` from the walk and `ISSUER_UNVERIFIED` from `decide`; (ao) the
+  OID → its OID recorded, `Walk.NotFound(NO_CANDIDATE)` from the walk and `NO_ISSUER(UNSUPPORTED_ALGORITHM)` from `decide`; (ao) the
   candidate order: an issuer that is itself a self-signed snapshot anchor P, presented beside its cross-certificate
   under another anchor in both orders → reported path `[L, P]` and `anchorIn([P])` exempts in both; two cross-signed
   intermediates under two different anchors → the reported path follows the presented order, as Firefox's does;
   (ap) 64 snapshot anchors named like the leaf's issuer ahead of the presented issuer → `Budget(RELATED_BUDGET)` at
   `endDepth = 1` with no partial path, `PATH_BUDGET_EXCEEDED`, `usedFallback = true` and only the fallback's key
-  evaluated; with the fallback disabled, `usedFallback = false`, `FallbackNotUsed(DISABLED)` and no key evaluated.
+  evaluated; with the fallback disabled, `usedFallback = false`, `FallbackNotUsed(DISABLED)` and no key evaluated;
+  (aq) a non-anchor issuer must be a CA: leaf → I → R with I having no basicConstraints, `cA` omitted, `cA` explicitly
+  FALSE, a `cA` of `01`, or two basicConstraints → `NotFound(ALL_CANDIDATES_INVALID)`, `verifications = 0`,
+  `candidatesExplored = 1`. Three cases use an end-entity certificate E under the real root, named like I: E's key
+  verifies the leaf and `[L, E, I]` is presented → `Found` through I alone, `verifications = 2`,
+  `candidatesExplored = 3`; `[L, E]` → `ALL_CANDIDATES_INVALID`; E signs itself with a probe-listed OID → the OID is
+  still recorded. The attack the check closes: `[L, C, F]`, where F is an end-entity certificate under the real root
+  and C, named like I, is a CA certificate for a recovered key that F's key signed → `NotFound(UNANCHORED)`,
+  `verifications = 1`, `candidatesExplored = 3` (without the check it is `Found([L, C, F, R])`, with C's key the only
+  leaf-issuer key); `[L, C2, F]`, the same with C2's issuer name not matching F's subject, so that only the unrelated
+  loop reaches F → `NotFound(UNANCHORED)`, `verifications = 1`, `unrelatedExploredAtLeaf = 1`; leaf → I1 → I2 → R
+  with I2 not a CA → `UNANCHORED`, `verifications = 1`, `candidatesExplored = 3`; a v3 anchor without
+  basicConstraints still terminates → `Found`.
   Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
   (z) has a related candidate that verifies but is unanchored; stuffing fixtures present their junk.
 - **Trust-manager invariants**: never accept what the platform rejected (the 3-arg overload's null-host retry only after a socket or engine overload accepted the chain and host); under `DEFAULT` never
@@ -306,9 +318,7 @@ tests; **live checks** are informational.
   57); a one-certificate `verifiedPath` whose leaf is a snapshot anchor outside the keyability profile → `FOUND` under
   its own key, `anchorSnapshotId` the entry snapshot's; the same leaf when it is not an anchor →
   `PARSE_FAILED(PRODUCER_UNKEYABLE)`, never queried; a longer `verifiedPath` → `anchorSnapshotId = 0`, an anchor at its
-  head gated like any leaf; `rule(NO_ISSUER, ALLOW)` on a `STRICT` builder → `outcome(ISSUER_UNVERIFIED) == ALLOW`, and
-  `exempt` or `clearExemption` on either rule → the same exemption, or none, on both (revision 57);
-  `STRICT.newBuilder().build().newBuilder()` keeps `STRICT`'s preset; `rollbackWindowMillis(-1)` and
+  head gated like any leaf; `STRICT.newBuilder().build().newBuilder()` keeps `STRICT`'s preset; `rollbackWindowMillis(-1)` and
   `clockSkew(Duration.ofSeconds(Long.MAX_VALUE))` → `IllegalArgumentException`; a policy that is an `ERROR` under
   `validate(ENFORCE)` has only `WARNING`s under `validate(OFF)`; a `PresentedChain` whose second certificate does not
   parse → `size = 2`, `parsed(1) = false`, `der(1)` its bytes and its other fields empty; two `Verdict`s that differ
@@ -381,13 +391,17 @@ release; Kover branch coverage of each parser package not regressed, 90 % as the
 corpus capped at a few MB, overflow in a corpus repository.
 
 **Walker fuzzer** (a 0.2 deliverable: it compiles against `Walk`, `CandidateIndex` and `reconstruct`, which exist from 0.2; the generator, `SymVerifier` and the reference walker are 0.1). Crypto is replaced by `SymVerifier(ok: Set<Pair<CertId, KeyId>>, unsupported:
-Set<Oid>)`, which implements `SignatureVerifier.verify(sigAlg, spki, message, signature)` over bytes with `KeyId = SHA-256(spki)` and `CertId = SHA-256(message)` (the TBS); the generator emits real DER and writes the key id into the SPKI BIT STRING under a private-arc key OID, and `unsupported` is matched against `tbsSigOid`/`keyOid`/`curveOid` exactly as the startup probe does, so recovered and duplicate-signature keys are free to generate. Generator: an honest
+Set<Oid>)`, which implements `SignatureVerifier.verify(sigAlg, spki, message, signature)` over bytes with `KeyId = SHA-256(spki)` and `CertId = SHA-256(message)` (the TBS); the generator emits real DER and writes the key id into the SPKI BIT STRING under a private-arc key OID, and `unsupported` is matched against `tbsSigOid`/`keyOid`/`curveOid` exactly as the startup probe does, so recovered and duplicate-signature keys are free to generate. Generator (every certificate carries a critical basicConstraints `cA = TRUE` except the leaf and
+`EndEntityIssuer`'s end-entity certificate, so the relatedness invariant covers CAs only): an honest
 world (1–200 anchors, some with unsupported OIDs; chain depth 0–9, depth = the number of intermediates; cross-signs only between
 snapshot roots), then **world mutations** (`NameEncoding`, `AlgMismatch`, `UnsupportedOwnSig` on
 honest certificates, `DropIntermediate`) and **attacker mutations** (`Recover(child)` with a fresh key
 in `ok`, optionally `CertifiedBy(anchor)`; `SameKeyDecoy`; `CrossCertToNonAnchor`; `Stuff(n ≤ 300,
-related)`; `SelfSignedNonAnchor`; `Loop`; `Permute`; `Duplicate`; `DepthPad`, junk certificates off the honest path that never lengthen it, so P3 is not tripped by a dead end). **Oracle**: a
-**relation-aware, uncapped reference walker** (at every node: related candidates, plus unrelated
+related)`; `SelfSignedNonAnchor`; `Loop`; `Permute`; `Duplicate`; `EndEntityIssuer(child, certifiedBy, unrelated)`, a recovered key
+in an end-entity certificate issued by a snapshot anchor, named like the child's issuer or, with `unrelated`, a fresh
+name only the unrelated loop reaches, which leaves the result unchanged and is the one generated certificate that
+verifies a child without being related to it; `DepthPad`, junk certificates off the honest path that never lengthen it, so P3 is not tripped by a dead end). **Oracle**: a
+**relation-aware, uncapped reference walker** (a non-anchor candidate must be a CA as the JDK reads it; at every node: related candidates, plus unrelated
 presented certificates only when no related path exists, at the leaf collecting every unrelated issuer's key as §5.1 does; depth ≤ `MAX_DEPTH`; no other limits; the fuzzer runs both walkers with the platform canonicaliser, so the leaf-level custom-canonicaliser clause is inert for P2/P6 and is covered by the walker-harness fixtures instead) →
 `refKeys`; a CRLite stub mapping the honest key to `REVOKED` in half the runs and every other key to `NOT_ENROLLED` (so `rules` is predictable under `Recover(CertifiedBy)`); a fake
 `PathBuilderFallback` equal to the reference. Properties:
@@ -409,7 +423,7 @@ presented certificates only when no related path exists, at the leaf collecting 
 - **P8 honest acceptance** (goal 3's core guarantee): an unmutated world, or one with only
   `NameEncoding`/`AlgMismatch`, ⇒ `Found` with `PathStatus.FOUND`, never `Budget`, and
   `Rejected ⇔ the CRLite stub maps the honest key to REVOKED`; `UnsupportedOwnSig` on a non-anchor certificate ⇒
-  `ISSUER_UNVERIFIED`, never `PATH_BUDGET_EXCEEDED` (an anchor's self-signature is never verified, so the mutation is applied to non-anchors only); `DropIntermediate` ⇒ `NO_ISSUER(NO_CANDIDATE)`
+  `NO_ISSUER(UNSUPPORTED_ALGORITHM)`, never `PATH_BUDGET_EXCEEDED` (an anchor's self-signature is never verified, so the mutation is applied to non-anchors only); `DropIntermediate` ⇒ `NO_ISSUER(NO_CANDIDATE)`
   (a world mutation under P3: the platform's acceptance of such a chain is the §5.2 residual,
   outside the fuzzer's model).
 Rounds 1–2 are `Recover` + P3; round 2's OID case is `UnsupportedOwnSig` + P1; round 3 is

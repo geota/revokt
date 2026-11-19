@@ -586,3 +586,17 @@ Appendix A of the spec: what was verified against live sources and reference cod
   for Web PKI certificates under the CA/Browser Forum Baseline Requirements; `SunCertPathBuilder` has
   no candidate budget and backtracks through all name-matching candidates; `CertPath.getCertificates()`
   excludes the trust anchor.
+- **Issuer basicConstraints** (revision 59), read 2026-11-16: rustls-webpki 0.104.0-alpha.7 `verify_cert.rs`
+  `check_basic_constraints` (422–454) rejects an issuer with no basicConstraints or `cA` FALSE as `EndEntityUsedAsCa`
+  (442, 448), and enforces `pathLenConstraint` (449); anchors are `TrustAnchor`s and are not checked. mozilla::pkix
+  `pkixcheck.cpp` `CheckBasicConstraints` returns `ERROR_CA_CERT_INVALID` for a non-CA issuer (712–715) and
+  `ERROR_V1_CERT_USED_AS_CA` for a v1 non-anchor without the extension (689–695), and checks anchors too (1057);
+  `pkixbuild.cpp` checks the issuer (205) before `VerifySignedData` (212). **Divergence, followed from webpki:** revokt
+  does not check an anchor's basicConstraints (pkix fails a v3 anchor without `cA = TRUE`). **Not followed yet:**
+  `pathLenConstraint`, and pkix's `keyCertSign` requirement. **Also different from webpki, and unreachable without a
+  real CA's signature:** revokt reads basicConstraints in a v1 or v2 certificate, which webpki rejects whole (it
+  requires v3, `cert.rs` 276–290); and a `pathLenConstraint` above 255 still reads as a CA, which webpki reads as a
+  `u8` and fails with `BadDer` (`verify_cert.rs` 436). More generally, revokt's parser keeps the JDK's envelope
+  leniency on issuers (any version INTEGER, an extension `critical` BOOLEAN of any single byte, elements after
+  extnValue or after `[3]`, an unknown critical extension), so it can read as a CA a certificate that webpki rejects
+  whole; each such certificate still needs the signature of a key that chains to a real anchor.
