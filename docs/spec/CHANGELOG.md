@@ -5,6 +5,19 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 61 (the issuer constraints of #237, 2026-11-19)
+
+- §5.1 "Why this is sound": a non-anchor issuer must also be within its `pathLenConstraint` (self-issued certificates
+  counted; above 127 not a CA), set `keyCertSign` when it has keyUsage, and list the request's purpose when it has
+  extKeyUsage; every nameConstraints on the path, an anchor's included, binds the certificates below it, by webpki's
+  rule; 250,000 name-constraint comparisons per walk. Fixtures (ar), (as).
+- §5.1 decision step 6 and the PKIX fallback contract: a fallback path must end at an anchor by bytes and meet the same
+  rules; the JDK's builder enforces less; a `verifiedPath` gets no issuer rule.
+- §10 residual 15 rewritten: only an unconstrained CA key holder can still certify a recovered key; the webpki rule's
+  differences from Firefox; a refusal is `NO_ISSUER`, allowed unchecked under `DEFAULT`; what was checked.
+- Test plan: fixtures (ar) and (as), the `NameConstraintsFuzzTest` target, the reference walker's scope. References:
+  the #237 entry. Divergences W11 to W15.
+
 ### Changes in revision 60 (the trust-class cut of #218, and #246)
 
 - **#218, the trust-class cut:**
