@@ -243,8 +243,10 @@ internal class SeedArchive private constructor(
         val maxEntries: Int get() = FIXED.size + RevoktLimits.MAX_CHANGESET_RECORDS
 
         /**
-         * The most bytes an archive may hold (the coordinator's decision on #138): about 3.7 times the most a channel
-         * holds today (a 6 MB full and 255 deltas of about 242 KB, §6.4), so a source that never ends fails closed.
+         * The most bytes an archive may hold (the coordinator's decision on #138, kept on #223): a channel at today's
+         * sizes (a 6 MB full and deltas of about 242 KB, §6.4) holds about 254 MB even at the full
+         * `MAX_CHANGESET_RECORDS` of 1,024 records, and a real seed is far below that. It makes a source that never ends
+         * fail closed: a larger archive is refused whole (`SEED_UNREADABLE`), never truncated.
          */
         const val MAX_BYTES: Long = 256L shl 20
 

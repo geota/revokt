@@ -4,12 +4,8 @@
 package dev.revokt.engine.store
 
 import dev.revokt.RevoktLimits
-import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonObject
-import dev.revokt.engine.json.JsonString
 import dev.revokt.engine.json.JsonValue
-import okio.ByteString
-import okio.ByteString.Companion.decodeHex
 
 /**
  * A dataset and channel's `updater.json` (spec §6.5): the rollback watermark, [seedInstalledAtMillis] and
@@ -44,20 +40,9 @@ internal data class SourceRecord(
     val lastAttemptAtMillis: Long? = null,
     val backoffUntilMillis: Long? = null,
     val consecutiveFailures: Int = 0,
-    val feedHostBlock: FeedHostBlock? = null,
 ) {
     init {
         require(consecutiveFailures >= 0) { "consecutiveFailures is negative" }
-    }
-}
-
-/** The §8 signed-source hold: when it began and the SHA-256 of each chain that hit. */
-internal data class FeedHostBlock(
-    val sinceMillis: Long,
-    val chainSha256s: Set<ByteString>,
-) {
-    init {
-        require(chainSha256s.all { it.size == SHA256_BYTES }) { "a chain hash is not a SHA-256" }
     }
 }
 
@@ -137,21 +122,6 @@ internal object UpdaterJson {
                 "lastAttemptAtMillis" to StoreFields.long(s.lastAttemptAtMillis),
                 "backoffUntilMillis" to StoreFields.long(s.backoffUntilMillis),
                 "consecutiveFailures" to StoreFields.long(s.consecutiveFailures.toLong()),
-                "feedHostBlock" to s.feedHostBlock?.let(::feedHostBlock),
-            ),
-        )
-
-    private fun feedHostBlock(b: FeedHostBlock): JsonObject =
-        StoreFields.objectOf(
-            listOf(
-                "sinceMillis" to StoreFields.long(b.sinceMillis),
-                "chainSha256s" to
-                    JsonArray(
-                        b.chainSha256s
-                            .map { it.hex() }
-                            .sorted()
-                            .map(::JsonString),
-                    ),
             ),
         )
 
@@ -166,18 +136,6 @@ internal object UpdaterJson {
             lastAttemptAtMillis = f.optLong("lastAttemptAtMillis"),
             backoffUntilMillis = f.optLong("backoffUntilMillis"),
             consecutiveFailures = failures.toInt(),
-            feedHostBlock = f.optObject("feedHostBlock")?.let(::feedHostBlock),
         )
     }
-
-    private fun feedHostBlock(f: StoreFields): FeedHostBlock =
-        FeedHostBlock(
-            sinceMillis = f.long("sinceMillis"),
-            chainSha256s =
-                (f.optArray("chainSha256s") ?: f.missing("chainSha256s")).items.mapTo(LinkedHashSet()) { v: JsonValue ->
-                    val hex = (v as? JsonString)?.value
-                    if (hex == null || !GenerationNames.isSha256Hex(hex)) f.wrong("chainSha256s")
-                    hex.decodeHex()
-                },
-        )
 }

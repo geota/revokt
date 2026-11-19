@@ -24,7 +24,6 @@ class RevoktLimitsTest {
         assertEquals(1_024, RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
         assertEquals(1_024, RevoktLimits.ACCEPTANCE_MEMO_ENTRIES)
         assertEquals(24 * hour, RevoktLimits.ACCEPTANCE_MEMO_TTL)
-        assertEquals(24 * hour, RevoktLimits.FEED_HOST_HOLD)
         assertEquals(5_000, RevoktLimits.ENGINE_CLOSE_DRAIN)
         assertEquals(30_000, RevoktLimits.FETCH_TIMEOUT)
         assertEquals(1_024, RevoktLimits.VERDICT_CACHE_ENTRIES)
@@ -37,7 +36,7 @@ class RevoktLimitsTest {
         assertEquals(16L shl 20, RevoktLimits.MAX_FILTER_BYTES)
         assertEquals(4L shl 20, RevoktLimits.MAX_JSON_BYTES)
         assertEquals(64L shl 10, RevoktLimits.MAX_X5U_BYTES)
-        assertEquals(256, RevoktLimits.MAX_CHANGESET_RECORDS)
+        assertEquals(1_024, RevoktLimits.MAX_CHANGESET_RECORDS)
         assertEquals(60_000, RevoktLimits.READONLY_POLL_INTERVAL)
         assertEquals(24 * hour, RevoktLimits.MAX_BACKOFF)
         assertEquals(1L shl 20, RevoktLimits.MiB)
@@ -46,10 +45,5 @@ class RevoktLimitsTest {
     @Test
     fun `fallback limit is below the presented cap so the skip rule is reachable`() {
         assertTrue(RevoktLimits.FALLBACK_MAX_PRESENTED < RevoktLimits.MAX_PRESENTED)
-    }
-
-    @Test
-    fun `computed failure backoff never exceeds the backoff cap`() {
-        assertTrue(RevoktLimits.FEED_HOST_HOLD <= RevoktLimits.MAX_BACKOFF)
     }
 }

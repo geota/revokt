@@ -3,15 +3,11 @@
 
 package dev.revokt
 
-import okio.ByteString
-import okio.ByteString.Companion.toByteString
 import kotlin.jvm.Transient
 
 /**
  * How one sync ended (spec §4): what it installed, where it stopped and why, without parsing a message. An output type:
- * a value with a private constructor and a `@RevoktTestingApi` builder; equality is by content except [cause], and
- * `ByteArray` getters return fresh copies. The builder checks that the `BLOCKED_BY_SELF` fields are set only on a
- * [SyncOutcome.BLOCKED_BY_SELF] result (§8), which nothing produces before 0.3.
+ * a value with a private constructor and a `@RevoktTestingApi` builder; equality is by content except [cause].
  */
 @OptIn(RevoktTestingApi::class)
 public class SyncResult private constructor(
@@ -26,12 +22,12 @@ public class SyncResult private constructor(
     /** The datasets this sync installed, each with the id of the generation it installed. */
     public val installed: Map<Dataset, String> = builder.installed
 
-    /** The source the outcome is about; null when no one source is (a `FETCHER_TRUST` failure, for example). */
+    /** The source the outcome is about; null when no one source is. */
     public val sourceId: String? = builder.sourceId
 
     /**
-     * Where a `FAILED`, `STORE_FAILED` or `CLOCK_SKEW` sync stopped. A fetcher-policy reject and a 401 or 407 carry the
-     * stage of the fetch they interrupted: `CHANGESET`, `X5U` or `ATTACHMENT` (§3).
+     * Where a `FAILED`, `STORE_FAILED` or `CLOCK_SKEW` sync stopped. A 401 or 407 carries the stage of the fetch it
+     * interrupted: `CHANGESET`, `X5U` or `ATTACHMENT` (§3).
      */
     public val stage: SyncStage? = builder.stage
 
@@ -42,31 +38,8 @@ public class SyncResult private constructor(
     @Transient
     public val cause: Throwable? = builder.cause
 
-    /** On a [SyncOutcome.BLOCKED_BY_SELF] result, which source is blocked. */
-    public val blockedSource: String? = builder.blockedSource
-
-    private val blockedChain: ByteString? = builder.blockedChainSha256
-
-    private val blockedSerial: ByteString? = builder.blockedLeafSerial
-
     /** The sync-time diagnostics: matched on code, never on message. */
     public val warnings: List<PolicyDiagnostic> = builder.warnings
-
-    init {
-        require(
-            outcome == SyncOutcome.BLOCKED_BY_SELF ||
-                (blockedSource == null && blockedChain == null && blockedSerial == null),
-        ) { "the blocked fields are set only on a BLOCKED_BY_SELF result (spec §4, §8): got outcome=$outcome" }
-    }
-
-    /**
-     * On a [SyncOutcome.BLOCKED_BY_SELF] result, the SHA-256 of the blocked host chain, to compare with the host's
-     * current chain (§8). A fresh copy.
-     */
-    public val blockedChainSha256: ByteArray? get() = blockedChain?.toByteArray()
-
-    /** On a [SyncOutcome.BLOCKED_BY_SELF] result, the blocked leaf's raw serial. A fresh copy. */
-    public val blockedLeafSerial: ByteArray? get() = blockedSerial?.toByteArray()
 
     /** A builder holding this result's values, [cause] included. */
     @RevoktTestingApi
@@ -79,9 +52,6 @@ public class SyncResult private constructor(
             .stage(stage)
             .httpStatus(httpStatus)
             .cause(cause)
-            .blockedSource(blockedSource)
-            .blockedChainSha256(blockedChainSha256)
-            .blockedLeafSerial(blockedLeafSerial)
             .warnings(warnings)
 
     /**
@@ -96,9 +66,6 @@ public class SyncResult private constructor(
             "sourceId" to sourceId,
             "stage" to stage,
             "httpStatus" to httpStatus,
-            "blockedSource" to blockedSource,
-            "blockedChainSha256" to blockedChain,
-            "blockedLeafSerial" to blockedSerial,
             "warnings" to warnings,
         )
 
@@ -107,13 +74,10 @@ public class SyncResult private constructor(
     override fun hashCode(): Int = fields().hashCode()
 
     override fun toString(): String =
-        fields().joinToString(prefix = "SyncResult(", postfix = ")") { (name, value) ->
-            "$name=${if (value is ByteString) value.hex() else value}"
-        }
+        fields().joinToString(prefix = "SyncResult(", postfix = ")") { (name, value) -> "$name=$value" }
 
-    /** Builds a [SyncResult] for tests and fakes; [build] checks the invariant the constructor does. */
+    /** Builds a [SyncResult] for tests and fakes. */
     @RevoktTestingApi
-    @Suppress("TooManyFunctions") // One setter per spec §4 field, plus build().
     public class Builder {
         internal var outcome: SyncOutcome? = null
             private set
@@ -128,12 +92,6 @@ public class SyncResult private constructor(
         internal var httpStatus: Int? = null
             private set
         internal var cause: Throwable? = null
-            private set
-        internal var blockedSource: String? = null
-            private set
-        internal var blockedChainSha256: ByteString? = null
-            private set
-        internal var blockedLeafSerial: ByteString? = null
             private set
         internal var warnings: List<PolicyDiagnostic> = emptyList()
             private set
@@ -156,13 +114,6 @@ public class SyncResult private constructor(
         public fun httpStatus(status: Int?): Builder = apply { httpStatus = status }
 
         public fun cause(cause: Throwable?): Builder = apply { this.cause = cause }
-
-        public fun blockedSource(sourceId: String?): Builder = apply { blockedSource = sourceId }
-
-        public fun blockedChainSha256(sha256: ByteArray?): Builder =
-            apply { blockedChainSha256 = sha256?.toByteString() }
-
-        public fun blockedLeafSerial(serial: ByteArray?): Builder = apply { blockedLeafSerial = serial?.toByteString() }
 
         /** Replaces the warnings with a read-only copy of [warnings]. */
         public fun warnings(warnings: List<PolicyDiagnostic>): Builder =
