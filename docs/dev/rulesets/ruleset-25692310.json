@@ -84,9 +84,6 @@
             "context": "dependency-review"
           },
           {
-            "context": "coverage"
-          },
-          {
             "context": "cooling"
           }
         ],

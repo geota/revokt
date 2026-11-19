@@ -43,7 +43,7 @@ generation stays published until the pointed generation displaces it under the r
 `sync()` returns `STORE_LOCKED` from then on), runs the owner start task against it with the in-memory
 generation as one more candidate under the ordinary rules (it displaces a stored generation only when
 its trust class is not lower and it is newer, exactly as a seed would; a `MIRROR` never displaces a
-stored `SIGNED`), merges `updater.json` per field (watermark = max; `feedHostBlock` = the later episode; cursor and
+stored `SIGNED`), merges `updater.json` per field (watermark = max; cursor and
 `lastVerified*` from the generation that ends up installed; `backoffUntilMillis` = max; `consecutiveFailures`
 and per-source `lastAttemptAtMillis` from the newer record; `seedInstalledAtMillis` from whichever seed
 install is live; `datasetLastAttemptAtMillis` = max, so an in-memory attempt that opened the `STALE` gate

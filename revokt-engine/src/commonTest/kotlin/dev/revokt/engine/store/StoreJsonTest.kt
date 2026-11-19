@@ -227,11 +227,6 @@ class StoreJsonTest {
                             lastAttemptAtMillis = now - 5,
                             backoffUntilMillis = now + 1_000,
                             consecutiveFailures = 3,
-                            feedHostBlock =
-                                FeedHostBlock(
-                                    now - 100,
-                                    setOf(ByteArray(32) { 2 }.toByteString(), ByteArray(32) { 1 }.toByteString()),
-                                ),
                         ),
                     "mirror" to SourceRecord(),
                 ),
@@ -250,6 +245,17 @@ class StoreJsonTest {
             edited(UpdaterJson.write(record, now), "\"consecutiveFailures\":3", "\"consecutiveFailures\":3,\"zNew\":{}")
         val wider = edited(bytes, "{\"datasetLastAttemptAtMillis\"", "{\"aNew\":true,\"datasetLastAttemptAtMillis\"")
         assertEquals(UpdaterRead(record), UpdaterJson.read(wider, now))
+        // An earlier build's per-source fetcher hold is one such member.
+        val held =
+            edited(
+                bytes,
+                "\"consecutiveFailures\":3",
+                "\"consecutiveFailures\":3,\"feedHostBlock\":{\"chainSha256s\":[],\"sinceMillis\":1}",
+            )
+        assertEquals(UpdaterRead(record), UpdaterJson.read(held, now))
+        // A malformed one too: the member is no longer read, so its shape cannot drop the source.
+        val malformed = edited(bytes, "\"consecutiveFailures\":3", "\"consecutiveFailures\":3,\"feedHostBlock\":7")
+        assertEquals(UpdaterRead(record), UpdaterJson.read(malformed, now))
     }
 
     @Test
@@ -277,17 +283,11 @@ class StoreJsonTest {
     @Test
     fun `a bad source entry is dropped alone and the watermark survives`() {
         val bytes = UpdaterJson.write(record, now)
-        val hash = "01".repeat(32)
         val withoutRemoteSettings = record.copy(sources = record.sources - "remote-settings")
         for ((from, to) in listOf(
             "\"consecutiveFailures\":3" to "\"consecutiveFailures\":-1",
             "\"consecutiveFailures\":3" to "\"consecutiveFailures\":2147483648",
             "\"lastVerifiedLastModified\":1762000000123" to "\"lastVerifiedLastModified\":\"x\"",
-            "\"$hash\"" to "\"${hash.dropLast(1)}A\"",
-            "\"$hash\"" to "\"${hash.drop(2)}\"",
-            "\"$hash\"" to "1",
-            "\"chainSha256s\":[" to "\"chainSha256s\":7,\"was\":[",
-            ",\"sinceMillis\":${now - 100}" to "",
         )) {
             val read = assertNotNull(UpdaterJson.read(edited(bytes, from, to), now), "$from -> $to")
             assertEquals(withoutRemoteSettings, read.record, "$from -> $to")
@@ -371,8 +371,7 @@ class StoreJsonTest {
     }
 
     @Test
-    fun `negative failure counts and short chain hashes are refused`() {
+    fun `negative failure counts are refused`() {
         assertFailsWith<IllegalArgumentException> { SourceRecord(consecutiveFailures = -1) }
-        assertFailsWith<IllegalArgumentException> { FeedHostBlock(1, setOf(ByteArray(31).toByteString())) }
     }
 }

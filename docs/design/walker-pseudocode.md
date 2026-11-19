@@ -16,7 +16,7 @@ internal sealed interface Walk {                          // every variant carri
     class NotFound(val reason: NoIssuerReason, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
     class Budget(val end: WalkEnd, val endDepth: Int, val partialPaths: List<WalkPath>, val partialLeafKeys: Set<ByteString>, val unsupportedOids: Set<String>, val findings: List<Finding>, val stats: WalkStats) : Walk
 }
-/** Built once per snapshot, synchronously at wiring or inside start(), or lazily for fetcherTrustManager (§5.1 "Anchor snapshot"), rebuilt on the loader by refreshAnchors() (~10 ms for 140 anchors on ART; ~150–200 ms for M2's 2,500 preload certificates):
+/** Built once per snapshot, synchronously at wiring or inside start() (§5.1 "Anchor snapshot"), rebuilt on the loader by refreshAnchors() (~10 ms for 140 anchors on ART; ~150–200 ms for M2's 2,500 preload certificates):
  *  bySubjectRaw, bySubjectCanonical, bySki over store certificates, with canonicalSubject, keyFamily and spkiHash precomputed and exact-byte duplicates removed.
  *  The presented chain (≤ ~10 certificates) is scanned linearly per call; no maps are built for it. */
 internal class CandidateIndex {
