@@ -491,6 +491,7 @@ public final class dev/revokt/NoIssuerReason : java/lang/Enum {
 	public static final field NO_CANDIDATE Ldev/revokt/NoIssuerReason;
 	public static final field PLATFORM_ONLY Ldev/revokt/NoIssuerReason;
 	public static final field UNANCHORED Ldev/revokt/NoIssuerReason;
+	public static final field UNSUPPORTED_ALGORITHM Ldev/revokt/NoIssuerReason;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/NoIssuerReason;
 	public static fun values ()[Ldev/revokt/NoIssuerReason;
@@ -519,7 +520,6 @@ public abstract interface class dev/revokt/PathBuilderFallback {
 
 public final class dev/revokt/PathStatus : java/lang/Enum {
 	public static final field FOUND Ldev/revokt/PathStatus;
-	public static final field ISSUER_UNVERIFIED Ldev/revokt/PathStatus;
 	public static final field NOT_WALKED Ldev/revokt/PathStatus;
 	public static final field NO_ISSUER Ldev/revokt/PathStatus;
 	public static final field PARSE_FAILED Ldev/revokt/PathStatus;
@@ -709,7 +709,6 @@ public abstract interface annotation class dev/revokt/RevoktTestingApi : java/la
 public final class dev/revokt/Rule : java/lang/Enum {
 	public static final field Companion Ldev/revokt/Rule$Companion;
 	public static final field ENGINE_ERROR Ldev/revokt/Rule;
-	public static final field ISSUER_UNVERIFIED Ldev/revokt/Rule;
 	public static final field NOT_COVERED Ldev/revokt/Rule;
 	public static final field NOT_ENROLLED Ldev/revokt/Rule;
 	public static final field NO_DATA Ldev/revokt/Rule;

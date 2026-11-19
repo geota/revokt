@@ -9,6 +9,7 @@ import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.TestDer
+import dev.revokt.engine.walker.Cert
 import okio.ByteString.Companion.toByteString
 import java.io.ByteArrayInputStream
 import java.security.cert.CertificateFactory
@@ -37,6 +38,8 @@ class ChainGeneratorTest {
             DropIntermediate(s),
             Recover(s, s),
             Recover(s + 1),
+            EndEntityIssuer(s, s + 1),
+            EndEntityIssuer(s + 1, s, unrelated = true),
             SameKeyDecoy(s),
             CrossCertToNonAnchor(s + 1),
             Stuff(20, related = true, at = s),
@@ -233,7 +236,7 @@ class ChainGeneratorTest {
     }
 
     @Test
-    fun `every presented certificate that verifies the leaf is related to it`() {
+    fun `every presented CA that verifies the leaf is related to it`() {
         var verifying = 0
         for (seed in 0L until 200) {
             val world =
@@ -254,7 +257,12 @@ class ChainGeneratorTest {
                     )
                 if (verified != VerifyResult.VERIFIED) continue
                 verifying++
-                assertTrue(related(c, leaf), "seed $seed ${world.mutations}: serial ${c.rawSerial().toList()}")
+                // EndEntityIssuer(unrelated = true) is the one unrelated certificate that verifies a child, and it is
+                // an end entity, which the walkers never use as an issuer (#225).
+                assertTrue(
+                    !Cert.isCa(c) || related(c, leaf),
+                    "seed $seed ${world.mutations}: serial ${c.rawSerial().toList()}",
+                )
             }
         }
         assertTrue(verifying > 400, "$verifying verifying certificates")
@@ -313,9 +321,9 @@ class ChainGeneratorTest {
     private companion object {
         val GOLDEN: Map<Long, String> =
             mapOf(
-                0L to "a5f80151f58df6bb93e864fafa673be4fa7a2b721484d4965bd19ad932487ec9",
-                1L to "9e13adfefbd929a11f1ef3001f303059d53fa1a016349a6be0cee1628092ae5c",
-                91L to "158157131c215aa5da2ba36640f48f80de99c1a8b1c2b5c958c2e72dd8fae5e2",
+                0L to "990b51ec325b91a65f439eecd505680d0e15da99fa96e7553e9aa5cd097a4d2f",
+                1L to "1d0817b0ca6499cf747232bbdbfe2420b2d717da3fbeaa4bb8d136f382e800ac",
+                91L to "6bc4cc4529266b94f10928e03358626ab173b79bd08882f681cd5926955f230d",
             )
     }
 }

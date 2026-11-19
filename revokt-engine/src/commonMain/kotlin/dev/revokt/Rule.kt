@@ -23,7 +23,6 @@ public enum class Rule(
     NO_DATA(RuleClass.UNEVALUABLE, null, true),
     ENGINE_ERROR(RuleClass.UNEVALUABLE, null, false),
     PARSE_FAILED(RuleClass.UNEVALUABLE, Layer.PATH, false),
-    ISSUER_UNVERIFIED(RuleClass.UNEVALUABLE, Layer.PATH, true),
     NO_ISSUER(RuleClass.UNEVALUABLE, Layer.PATH, true),
     NOT_ENROLLED(RuleClass.NON_ANSWER, Layer.CRLITE, true),
     NO_SCTS(RuleClass.NON_ANSWER, Layer.CRLITE, true),
