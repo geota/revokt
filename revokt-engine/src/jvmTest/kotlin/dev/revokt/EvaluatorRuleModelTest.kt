@@ -49,23 +49,24 @@ class EvaluatorRuleModelTest {
 
     @Test
     fun `Verdict rule is the first fired, non-exempted REJECT rule`() {
-        val bundled = generation(trustClass = TrustClass.BUNDLED)
-        val strict = verdictOf(RevoktPolicy.STRICT, CrliteQueryResult.NO_SCTS, bundled)
-        assertEquals(setOf(Rule.NO_SCTS, Rule.UNSIGNED_DATA), strict.rules)
+        // STRICT rejects NO_SCTS and, past 30 days, STALE; NO_SCTS precedes STALE.
+        val old = generation(31 * DAY)
+        val strict = verdictOf(RevoktPolicy.STRICT, CrliteQueryResult.NO_SCTS, old)
+        assertEquals(setOf(Rule.NO_SCTS, Rule.STALE), strict.rules)
         assertEquals(Rule.NO_SCTS, assertIs<Verdict.Rejected>(strict).rule)
         val exempting =
             RevoktPolicy.STRICT
                 .newBuilder()
                 .exempt(Rule.NO_SCTS, anchorIn(h.root))
                 .build()
-        val v = verdictOf(exempting, CrliteQueryResult.NO_SCTS, bundled)
-        assertEquals(Rule.UNSIGNED_DATA, assertIs<Verdict.Rejected>(v).rule)
+        val v = verdictOf(exempting, CrliteQueryResult.NO_SCTS, old)
+        assertEquals(Rule.STALE, assertIs<Verdict.Rejected>(v).rule)
         assertEquals(listOf(Rule.NO_SCTS), v.findings.filterIsInstance<Finding.Exempted>().map { it.rule })
-        val both = exempting.newBuilder().exempt(Rule.UNSIGNED_DATA, anchorIn(h.root)).build()
-        val accepted = verdictOf(both, CrliteQueryResult.NO_SCTS, bundled)
+        val both = exempting.newBuilder().exempt(Rule.STALE, anchorIn(h.root)).build()
+        val accepted = verdictOf(both, CrliteQueryResult.NO_SCTS, old)
         assertIs<Verdict.Accepted>(accepted)
         assertNull(accepted.rule)
-        assertEquals(setOf(Rule.NO_SCTS, Rule.UNSIGNED_DATA), accepted.rules, "exempted rules still fired")
+        assertEquals(setOf(Rule.NO_SCTS, Rule.STALE), accepted.rules, "exempted rules still fired")
     }
 
     @Test
@@ -155,22 +156,6 @@ class EvaluatorRuleModelTest {
         val v = verdictOf(crlite = CrliteQueryResult.NO_SCTS)
         assertIs<Verdict.Accepted>(v)
         assertEquals(setOf(Rule.NO_SCTS), v.rules)
-    }
-
-    @Test
-    fun `a SYSTEM generation fires UNSIGNED_DATA under a SIGNED floor, and STRICT rejects it`() {
-        val system = generation(trustClass = TrustClass.SYSTEM)
-        val floor =
-            RevoktPolicy.DEFAULT
-                .newBuilder()
-                .minTrustClass(Dataset.CRLITE, TrustClass.SIGNED)
-                .build()
-        val v = verdictOf(floor, generation = system)
-        assertIs<Verdict.Accepted>(v)
-        assertTrue(Rule.UNSIGNED_DATA in v.rules)
-        assertEquals(setOf(Rule.UNSIGNED_DATA), v.dataStates.getValue(Dataset.CRLITE).rules)
-        val strict = verdictOf(RevoktPolicy.STRICT, generation = system)
-        assertEquals(Rule.UNSIGNED_DATA, assertIs<Verdict.Rejected>(strict).rule)
     }
 
     @Test

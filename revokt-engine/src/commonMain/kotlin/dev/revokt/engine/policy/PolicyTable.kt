@@ -6,7 +6,6 @@ package dev.revokt.engine.policy
 import dev.revokt.Dataset
 import dev.revokt.Outcome
 import dev.revokt.Rule
-import dev.revokt.TrustClass
 
 /** The two presets of spec §8. */
 internal enum class Preset { DEFAULT, STRICT }
@@ -21,14 +20,13 @@ internal data class StalenessTable(
 )
 
 /**
- * One preset as spec §8 tabulates it: an outcome for every rule, the required datasets, the staleness and
- * `minTrustClass` maps and the three time fields, all in milliseconds. The public `RevoktPolicy` (0.2) wraps it.
+ * One preset as spec §8 tabulates it: an outcome for every rule, the required datasets, the staleness map and the
+ * three time fields, all in milliseconds. The public `RevoktPolicy` (0.2) wraps it.
  */
 internal class PresetTable(
     private val outcomes: Map<Rule, Outcome>,
     val requiredDatasets: Set<Dataset>,
     val staleness: Map<Dataset, StalenessTable>,
-    val minTrustClass: Map<Dataset, TrustClass>,
     val rollbackWindowMillis: Long,
     val clockSkewMillis: Long,
     val signedSourceFailingAfterMillis: Long,
@@ -45,16 +43,15 @@ internal object PolicyTable {
     private const val DAY_MILLIS = 24L * 60 * 60 * 1_000
 
     /**
-     * `DEFAULT` rejects only the evidence, the budget and missing data. `STALE` and `UNSIGNED_DATA` never fire in it,
-     * and allow (spec revision 47): setting a `rejectStaleAfter` or raising `minTrustClass` makes them fire and report,
-     * and rejecting takes `rule(…, REJECT)` as well.
+     * `DEFAULT` rejects only the evidence, the budget and missing data. `STALE` never fires in it, and allows (spec
+     * revision 47): setting a `rejectStaleAfter` makes it fire and report, and rejecting takes `rule(…, REJECT)` as well.
      */
     private fun defaultOutcome(rule: Rule): Outcome =
         when (rule) {
             Rule.REVOKED, Rule.PATH_BUDGET_EXCEEDED, Rule.NO_DATA -> Outcome.REJECT
 
             Rule.ENGINE_ERROR, Rule.PARSE_FAILED, Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.NOT_COVERED,
-            Rule.STALE, Rule.UNSIGNED_DATA,
+            Rule.STALE,
             -> Outcome.ALLOW
         }
 
@@ -64,7 +61,7 @@ internal object PolicyTable {
             Rule.NOT_COVERED -> Outcome.ALLOW
 
             Rule.REVOKED, Rule.PATH_BUDGET_EXCEEDED, Rule.NO_DATA, Rule.ENGINE_ERROR, Rule.PARSE_FAILED,
-            Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE, Rule.UNSIGNED_DATA,
+            Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.STALE,
             -> Outcome.REJECT
         }
 
@@ -73,7 +70,6 @@ internal object PolicyTable {
             outcomes = Rule.entries.associateWith(::defaultOutcome),
             requiredDatasets = setOf(Dataset.CRLITE),
             staleness = mapOf(Dataset.CRLITE to StalenessTable(3 * DAY_MILLIS, null)),
-            minTrustClass = Dataset.entries.associateWith { TrustClass.BUNDLED },
             rollbackWindowMillis = DAY_MILLIS,
             clockSkewMillis = DAY_MILLIS,
             signedSourceFailingAfterMillis = DAY_MILLIS,
@@ -84,7 +80,6 @@ internal object PolicyTable {
             outcomes = Rule.entries.associateWith(::strictOutcome),
             requiredDatasets = setOf(Dataset.CRLITE),
             staleness = mapOf(Dataset.CRLITE to StalenessTable(3 * DAY_MILLIS, 30 * DAY_MILLIS)),
-            minTrustClass = Dataset.entries.associateWith { TrustClass.SIGNED },
             rollbackWindowMillis = DAY_MILLIS,
             clockSkewMillis = DAY_MILLIS,
             signedSourceFailingAfterMillis = DAY_MILLIS,
@@ -106,7 +101,7 @@ internal object PolicyTable {
     fun introducedIn(rule: Rule): String =
         when (rule) {
             Rule.REVOKED, Rule.PATH_BUDGET_EXCEEDED, Rule.NO_DATA, Rule.ENGINE_ERROR, Rule.PARSE_FAILED,
-            Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.NOT_COVERED, Rule.STALE, Rule.UNSIGNED_DATA,
+            Rule.NO_ISSUER, Rule.NOT_ENROLLED, Rule.NO_SCTS, Rule.NOT_COVERED, Rule.STALE,
             -> "0.1"
         }
 

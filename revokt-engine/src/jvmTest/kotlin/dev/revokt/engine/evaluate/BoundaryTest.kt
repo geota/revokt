@@ -11,7 +11,6 @@ import dev.revokt.Finding
 import dev.revokt.PathStatus
 import dev.revokt.RevoktPolicy
 import dev.revokt.Rule
-import dev.revokt.TrustClass
 import dev.revokt.Verdict
 import dev.revokt.engine.walker.ExpectedWalk
 import dev.revokt.engine.walker.Honest
@@ -113,7 +112,7 @@ class BoundaryTest {
 
     @Test
     fun `data rules and data states are on every boundary verdict`() {
-        val system = snapshot(generation(400 * DAY, TrustClass.SYSTEM))
+        val system = snapshot(generation(400 * DAY))
         val v =
             Run(
                 presented,
@@ -121,8 +120,8 @@ class BoundaryTest {
                 system,
                 decide = throwing(IllegalStateException()),
             ).evaluate().verdict
-        assertEquals(setOf(Rule.ENGINE_ERROR, Rule.STALE, Rule.UNSIGNED_DATA), v.rules)
-        assertEquals(setOf(Rule.STALE, Rule.UNSIGNED_DATA), v.dataStates.getValue(Dataset.CRLITE).rules)
+        assertEquals(setOf(Rule.ENGINE_ERROR, Rule.STALE), v.rules)
+        assertEquals(setOf(Rule.STALE), v.dataStates.getValue(Dataset.CRLITE).rules)
         assertEquals(Rule.ENGINE_ERROR, assertIs<Verdict.Rejected>(v).rule)
     }
 
@@ -142,13 +141,13 @@ class BoundaryTest {
             Run(
                 presented,
                 RevoktPolicy.STRICT,
-                snapshot(generation(400 * DAY, TrustClass.SYSTEM)),
+                snapshot(generation(400 * DAY)),
                 clock = { error("clock") },
             ) {
                 error("unreachable")
             }.evaluate().verdict
         assertNull(old.dataStates.getValue(Dataset.CRLITE).ageMillis)
-        assertEquals(setOf(Rule.ENGINE_ERROR, Rule.UNSIGNED_DATA), old.rules, "no age, so no STALE")
+        assertEquals(setOf(Rule.ENGINE_ERROR), old.rules, "no age, so no STALE")
     }
 
     @Test
@@ -170,17 +169,17 @@ class BoundaryTest {
             ).evaluate().verdict
         assertEquals(0, calls)
         assertEquals(Rule.NO_DATA, assertIs<Verdict.Rejected>(v).rule)
-        val unsigned =
+        val stale =
             RevoktPolicy.STRICT
                 .newBuilder()
-                .exempt(Rule.UNSIGNED_DATA) {
+                .exempt(Rule.STALE) {
                     calls++
                     true
                 }.build()
-        val system = snapshot(generation(trustClass = TrustClass.SYSTEM))
-        val failingEngine = Run.of(honest, unsigned, system, StubEngine { error("x") }).evaluate().verdict
+        val old = snapshot(generation(31 * DAY))
+        val failingEngine = Run.of(honest, stale, old, StubEngine { error("x") }).evaluate().verdict
         assertEquals(0, calls)
-        assertEquals(setOf(Rule.ENGINE_ERROR, Rule.UNSIGNED_DATA), failingEngine.rules)
+        assertEquals(setOf(Rule.ENGINE_ERROR, Rule.STALE), failingEngine.rules)
         assertEquals(emptyList(), failingEngine.findings.filterIsInstance<Finding.Exempted>())
     }
 

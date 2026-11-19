@@ -7,14 +7,13 @@ import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
-import dev.revokt.TrustClass
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.json.JsonString
 import okio.ByteString
 import okio.ByteString.Companion.decodeHex
 
 /**
- * The `SIGNED` members of a `meta.json` (spec §6.5): the changeset's timestamp, the signer leaf's SHA-256, the
+ * The signed members of a `meta.json` (spec §6.5): the changeset's timestamp, the signer leaf's SHA-256, the
  * signature as the raw `r ‖ s` pair, two equal halves of any non-empty even length (§7.1: the leaf may be on any EC
  * curve the floor admits, Firefox parity, the maintainer's decision on #163; 96 bytes for today's P-384 leaf).
  */
@@ -34,26 +33,24 @@ internal data class SignedMeta(
 /**
  * A generation's `meta.json` (spec §6.5), the completeness marker written last in its directory, which persists [channel]
  * by its enum name; [blobs] maps each full filter's name in the generation (its derived name, never the attachment
- * filename) to the SHA-256 of its blob; [signed] is present exactly when [trustClass] is `SIGNED`. [collection] is the
- * Remote Settings collection, absent for a source that has none.
+ * filename) to the SHA-256 of its blob; [signed] carries what verified it. Every generation is Mozilla-signed (#218 cut
+ * the mirror and system-cache sources). [collection] is the Remote Settings collection.
  */
 internal data class GenerationMeta(
     val dataset: Dataset,
     val channel: CrliteChannel,
-    val trustClass: TrustClass,
     val generationId: String,
     val format: FilterFormat,
     val freshness: Freshness,
     val sourceTimestampMillis: Long,
     val collection: String?,
     val blobs: Map<String, ByteString>,
-    val signed: SignedMeta?,
+    val signed: SignedMeta,
 ) {
     /** The generation's directory name, `gen-<timestamp>-<hash16>`. */
     val directory: String = GenerationNames.directory(sourceTimestampMillis, generationId)
 
     init {
-        require((signed != null) == (trustClass == TrustClass.SIGNED)) { "signed members iff SIGNED, got $trustClass" }
         for ((name, sha256) in blobs) {
             require(C2spIndex.isFilename(name)) { "'$name' is not a generation file name" }
             require(sha256.size == SHA256_BYTES) { "the blob of '$name' is not a SHA-256" }
@@ -72,7 +69,6 @@ internal object MetaJson {
             "metaVersion" to StoreFields.long(VERSION),
             "dataset" to StoreFields.string(meta.dataset.name),
             "channel" to StoreFields.string(meta.channel.name),
-            "trustClass" to StoreFields.string(meta.trustClass.name),
             "generationId" to StoreFields.string(meta.generationId),
             "format" to StoreFields.string(meta.format.name),
             "freshness" to StoreFields.string(meta.freshness.name),
@@ -80,20 +76,18 @@ internal object MetaJson {
             "collection" to StoreFields.string(meta.collection),
             "blobs" to
                 StoreFields.objectOf(meta.blobs.map { (name, sha256) -> name to JsonString(BLOBS + sha256.hex()) }),
-            "changesetTimestampMillis" to StoreFields.long(meta.signed?.changesetTimestampMillis),
-            "signerLeafSha256" to StoreFields.string(meta.signed?.signerLeafSha256?.hex()),
-            "signature" to StoreFields.string(meta.signed?.signature?.hex()),
+            "changesetTimestampMillis" to StoreFields.long(meta.signed.changesetTimestampMillis),
+            "signerLeafSha256" to StoreFields.string(meta.signed.signerLeafSha256.hex()),
+            "signature" to StoreFields.string(meta.signed.signature.hex()),
         )
 
     /** The `meta.json` in [bytes], or null when it is malformed or of another `metaVersion`. */
     fun read(bytes: ByteArray): GenerationMeta? =
         StoreFields.decodeOrNull(bytes) { f ->
             if (f.long("metaVersion") != VERSION) f.wrong("metaVersion")
-            val trustClass = f.enum<TrustClass>("trustClass")
             GenerationMeta(
                 dataset = f.enum("dataset"),
                 channel = f.enum("channel"),
-                trustClass = trustClass,
                 generationId = f.string("generationId"),
                 format = f.enum("format"),
                 freshness = f.enum("freshness"),
@@ -101,15 +95,11 @@ internal object MetaJson {
                 collection = f.optString("collection"),
                 blobs = blobs(f.optObject("blobs") ?: f.missing("blobs")),
                 signed =
-                    if (trustClass == TrustClass.SIGNED) {
-                        SignedMeta(
-                            changesetTimestampMillis = f.long("changesetTimestampMillis"),
-                            signerLeafSha256 = hex(f, "signerLeafSha256"),
-                            signature = hex(f, "signature"),
-                        )
-                    } else {
-                        null
-                    },
+                    SignedMeta(
+                        changesetTimestampMillis = f.long("changesetTimestampMillis"),
+                        signerLeafSha256 = hex(f, "signerLeafSha256"),
+                        signature = hex(f, "signature"),
+                    ),
             )
         }
 
