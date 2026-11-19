@@ -43,6 +43,22 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
 - **#255 (#249):** §6.5 states the order of the new `previous`: the generation the engine served before the install,
   then the old `live`, then the old `previous`, skipping the new `live`. It also fixes the malformed-pointer sentence that revision 60's merge
   left broken.
+- **#228 (phase 1):**
+  - §3: `KotlinRevocationEngine` and its CRLite evaluation move from `revokt-engine` common to `jvmMain`, with the
+    `AtomicInt32` and `awaitDrain` expect/actual pairs and their linuxX64 stubs. The native compile checks the common
+    parts only.
+  - §4 states why `RevoktPolicy` (jvmMain, `java.time`) and `PolicyTable` (commonMain, the rules' input) stay split.
+- **#237, issuer constraints:**
+  - §5.1 "Why this is sound": a non-anchor issuer must also be within its `pathLenConstraint` (self-issued certificates
+    counted; above 127 not a CA), set `keyCertSign` when it has keyUsage, and list the request's purpose when it has
+    extKeyUsage; every nameConstraints on the path, an anchor's included, binds the certificates below it, by webpki's
+    rule; 250,000 name-constraint comparisons per walk. Fixtures (ar), (as).
+  - §5.1 decision step 6 and the PKIX fallback contract: a fallback path must end at an anchor by bytes and meet the same
+    rules; the JDK's builder enforces less; a `verifiedPath` gets no issuer rule.
+  - §10 residual 15 rewritten: only an unconstrained CA key holder can still certify a recovered key; the webpki rule's
+    differences from Firefox; a refusal is `NO_ISSUER`, allowed unchecked under `DEFAULT`; what was checked.
+  - Test plan: fixtures (ar) and (as), the `NameConstraintsFuzzTest` target, the reference walker's scope. References:
+    the #237 entry. Divergences W11 to W15.
 - **#224, the sync rules aligned with Firefox:**
   - §7.1's rollback guard: a changeset older than the floor, the higher of the stored watermark and the live
     `<ts>`, is `ROLLBACK_REFUSED` however little older, and one equal to it installs. With no generation loaded the

@@ -617,11 +617,33 @@ Appendix A of the spec: what was verified against live sources and reference cod
   `pkixcheck.cpp` `CheckBasicConstraints` returns `ERROR_CA_CERT_INVALID` for a non-CA issuer (712–715) and
   `ERROR_V1_CERT_USED_AS_CA` for a v1 non-anchor without the extension (689–695), and checks anchors too (1057);
   `pkixbuild.cpp` checks the issuer (205) before `VerifySignedData` (212). **Divergence, followed from webpki:** revokt
-  does not check an anchor's basicConstraints (pkix fails a v3 anchor without `cA = TRUE`). **Not followed yet:**
-  `pathLenConstraint`, and pkix's `keyCertSign` requirement. **Also different from webpki, and unreachable without a
+  does not check an anchor's basicConstraints (pkix fails a v3 anchor without `cA = TRUE`). `pathLenConstraint`
+  and pkix's `keyCertSign` requirement are followed from revision 61 (#237, the next entry). **Also different from webpki, and unreachable without a
   real CA's signature:** revokt reads basicConstraints in a v1 or v2 certificate, which webpki rejects whole (it
-  requires v3, `cert.rs` 276–290); and a `pathLenConstraint` above 255 still reads as a CA, which webpki reads as a
-  `u8` and fails with `BadDer` (`verify_cert.rs` 436). More generally, revokt's parser keeps the JDK's envelope
+  requires v3, `cert.rs` 276–290). (A `pathLenConstraint` above 127 is not a CA from revision 61, pkix's bound.) More generally, revokt's parser keeps the JDK's envelope
   leniency on issuers (any version INTEGER, an extension `critical` BOOLEAN of any single byte, elements after
   extnValue or after `[3]`, an unknown critical extension), so it can read as a CA a certificate that webpki rejects
   whole; each such certificate still needs the signature of a key that chains to a real anchor.
+- **Issuer constraints** (revision 61, #237), read 2026-11-17 in rustls-webpki 0.104.0-alpha.7 and Firefox at
+  `cac25a6`:
+  - **`pathLenConstraint`:** webpki fails `sub_ca_count > len` (`verify_cert.rs` 449–450; `sub_ca_count` grows per
+    `Role::Issuer`, 126–129) and reads a `u8`; pkix fails `subCACount > pathLenConstraint` (`pkixcheck.cpp` 718) and
+    reads 0 to 127 (`OptionalInteger`). Neither exempts a self-issued certificate. revokt: both, above 127 not a CA.
+  - **keyUsage:** webpki ignores it for path building (`verify_cert.rs` 370–375; read only for CRLs, 151–171); pkix
+    requires `keyCertSign` on an issuer when keyUsage is present (`CheckKeyUsage`, `pkixcheck.cpp` 405 ff., requested
+    at `pkixbuild.cpp` 205), as the JDK's `KeyChecker` does. revokt follows pkix: stricter than webpki.
+  - **extKeyUsage on an issuer:** webpki checks every certificate (`verify_cert.rs` 381) for the exact purpose
+    (`ExtendedKeyUsage::validate`, 572–598; empty is `EmptyEkuExtension`, 391); pkix's `CheckExtendedKeyUsage`
+    (`pkixcheck.cpp` 816–846) counts `anyExtendedKeyUsage` only when it is the required purpose (826). They agree.
+  - **nameConstraints:** webpki applies the anchor's and each issuer's to every certificate below
+    (`check_signed_chain_name_constraints`, `verify_cert.rs` 282–300; `check_name_constraints`, `subject_name/mod.rs`
+    32–200): dNSName in the name-constraint role (`dns_name.rs` 238–360, the CVE-2025-61727 wildcard rule), iPAddress
+    by mask (`ip_address.rs` 110–180), directoryName and URI subtrees failing closed, any other shared form a
+    violation; the comparisons of one build are bounded at 250,000 (`verify_cert.rs` 353). pkix checks nameConstraints
+    before the issuer's other checks (`pkixbuild.cpp` 173–186), evaluates directoryName and rfc822Name, and applies
+    dNSName constraints to a SAN-less leaf's CN. revokt follows webpki.
+  - **The JDK's `CertPathBuilder`** exempts self-issued certificates from `pathLenConstraint` and name constraints and
+    does not apply the anchor certificate's own nameConstraints (`ConstraintsChecker` starts with no constraints);
+    revokt re-checks a fallback path against the rules above.
+  - **Roots:** no root in the JDK 21 `cacerts` (118, Temurin 21.0.13) or macOS `SystemRootCertificates` (158) carries
+    nameConstraints, checked with OpenSSL on 2026-11-19, so the anchor rule refuses none of them.

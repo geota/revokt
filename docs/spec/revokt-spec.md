@@ -65,8 +65,8 @@ verifier; non-JVM targets in 1.0.
 | Artifact | Source set | Contents | Depends on |
 |---|---|---|---|
 | `revokt-clubcard` | common | Port of `clubcard` and `clubcard-crlite` query and decoding (no builder), v3 and v4. Public only under `@RevoktInternalApi`. | Okio |
-| `revokt-engine` | common | `KotlinRevocationEngine` (the default engine), DER/TBS parser, `EvaluationRequest` and `Evaluator` (sealed; its single implementation lives beside it and is what `Revokt.evaluator` returns), candidate index and path walker, CRLite evaluation, coverage index, generation model, policy and precedence, `Verdict`, updater state machine, Remote Settings protocol, JSON tree and canonical JSON, content-signature logic, C2SP cache reader/writer, `RevocationEngine` (Kotlin), the `SignatureVerifier`, `HttpFetcher`, `PathBuilderFallback`, `RevoktStorage` interfaces, `expect class SeedSource`, `expect fun canonicalSubject`, `RevoktLimits`, the internal policy table; **no public type with a `java.time` member** | `revokt-clubcard`, Okio, kotlinx-coroutines |
-| `revokt-engine` `jvmMain` | jvm | `Staleness`, `RevoktPolicy` and its `Builder` (the public policy surface, with `java.time` members), `JvmStorage`, `actual canonicalSubject` (`X500Principal.getName(CANONICAL)`), `actual SeedSource` (`of`, `fromResource`, `bundled`), `SeedOpener` and `JvmSeedSource`, `JcaSignatureVerifier(provider)`, `PkixPathBuilderFallback`, `PlatformTrust`, the `Rule → BasicReason` map (`java.security.cert`, so jvmMain; total over `Rule.entries`, asserted by the 0.1 golden fixture), `RevoktLoggers.jul()` | JDK |
+| `revokt-engine` | common | DER/TBS parser, `EvaluationRequest` and `Evaluator` (sealed; its single implementation lives beside it and is what `Revokt.evaluator` returns), candidate index and path walker, coverage index, generation model, policy and precedence, `Verdict`, updater state machine, Remote Settings protocol, JSON tree and canonical JSON, content-signature logic, C2SP cache reader/writer, `RevocationEngine` (Kotlin), the `SignatureVerifier`, `HttpFetcher`, `PathBuilderFallback`, `RevoktStorage` interfaces, `expect class SeedSource`, `expect fun canonicalSubject`, `RevoktLimits`, the internal policy table; **no public type with a `java.time` member** | `revokt-clubcard`, Okio, kotlinx-coroutines |
+| `revokt-engine` `jvmMain` | jvm | `KotlinRevocationEngine` (the default engine) and its CRLite evaluation, JVM-only until a second target is planned (the native compile checks the common parts only), `Staleness`, `RevoktPolicy` and its `Builder` (the public policy surface, with `java.time` members), `JvmStorage`, `actual canonicalSubject` (`X500Principal.getName(CANONICAL)`), `actual SeedSource` (`of`, `fromResource`, `bundled`), `SeedOpener` and `JvmSeedSource`, `JcaSignatureVerifier(provider)`, `PkixPathBuilderFallback`, `PlatformTrust`, the `Rule → BasicReason` map (`java.security.cert`, so jvmMain; total over `Rule.entries`, asserted by the 0.1 golden fixture), `RevoktLoggers.jul()` | JDK |
 | `revokt-jsse` | jvm | `Revokt` facade and `Builder`, `RevoktTrustManager`, `JvmPlatformTrust`, `X509Certificate` adapters, `JdkHttpFetcher` (HttpsURLConnection over the platform's default TLS, the default `http` on the JVM; never on Android, §4) | `revokt-engine` |
 | `revokt-bc` *(optional)* | jvm | BouncyCastle `SignatureVerifier` for ML-DSA, SLH-DSA, composite OIDs and BC-only curves | `revokt-engine`, bcprov |
 | `revokt-okhttp` | jvm | `RevoktOkHttp.install(builder, revokt, delegate?)`, `OkHttpClient.Builder.revokt(…)`, `OkHttpClient.withRevokt(…)`, `OkHttpClient.revoktTrustManager()`, OkHttp-backed `HttpFetcher` | `revokt-jsse`, OkHttp 4.12+ / 5.x |
@@ -422,7 +422,7 @@ enum class ChainSource { PLATFORM, RECONSTRUCTED, PRESENTED /* reserved; produce
 enum class SyncOutcome { INSTALLED, UNCHANGED, FAILED, CLOCK_SKEW /* an x5u link outside its validity window at the local clock, stage X5U (§7.1) */, ROLLBACK_REFUSED, BACKOFF, STORE_FAILED, STORE_LOCKED }   // growable
 enum class SyncStage { CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: CHANGESET = the changeset fetch; X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), any x5u PEM or chain failure other than validity (which is CLOCK_SKEW at X5U), or the content signature (§7.1); ATTACHMENT = a body fetch or the over-cap signed record, and a mirror file's fetch or a body whose size or SHA-256 differs from the manifest's (§7.3); each producing bullet names its stage
 
-/** jvmMain. Time fields are stored as millis. Java: *Millis properties and java.time.Duration accessors/factories (API 26+). Kotlin: kotlin.time.Duration via @JvmSynthetic extensions. No inline value class on the surface. commonMain sees only an internal PolicyTable these compile to. */
+/** jvmMain. Time fields are stored as millis. Java: *Millis properties and java.time.Duration accessors/factories (API 26+). Kotlin: kotlin.time.Duration via @JvmSynthetic extensions. No inline value class on the surface. commonMain sees only an internal PolicyTable these compile to. The split stays: the rules evaluate in commonMain over PolicyForm and PolicyTable, which carry no java.time, while RevoktPolicy's java.time surface needs jvmMain; merging them would move the rules out of commonMain. */
 class Staleness private constructor(…) { val staleAfterMillis: Long; val rejectStaleAfterMillis: Long?   // staleAfter: loud threshold only (DataState.stale). rejectStaleAfter: the only threshold at which Rule.STALE fires; null = STALE never fires for this dataset
     fun staleAfter(): java.time.Duration; fun rejectStaleAfter(): java.time.Duration?
     companion object { @JvmStatic fun ofMillis(staleAfter: Long, rejectStaleAfter: Long?): Staleness; @JvmStatic fun of(staleAfter: java.time.Duration, rejectStaleAfter: java.time.Duration?): Staleness } }
@@ -642,13 +642,14 @@ remaining a subsequence.
 | `MAX_PRESENTED` / `MAX_PRESENTED_BYTES` | 64 / 1 MiB | presented certificates and their summed DER; beyond either the chain is `Budget(EXPLORATION_BUDGET)` without a walk (honest chains are under 20 KB; bounds per-handshake memory independently of `MAX_CERT_BYTES`) |
 | `MAX_RELATED_PER_LEVEL` | 64 | related candidates explored at one node; the 65th triggers `RELATED_BUDGET` without being explored |
 | `MAX_VERIFICATIONS` | 256 | verifier calls per walk (memo hits excluded; the guard-tripping attempt not counted) |
-| `MAX_EXPLORED` | 1,024 | candidates explored per walk, a candidate refused by the CA check and memo hits included |
+| `MAX_EXPLORED` | 1,024 | candidates explored per walk, a candidate refused by the issuer rules and memo hits included |
 | `FALLBACK_MAX_PRESENTED` | 8 | the PKIX fallback is skipped for longer presented chains; a `NotFound` on such a chain is `PATH_BUDGET_EXCEEDED`, never `NO_ISSUER`, whether the platform accepted it in step 1 or step 1 did not run (the walker-only harness, `Evaluator.evaluate`), and with the fallback enabled or disabled (decision step 6) |
 | `PATH_CACHE_ENTRIES` / `PATH_CACHE_TTL` | 256 / 10 min | per trust manager; TTLs are absolute from insertion on the monotonic `TimeSource`, not sliding; entries hold the leaf's DER, `serial` and `scts` only, never the presented chain |
 | `CROSS_CALL_MEMO_ENTRIES` | 1,024 | per `Revokt`; `VERIFIED` only; synchronized, shared by concurrent handshake threads across trust managers |
 | `ACCEPTANCE_MEMO_ENTRIES` / `ACCEPTANCE_MEMO_TTL` | 1,024 / 24 h | per trust manager; the 3-arg null-host retry memo (flow step 1), keyed (chain hash, host'), written only after a Socket/SSLEngine overload's flow step 1 returned; absolute TTL; an expired entry costs a failed lazy cleaner on a long-lived connection and buys no safety, hence long |
 | `ENGINE_CLOSE_DRAIN` | 5 s | `RevocationEngine.close()` waits this long for in-flight queries (§3.2) |
 | `FETCH_TIMEOUT` | 30 s | default `FetchRequest.timeoutMillis`, enforced by the engine (§3), so "a sync attempt completed" is bounded |
+
 | `VERDICT_CACHE_ENTRIES` / `VERDICT_CACHE_TTL` | 1,024 / 60 s | per trust manager |
 | `ANCHOR_REFRESH_MIN_INTERVAL` | 60 s | |
 | `EVENT_RING_CAPACITY` / `REJECTED_QUEUE_CAPACITY` | 64 / 4,096 | |
@@ -659,6 +660,10 @@ remaining a subsequence.
 | `READONLY_POLL_INTERVAL` | 60 s | a read-only instance's pointer re-read and lock retry |
 | `MAX_BACKOFF` | 24 h | cap on honoured `Backoff`/`Retry-After` and on persisted `backoffUntilMillis`; computed failure backoff ≤ the 6 h poll interval |
 | `AWAIT_DATA_COMPAT`, `AWAIT_DATA_DEFAULT` | measured (§6.4) on Android; a fixed 2 s on the JVM (§11) | readiness deadline per channel |
+
+The name-constraint comparisons of one walk, and of one fallback path, are bounded at 250,000, webpki's
+`name_constraint_comparisons` (fixture (as), "the comparison budget shared by two candidates";
+`DecideFallbackTest`). The bound is internal: it is not a `RevoktLimits` constant.
 
 **Flow**
 
@@ -713,9 +718,11 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    with and without a `<domain-config>`, it does not establish availability.
 5. `walk = reconstruct(presented, index)`; `Found` → step 7.
 6. `fallback = pathBuilder.build(presented, anchors, now)` if the fallback is enabled and `presented.size ≤ FALLBACK_MAX_PRESENTED`,
-   cached under the path key; a `build` that returns null, throws, or returns a path decide cannot use (empty, holding a
-   null element, not starting with the presented leaf's bytes, with an intermediate that does not parse or is not a
-   CA, or with a leaf-issuer key that cannot be read) is a **failed** fallback. A throw is caught here
+   cached under the path key; a `build` that returns null, throws, or returns a path decide cannot use (shorter than
+   the leaf and its issuer, holding a null element, not starting with the presented leaf's bytes, not ending at an
+   anchor of the index by exact bytes, holding a certificate that does not parse, or failing the issuer rules of
+   "Why this is sound" below, nameConstraints and the comparison bound included; `DecideFallbackTest`) is a
+   **failed** fallback. A throw is caught here
    and is never an engine error, except that every `VirtualMachineError` other than `StackOverflowError` is rethrown,
    as at §5.5's catch boundary. A result produced by a throw is **not** cached, neither in the path cache nor, through
    its verdict, in the verdict cache (flow step 3a), so a transient error is not remembered; a null return is:
@@ -915,18 +922,27 @@ budgets, shared memo, never demoting the first walk's `Found`). **Any limit exce
 aborts the whole walk with `Budget`**; only `MAX_DEPTH` is a local dead end. `Found` is returned
 only when the walk completed without exhaustion; a `Budget` may carry partial paths.
 
-*Why this is sound.* Every path member below the leaf that is not an anchor must be a CA: its one basicConstraints
-extension reads `cA = TRUE`. An absent, FALSE or unreadable basicConstraints is a dead end before the link is
-verified, as webpki (`EndEntityUsedAsCa`) and mozilla::pkix (`CheckBasicConstraints`, `ERROR_CA_CERT_INVALID`)
-require of an issuer. Anyone can obtain an end-entity certificate under a real anchor, and its key can sign a
-certificate for any other key, a recovered one included; the CA check removes that route. A recovered key can then
-terminate only through a certificate chain that a holder of a CA key under a real anchor signed. An
-`UNSUPPORTED` link is never trusted. Nothing is excluded for a shared property, so a
+*Why this is sound.* Every path member below the leaf that is not an anchor must be able to issue (fixtures (aq),
+(ar)): its one basicConstraints reads `cA = TRUE` with a `pathLenConstraint` of at most 127; it is
+within that `pathLenConstraint`, counting every CA between it and the leaf, self-issued ones included; it sets
+`keyCertSign` when it has keyUsage; and it lists the request's purpose (`serverAuth`, or `clientAuth` for a client
+certificate) when it has extKeyUsage, `anyExtendedKeyUsage` not counting. Every nameConstraints on the path, an
+anchor's included, must admit each certificate below it, under webpki's rule (fixture (as)): dNSName and iPAddress
+subtrees are evaluated on each subjectAltName name; directoryName and URI subtrees fail closed, and the subject is
+always presented as a directoryName; any other form shared by a name and a subtree is a violation. A value that does
+not read, or a duplicated extension, fails closed. Each rule is a dead end before the link is verified, as pkix checks
+an issuer before `VerifySignedData`; an anchor by bytes is exempt from all but its nameConstraints, as webpki's
+`TrustAnchor` has no other extension. The name-constraint comparisons of one walk are bounded at webpki's 250,000;
+spending them ends the walk `Budget(EXPLORATION_BUDGET)` (fixture (as), "the comparison budget shared by two
+candidates"). Anyone can obtain an end-entity certificate under a real anchor, and its key can sign a certificate for
+any other key, a recovered one included; the issuer rules remove that route, and with it the limited sub-CAs that
+organisations hold under public roots (a `pathLen 0` one, one name-constrained to its own domains, an EKU-limited
+one; fixtures (ar) and (as)). An `UNSUPPORTED` link is never trusted. Nothing is excluded for a shared property, so a
 same-key decoy or a cross-certificate to a non-anchor listed first cannot hide the real certificate,
 which is related and is explored. The honest issuer's key is the only key that verifies a
-real leaf's signature, other than a recovered key. A recovered key terminates only through CA certificates up to a
-real anchor, so a `Found` carrying only benign keys needs the cooperation of some CA key holder under a real anchor
-(§10 residual "constrained sub-CA"). Stuffing related junk past the cap, or verifying junk past the
+real leaf's signature, other than a recovered key. A recovered key terminates only through CA certificates whose
+constraints admit the real leaf, so a `Found` carrying only benign keys needs the cooperation of an unconstrained CA
+key holder under a real anchor (§10 residual "constrained sub-CA"). Stuffing related junk past the cap, or verifying junk past the
 guards, yields `Budget`, which rejects; an exhaustion in any subtree also yields `Budget`, so a
 stuffed subtree cannot starve the honest key out of a `Found`. Every terminating
 leaf-issuer key is evaluated and `REVOKED` wins. The PKIX fallback covers one residue the walker
@@ -969,10 +985,15 @@ The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walk
   call; `setRevocationEnabled(false)`, `setPolicyQualifiersRejected(false)`, `setDate(now)`,
   `X509CertSelector().apply { certificate = leaf }`; Android resolves to ojluni's `SunCertPathBuilder`
   with Conscrypt doing signatures. The builder verifies every link under the platform's providers,
-  so its path satisfies the invariant's intent. Every certificate of a returned path between the leaf and the anchor must
-  be a CA under RFC 5280 basicConstraints (`cA = TRUE`), as `CertPathBuilder("PKIX")` requires; decision step 6
-  checks it again, so a path with an intermediate that does not parse or is not a CA is a failed build,
-  `FallbackNotUsed(FAILED)` (the JDK's builder already enforces it, so only a consumer builder is affected); `jdk.certpath.disabledAlgorithms` and provider
+  so its path satisfies the invariant's intent. A returned path must end at the trust anchor's certificate, and meet
+  the issuer rules and nameConstraints of "Why this is sound"; decision step 6 checks them again, so a path that does
+  not end at an anchor of the index by exact bytes (a builder returning `CertPath.getCertificates()`, which leaves the
+  anchor out), holds a certificate that does not parse, fails a rule, or spends the 250,000-comparison bound is a
+  failed build, `FallbackNotUsed(FAILED)` (`DecideFallbackTest`). The JDK's builder enforces less: it exempts
+  self-issued certificates from `pathLenConstraint` and name constraints, does not apply the anchor certificate's own
+  nameConstraints, and does not read a CA's extKeyUsage, so a JDK path through an EKU-limited intermediate is
+  refused, as Firefox refuses it. A `verifiedPath` (`EvaluationRequest`, `decideVerified`) is trusted as the platform
+  built it: no issuer rule is applied to it; `jdk.certpath.disabledAlgorithms` and provider
   divergence from the delegate fail the build, and like every failed build (null or a throw) are reported as
   `Finding.FallbackNotUsed(FAILED)` and surface as `PLATFORM_ONLY` on a walk `NotFound` at a trust-manager binding.
   It is skipped above `FALLBACK_MAX_PRESENTED` presented certificates (no candidate
@@ -1642,15 +1663,25 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
       - **Two SPKI encodings**: two enrolled issuer certificates carry one key with different SPKI encodings, for
         example RSA with and without NULL parameters. A query under the encoding Mozilla did not key falls outside the
         universe.
-  15. **Constrained sub-CA.** A holder of a CA key under a real anchor can certify a recovered key, and the walker then
-     reports only that benign key as long as the honest intermediate is not presented. This includes a technically
-     constrained sub-CA whose `pathLenConstraint`, name constraints or EKU should forbid it: the walker checks
-     `cA = TRUE` on an issuer and enforces none of `pathLenConstraint`, keyUsage `keyCertSign`, name constraints or EKU
-     nesting there. So the holder of a `pathLen 0` sub-CA S under a real root can sign C, a CA certificate for a key
-     recovered from a revoked leaf's signature, and `[L, C, S]` walks to `Found([L, C, S, R])` with C's benign key as
-     the only leaf-issuer key; x509-limbo's `pathlen::intermediate-violates-pathlen-0` likewise walks to `Found`. On
-     the bindings the platform validates the chain first (step 1), and a chain that breaks those constraints does not
-     reach the walker.
+  15. **Constrained sub-CA.** The holder of an unconstrained CA key under a real anchor, which is any public CA, can
+     certify a recovered key, and the walker then reports only that benign key as long as the honest intermediate is
+     not presented (fixture (ar), "no limit, an unconstrained CA"). A limited sub-CA cannot: `pathLenConstraint`,
+     keyUsage `keyCertSign`, extKeyUsage and name constraints are enforced on every issuer (fixtures (ar), (as)).
+     The rules are webpki's, which differ from Firefox's in two places:
+      - **Stricter:** a directoryName or an rfc822Name subtree fails closed, where Firefox evaluates it.
+      - **Looser:** dNSName constraints are not applied to the CN of a leaf without a subjectAltName dNSName, as Firefox
+        applies them. Such a leaf has been outside the CA/B profile since 2012.
+
+     Neither RFC 5280 self-issued exemption applies (from `pathLenConstraint`, and from the name constraints on a
+     self-issued intermediate); neither reference applies them either.
+     **What a refusal means for the verdict.** A `NotFound` caused by these rules is `NO_ISSUER`, which `DEFAULT`
+     allows unchecked and `STRICT` rejects (§8). So a revoked leaf under a directoryName- or rfc822-constrained issuer,
+     under a self-issued key-rollover CA that relies on the RFC 5280 exemption, or under an EKU-limited issuer, is
+     accepted under `DEFAULT` without a revocation check; the same holds for a fallback path that spends the
+     comparison bound. What was checked: the walker test chains of github.com, letsencrypt.org, www.google.com and
+     www.mozilla.org stay `Found` under the JDK verifier (`HonestCorpusWalkTest`); no root in the JDK 21 `cacerts`
+     (118) or macOS `SystemRootCertificates` (158) carries nameConstraints; live Web PKI sub-CAs were not surveyed for
+     directoryName or rfc822Name subtrees. On the bindings the platform validates the chain first (step 1).
 - Feed authenticity: every generation is verified against Mozilla's content-signature roots, from the feed or from a
   seed (§7.1); there is no unsigned source. The M2 denylist is project-attested and availability-only.
 - Rollback and freeze: a persisted non-decreasing watermark with no tolerance, floored at the live generation's

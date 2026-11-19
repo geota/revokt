@@ -27,6 +27,7 @@ internal class Honest(
     rsa: Boolean = false,
     leafAki: ByteArray? = null,
     leafExtensions: List<ByteArray> = emptyList(),
+    intermediateExtensions: List<ByteArray> = emptyList(),
 ) {
     private val sig = if (rsa) WalkerCerts.SHA256_RSA else SymOids.SIGNATURE
     val root: FixtureCert = w.root("R", "Root", if (rsa) w.key(WalkerCerts.RSA_KEY) else w.key(), sig)
@@ -38,6 +39,7 @@ internal class Honest(
             if (rsa) w.key(WalkerCerts.RSA_KEY) else w.key(),
             signer = root.key,
             sigOid = sig,
+            extensions = intermediateExtensions,
         )
     val leaf: FixtureCert =
         w.cert(

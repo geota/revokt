@@ -203,4 +203,14 @@ class WalkerFixtureTest {
     fun `walker (aq) an issuer that is not an anchor must be a CA`() {
         assertEquals(12, run(WalkerFixturesAq.aq()).size)
     }
+
+    @Test
+    fun `walker (ar) an issuer must respect pathLenConstraint, keyCertSign and extKeyUsage`() {
+        assertEquals(16, run(WalkerFixturesAr.ar()).size)
+    }
+
+    @Test
+    fun `walker (as) an issuer's nameConstraints, an anchor's included, bind every certificate below it`() {
+        assertEquals(13, run(WalkerFixturesAs.`as`()).size)
+    }
 }
