@@ -99,7 +99,8 @@ and the public history are the record that the process below was followed.
   the issue does not explicitly cover (registering a new fuzz target in the ClusterFuzzLite matrix is part of
   the parser issue; everything else is its own `kind/ci` issue).
 - Adding a dependency, a licence outside the allow-list, or any asset or corpus entry.
-- Deleting a test, lowering a floor, or touching anything under `docs/spec/` (that is a `spec` PR).
+- Deleting a test, lowering a floor, or a spec change the issue's behaviour does not need: a behaviour PR edits the
+  sections it changes (CONTRIBUTING §1), and anything larger or separable is a `spec` PR.
 - Anything that would spend money, publish, or leave the repository (a release, a seed publish, an external service).
 
 **Never**
