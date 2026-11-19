@@ -57,7 +57,7 @@ abstract class VerifyPomLicensesTask : DefaultTask() {
 
 /**
  * Spec §3 "Dependency scopes": Okio and revokt-clubcard are `implementation` (never in an api variant); kotlinx-coroutines
- * is `api` in revokt-engine; OkHttp, Ktor and bcprov appear only in their own binding; nothing under native/ or the upki
+ * is `api` in revokt-engine; revokt-engine is `api` in revokt-jsse; OkHttp, Ktor and bcprov appear only in their own binding; nothing under native/ or the upki
  * engine is reachable from a published module.
  */
 abstract class VerifyDependencyScopesTask : DefaultTask() {
@@ -84,6 +84,9 @@ abstract class VerifyDependencyScopesTask : DefaultTask() {
         }
         if (name == "revokt-engine" && "org.jetbrains.kotlinx:kotlinx-coroutines-core" !in api && all.any { it.startsWith("org.jetbrains.kotlinx:kotlinx-coroutines") }) {
             fail("verifyDependencyScopes: kotlinx-coroutines-core must be api in revokt-engine (it appears in public signatures, spec §3).")
+        }
+        if (name == "revokt-jsse" && "dev.revokt:revokt-engine" !in api) {
+            fail("verifyDependencyScopes: revokt-engine must be api in revokt-jsse (its types cross the builder signatures, spec §3 \"Dependency scopes\"); declare api(project(\":revokt-engine\")).")
         }
         val bindingOnly = mapOf(
             "com.squareup.okhttp3:" to "revokt-okhttp",
