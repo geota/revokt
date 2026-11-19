@@ -20,6 +20,7 @@ import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.json.JsonParseException
 import dev.revokt.engine.json.JsonString
 import dev.revokt.engine.json.JsonValue
+import dev.revokt.engine.verify.ContentSignature
 import kotlinx.coroutines.CoroutineDispatcher
 import okio.ByteString
 
@@ -66,14 +67,22 @@ internal class Changeset(
 
 /**
  * One `metadata.signatures[]` element's three fields as served (spec §7.1), each null when absent or not a string; an
- * element that is neither an object nor `null` has all three null, as Firefox's destructuring reads it. Unsigned: [x5u] and [mode] say how to verify [signature], and
- * only a verified one is trusted.
+ * element that is neither an object nor `null` has all three null, as Firefox's destructuring reads it. [modeGiven] is
+ * whether `mode` is present and not JSON `null`, whatever its type. Unsigned: [x5u] and [mode] say how to verify
+ * [signature], and only a verified one is trusted.
  */
 internal class SignatureEntry(
     val signature: String?,
     val x5u: String?,
     val mode: String?,
+    val modeGiven: Boolean = mode != null,
 ) {
+    /**
+     * Whether the entry may be tried for its `mode`: absent or `null` (Firefox's `mode && mode !== "p384ecdsa"`), or the
+     * string `p384ecdsa`. Any other value, a non-string or `""` included, is a mode revokt cannot verify.
+     */
+    val modeSupported: Boolean get() = !modeGiven || mode == ContentSignature.MODE
+
     override fun toString(): String = "SignatureEntry(x5u=$x5u, mode=$mode)"
 }
 
@@ -174,7 +183,13 @@ internal class RemoteSettingsClient(
             ((root["metadata"] as? JsonObject)?.get("signatures") as? JsonArray)?.items.orEmpty().map {
                 if (it == JsonNull) return@map null
                 val fields = it as? JsonObject ?: JsonObject.EMPTY
-                SignatureEntry(string(fields["signature"]), string(fields["x5u"]), string(fields["mode"]))
+                val mode = fields["mode"]
+                SignatureEntry(
+                    string(fields["signature"]),
+                    string(fields["x5u"]),
+                    string(mode),
+                    mode != null && mode != JsonNull,
+                )
             }
         return ClientResult.Ok(Changeset(timestamp, changes, signatures), body.status, body.backoffMillis, body.size)
     }

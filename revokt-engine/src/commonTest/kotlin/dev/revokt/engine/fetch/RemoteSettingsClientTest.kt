@@ -125,6 +125,20 @@ class RemoteSettingsClientTest {
             listOf(listOf(null, null, null), null, listOf(null, null, null), listOf("s", null, null)),
             entries("""{"signatures":[1,null,{"x5u":1,"mode":null},{"signature":"s","x5u":["https://h/x"]}]}"""),
         )
+        // modeGiven: an absent or null mode is not given (Firefox tries it), any other value is, whatever its type.
+        val modes =
+            client(
+                ScriptedFetcher {
+                    ok(
+                        """{"metadata":{"signatures":[{},{"mode":null},{"mode":5},{"mode":""},{"mode":"p384ecdsa"}]},""" +
+                            """"timestamp":5,"changes":[]}""",
+                    )
+                },
+            ).fetchChangeset(1, null).assertOk().signatures
+        assertEquals(
+            listOf(false to true, false to true, true to false, true to false, true to true),
+            modes.map { checkNotNull(it).modeGiven to it.modeSupported },
+        )
         val bare = client(ScriptedFetcher { ok("""{"timestamp":5,"changes":[]}""") }).fetchChangeset(1, null).assertOk()
         assertEquals(emptyList(), bare.signatures)
     }

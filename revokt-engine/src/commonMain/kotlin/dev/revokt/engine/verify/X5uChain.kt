@@ -22,6 +22,7 @@ import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.ParseContext
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.Span
+import dev.revokt.engine.parse.SubjectAltNames
 import dev.revokt.engine.parse.Validity
 import dev.revokt.engine.parse.VerifierInput
 import dev.revokt.verify.verifyClassified
@@ -67,15 +68,18 @@ internal enum class X5uChainFailure {
     NAME,
 
     /**
-     * The leaf's dNSName lies outside a CA's nameConstraints: not in its permitted dNSName subtrees, or in an excluded
-     * one (mozilla::pkix's `ERROR_CERT_NOT_IN_NAME_SPACE`; spec revision 55).
+     * One of the leaf's dNSNames lies outside a CA's nameConstraints: not in its permitted dNSName subtrees, or in an
+     * excluded one (mozilla::pkix's `ERROR_CERT_NOT_IN_NAME_SPACE`; spec revision 55).
      */
     NAME_CONSTRAINTS,
 
-    /** The leaf has no extKeyUsage, no codeSigning in it, or also OCSPSigning; or a CA's extKeyUsage lacks codeSigning. */
+    /** The leaf's extKeyUsage lacks codeSigning or has OCSPSigning; or a CA's extKeyUsage lacks codeSigning. */
     EKU,
 
-    /** The leaf's subjectAltName is absent or is not exactly one dNSName equal to [X5U_LEAF_NAME]. */
+    /**
+     * The leaf's subjectAltName is absent, holds a name that is not a dNSName or not a plain DNS host name (a wildcard
+     * included), or holds no dNSName equal to [X5U_LEAF_NAME], ASCII case ignored.
+     */
     SAN,
 
     /** A link's signature is not `VERIFIED` under its issuer's SPKI: `INVALID`, `UNSUPPORTED` or a verifier throw. */
@@ -145,7 +149,7 @@ internal sealed class X5uValidity {
     ) : X5uValidity()
 }
 
-/** The one SAN the content-signature leaf carries (spec §7.1 "leaf SAN exactly `onecrl.content-signature.mozilla.org`"). */
+/** The signer name a content-signature leaf's SAN must hold (spec §7.1), matched exactly, ASCII case ignored. */
 internal const val X5U_LEAF_NAME: String = "onecrl.content-signature.mozilla.org"
 
 /**
@@ -161,12 +165,13 @@ internal const val X5U_LEAF_NAME: String = "onecrl.content-signature.mozilla.org
  *   outer algorithm equal to the signed one; no extension OID twice; no critical extension mozilla::pkix does not
  *   understand, and no understood one empty; the algorithm floor and `CheckSubjectPublicKeyInfo` ([X5uFloor]); its
  *   signature `VERIFIED` under the next certificate's SPKI through [verifier], with the signed TBS algorithm.
- * - **The leaf:** not a CA; a well-formed basicConstraints and keyUsage if present; extKeyUsage with codeSigning and
- *   without OCSPSigning; exactly one SAN, the dNSName [X5U_LEAF_NAME]; an embedded SCT list, if any, one OCTET STRING.
+ * - **The leaf:** not a CA; a well-formed basicConstraints and keyUsage if present; when extKeyUsage is present,
+ *   codeSigning and no OCSPSigning (mozilla::pkix's `requiredEKUIfPresent`); a SAN of dNSNames only, each a plain DNS
+ *   host name, one of them [X5U_LEAF_NAME] ([leafNames]); an embedded SCT list, if any, one OCTET STRING.
  * - **Every non-leaf link below the terminal:** basicConstraints `cA = TRUE` within its `pathLenConstraint` (at most
  *   127); its subject equal to its child's issuer, raw or under `canonicalSubject`; `keyCertSign` when keyUsage is
  *   present; codeSigning when extKeyUsage is present; its TLS feature, if any, carried by its child; its
- *   nameConstraints satisfied by the leaf's dNSName ([DnsSubtrees]).
+ *   nameConstraints satisfied by every one of the leaf's dNSNames ([DnsSubtrees]).
  *
  * The extension readers are the strict ones ([ExtensionValues]); anything malformed in a value they read is
  * [X5uChainFailure.EXTENSION]. The signatures are verified last. Nothing here throws but a fatal error (spec §5.5,
@@ -280,9 +285,9 @@ private fun link(
 }
 
 /**
- * The leaf rules: not a CA, a readable keyUsage if present, codeSigning in extKeyUsage without OCSPSigning, and exactly
- * one SAN, the dNSName [X5U_LEAF_NAME]. The not-a-CA, keyUsage and OCSPSigning rules are mozilla::pkix's
- * (`CheckBasicConstraints`, `CheckKeyUsage`, `CheckExtendedKeyUsage` for an end entity; spec revision 55).
+ * The leaf rules: not a CA, a readable keyUsage if present, codeSigning without OCSPSigning when extKeyUsage is
+ * present, and the SAN [leafNames] reads. The not-a-CA, keyUsage and extKeyUsage rules are mozilla::pkix's
+ * (`CheckBasicConstraints`, `CheckKeyUsage`, `CheckExtendedKeyUsage` for an end entity with `requiredEKUIfPresent`).
  */
 private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
     // Every value the leaf rules read is parsed first (revision 55): a malformed one is EXTENSION, never SAN or EKU.
@@ -292,17 +297,35 @@ private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
     val san = ExtensionValues.subjectAltName(c).valueOr(0, "subjectAltName") { return it }
     if (!sctListIsOctetString(c)) return failed(X5uChainFailure.EXTENSION, 0, "SCT list not one OCTET STRING")
     if (bc?.ca == true) return failed(X5uChainFailure.LEAF_CA, 0, "the leaf has cA TRUE")
-    if (eku == null || !eku.contains(CODE_SIGNING)) {
+    if (eku != null &&
+        !eku.contains(CODE_SIGNING)
+    ) {
         return failed(X5uChainFailure.EKU, 0, "no codeSigning in extKeyUsage")
     }
-    if (eku.contains(OCSP_SIGNING)) return failed(X5uChainFailure.EKU, 0, "OCSPSigning in extKeyUsage")
-    val names = san?.names.orEmpty()
-    val only = names.singleOrNull()
-    if (only == null || only.tag != ExtensionValues.DNS_NAME || only.content.utf8() != X5U_LEAF_NAME) {
-        return failed(X5uChainFailure.SAN, 0, "${names.size} names, not just the dNSName $X5U_LEAF_NAME")
+    if (eku?.contains(OCSP_SIGNING) == true) return failed(X5uChainFailure.EKU, 0, "OCSPSigning in extKeyUsage")
+    val names = leafNames(san) ?: return failed(X5uChainFailure.SAN, 0, "a SAN name that is not a plain dNSName")
+    if (names.none { it.equals(X5U_LEAF_NAME, ignoreCase = true) }) {
+        return failed(X5uChainFailure.SAN, 0, "${names.size} dNSNames, none of them $X5U_LEAF_NAME")
     }
     return null
 }
+
+/**
+ * The leaf's dNSNames, or null when [san] holds a name of another form, or a dNSName that is not a plain DNS host name
+ * ([DnsId.validConstraint] without the empty name or a leading dot, so no wildcard): nameConstraints are evaluated for
+ * dNSNames only, so a name of another form could escape a CA's constraint, and a wildcard never names the signer.
+ * Empty when [san] is absent.
+ */
+private fun leafNames(san: SubjectAltNames?): List<String>? =
+    san?.names.orEmpty().map { name ->
+        val dns = name.content.utf8()
+        if (name.tag != ExtensionValues.DNS_NAME || dns.isEmpty() || dns.startsWith('.') ||
+            !DnsId.validConstraint(dns)
+        ) {
+            return null
+        }
+        dns
+    }
 
 /**
  * mozilla::pkix's `ExtractSignedCertificateTimestampListFromExtension` on the leaf (`pkixbuild.cpp`): an embedded SCT
@@ -351,9 +374,16 @@ private fun issuer(
     // terminal is never read.
     if (eku?.contains(CODE_SIGNING) == false) return failed(X5uChainFailure.EKU, i, "extKeyUsage without codeSigning")
     if (!tlsFeatures(c, child)) return failed(X5uChainFailure.EXTENSION, i, "the child lacks the TLS feature")
-    // The leaf's one dNSName is X5U_LEAF_NAME, which leaf() required before any issuer is checked.
-    if (subtrees?.permits(X5U_LEAF_NAME) == false) {
-        return failed(X5uChainFailure.NAME_CONSTRAINTS, i, "the leaf is outside nameConstraints")
+    // Every one of the leaf's names, which leaf() checked before any issuer, is a dNSName (mozilla::pkix checks every
+    // name of the end entity).
+    if (subtrees != null) {
+        val names = leafNames(ExtensionValues.subjectAltName(certs[0]).valueOr(0, "subjectAltName") { return it })
+        val outside = names.orEmpty().firstOrNull { !subtrees.permits(it) }
+        if (outside !=
+            null
+        ) {
+            return failed(X5uChainFailure.NAME_CONSTRAINTS, i, "the leaf's $outside is outside nameConstraints")
+        }
     }
     return null
 }
