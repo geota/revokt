@@ -450,6 +450,7 @@ public final class dev/revokt/MozillaRemoteSettings {
 	public synthetic fun <init> (Ldev/revokt/MozillaRemoteSettings$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun collection (Ldev/revokt/Dataset;)Ljava/lang/String;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllowedDomains ()Ljava/util/Set;
 	public final fun getAttachmentBaseUrl ()Ljava/lang/String;
 	public final fun getBaseUrl ()Ljava/lang/String;
 	public final fun getBucket ()Ljava/lang/String;
@@ -457,7 +458,6 @@ public final class dev/revokt/MozillaRemoteSettings {
 	public final fun getSourceId ()Ljava/lang/String;
 	public final fun getUserAgent ()Ljava/lang/String;
 	public final fun getX5uHostRewrites ()Ljava/util/Map;
-	public final fun getX5uHosts ()Ljava/util/Set;
 	public fun hashCode ()I
 	public final fun newBuilder ()Ldev/revokt/MozillaRemoteSettings$Builder;
 	public fun toString ()Ljava/lang/String;
@@ -465,6 +465,7 @@ public final class dev/revokt/MozillaRemoteSettings {
 
 public final class dev/revokt/MozillaRemoteSettings$Builder {
 	public fun <init> ()V
+	public final fun allowedDomains (Ljava/util/Set;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun attachmentBaseUrl (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun baseUrl (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun bucket (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
@@ -474,7 +475,6 @@ public final class dev/revokt/MozillaRemoteSettings$Builder {
 	public final fun sourceId (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun userAgent (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun x5uHostRewrite (Ljava/lang/String;Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
-	public final fun x5uHosts (Ljava/util/Set;)Ldev/revokt/MozillaRemoteSettings$Builder;
 }
 
 public final class dev/revokt/MozillaRemoteSettings$Companion {

@@ -212,6 +212,11 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
                     ok(pem, *headers)
                 }
 
+                // The server root, read for its attachment base before the first attachment fetch (spec §7.1).
+                url == "$base/" -> {
+                    ok("""{"capabilities":{"attachments":{"base_url":"$attachments"}}}""", *headers)
+                }
+
                 url.startsWith(attachments) -> {
                     bodies[url.removePrefix(attachments)]?.let { response(200, it, *headers) } ?: response(404)
                 }

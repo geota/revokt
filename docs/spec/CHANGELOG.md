@@ -5,18 +5,36 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
-### Changes in revision 61 (the issuer constraints of #237, 2026-11-19)
+### Changes in revision 61 (in progress)
 
-- §5.1 "Why this is sound": a non-anchor issuer must also be within its `pathLenConstraint` (self-issued certificates
-  counted; above 127 not a CA), set `keyCertSign` when it has keyUsage, and list the request's purpose when it has
-  extKeyUsage; every nameConstraints on the path, an anchor's included, binds the certificates below it, by webpki's
-  rule; 250,000 name-constraint comparisons per walk. Fixtures (ar), (as).
-- §5.1 decision step 6 and the PKIX fallback contract: a fallback path must end at an anchor by bytes and meet the same
-  rules; the JDK's builder enforces less; a `verifiedPath` gets no issuer rule.
-- §10 residual 15 rewritten: only an unconstrained CA key holder can still certify a recovered key; the webpki rule's
-  differences from Firefox; a refusal is `NO_ISSUER`, allowed unchecked under `DEFAULT`; what was checked.
-- Test plan: fixtures (ar) and (as), the `NameConstraintsFuzzTest` target, the reference walker's scope. References:
-  the #237 entry. Divergences W11 to W15.
+- **#223 (audit A-1), Mozilla constants:**
+  - §7.1 tries the first 4 `metadata.signatures` entries and ignores the rest, where more than 4 failed the changeset.
+  - §5.1 raises `MAX_CHANGESET_RECORDS` from 256 to 1,024.
+  - §4 and §7.1: `allowedDomains` (default `cdn.mozilla.net`, a suffix rule on a label boundary) replaces the exact
+    `x5uHosts`. `attachmentBaseUrl` is nullable and null by default: the base is then the server root's
+    `capabilities.attachments.base_url`, read once per sync before the first attachment fetch, under the x5u URL
+    grammar and `allowedDomains`, and anything else is `FAILED` at `ATTACHMENT` with no fallback.
+  - §7.1: an absent or `null` `mode` is tried, as Firefox does, reversing #163's "`mode` required"; a present
+    `mode` other than `p384ecdsa` is still skipped.
+  - §7.1: the leaf SAN may hold several dNSNames, one equal to the signer name with ASCII case ignored, with no
+    wildcard match and no other name form; nameConstraints are checked against every dNSName. An absent leaf
+    extKeyUsage passes.
+  - §7.1 states why the x5u order is the path (no path search over an unsigned body).
+  - The test plan's content-signature row, (d) and API rows cover each change.
+  - §4: `build()` refuses a single-label `allowedDomains` entry.
+  - §6.5: the 256 MiB seed archive cap is kept, its basis restated for 1,024 records; a larger archive is refused
+    whole, never truncated.
+- **#237, issuer constraints:**
+  - §5.1 "Why this is sound": a non-anchor issuer must also be within its `pathLenConstraint` (self-issued certificates
+    counted; above 127 not a CA), set `keyCertSign` when it has keyUsage, and list the request's purpose when it has
+    extKeyUsage; every nameConstraints on the path, an anchor's included, binds the certificates below it, by webpki's
+    rule; 250,000 name-constraint comparisons per walk. Fixtures (ar), (as).
+  - §5.1 decision step 6 and the PKIX fallback contract: a fallback path must end at an anchor by bytes and meet the same
+    rules; the JDK's builder enforces less; a `verifiedPath` gets no issuer rule.
+  - §10 residual 15 rewritten: only an unconstrained CA key holder can still certify a recovered key; the webpki rule's
+    differences from Firefox; a refusal is `NO_ISSUER`, allowed unchecked under `DEFAULT`; what was checked.
+  - Test plan: fixtures (ar) and (as), the `NameConstraintsFuzzTest` target, the reference walker's scope. References:
+    the #237 entry. Divergences W11 to W15.
 
 ### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 
