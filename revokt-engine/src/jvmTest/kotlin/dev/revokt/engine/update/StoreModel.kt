@@ -61,7 +61,8 @@ internal class ModelViolation(
  * - **I2** no key of a generation that is live or pointed to is deleted or overwritten while it is, damaged or not
  *   (#236: a damaged generation the store names is held, never rewritten or deleted). "Pointed to" is the last pointer
  *   the code wrote ([ModelStorage.pointer]), not what a damaged `current` reads as: a malformed pointer must not make
- *   its generations fair game (the shape of #207's fail-open bootstrap). And the generation the engine held when a
+ *   its generations fair game (the shape of #207's fail-open bootstrap). Damage that leaves `current` readable is the
+ *   one exception: no reader can tell it from a write, so the pointer it reads as becomes the held one (#246, #229). And the generation the engine held when a
  *   sync began survives that sync, as the pointer's live or previous, if it read back undamaged (#242's fallback);
  * - **I3** `updater.json` is written only by a sync whose read of it returned (#209), and its watermark never goes
  *   backwards unless damage hit the file;
@@ -448,10 +449,20 @@ internal class StoreModel : CrliteSyncFixture() {
                     else -> keys[choices.int(keys.size)]
                 }
             val bytes = storage.inner.read(key) ?: return
-            storage.inner.write(key, damaged(key, bytes))
+            val written = damaged(key, bytes)
+            storage.inner.write(key, written)
             storage.damaged += key
+            if (key == "$root/current") adoptPointer(written)
             if (key == "$root/updater.json") watermark = null
             trail += "damage $key"
+        }
+
+        /**
+         * Damage that leaves `current` a readable pointer (a member name flipped into one the reader ignores, a directory
+         * name changed) is a pointer write no reader can tell from the code's own, so what it reads as is held (#246).
+         */
+        private fun adoptPointer(bytes: ByteArray) {
+            PointerJson.read(bytes)?.let { storage.pointer = it }
         }
 
         /** [bytes] of [key] damaged: a flipped byte, a truncation, a malformed document, or a too-new `metaVersion`. */
