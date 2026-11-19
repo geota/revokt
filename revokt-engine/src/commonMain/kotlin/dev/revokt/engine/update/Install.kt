@@ -383,41 +383,33 @@ private class Install(
         sourceTimestampMillis - publication.clockSkewMillis > publication.nowMillis
 
     /**
-     * The pointer's new `previous`: the first of the old `live` and `previous` that is another complete generation of
-     * the same or a higher trust class (spec §6.5), else none. A malformed pointer, and a pointed directory whose
-     * `meta.json` is missing or malformed, each count a store failure. Beside a malformed pointer, the candidate is the
-     * generation the engine holds live, when it is another that qualifies (#236): a running loader keeps its fallback,
-     * while a fresh one has none.
+     * The pointer's new `previous`: the first of the generation the engine served before this install, then the old
+     * `live` and `previous`, that is another complete generation of the same or a higher trust class (spec §6.5), else
+     * none. The served one comes first so that a flip that failed after activation, which left the engine serving a
+     * generation `current` does not name, never loses it to the next install's prune (#249: never delete what is served);
+     * so a running loader keeps its fallback beside an absent or malformed pointer too (#236), while a fresh one has none.
+     * A malformed pointer, and each candidate whose `meta.json` is missing or malformed, count a store failure.
      */
     private fun previous(directory: String): String? {
-        val pointer =
+        val pointed =
             when (val read = store.pointer()) {
                 StoreRead.Absent -> {
-                    return null
+                    emptyList()
                 }
 
                 StoreRead.Malformed -> {
-                    // #236: a running loader keeps the generation its engine held as the fallback; a fresh one has none.
                     storeFailures++
-                    return liveBefore?.takeIf { it != directory && qualifies(it) }
+                    emptyList()
                 }
 
                 is StoreRead.Found -> {
-                    read.value
+                    listOfNotNull(read.value.live, read.value.previous)
                 }
             }
-        return listOfNotNull(pointer.live, pointer.previous).filter { it != directory }.firstOrNull { candidate ->
-            when (val read = store.readMeta(candidate)) {
-                is StoreRead.Found -> {
-                    read.value.trustClass.rank >= meta.trustClass.rank
-                }
-
-                else -> {
-                    storeFailures++
-                    false
-                }
-            }
-        }
+        // Every candidate is read, so a pointed directory that does not read counts its store failure even when the
+        // served generation comes first.
+        val candidates = (listOfNotNull(liveBefore) + pointed).distinct().filter { it != directory }
+        return candidates.filter(::qualifies).firstOrNull()
     }
 
     /**
@@ -431,7 +423,7 @@ private class Install(
             }
 
             else -> {
-                // As in the pointer's branch: a candidate whose meta.json is missing or malformed is a store failure.
+                // A candidate whose meta.json is missing or malformed is a store failure.
                 storeFailures++
                 false
             }
