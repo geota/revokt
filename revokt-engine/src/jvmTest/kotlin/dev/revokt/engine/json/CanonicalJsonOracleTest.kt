@@ -43,12 +43,14 @@ class CanonicalJsonOracleTest {
         val name: String,
         val input: ByteArray,
         val canonical: ByteArray?,
+        /** The oracle's error text, for a row it rejected. */
+        val error: String?,
     )
 
     private val goldens =
         rows("canonical-json.tsv").map { f ->
             check(f.size == 4 && (f[2] == "OK" || f[2] == "ERR")) { "bad golden row ${f.firstOrNull()}" }
-            Golden(f[0], b64.decode(f[1]), if (f[2] == "OK") b64.decode(f[3]) else null)
+            Golden(f[0], b64.decode(f[1]), if (f[2] == "OK") b64.decode(f[3]) else null, f[3].takeIf { f[2] == "ERR" })
         }
 
     private fun revokt(input: ByteArray): Result<ByteArray> = runCatching { CanonicalJson.write(Json.parse(input)) }
@@ -66,13 +68,21 @@ class CanonicalJsonOracleTest {
     fun `revokt agrees with canonical_json on every recorded input`() {
         val declared = mutableListOf<String>()
         val refused = mutableListOf<String>()
+        val outOfRange = mutableListOf<String>()
         for (g in goldens) {
             val ours = revokt(g.input)
             val error = (ours.exceptionOrNull() as? JsonParseException)?.error
             if (ours.exceptionOrNull() is NonIntegerNumberException) {
                 // The second declared difference (#227): revokt refuses every non-integer number canonical_json accepts.
                 assertTrue(hasDecimal(Json.parse(g.input)), g.name)
-                if (g.canonical != null) refused += g.name
+                if (g.canonical != null) {
+                    refused += g.name
+                } else {
+                    // The third declared difference: both refuse, canonical_json only for a number out of f64's range.
+                    // Any other oracle error here would hide a parser difference behind the decimal (#254 review).
+                    assertTrue("number out of range" in g.error.orEmpty(), "${g.name}: ${g.error}")
+                    outOfRange += g.name
+                }
                 continue
             }
             ours.exceptionOrNull()?.let { if (it !is JsonParseException) throw AssertionError(g.name, it) }
@@ -85,6 +95,10 @@ class CanonicalJsonOracleTest {
         }
         assertEquals(listOf("duplicate-same", "duplicate-escaped", "duplicate-nested", "duplicate-surrogate"), declared)
         assertTrue(refused.count { it.startsWith("number-") } > 3000, "the generated non-integer numbers are refused")
+        assertEquals(60, outOfRange.size, "$outOfRange")
+        assertTrue(
+            listOf("reject-overflow", "reject-neg-overflow", "reject-overflow-huge-exp").all { it in outOfRange },
+        )
         assertTrue(goldens.count { it.name.startsWith("number-") } > 4000)
     }
 

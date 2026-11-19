@@ -5,6 +5,13 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 61 (in progress)
+
+- **#227 (#254):** §7.1's canonical JSON is integers only: a number outside `u64`/`i64` (a fraction, an exponent,
+  or an out-of-range integer) has no canonical form, so its payload is refused (`RECORDS`), in place of citing
+  `canonical_json`'s float rules; `deleted` reads such a number as zero lexically. The test plan's differential lists
+  the refusal and the out-of-range rejections as declared differences, and the `1e-400` tombstone.
+
 ### Changes in revision 60 (the trust-class cut of #218, and #246)
 
 - **#218, the trust-class cut:**

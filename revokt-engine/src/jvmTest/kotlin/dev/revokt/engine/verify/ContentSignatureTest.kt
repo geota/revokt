@@ -356,6 +356,19 @@ class ContentSignatureTest {
             assertEquals(4, ContentSignature.merge(stored, kept)?.size, "deleted: $value")
             assertNull(ContentSignature.recordsJson(stored + kept, TS), "deleted: $value")
         }
+        // Zero is lexical (#227): 1e-400 has a non-zero digit, so revokt reads it as a tombstone and merge removes the
+        // record, where Python's float() underflows it to 0.0 and keeps it. Either way nothing installs a record the
+        // signer kept: a payload with the record kept holds 1e-400 and is refused. This pins revokt's reading.
+        val underflow = records("""[{"id":"a","deleted":1e-400}]""")
+        assertEquals(
+            stored.filter { id(it) != "a" }.sortedBy { id(it) },
+            ContentSignature.merge(stored, underflow),
+            "change deleted: 1e-400",
+        )
+        assertEquals(
+            payload(stored).decodeToString(),
+            payload(stored + records("""[{"id":"t","deleted":1e-400}]""")).decodeToString(),
+        )
     }
 
     @Test
