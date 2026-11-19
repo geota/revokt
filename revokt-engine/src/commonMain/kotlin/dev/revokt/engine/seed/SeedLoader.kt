@@ -662,7 +662,7 @@ internal class SeedLoader(
          * - Rule (b): a complete one is held, installed as it stands when it is this generation (the install compares
          *   everything but `freshness` and the signed members), else `STORE_FAILED`; one whose `meta.json` is absent or
          *   present but unreadable is this load's to complete from the verified seed (the lead's Note 1), never a
-         *   complete one deleted.
+         *   complete one deleted, and never the engine's live one, which is a [StoreFault] instead.
          * - Rule (a), as the sync does: one the engine holds live or the pointer names is held when complete, and a
          *   [StoreFault] otherwise (counted once: a pointed one's unreadable `meta.json` was counted by [read]); any other
          *   is this load's, a complete orphan reopened first.
@@ -676,6 +676,11 @@ internal class SeedLoader(
             val read = store.readMeta(directory)
             if (!stored.trusted) {
                 if (read is StoreRead.Found) return true
+                // The engine's live directory is never staged into while it is served, whatever its meta.json says.
+                if (directory == liveDirectory()) {
+                    val counted = directory == stored.pointer?.live || directory == stored.pointer?.previous
+                    fault("$directory is the engine's live generation, and its meta.json is not readable", counted)
+                }
                 staged = directory
                 return false
             }

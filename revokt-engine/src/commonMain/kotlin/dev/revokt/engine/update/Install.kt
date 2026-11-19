@@ -238,8 +238,9 @@ private class Install(
      * one the pointer names, or when the pointer is malformed (it may name any directory) and [directory]'s `meta.json`
      * is present, complete or malformed (#236, fail closed). A directory nothing holds is this install's: it is
      * completed over its staged deltas, or deleted on a failure before activation. A complete one becomes this install's
-     * only once [StoreLayout.reopen] accepts it. Under [Publication.heal] (the seed's rule (b), #138) it is held exactly
-     * when it is complete: an incomplete one is this install's, pointed or not, and a complete one is never reopened.
+     * only once [StoreLayout.reopen] accepts it. Under [Publication.heal] (the seed's rule (b), #138) it is held when it is
+     * complete or is the engine's live generation: an incomplete one the engine does not serve is this install's, pointed
+     * or not, a complete one is never reopened, and the live one is never rewritten whatever its `meta.json` says.
      */
     private fun claim(directory: String): Pair<Boolean, StoreRead<GenerationMeta>> {
         liveBefore = liveDirectory()
@@ -250,7 +251,8 @@ private class Install(
         val unknown = store.pointer() is StoreRead.Malformed && existing !is StoreRead.Absent
         val held =
             if (publication.heal) {
-                existing is StoreRead.Found
+                // The engine's live directory is held whatever its meta.json says: it is never rewritten while served.
+                existing is StoreRead.Found || directory == liveDirectory()
             } else {
                 directory == liveDirectory() || directory in pointed() || unknown
             }

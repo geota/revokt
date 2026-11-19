@@ -267,6 +267,31 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
+    fun `a running loader's live directory with a damaged meta_json is never rewritten beside a malformed pointer`() {
+        val own = installedAt(ts)
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        storage.inner.write("$root/$own/meta.json", "{".encodeToByteArray())
+        val before = contents()
+        // The snapshot still serves the seed's generation: the running loader's live directory.
+        failed(load(Seed()), "is the engine's live generation")
+        assertEquals(before, contents())
+        assertEquals("$ts/${delta.id}", live().generationId)
+    }
+
+    @Test
+    fun `a running loader's damaged live directory is left as it is when a newer generation is adopted instead`() {
+        val own = installedAt(ts)
+        val serving = snapshot.snapshot
+        val newer = installedAt(ts + hour)
+        snapshot.publish(serving)
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        storage.inner.write("$root/$own/meta.json", "{".encodeToByteArray())
+        val kept = files(own)
+        assertEquals(newer, assertIs<SeedLoad.Adopted>(load(Seed())).directory)
+        assertEquals(kept, files(own))
+    }
+
+    @Test
     fun `under a trusted pointer to an older live generation the seed installs and never prunes a newer one`() {
         // A sync completed gen-(ts + 1 h) and crashed before its flip; the pointer still names an older one.
         val older = installedAt(ts - hour)
