@@ -1817,4 +1817,3 @@ merge) and before the §9.1 walker fuzzer runs against them**, since every revie
 ## Appendix A. Verification log (2026-10-21, additions 2026-10-22)
 
 The verification log is [references.md](references.md).
-
