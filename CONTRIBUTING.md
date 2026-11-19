@@ -429,8 +429,8 @@ every required check in Appendix B passes**.
   `NoHttpClientInTests` alone; the table marks them advisory.
 - Coverage: Kover branch floor of 90 % per parser package over the committed replay (§9.1), as a hard rule.
   The path walker, the store, the updater and the fetch layer have floors a little under their measured branch
-  coverage (#161: walker 98.96 %, store 94.26 % at f2c54fc; #212: `update` 91.46 % and `fetch` 96.69 % at 36dafac,
-  floors 91 and 96). The floors may only be raised. They are the coverage ratchet: no check compares with a
+  coverage (#161: walker 98.96 %, store 94.26 % at f2c54fc; #212: `update` 90.66 % and `fetch` 95.87 % at 22b2191,
+  floors 90 and 95). The floors may only be raised. They are the coverage ratchet: no check compares with a
   coverage artifact from `main` (#212 removed that comparison, which failed a PR that deleted well-covered code
   and tied a required check to artifact storage).
 
