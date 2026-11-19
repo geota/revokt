@@ -58,6 +58,8 @@ internal class PathDecision(
  * - [platformOnly] is step 6's `PLATFORM_ONLY` promotion of a walk `NotFound` whose fallback failed, one that met an
  *   unsupported algorithm included: on for the trust-manager bindings and `Revokt.evaluate`, which run step 1; off for
  *   the walker-only harness and `Evaluator.evaluate`, where the walker's reason is reported directly.
+ * - [requiredEku] is the purpose an issuer's extKeyUsage must list when it has one (#237): `SERVER_AUTH` unless the
+ *   binding checks a client certificate.
  */
 internal class DecideContext(
     val verifier: SignatureVerifier,
@@ -66,6 +68,7 @@ internal class DecideContext(
     val fallback: PathBuilderFallback?,
     val nowMillis: Long,
     val platformOnly: Boolean,
+    val requiredEku: RequiredEku = RequiredEku.SERVER_AUTH,
 )
 
 /**
@@ -153,7 +156,15 @@ private class Decider(
         if (index.isAnchorBytes(leaf)) return anchorLeaf(leaf)
         leaf.keyabilityClause?.let { return parseFailed(ParseReason.PRODUCER_UNKEYABLE, it) }
         if (presentedCut && overPresented()) return presentedCut(leaf)
-        val walk = reconstruct(presented(leaf), index, context.verifier, context.probe, context.crossCallMemo)
+        val walk =
+            reconstruct(
+                presented(leaf),
+                index,
+                context.verifier,
+                context.probe,
+                context.crossCallMemo,
+                context.requiredEku,
+            )
         findings += walk.findings
         return when (walk) {
             is Walk.Found -> found(walk, leaf)
@@ -263,7 +274,7 @@ private class Decider(
         leaf: Cert,
     ): PathDecision {
         val builder = base(PathStatus.FOUND).endReason(WalkEnd.COMPLETE).walkerReason(walk.reason)
-        val fallback = fallback(leaf)
+        val fallback = fallback()
         if (fallback is Fallback.Path) {
             return walked(
                 walk,
@@ -299,7 +310,7 @@ private class Decider(
     ): PathDecision {
         val keys = LinkedHashSet(walk.partialLeafKeys)
         var reported = walk.partialPaths.firstOrNull()?.hashes()
-        val fallback = fallback(leaf)
+        val fallback = fallback()
         if (fallback is Fallback.Path) {
             keys += fallback.key
             reported = reported ?: fallback.hashes
@@ -321,17 +332,18 @@ private class Decider(
     /**
      * Step 6's PKIX fallback: `DISABLED` with none configured, `SKIPPED` over `FALLBACK_MAX_PRESENTED`, else one
      * `build` over the raw presented chain (copies, so the builder cannot change the caller's arrays). `FAILED` is a
-     * null, a throw, or a path decide cannot use: empty, holding a null element (a Java builder), not starting with the
-     * presented leaf's bytes (a consumer builder's path could otherwise be keyed by an unrelated issuer), with an
-     * intermediate that does not parse or is not a CA (#225), or with a leaf-issuer key that cannot be read. Reading the result runs inside the catch, so nothing it does escapes as an
-     * engine error.
+     * null, a throw, or a path decide cannot use: shorter than the leaf and its issuer, holding a null element (a Java
+     * builder), not starting with the presented leaf's bytes (a consumer builder's path could otherwise be keyed by an
+     * unrelated issuer), not ending at an anchor by bytes, holding a certificate that does not parse, or failing the
+     * walker's issuer rules ([issuersMayIssue], #225 and #237). Reading the result runs inside the catch, so nothing it
+     * does escapes as an engine error.
      */
     @Suppress("TooGenericExceptionCaught") // §5.5's rule: every throwable but a fatal error is caught
-    private fun fallback(leaf: Cert): Fallback {
+    private fun fallback(): Fallback {
         val builder = context.fallback ?: return Fallback.NotUsed(FallbackReason.DISABLED)
         if (chain.size > RevoktLimits.FALLBACK_MAX_PRESENTED) return Fallback.NotUsed(FallbackReason.SKIPPED)
         return try {
-            builder.build(chain.map { it.copyOf() }, snapshot, context.nowMillis)?.let { path(it, leaf) }
+            builder.build(chain.map { it.copyOf() }, snapshot, context.nowMillis)?.let { path(it) }
         } catch (t: Throwable) {
             absorb(t)
             buildThrew = true
@@ -340,42 +352,54 @@ private class Decider(
     }
 
     /**
-     * A usable fallback [result], or null; [result] is typed as a Java builder may fill it. Every certificate between
-     * the leaf and the last (the anchor) must parse and be a CA ([Cert.isCa]), the walker's own check (#225), so a
-     * consumer builder that skips basicConstraints cannot key the decision by a key an end entity certified.
+     * A usable fallback [result], or null; [result] is typed as a Java builder may fill it. The path holds the leaf and
+     * at least its issuer, every certificate parses and the walker's own issuer rules hold ([issuersMayIssue]), so a
+     * consumer builder that skips them cannot key the decision by a key an end entity or a constrained CA certified
+     * (#225, #237). The leaf-issuer key is the second certificate's SPKI hash.
      */
-    private fun path(
-        result: List<ByteArray?>,
-        leaf: Cert,
-    ): Fallback.Path? {
+    private fun path(result: List<ByteArray?>): Fallback.Path? {
         val ders = result.map { it ?: return null }
-        if (ders.isEmpty() || !ders[0].contentEquals(chain[0])) return null
-        if (!intermediatesAreCas(ders)) return null
-        val key = issuerKey(ders, leaf) ?: return null
+        if (ders.size < 2 || !ders[0].contentEquals(chain[0])) return null
+        val parsed = issuersMayIssue(ders) ?: return null
+        val key = parsed[1].rawSpki().toByteString().sha256()
         return Fallback.Path(ders.map { it.toByteString().sha256() }, key)
     }
 
-    /** True when every certificate of [ders] after the leaf and before the anchor parses and is a CA. */
-    private fun intermediatesAreCas(ders: List<ByteArray>): Boolean =
-        (1 until ders.size - 1).all { i ->
-            (CertificateParser.parse(ders[i]) as? CertificateParse.Parsed)?.let { Cert.isCa(it.certificate) } == true
-        }
-
     /**
-     * The leaf-issuer key of a fallback path, the SPKI hash of its second certificate, or of the leaf when the path
-     * is the leaf alone (an anchor, as at step 2); null when that certificate does not parse, since step 7 could not
-     * query under it.
+     * The walker's issuer rules over a fallback path [ders], leaf → anchor: each certificate between them may issue
+     * with the CAs under it ([IssuerProfile.mayIssue]: `cA`, `pathLenConstraint`, `keyCertSign`, and
+     * [DecideContext.requiredEku] in extKeyUsage), and the nameConstraints of each certificate above the leaf, the
+     * anchor's included, admit every certificate below it. The last certificate is exempt from the issuer rules only
+     * because it is an anchor of the index by exact bytes: a path that ends elsewhere (a builder returning
+     * `CertPath.getCertificates()`, which leaves the anchor out) fails. Null when any of this does not hold, a
+     * certificate does not parse, or the name-constraint comparisons pass [NameConstraints.MAX_COMPARISONS], which
+     * fails closed here as a failed build; else the parsed path.
      */
-    private fun issuerKey(
-        ders: List<ByteArray>,
-        leaf: Cert,
-    ): ByteString? {
-        if (ders.size == 1) return leaf.spkiHash
-        val issuer = CertificateParser.parse(ders[1]) as? CertificateParse.Parsed ?: return null
-        return issuer.certificate
-            .rawSpki()
-            .toByteString()
-            .sha256()
+    private fun issuersMayIssue(ders: List<ByteArray>): List<ParsedCertificate>? {
+        val parsed = ders.map { (CertificateParser.parse(it) as? CertificateParse.Parsed)?.certificate ?: return null }
+        if (!index.isAnchorBytes(index.cert(parsed.last()))) return null
+        for (i in 1 until parsed.size - 1) {
+            if (!IssuerProfile.of(parsed[i]).mayIssue(i - 1, context.requiredEku)) return null
+        }
+        var comparisons = 0
+        val budget =
+            ComparisonBudget {
+                if (comparisons >=
+                    NameConstraints.MAX_COMPARISONS
+                ) {
+                    false
+                } else {
+                    true.also { comparisons++ }
+                }
+            }
+        val names = parsed.map { PresentedName.of(it) }
+        for (i in 1 until parsed.size) {
+            val nc = NameConstraints.of(parsed[i]) ?: continue
+            for (j in 0 until i) {
+                if (nc.check(names[j], budget) != NameConstraints.Result.CONFORMS) return null
+            }
+        }
+        return parsed
     }
 
     /** An exit after the walk: the walk's stats and `UnsupportedAlgorithm` findings, then any `FallbackNotUsed`. */

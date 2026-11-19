@@ -273,6 +273,20 @@ tests; **live checks** are informational.
   loop reaches F → `NotFound(UNANCHORED)`, `verifications = 1`, `unrelatedExploredAtLeaf = 1`; leaf → I1 → I2 → R
   with I2 not a CA → `UNANCHORED`, `verifications = 1`, `candidatesExplored = 3`; a v3 anchor without
   basicConstraints still terminates → `Found`.
+  (ar) (#237) a non-anchor issuer within its `pathLenConstraint`, with `keyCertSign` and the request's purpose:
+  `pathLenConstraint` on I2 in leaf → I1 → I2 → R, 0 → `UNANCHORED`, 1 → `Found`, 128 → not a CA; 0 on the leaf's
+  issuer → `Found`; keyUsage on I with `keyCertSign` → `Found`, without it, with no bits or with bad padding →
+  `ALL_CANDIDATES_INVALID`; extKeyUsage on I listing `serverAuth`, alone or beside `clientAuth` → `Found`,
+  `emailProtection`, `anyExtendedKeyUsage` alone or empty → `ALL_CANDIDATES_INVALID`; a sub-CA S under the real root
+  signing C, a CA for a key recovered from the leaf's signature, `[L, C, S]`: limited by `pathLen 0` or to
+  `emailProtection` → `UNANCHORED`, unconstrained → `Found` through C (§10 residual 15).
+  (as) (#237) nameConstraints, the leaf presenting `leaf.example`: on I, permitted `leaf.example` or `.example` →
+  `Found`; excluded `leaf.example`, permitted `other.example`, a directoryName subtree, or unreadable →
+  `ALL_CANDIDATES_INVALID`; a sub-CA name-constrained to `attacker.example` certifying a recovered key → `UNANCHORED`;
+  an anchor's nameConstraints refusing the leaf → `UNANCHORED`; a wildcard `*.leaf.example` → `Found` under permitted
+  `leaf.example`, refused under `a.leaf.example`; a leaf subjectAltName that does not read →
+  `ALL_CANDIDATES_INVALID`; 500 names against 501 subtrees → `Budget(EXPLORATION_BUDGET)`; 300 names against two
+  candidates of 501 subtrees each, neither past 250,000 alone → `Budget(EXPLORATION_BUDGET)`.
   Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
   (z) has a related candidate that verifies but is unanchored; stuffing fixtures present their junk.
 - **Trust-manager invariants**: never accept what the platform rejected (the 3-arg overload's null-host retry only after a socket or engine overload accepted the chain and host); under `DEFAULT` never
@@ -342,7 +356,8 @@ Mandatory for every component that parses bytes it did not produce; measured by 
 yield. **Targets**: v3/v4 filter decoders (differential against `clubcard-crlite`); `index.bin`
 round trip; JSON and canonical JSON (differential against `canonical_json`); the TBS/DER parser and
 SCT list (§9.2); DER ECDSA conversion and `AlgorithmIdentifier`/PSS parameters; seed archive and x5u
-PEM; the path walker (below); [M2] CRX3, zip, `crl-set`, OneCRL, preload DER; [M3] precert TBS, log
+PEM; the nameConstraints and subjectAltName readers of the walker's issuer rules (`NameConstraintsFuzzTest`, #237);
+the path walker (below); [M2] CRX3, zip, `crl-set`, OneCRL, preload DER; [M3] precert TBS, log
 list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput` wrapper;
 `-Xmx256m -rss_limit_mb=1024 -timeout=10` (the §9.2 parser target overrides with `-timeout=1`); `-max_len` = each target's cap + 1 (filters:
 `MAX_FILTER_BYTES + 1`); allocation budgets in each decoder; differential oracles in-process through
@@ -367,7 +382,9 @@ related)`; `SelfSignedNonAnchor`; `Loop`; `Permute`; `Duplicate`; `EndEntityIssu
 in an end-entity certificate issued by a snapshot anchor, named like the child's issuer or, with `unrelated`, a fresh
 name only the unrelated loop reaches, which leaves the result unchanged and is the one generated certificate that
 verifies a child without being related to it; `DepthPad`, junk certificates off the honest path that never lengthen it, so P3 is not tripped by a dead end). **Oracle**: a
-**relation-aware, uncapped reference walker** (a non-anchor candidate must be a CA as the JDK reads it; at every node: related candidates, plus unrelated
+**relation-aware, uncapped reference walker** (a non-anchor candidate must be a CA as the JDK reads it; #237's other
+issuer rules are not modelled, since the generator writes none of those extensions and `pathLenConstraint` and
+nameConstraints depend on the path below a certificate, so fixtures (ar) and (as) carry them; at every node: related candidates, plus unrelated
 presented certificates only when no related path exists, at the leaf collecting every unrelated issuer's key as §5.1 does; depth ≤ `MAX_DEPTH`; no other limits; the fuzzer runs both walkers with the platform canonicaliser, so the leaf-level custom-canonicaliser clause is inert for P2/P6 and is covered by the walker-harness fixtures instead) →
 `refKeys`; a CRLite stub mapping the honest key to `REVOKED` in half the runs and every other key to `NOT_ENROLLED` (so `rules` is predictable under `Recover(CertifiedBy)`); a fake
 `PathBuilderFallback` equal to the reference. Properties:

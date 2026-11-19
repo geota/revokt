@@ -9,7 +9,7 @@ import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.TestDer
-import dev.revokt.engine.walker.Cert
+import dev.revokt.engine.walker.IssuerProfile
 import okio.ByteString.Companion.toByteString
 import java.io.ByteArrayInputStream
 import java.security.cert.CertificateFactory
@@ -260,7 +260,7 @@ class ChainGeneratorTest {
                 // EndEntityIssuer(unrelated = true) is the one unrelated certificate that verifies a child, and it is
                 // an end entity, which the walkers never use as an issuer (#225).
                 assertTrue(
-                    !Cert.isCa(c) || related(c, leaf),
+                    !IssuerProfile.of(c).isCa || related(c, leaf),
                     "seed $seed ${world.mutations}: serial ${c.rawSerial().toList()}",
                 )
             }
