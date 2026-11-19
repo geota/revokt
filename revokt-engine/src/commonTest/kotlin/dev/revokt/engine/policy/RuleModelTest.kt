@@ -10,7 +10,6 @@ import dev.revokt.Outcome
 import dev.revokt.ParseReason
 import dev.revokt.PathStatus
 import dev.revokt.Rule
-import dev.revokt.TrustClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -35,7 +34,6 @@ class RuleModelTest {
         for (preset in Preset.entries) {
             val table = PolicyTable.preset(preset)
             assertEquals(Rule.entries.size, Rule.entries.map(table::outcome).size, "$preset outcomes")
-            assertEquals(Dataset.entries.toSet(), table.minTrustClass.keys, "$preset minTrustClass")
         }
     }
 
@@ -47,7 +45,6 @@ class RuleModelTest {
             assertEquals(expected, PolicyTable.DEFAULT.outcome(rule), "$rule")
         }
         assertEquals(mapOf(Dataset.CRLITE to StalenessTable(3 * day, null)), PolicyTable.DEFAULT.staleness)
-        assertEquals(Dataset.entries.associateWith { TrustClass.BUNDLED }, PolicyTable.DEFAULT.minTrustClass)
     }
 
     @Test
@@ -57,7 +54,6 @@ class RuleModelTest {
             assertEquals(expected, PolicyTable.STRICT.outcome(rule), "$rule")
         }
         assertEquals(mapOf(Dataset.CRLITE to StalenessTable(3 * day, 30 * day)), PolicyTable.STRICT.staleness)
-        assertEquals(Dataset.entries.associateWith { TrustClass.SIGNED }, PolicyTable.STRICT.minTrustClass)
     }
 
     @Test
@@ -114,7 +110,7 @@ class RuleModelTest {
         val reached =
             PathStatus.entries.mapNotNull { it.firedRule() }.toSet() +
                 CrliteQueryResult.entries.flatMap { r -> listOf(false, true).mapNotNull { r.firedRule(it) } }
-        assertEquals(Rule.entries.toSet() - setOf(Rule.NO_DATA, Rule.STALE, Rule.UNSIGNED_DATA), reached)
+        assertEquals(Rule.entries.toSet() - setOf(Rule.NO_DATA, Rule.STALE), reached)
     }
 
     @Test

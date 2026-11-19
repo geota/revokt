@@ -135,7 +135,6 @@ class PolicyValidationTest {
                 exemptions = mapOf(Rule.REVOKED to Exemption { true }),
                 requiredDatasets = default.requiredDatasets,
                 staleness = default.staleness,
-                minTrustClass = default.minTrustClassEntries,
                 rollbackWindowMillis = default.rollbackWindowMillis,
                 clockSkewMillis = default.clockSkewMillis,
                 signedSourceFailingAfterMillis = default.signedSourceFailingAfterMillis,

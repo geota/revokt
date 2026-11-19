@@ -319,8 +319,8 @@ public sealed class Finding {
 
     /**
      * One dataset's data as a verdict saw it (spec §4, §8 data rules): the generation it read, where that came from and
-     * how old it was, and the data rules that fired for it. The builder checks the invariant that needs no other
-     * finding: [trustClass] is null exactly when [generationId] is, that is when the dataset has no generation.
+     * how old it was, and the data rules that fired for it. Every generation is Mozilla-signed (#218), so the only
+     * data-quality dimension is age.
      */
     @OptIn(RevoktTestingApi::class)
     public class DataState private constructor(
@@ -330,12 +330,9 @@ public sealed class Finding {
         // fields are added (the class is growable).
         public val dataset: Dataset = requireNotNull(builder.dataset) { "dataset is not set" }
 
-        /** How the generation was obtained; null exactly when [generationId] is. `UNSIGNED_DATA` never fires on null. */
-        public val trustClass: TrustClass? = builder.trustClass
-
         /**
-         * The generation read: `SIGNED` `"<changeset timestamp>/<last applied record id>"`, `MIRROR`/`SYSTEM` the
-         * manifest hash, a seed its seed id; null when the dataset has no generation.
+         * The generation read, `"<changeset timestamp>/<last applied record id>"`; null when the dataset has no
+         * generation.
          */
         public val generationId: String? = builder.generationId
 
@@ -349,7 +346,7 @@ public sealed class Finding {
         /** The generation's age when the verdict was computed; clamped at 0 when [clockBehind]. */
         public val ageMillis: Long? = builder.ageMillis
 
-        /** True while the loader's start task has not passed the seed and system-cache steps; `NO_DATA` never fires. */
+        /** True while the loader's start task has not passed the seed step; `NO_DATA` never fires. */
         public val pending: Boolean = builder.pending
 
         /** `sourceTimestampMillis > now + clockSkew` at the last publish; never persisted. */
@@ -361,22 +358,14 @@ public sealed class Finding {
         /** The loud flag: `ageMillis > staleAfter`. Fires no rule. */
         public val stale: Boolean = builder.stale
 
-        /** The data rules that fired for this dataset (`NO_DATA`, `STALE`, `UNSIGNED_DATA`), in `Rule.PRECEDENCE` order. */
+        /** The data rules that fired for this dataset (`NO_DATA`, `STALE`), in `Rule.PRECEDENCE` order. */
         public val rules: Set<Rule> = builder.rules
-
-        init {
-            require((trustClass == null) == (generationId == null)) {
-                "trustClass is null exactly when generationId is (spec §4): got trustClass=$trustClass, " +
-                    "generationId=$generationId"
-            }
-        }
 
         /** A builder holding this finding's values. */
         @RevoktTestingApi
         public fun newBuilder(): Builder =
             Builder()
                 .dataset(dataset)
-                .trustClass(trustClass)
                 .generationId(generationId)
                 .freshness(freshness)
                 .fromSeed(fromSeed)
@@ -392,7 +381,6 @@ public sealed class Finding {
         private fun fields(): List<Pair<String, Any?>> =
             listOf(
                 "dataset" to dataset,
-                "trustClass" to trustClass,
                 "generationId" to generationId,
                 "freshness" to freshness,
                 "fromSeed" to fromSeed,
@@ -412,13 +400,11 @@ public sealed class Finding {
         override fun toString(): String =
             fields().joinToString(prefix = "DataState(", postfix = ")") { (name, value) -> "$name=$value" }
 
-        /** Builds a [Finding.DataState] for tests and fakes; [build] checks the invariant the constructor does. */
+        /** Builds a [Finding.DataState] for tests and fakes. */
         @RevoktTestingApi
         @Suppress("TooManyFunctions") // One setter per spec §4 field, plus build().
         public class Builder {
             internal var dataset: Dataset? = null
-                private set
-            internal var trustClass: TrustClass? = null
                 private set
             internal var generationId: String? = null
                 private set
@@ -442,8 +428,6 @@ public sealed class Finding {
                 private set
 
             public fun dataset(dataset: Dataset): Builder = apply { this.dataset = dataset }
-
-            public fun trustClass(trustClass: TrustClass?): Builder = apply { this.trustClass = trustClass }
 
             public fun generationId(id: String?): Builder = apply { generationId = id }
 

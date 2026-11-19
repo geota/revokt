@@ -11,8 +11,8 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
 
 - `AGENTS.md`, `CONTRIBUTING.md` and `CLAUDE.md` (a link to `AGENTS.md`): the house rules. "Ask first" items there
   mean stop and report back to the coordinator instead of doing them, unless your issue explicitly covers it.
-- Your issue (`gh issue view <n>`), and the spec sections it names in `docs/spec/revokt-spec.md`. Never edit
-  `docs/spec/`. If the spec has two readings that would change observable behaviour, pick neither: report both to
+- Your issue (`gh issue view <n>`), and the spec sections it names in `docs/spec/revokt-spec.md` and
+  `docs/spec/test-plan.md`. If the spec has two readings that would change observable behaviour, pick neither: report both to
   the coordinator.
 - Look at the neighbouring code and match it: KDoc density, naming, `require` for argument checks, okio
   `ByteString`, `@RevoktTestingApi` builders, `internal` by default. PRs #88 and #89 (`git show 637eb7c fa25d1f`)
@@ -32,8 +32,11 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
 - **Land every assumption.** Each item under "Assumptions made" lands in a spec revision or is dropped; the
   coordinator carries them to the next revision.
 - **Keep the public surface small.** New types are `internal` unless a caller of the public API needs them now.
-- **Spec text.** Until #216 (the spec split) lands, behaviour PRs don't edit `docs/spec/`. Put a "Spec delta"
-  section in the PR body instead, before Trailers.
+- **Spec text.** A behaviour PR that changes what the spec states, or adds behaviour it does not state, edits
+  `docs/spec/` in the same PR (the core, or `test-plan.md` for a fixture row), in the present tense and with no
+  issue or revision references, and adds a line to the next revision's block in `docs/spec/CHANGELOG.md`. A larger
+  or separable spec change is a `spec` PR first (CONTRIBUTING §1). The `## Spec` section, which pr-lint requires,
+  cites the sections changed.
 
 ## Worktree and git
 
@@ -91,7 +94,8 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
 - Never construct inputs designed to bypass the JDK's signature check. Never add dependencies, assets, or workflow
   or ruleset changes that your issue does not explicitly cover.
 - Never claim a fact you did not verify; say what you checked.
-- Never edit `docs/spec/**`, `ROADMAP.md` or `README.md` (the coordinator owns them).
+- Never edit `ROADMAP.md` or `README.md` (the coordinator owns them), or `docs/spec/` beyond what your issue's
+  behaviour needs.
 
 ## Messages
 

@@ -21,7 +21,6 @@ import dev.revokt.RevocationEngine
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktPolicy
 import dev.revokt.RevoktTestingApi
-import dev.revokt.TrustClass
 import dev.revokt.Verdict
 import dev.revokt.engine.update.DatasetGeneration
 import dev.revokt.engine.update.GenerationSnapshot
@@ -83,19 +82,17 @@ internal open class StubEngine(
 }
 
 /**
- * A published CRLite generation [ageMillis] old of [trustClass]; [fromSeed] with the seed gate [gateOpen]. `pending`
- * and `clockBehind` are false unless given.
+ * A published CRLite generation [ageMillis] old; [fromSeed] with the seed gate [gateOpen]. `pending` and
+ * `clockBehind` are false unless given.
  */
 internal fun generation(
     ageMillis: Long = 0,
-    trustClass: TrustClass = TrustClass.SIGNED,
     fromSeed: Boolean = false,
     gateOpen: Boolean = true,
     clockBehind: Boolean = false,
 ): DatasetGeneration =
     DatasetGeneration(
         generationId = if (fromSeed) "seed-1" else "1700000000000/rec-1",
-        trustClass = trustClass,
         freshness = if (fromSeed) Freshness.SEED_SIGNED_TIME else Freshness.RECORD_LAST_MODIFIED,
         fromSeed = fromSeed,
         sourceTimestampMillis = NOW - ageMillis,
@@ -109,7 +106,6 @@ internal fun generation(
 internal fun noGeneration(pending: Boolean = false): DatasetGeneration =
     DatasetGeneration(
         generationId = null,
-        trustClass = null,
         freshness = null,
         fromSeed = false,
         sourceTimestampMillis = null,

@@ -21,7 +21,9 @@ internal class MalformedStoreFileException(
 /**
  * Typed reads of one JSON object of a store file (spec §6.5), over the engine's JSON tree. A member that is absent or
  * `null` is absent; one of the wrong type, and an absent required member, is a [MalformedStoreFileException]. Members
- * the decoder does not ask for are ignored, so the layout can grow (the reading the issue states; §6.5 is silent).
+ * the decoder does not ask for are ignored, so the layout can grow (the reading the issue states; §6.5 is silent),
+ * except in a file whose decoder calls [only]: `current`, where a damaged member name must not read as a pointer with
+ * fewer generations (#246).
  */
 internal class StoreFields(
     private val obj: JsonObject,
@@ -71,6 +73,14 @@ internal class StoreFields(
     inline fun <reified E : Enum<E>> enum(key: String): E {
         val name = string(key)
         return enumValues<E>().firstOrNull { it.name == name } ?: wrong(key)
+    }
+
+    /** Fails unless every member of this object is one of [keys]. (The parser already refuses a duplicate key.) */
+    fun only(vararg keys: String) {
+        for (i in 0 until obj.size) {
+            val key = obj.keyAt(i)
+            if (key !in keys) throw MalformedStoreFileException("unknown '$key'")
+        }
     }
 
     fun missing(key: String): Nothing = throw MalformedStoreFileException("no '$key'")

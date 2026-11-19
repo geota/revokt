@@ -13,7 +13,6 @@ import dev.revokt.Finding
 import dev.revokt.Outcome
 import dev.revokt.RevoktPolicy
 import dev.revokt.Rule
-import dev.revokt.TrustClass
 import dev.revokt.Verdict
 import dev.revokt.and
 import dev.revokt.engine.policy.PolicyForm
@@ -73,21 +72,21 @@ class ExemptionStageTest {
         assertIs<Verdict.Accepted>(d)
         assertTrue(recorders.values.all { it.seen.isEmpty() })
         assertEquals(0, default.chainsBuilt)
-        // STRICT: NO_SCTS and UNSIGNED_DATA fire and reject; exactly those two run, over one chain.
+        // STRICT: NO_SCTS and STALE fire and reject; exactly those two run, over one chain.
         val strict =
             Run.of(
                 honest,
                 policy(RevoktPolicy.STRICT),
-                snapshot(generation(trustClass = TrustClass.MIRROR)),
+                snapshot(generation(31 * DAY)),
                 StubEngine.always(CrliteQueryResult.NO_SCTS),
             )
         val s = strict.evaluate().verdict
-        assertEquals(setOf(Rule.NO_SCTS, Rule.UNSIGNED_DATA), recorders.filterValues { it.seen.isNotEmpty() }.keys)
+        assertEquals(setOf(Rule.NO_SCTS, Rule.STALE), recorders.filterValues { it.seen.isNotEmpty() }.keys)
         assertTrue(recorders.values.all { it.seen.size <= 1 })
         assertEquals(1, strict.chainsBuilt)
         assertIs<Verdict.Accepted>(s)
         assertEquals(
-            listOf(Rule.NO_SCTS, Rule.UNSIGNED_DATA),
+            listOf(Rule.NO_SCTS, Rule.STALE),
             s.findings.filterIsInstance<Finding.Exempted>().map { it.rule },
         )
     }
@@ -104,7 +103,6 @@ class ExemptionStageTest {
                 mapOf(Rule.REVOKED to recording, Rule.NOT_COVERED to recording),
                 strict.requiredDatasets,
                 strict.staleness,
-                strict.minTrustClassEntries,
                 strict.rollbackWindowMillis,
                 strict.clockSkewMillis,
                 strict.signedSourceFailingAfterMillis,
@@ -289,16 +287,16 @@ class ExemptionStageTest {
         assertIs<Verdict.Accepted>(outage)
         assertEquals(setOf(Rule.NO_DATA), outage.rules)
         assertEquals(listOf(Rule.NO_DATA), outage.findings.filterIsInstance<Finding.Exempted>().map { it.rule })
-        val mirror =
+        val old =
             Run.of(
                 honest,
                 policy,
-                snapshot(generation(40 * DAY, TrustClass.MIRROR)),
+                snapshot(generation(40 * DAY)),
                 StubEngine.always(CrliteQueryResult.NOT_ENROLLED),
             )
-        val m = mirror.evaluate().verdict
+        val m = old.evaluate().verdict
         assertIs<Verdict.Accepted>(m)
-        assertEquals(setOf(Rule.NOT_ENROLLED, Rule.STALE, Rule.UNSIGNED_DATA), m.rules)
+        assertEquals(setOf(Rule.NOT_ENROLLED, Rule.STALE), m.rules)
         val otherRoot = h.w.root("R2", "Other root")
         val otherIssuer = h.w.cert("I2", h.w.name("Other intermediate"), otherRoot.subject, signer = otherRoot.key)
         val otherLeaf =
