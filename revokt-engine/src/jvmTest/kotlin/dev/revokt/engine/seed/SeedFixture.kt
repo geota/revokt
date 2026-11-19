@@ -6,6 +6,7 @@ package dev.revokt.engine.seed
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.SeedSource
+import dev.revokt.SyncOutcome
 import dev.revokt.engine.fetch.json
 import dev.revokt.engine.seed.parse.SeedArchive
 import dev.revokt.engine.seed.parse.TestZip
@@ -23,6 +24,7 @@ import okio.ByteString
 import java.io.ByteArrayInputStream
 import java.security.PrivateKey
 import java.util.Base64
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -150,6 +152,32 @@ internal open class SeedFixture : CrliteSyncFixture() {
         assertNothingInstalled()
         return unreadable
     }
+
+    protected val root = "crlite/compat"
+    protected val updaterKey = "$root/updater.json"
+    protected val pointerKey = "$root/current"
+
+    /** Every key and its bytes, to show a failure left the store byte-identical. */
+    protected fun contents(): Map<String, List<Byte>> =
+        storage.inner.names().associateWith { checkNotNull(storage.inner.read(it)).toList() }
+
+    protected fun failed(
+        load: SeedLoad,
+        detail: String,
+        activated: Boolean = false,
+    ): SeedLoad.Failed {
+        val failed = assertIs<SeedLoad.Failed>(load, "$load")
+        assertEquals(SyncOutcome.STORE_FAILED, failed.outcome)
+        assertEquals(activated, failed.activated)
+        assertTrue(detail in failed.detail, "'${failed.detail}' does not say '$detail'")
+        return failed
+    }
+
+    /** A store holding the seed at [at] installed, live and pointed. */
+    protected fun installedAt(at: Long): String = installed(load(Seed(ts = at))).directory
+
+    /** Every key of [directory] and its bytes. */
+    protected fun files(directory: String): Map<String, List<Byte>> = contents().filterKeys { "/$directory/" in it }
 
     /** An empty snapshot again, as at a fresh `start()`, and an empty store unless [keepStore]. */
     protected fun reset(keepStore: Boolean = false) {

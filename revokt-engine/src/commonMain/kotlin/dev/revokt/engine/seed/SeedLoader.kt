@@ -352,6 +352,9 @@ internal class SeedLoader(
 
         private var installing = false
 
+        /** Whether this load counted a complete directory as rejected ([verifiesCounted]). */
+        private var rejected = false
+
         @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable, an OutOfMemoryError too.
         fun run(): SeedLoad =
             try {
@@ -617,10 +620,11 @@ internal class SeedLoader(
             val adoptable = candidates.firstOrNull { stored { verifiesCounted(it.key, seed) } }
             if (adoptable != null) {
                 stored {
-                    store.point(Pointer(adoptable.key, null))
-                    // The record read (an absent or malformed one replaced), its watermark raised to the adopted <ts>.
+                    // The record read (an absent or malformed one replaced), its watermark raised to the adopted <ts>,
+                    // before the flip: a failed flip then leaves an honest failure, and the next load adopts again.
                     val watermark = maxOf(stored.updater.watermarkMillis ?: Long.MIN_VALUE, adoptable.value)
                     store.writeUpdater(stored.updater.copy(watermarkMillis = watermark), now)
+                    store.point(Pointer(adoptable.key, null))
                 }
                 logger.safeLog(LogLevel.INFO, "${store.root}: adopted ${adoptable.key}, newer than the seed's $ts")
                 return SeedLoad.Adopted(adoptable.key, adoptable.value, storeFailures)
@@ -635,6 +639,7 @@ internal class SeedLoader(
         ): Boolean {
             val ok = verifies(directory, seed)
             if (!ok) {
+                rejected = true
                 storeFailures++
                 logger.safeLog(LogLevel.WARN, "${store.root}: $directory is complete but does not re-verify")
             }
@@ -752,8 +757,8 @@ internal class SeedLoader(
                     // name, so it is completed again from the verified seed, only its rotted files re-staged (#235's
                     // review: a valid seed always leaves a live generation behind). Never the one the engine serves.
                     if (live || verifiesCounted(directory, seed)) return true
+                    // Not staged: a failed load leaves it incomplete for the next one and never deletes it (#235).
                     store.reopen(directory, unloadable = true)
-                    staged = directory
                     return false
                 }
                 // The engine's live directory is never staged into while it is served, whatever its meta.json says.
@@ -761,7 +766,9 @@ internal class SeedLoader(
                     val counted = directory == stored.pointer?.live || directory == stored.pointer?.previous
                     fault("$directory is the engine's live generation, and its meta.json is not readable", counted)
                 }
-                staged = directory
+                // Rule (b) never deletes what it found: only a directory this load creates is deleted on a failure. One
+                // already there (an earlier load's reopened rotted directory, say) stays incomplete for the next.
+                if (directory !in store.directories) staged = directory
                 return false
             }
             val pointer = checkNotNull(stored.pointer)
@@ -802,7 +809,8 @@ internal class SeedLoader(
                 val name = GenerationNames.derive(r.attachment.filename)
                 stored {
                     if (!r.incremental) {
-                        if (store.putBlob(bytes) == BlobWrite.REWRITTEN) storeFailures++
+                        // A blob of a directory this load counted as rejected is that fault, counted once (#235).
+                        if (store.putBlob(bytes) == BlobWrite.REWRITTEN && !rejected) storeFailures++
                         blobs[name] = sha256
                     } else {
                         deltas[name] = sha256
@@ -904,8 +912,9 @@ internal class SeedLoader(
                 )
             installing = true
             val result = install(pending, engine, store, snapshot, publication, updated, logger)
-            // The install deleted its directory on a failure before activation, and keeps it after one.
-            staged = null
+            // Under heal the install deletes nothing: on a failure before activation this load deletes only a directory it
+            // staged afresh; after activation, or on success, the directory stays.
+            if (result is InstallResult.Failed && !result.activated) discard() else staged = null
             storeFailures += result.storeFailures
             return when (result) {
                 is InstallResult.Installed -> {

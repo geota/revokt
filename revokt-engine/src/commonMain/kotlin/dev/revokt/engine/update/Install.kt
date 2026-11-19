@@ -63,7 +63,8 @@ internal class PendingGeneration(
  * the install's own read of them for the new `previous` does not count them again: each store fault is counted once.
  * [heal] when the caller found no trustworthy pointer (rule (b) of the seed-load rule, lead 2026-11-16): a complete
  * directory of this generation's name is then held and installed as it stands when it is this generation, and one whose
- * `meta.json` is absent or does not read is this install's to complete, pointed or not.
+ * `meta.json` is absent or does not read is this install's to complete, pointed or not, and never deleted by it on a
+ * failure: the caller deletes only a directory it staged afresh.
  */
 internal class Publication(
     val fromSeed: Boolean,
@@ -256,7 +257,8 @@ private class Install(
             } else {
                 directory == liveDirectory() || directory in pointed() || unknown
             }
-        if (!held && existing !is StoreRead.Found) written = directory
+        // Under heal the caller owns its directory's cleanup: it never deletes one it reopened (#235's review).
+        if (!held && existing !is StoreRead.Found && !publication.heal) written = directory
         return held to existing
     }
 
