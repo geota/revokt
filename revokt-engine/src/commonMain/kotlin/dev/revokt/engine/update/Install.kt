@@ -74,12 +74,17 @@ internal class Publication(
 internal sealed interface InstallResult {
     val storeFailures: Int
 
-    /** [generationId] is live in the engine, published at [generationEpoch], and named by the pointer as `live`. */
+    /**
+     * [generationId] is live in the engine, published at [generationEpoch], and named by the pointer as `live`. [healed]
+     * is true when the pointer was malformed before this install, so the flip healed it: a heal is never pruned after,
+     * since the damaged pointer may have named any directory (#256); the next install over a valid pointer prunes.
+     */
     class Installed(
         val directory: String,
         val generationId: String,
         val generationEpoch: Long,
         override val storeFailures: Int,
+        val healed: Boolean,
     ) : InstallResult {
         override fun toString(): String = "Installed($generationId in $directory at epoch $generationEpoch)"
     }
@@ -148,6 +153,9 @@ private class Install(
     /** The directory of the generation the engine held live when this install began, before its publish. */
     private var liveBefore: String? = null
 
+    /** Whether the pointer was malformed when this install began, so its flip heals it ([InstallResult.Installed.healed]). */
+    private var healing = false
+
     /** The directory this install wrote into, deleted on a failure before activation. */
     private var written: String? = null
     private var prepared: PreparedGeneration? = null
@@ -205,7 +213,7 @@ private class Install(
         stage = SyncStage.STORE
         store.point(Pointer(directory, previous(directory)))
         updater?.let { store.writeUpdater(it, publication.nowMillis) }
-        return InstallResult.Installed(directory, meta.generationId, epoch, storeFailures)
+        return InstallResult.Installed(directory, meta.generationId, epoch, storeFailures, healing)
     }
 
     /**
@@ -221,7 +229,8 @@ private class Install(
         // #236, fail closed: a malformed pointer may name a directory whose meta.json is present, so it is held: compared,
         // reused when it is this generation, never reopened, rewritten or deleted. The flip then writes a pointer that
         // reads. Only a directory with no meta.json is staged.
-        val unknown = store.pointer() is StoreRead.Malformed && existing !is StoreRead.Absent
+        healing = store.pointer() is StoreRead.Malformed
+        val unknown = healing && existing !is StoreRead.Absent
         val held = directory == liveDirectory() || directory in pointed() || unknown
         if (!held && existing !is StoreRead.Found) written = directory
         return held to existing
@@ -357,40 +366,48 @@ private class Install(
         sourceTimestampMillis - publication.clockSkewMillis > publication.nowMillis
 
     /**
-     * The pointer's new `previous`: the first of the old `live` and `previous` that is another complete generation (spec
-     * §6.5), else none. A malformed pointer, and a pointed directory whose
-     * `meta.json` is missing or malformed, each count a store failure. Beside a malformed pointer, the candidate is the
-     * generation the engine holds live, when it is another that qualifies (#236): a running loader keeps its fallback,
-     * while a fresh one has none.
+     * The pointer's new `previous`: the first of the generation the engine served before this install, then the old
+     * `live` and `previous`, that is another complete generation that reads back ([qualifies], spec §6.5), else none.
+     * The served one comes first so that a flip that failed after activation, which left the engine serving a
+     * generation `current` does not name, never loses it to the next install's prune (#249: never delete what is
+     * served); so a running loader keeps its fallback beside an absent or malformed pointer too (#236), while a fresh one
+     * has none. A malformed pointer, and each candidate that does not qualify, count a store failure. A heal (the flip
+     * beside a malformed pointer) is not pruned after (#256).
      */
     private fun previous(directory: String): String? {
-        val pointer =
+        val pointed =
             when (val read = store.pointer()) {
                 StoreRead.Absent -> {
-                    return null
+                    emptyList()
                 }
 
                 StoreRead.Malformed -> {
-                    // #236: a running loader keeps the generation its engine held as the fallback; a fresh one has none.
                     storeFailures++
-                    return liveBefore?.takeIf { it != directory && qualifies(it) }
+                    emptyList()
                 }
 
                 is StoreRead.Found -> {
-                    read.value
+                    listOfNotNull(read.value.live, read.value.previous)
                 }
             }
-        return listOfNotNull(pointer.live, pointer.previous).filter { it != directory }.firstOrNull(::qualifies)
+        // Every candidate is read, once, so a pointed directory that does not read counts its store failure even when
+        // an earlier candidate qualifies.
+        val candidates = (listOfNotNull(liveBefore) + pointed).distinct().filter { it != directory }
+        return candidates.filter(::qualifies).firstOrNull()
     }
 
     /**
-     * Whether [candidate] is a complete generation, as a `previous` must be; one whose `meta.json` is missing or
-     * malformed counts a store failure.
+     * Whether [candidate] is a complete generation, as a `previous` must be. Complete is what loading it needs
+     * ([StoreLayout.readGeneration]: `meta.json`, `index.bin`, `records.json`, every file it names, each blob
+     * re-hashed), so the fallback is always one that can load (#246, the #247 review). One whose `meta.json` is missing
+     * or malformed, or that does not read back, counts a store failure.
      */
     private fun qualifies(candidate: String): Boolean {
-        if (store.readMeta(candidate) is StoreRead.Found) return true
-        storeFailures++
-        return false
+        if (store.readMeta(candidate) !is StoreRead.Found || store.readGeneration(candidate) == null) {
+            storeFailures++
+            return false
+        }
+        return true
     }
 
     /**

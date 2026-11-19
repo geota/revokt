@@ -175,10 +175,23 @@ class StoreJsonTest {
             assertEquals(pointer, PointerJson.read(PointerJson.write(pointer)))
         }
         assertEquals("""{"live":"$live"}""", text(PointerJson.write(Pointer(live, null))))
-        assertEquals(
-            Pointer(live, null),
-            PointerJson.read("""{"live":"$live","previous":null,"next":1}""".encodeToByteArray()),
-        )
+        assertEquals(Pointer(live, null), PointerJson.read("""{"live":"$live","previous":null}""".encodeToByteArray()))
+    }
+
+    @Test
+    fun `a pointer with an unknown or a duplicate member reads as nothing (#246)`() {
+        val live = GenerationNames.directory(2, "b")
+        val previous = GenerationNames.directory(1, "a")
+        for (bad in listOf(
+            // A flipped byte in the member name: a lenient reader would read Pointer(live, null).
+            """{"live":"$live","p|evious":"$previous"}""",
+            """{"live":"$live","|revious":"$previous"}""",
+            """{"live":"$live","previous":null,"next":1}""",
+            """{"live":"$live","previous":"$previous","live":"$live"}""",
+            """{"live":"$live","live":"$live"}""",
+        )) {
+            assertNull(PointerJson.read(bad.encodeToByteArray()), bad)
+        }
     }
 
     @Test

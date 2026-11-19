@@ -275,7 +275,8 @@ internal class InstallTest : InstallFixture() {
         val g2 = pending("g2", timestamp = 1_792_587_631_205)
         val u = failed(install(g2))
         assertEquals(true, u.activated)
-        assertEquals(StoreRead.Found(Pointer(g2.meta.directory, null)), store.pointer())
+        // g1, which the engine served although no pointer named it, is the fallback (#249).
+        assertEquals(StoreRead.Found(Pointer(g2.meta.directory, p.meta.directory)), store.pointer())
     }
 
     @Test
@@ -542,6 +543,17 @@ internal class InstallTest : InstallFixture() {
         assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
         val g3 = dir(install(pending("g3", timestamp = 2_000_000_000_001)))
         assertEquals(StoreRead.Found(Pointer(g3, g2)), store.pointer())
+    }
+
+    @Test
+    fun `a pointed generation that does not read back is no previous, counted (#246)`() {
+        val g1 = assertIs<InstallResult.Installed>(install(pending("g1"))).directory
+        // meta.json reads, records.json is gone: the loader could not load g1, so it is no fallback.
+        storage.inner.delete("crlite/compat/$g1/records.json")
+        assertIs<StoreRead.Found<*>>(store.readMeta(g1))
+        val r = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000)))
+        assertEquals(1, r.storeFailures)
+        assertEquals(StoreRead.Found(Pointer(r.directory, null)), store.pointer())
     }
 
     @Test

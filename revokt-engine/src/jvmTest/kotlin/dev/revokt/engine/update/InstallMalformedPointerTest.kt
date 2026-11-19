@@ -34,6 +34,21 @@ internal class InstallMalformedPointerTest : InstallFixture() {
     }
 
     @Test
+    fun `a pointer whose previous member name is damaged is malformed, so the generation it named is held (#246)`() {
+        val g1 = assertIs<InstallResult.Installed>(install(pending("g1"))).directory
+        val g2 = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000))).directory
+        storage.inner.write("crlite/compat/current", "{\"live\":\"$g2\",\"p|evious\":\"$g1\"}".encodeToByteArray())
+        assertEquals(StoreRead.Malformed, store.pointer())
+        val meta = checkNotNull(storage.inner.read("crlite/compat/$g1/meta.json"))
+        storage.writes.clear()
+        // g1's publication served again to a fresh loader: g1 is reused as it stands, never reopened as an orphan.
+        val r = install(pending("g1"), engine, store, SnapshotRef(empty), publication, null, logger)
+        assertEquals(g1, assertIs<InstallResult.Installed>(r).directory)
+        assertEquals(listOf("current"), storage.writes)
+        assertTrue(meta.contentEquals(storage.inner.read("crlite/compat/$g1/meta.json")))
+    }
+
+    @Test
     fun `beside a malformed pointer a complete directory holding another generation fails and stays`() {
         val dir = assertIs<InstallResult.Installed>(install(pending())).directory
         storage.inner.write("crlite/compat/current", "{".encodeToByteArray())

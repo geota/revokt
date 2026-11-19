@@ -5,7 +5,7 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
-### Changes in revision 60 (in progress)
+### Changes in revision 60 (the trust-class cut of #218, and #246)
 
 - **#218, the trust-class cut:**
   - No MIRROR or SYSTEM source. `TrustClass`, `UNSIGNED_DATA`, `minTrustClass`, the bootstrap-only rule,
@@ -24,6 +24,8 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
   - §10: the bootstrap-only and mirror bullets.
   - §11: the mirror and system-cache deliverables.
   - The test plan: data-path fixture (c) and the MIRROR, SYSTEM and `UNSIGNED_DATA` items.
+- **#246:** §6.5 reads `current` strictly (an unknown or duplicate member is malformed); `previous` must read back as
+  the loader reads it, `records.json` included; a heal flip is not followed by a prune (the lead's decision on r256).
 
 ### Changes in revision 59 (the spec split of #216, and the deltas of #209, #234, #242 and #244, 2026-11-18)
 

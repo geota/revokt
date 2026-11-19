@@ -98,7 +98,9 @@ tests; **live checks** are informational.
   falls to `previous`, `storeFailures = 1`; a crash before `meta.json` leaves an incomplete directory
   that prune deletes; a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → migrates within one `READONLY_POLL_INTERVAL`, `storageFallback = false`, the in-memory generation on disk; an empty
   directory → `storeFailures = 0`; a `meta.json` without its signed members, or without `records.json` beside it → no generation; a `meta.json` with the
-  other channel → no generation; two instances on one directory in one process → the second throws;
+  other channel → no generation; a `current` with an unknown or a duplicate member → malformed, so the generation its
+  damaged `previous` member named is held, and a fresh loader's heal flip beside it prunes nothing, while the next
+  install over the healed pointer prunes; a pointed generation without `records.json` → no `previous`, counted; two instances on one directory in one process → the second throws;
   a second JVM process on a held lock → read-only start within 1 s, `sync()` → `STORE_LOCKED`, the
   directory listing is byte-identical before and after its start even with a newer seed configured
   (served in memory, `fromSeed = true`), it observes the first process's install within

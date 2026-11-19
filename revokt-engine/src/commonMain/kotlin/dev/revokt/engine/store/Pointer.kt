@@ -27,7 +27,15 @@ internal object PointerJson {
             "previous" to StoreFields.string(pointer.previous),
         )
 
-    /** The pointer in [bytes], or null when it is malformed. */
+    /**
+     * The pointer in [bytes], or null when it is malformed: not a JSON object of `live` and an optional `previous`, with
+     * no other member and none twice (#246). Read strictly, since only this engine writes it and a member name damaged
+     * into one a lenient reader skips would read as a pointer that no longer names its `previous`, which the next sync
+     * would then reopen as an orphan; `Malformed` takes the heal path instead (#236, #242).
+     */
     fun read(bytes: ByteArray): Pointer? =
-        StoreFields.decodeOrNull(bytes) { f -> Pointer(f.string("live"), f.optString("previous")) }
+        StoreFields.decodeOrNull(bytes) { f ->
+            f.only("live", "previous")
+            Pointer(f.string("live"), f.optString("previous"))
+        }
 }
