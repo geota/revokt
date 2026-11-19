@@ -182,6 +182,14 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
     }
 
     @Test
+    fun `a snapshot with no CRLite entry is no generation, so the watermark is not read`() {
+        val server = older(installedFirst())
+        snapshot.publish(GenerationSnapshot(0, emptyMap(), null))
+        sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
+        assertEquals("$older/${delta.id}", live().generationId)
+    }
+
+    @Test
     fun `with no generation ever installed a stored watermark far ahead is not read`() {
         store.writeUpdater(UpdaterRecord(watermarkMillis = ts + 30 * day), ts)
         val now = ts + hour

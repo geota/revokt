@@ -178,6 +178,21 @@ internal class CrliteDeltaBaseTest : CrliteDeltaFixture() {
     }
 
     @Test
+    fun `a pointed records json of another shape is a store failure, and the sync fetches in full`() {
+        for (shape in listOf("[]", "{}", """{"data":{}}""", """{"data":[1]}""")) {
+            val server = installedFirst()
+            storage.inner.write("crlite/compat/$directory1/records.json", shape.encodeToByteArray())
+            next(server, listOf(full, delta, delta2))
+            val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+            assertEquals(1, run.storeFailures, shape)
+            assertEquals(server.changesetUrl, server.fetcher.requests[1].url, shape)
+            // Back to the first generation for the next shape: a fresh store is what installedFirst expects.
+            storage.inner.names().forEach { storage.inner.delete(it) }
+            freshLoader()
+        }
+    }
+
+    @Test
     fun `a pointed records json that does not read is a store failure, and the sync fetches in full`() {
         val server = installedFirst()
         storage.inner.write("crlite/compat/$directory1/records.json", "{".encodeToByteArray())
