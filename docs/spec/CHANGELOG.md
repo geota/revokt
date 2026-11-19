@@ -5,6 +5,10 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 60 (the seed loader of #138, 2026-11-19)
+
+- **#138 (#235):** §6.5 states the seed-load rule (a)/(b) with adopt, never-prune and never-delete, the `seed.json` encoding, the zip the loader reads, the `signature` cap of 64 KiB and the 256 MiB archive cap, the canonical `records.json` and the seed's generation id; §5.1's loader task cites the rule; the test plan's (f) replaces the `MIRROR` eviction rows with the rule's rows.
+
 ### Changes in revision 59 (the spec split of #216, and the deltas of #209, #234, #242 and #244, 2026-11-18)
 
 - **The split.** `revokt-spec.md` is the normative core. §9 is now `test-plan.md` (section numbers kept), with the
