@@ -394,6 +394,32 @@ class StoreLayoutTest {
     }
 
     @Test
+    fun `prune keeps the files directly under the channel and deletes a stray directory, an empty-named one too`() {
+        val directory = install()
+        layout.point(Pointer(directory, null))
+        storage.write("crlite/compat/updater.json", byteArrayOf())
+        // A storage may list a key no engine writes: "crlite/compat//stray" sits in a directory named "", which is no
+        // generation the pointer names, so prune deletes it, as it does any other stray directory, while `current` and
+        // `updater.json`, directly under the channel, stay.
+        val listing =
+            object : RevoktStorage by storage {
+                val gone = mutableListOf<String>()
+
+                override fun names(): Set<String> = storage.names() + "crlite/compat//stray" - gone
+
+                override fun delete(name: String) {
+                    if (name == "crlite/compat//stray") gone += name else storage.delete(name)
+                }
+            }
+        val strays = StoreLayout(listing, Dataset.CRLITE, CrliteChannel.COMPAT)
+        assertEquals(1, strays.prune())
+        assertEquals(listOf("crlite/compat//stray"), listing.gone)
+        assertNotNull(storage.read("crlite/compat/current"))
+        assertNotNull(storage.read("crlite/compat/updater.json"))
+        assertNotNull(strays.readGeneration(directory))
+    }
+
+    @Test
     fun `prune with no pointer deletes nothing`() {
         install()
         storage.write("crlite/compat/updater.json", byteArrayOf())
