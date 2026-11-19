@@ -18,7 +18,6 @@ import dev.revokt.SignatureVerifier
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncResult
 import dev.revokt.SyncStage
-import dev.revokt.TrustClass
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.api.ClubcardFormatException
@@ -128,7 +127,8 @@ internal class CrliteSync(
      *    delta staged as a file of the generation directory, copied without a fetch from a pointed generation whose file
      *    of that name re-hashes to it, as Firefox and upki reuse a filter on disk whose hash matches.
      * 10. [buildIndex], then the decision on the coverage ([SyncRules.decide]), then [install] in §6.5's order, which
-     *    writes `updater.json` after the pointer flip; on success the store is pruned to what the pointer names.
+     *    writes `updater.json` after the pointer flip; on success the store is pruned to what the pointer names,
+     *    unless the flip healed a malformed pointer (#256).
      *
      * Every outcome but `INSTALLED` writes `updater.json` itself ([UpdaterTransitions.after]) and deletes any directory
      * this sync staged: the cursor, `lastVerified*` and the watermark advance only through an install. Every throwable is
@@ -429,7 +429,6 @@ internal class CrliteSync(
                 GenerationMeta(
                     dataset = Dataset.CRLITE,
                     channel = channel,
-                    trustClass = TrustClass.SIGNED,
                     generationId = generationId,
                     format = format,
                     freshness = Freshness.RECORD_LAST_MODIFIED,
@@ -471,7 +470,8 @@ internal class CrliteSync(
                     val installed =
                         result(SyncOutcome.INSTALLED, null, warnings, mapOf(Dataset.CRLITE to result.generationId))
                     done = installed
-                    reads.prune(result.directory)
+                    // A heal is never pruned: the malformed pointer it replaced may have named any directory (#256).
+                    if (!result.healed) reads.prune(result.directory)
                     installed
                 }
 
@@ -736,16 +736,15 @@ internal class CrliteSync(
             /**
              * The pointed generation's verified records, which a `_since` changeset is merged with (spec §6.5: "so a `_since`
              * changeset can be verified against it (tombstones merged) without a full re-fetch"), or null when there is none
-             * to merge with: no pointer, no complete `SIGNED` generation, or a `records.json` that does not read.
+             * to merge with: no pointer, no complete generation, or a `records.json` that does not read.
              *
              * Only the last counts a store failure here: it is the one store fault no other step of the sync reads. A
              * malformed pointer, or a pointed `meta.json` that is malformed, is counted by the install when it reads the
-             * pointer for its new `previous` (`Install.previous`), so counting it here too would count it twice; and a
-             * pointed generation that is not `SIGNED` is not a fault (a mirror's has no `records.json`).
+             * pointer for its new `previous` (`Install.previous`), so counting it here too would count it twice.
              */
             fun deltaBase(): List<JsonObject>? {
                 val live = (store.pointer() as? StoreRead.Found)?.value?.live ?: return null
-                if (store.meta(live)?.trustClass != TrustClass.SIGNED) return null
+                store.meta(live) ?: return null
                 val records = store.file(live, StoreLayout.RECORDS)?.let(::recordsOf)
                 if (records == null) {
                     storeFailures++
@@ -768,9 +767,9 @@ internal class CrliteSync(
             /** The dataset's live generation as the snapshot publishes it, for [SyncRules]; null when it has none. */
             fun liveGeneration(): LiveGeneration? {
                 val live = snapshot.snapshot.datasets[Dataset.CRLITE] ?: return null
-                val trustClass = live.trustClass ?: return null
+                live.generationId ?: return null
                 val timestamp = live.sourceTimestampMillis ?: return null
-                return LiveGeneration(trustClass, timestamp, live.maxCoverageMillis)
+                return LiveGeneration(timestamp, live.maxCoverageMillis)
             }
 
             /** The directory of the generation the snapshot publishes live, or null. */

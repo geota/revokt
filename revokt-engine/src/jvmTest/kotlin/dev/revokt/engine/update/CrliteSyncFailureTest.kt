@@ -18,7 +18,6 @@ import dev.revokt.RevoktStorage
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
-import dev.revokt.TrustClass
 import dev.revokt.VerifyResult
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.fetch.FetchLimits

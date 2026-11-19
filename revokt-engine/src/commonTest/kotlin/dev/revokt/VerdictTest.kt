@@ -71,8 +71,8 @@ class VerdictTest {
 
     @Test
     fun `rules iterate in precedence order whatever the insertion order`() {
-        val given = linkedSetOf(Rule.UNSIGNED_DATA, Rule.NOT_ENROLLED, Rule.REVOKED, Rule.NO_DATA, Rule.STALE)
-        val expected = listOf(Rule.REVOKED, Rule.NO_DATA, Rule.NOT_ENROLLED, Rule.STALE, Rule.UNSIGNED_DATA)
+        val given = linkedSetOf(Rule.STALE, Rule.NOT_ENROLLED, Rule.REVOKED, Rule.NO_DATA)
+        val expected = listOf(Rule.REVOKED, Rule.NO_DATA, Rule.NOT_ENROLLED, Rule.STALE)
         val accepted = accepted().newBuilder().rules(given).build()
         val rejected =
             rejected()

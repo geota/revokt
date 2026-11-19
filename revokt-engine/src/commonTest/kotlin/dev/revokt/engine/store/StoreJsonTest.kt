@@ -5,7 +5,6 @@ package dev.revokt.engine.store
 
 import dev.revokt.FilterFormat
 import dev.revokt.RevoktLimits
-import dev.revokt.TrustClass
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -33,7 +32,7 @@ class StoreJsonTest {
     }
 
     @Test
-    fun `a SIGNED meta json round-trips with every member`() {
+    fun `a meta json round-trips with every member`() {
         val meta = StoreFixtures.meta(blobs = blobs)
         val bytes = MetaJson.write(meta)
         assertEquals(meta, MetaJson.read(bytes))
@@ -43,7 +42,7 @@ class StoreJsonTest {
                 """"collection":"security-state/cert-revocations","dataset":"CRLITE","format":"V3",""" +
                 """"freshness":"RECORD_LAST_MODIFIED","generationId":"g1","metaVersion":1,""" +
                 """"signature":"${"09".repeat(96)}","signerLeafSha256":"${"07".repeat(32)}",""" +
-                """"sourceTimestampMillis":1762430400000,"trustClass":"SIGNED"}""",
+                """"sourceTimestampMillis":1762430400000}""",
             text(bytes),
         )
     }
@@ -53,7 +52,7 @@ class StoreJsonTest {
         // Spec §7.1 (the maintainer's decision on #163): a P-256 leaf signs a 64-byte pair, a P-521 one 132 bytes.
         for (size in listOf(64, 96, 132)) {
             val base = StoreFixtures.meta(blobs = blobs)
-            val signed = checkNotNull(base.signed).copy(signature = ByteArray(size) { 9 }.toByteString())
+            val signed = base.signed.copy(signature = ByteArray(size) { 9 }.toByteString())
             val meta = base.copy(signed = signed)
             assertEquals(meta, MetaJson.read(MetaJson.write(meta)))
         }
@@ -72,22 +71,13 @@ class StoreJsonTest {
     }
 
     @Test
-    fun `layout unit for data-path (e) (not the fixture) - a MIRROR meta json reloads as MIRROR`() {
-        val meta = StoreFixtures.meta(trustClass = TrustClass.MIRROR, blobs = blobs)
-        val read = MetaJson.read(MetaJson.write(meta))
-        assertEquals(meta, read)
-        assertEquals(TrustClass.MIRROR, read?.trustClass)
-        assertNull(read?.signed)
-        assertNull(read?.collection)
-    }
-
-    @Test
-    fun `a MIRROR meta json that carries signed members still reloads as MIRROR`() {
-        val signed = MetaJson.write(StoreFixtures.meta(blobs = blobs))
-        val relabelled = edited(signed, "\"trustClass\":\"SIGNED\"", "\"trustClass\":\"MIRROR\"")
-        val read = MetaJson.read(relabelled)
-        assertEquals(TrustClass.MIRROR, read?.trustClass)
-        assertNull(read?.signed)
+    fun `a meta json without its signed members is malformed`() {
+        val bytes = MetaJson.write(StoreFixtures.meta(blobs = blobs))
+        for (member in listOf("changesetTimestampMillis", "signerLeafSha256", "signature")) {
+            val text = text(bytes)
+            val stripped = Regex(""""$member":[^,}]*,?""").replace(text, "").replace(",}", "}")
+            assertNull(MetaJson.read(stripped.encodeToByteArray()), member)
+        }
     }
 
     @Test
@@ -104,8 +94,6 @@ class StoreJsonTest {
         for ((from, to) in listOf(
             "\"metaVersion\":1" to "\"metaVersion\":2",
             "\"metaVersion\":1" to "\"metaVersion\":\"1\"",
-            "\"trustClass\":\"SIGNED\"" to "\"trustClass\":\"signed\"",
-            "\"trustClass\":\"SIGNED\"" to "\"trustClass\":\"FUTURE\"",
             "\"dataset\":\"CRLITE\"" to "\"dataset\":0",
             "\"format\":\"V3\"" to "\"format\":\"V9\"",
             "\"freshness\":\"RECORD_LAST_MODIFIED\"" to "\"freshness\":null",
@@ -157,10 +145,6 @@ class StoreJsonTest {
             )
         }
         assertFailsWith<IllegalArgumentException> { StoreFixtures.meta(sourceTimestampMillis = -1) }
-        assertFailsWith<IllegalArgumentException> {
-            StoreFixtures.meta(TrustClass.MIRROR).copy(signed = StoreFixtures.meta().signed)
-        }
-        assertFailsWith<IllegalArgumentException> { StoreFixtures.meta().copy(signed = null) }
         for (size in listOf(0, 1, 95, 97)) {
             assertFailsWith<IllegalArgumentException>("$size") {
                 SignedMeta(1, ByteArray(32).toByteString(), ByteArray(size).toByteString())
@@ -191,10 +175,23 @@ class StoreJsonTest {
             assertEquals(pointer, PointerJson.read(PointerJson.write(pointer)))
         }
         assertEquals("""{"live":"$live"}""", text(PointerJson.write(Pointer(live, null))))
-        assertEquals(
-            Pointer(live, null),
-            PointerJson.read("""{"live":"$live","previous":null,"next":1}""".encodeToByteArray()),
-        )
+        assertEquals(Pointer(live, null), PointerJson.read("""{"live":"$live","previous":null}""".encodeToByteArray()))
+    }
+
+    @Test
+    fun `a pointer with an unknown or a duplicate member reads as nothing (#246)`() {
+        val live = GenerationNames.directory(2, "b")
+        val previous = GenerationNames.directory(1, "a")
+        for (bad in listOf(
+            // A flipped byte in the member name: a lenient reader would read Pointer(live, null).
+            """{"live":"$live","p|evious":"$previous"}""",
+            """{"live":"$live","|revious":"$previous"}""",
+            """{"live":"$live","previous":null,"next":1}""",
+            """{"live":"$live","previous":"$previous","live":"$live"}""",
+            """{"live":"$live","live":"$live"}""",
+        )) {
+            assertNull(PointerJson.read(bad.encodeToByteArray()), bad)
+        }
     }
 
     @Test
