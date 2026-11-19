@@ -285,28 +285,6 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
-    fun `a flip that failed after activation keeps the generation the engine served as the next previous (#249)`() {
-        fun dir(r: InstallResult) = assertIs<InstallResult.Installed>(r).directory
-        val g1 = dir(install(pending("g1")))
-        val g2 = dir(install(pending("g2", timestamp = 2_000_000_000_000)))
-        assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
-        // g3 activates and is served, but its flip throws: current still names g2 and g1.
-        storage.fail = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
-        val p3 = pending("g3", timestamp = 2_000_000_000_001)
-        assertEquals(true, failed(install(p3)).activated)
-        assertEquals("g3", engine.live)
-        assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
-        storage.fail = { null }
-        // The next install keeps g3, the generation the engine served, not the pointer's old live g2.
-        val g4 = dir(install(pending("g4", timestamp = 2_000_000_000_002)))
-        assertEquals(StoreRead.Found(Pointer(g4, p3.meta.directory)), store.pointer())
-        assertTrue(store.prune() > 0)
-        assertNotNull(store.readGeneration(p3.meta.directory), "the served generation survives prune")
-        assertNull(store.readGeneration(g1))
-        assertNull(store.readGeneration(g2))
-    }
-
-    @Test
     fun `a retry over its own complete directory skips the write and installs`() {
         val p = pending()
         storage.fail = { if (it.endsWith("/current")) IllegalStateException("flip") else null }

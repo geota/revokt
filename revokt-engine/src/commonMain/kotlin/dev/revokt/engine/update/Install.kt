@@ -406,8 +406,8 @@ private class Install(
                     listOfNotNull(read.value.live, read.value.previous)
                 }
             }
-        // Every candidate is read, so a pointed directory that does not read counts its store failure even when the
-        // served generation comes first.
+        // Every candidate is read, once, so a pointed directory that does not read counts its store failure even when
+        // an earlier candidate qualifies.
         val candidates = (listOfNotNull(liveBefore) + pointed).distinct().filter { it != directory }
         return candidates.filter(::qualifies).firstOrNull()
     }
