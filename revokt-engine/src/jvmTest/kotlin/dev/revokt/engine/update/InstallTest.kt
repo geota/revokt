@@ -553,6 +553,16 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
+    fun `a lower-class pointed generation is passed over on its class, before it is read, so it counts nothing`() {
+        val g1 = assertIs<InstallResult.Installed>(install(pending("g1", TrustClass.MIRROR))).directory
+        // g1 would not read back either; its class rules it out first, so that is never asked.
+        storage.inner.delete("crlite/compat/$g1/index.bin")
+        val r = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000)))
+        assertEquals(0, r.storeFailures)
+        assertEquals(StoreRead.Found(Pointer(r.directory, null)), store.pointer())
+    }
+
+    @Test
     fun `a pointed generation that does not read back is no previous, counted (#246)`() {
         val g1 = assertIs<InstallResult.Installed>(install(pending("g1"))).directory
         // meta.json reads, records.json is gone: the loader could not load g1, so it is no fallback.

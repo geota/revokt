@@ -80,12 +80,17 @@ internal class Publication(
 internal sealed interface InstallResult {
     val storeFailures: Int
 
-    /** [generationId] is live in the engine, published at [generationEpoch], and named by the pointer as `live`. */
+    /**
+     * [generationId] is live in the engine, published at [generationEpoch], and named by the pointer as `live`. [healed]
+     * is true when the pointer was malformed before this install, so the flip healed it: a heal is never pruned after,
+     * since the damaged pointer may have named any directory (#256); the next install over a valid pointer prunes.
+     */
     class Installed(
         val directory: String,
         val generationId: String,
         val generationEpoch: Long,
         override val storeFailures: Int,
+        val healed: Boolean,
     ) : InstallResult {
         override fun toString(): String = "Installed($generationId in $directory at epoch $generationEpoch)"
     }
@@ -153,6 +158,9 @@ private class Install(
 
     /** The directory of the generation the engine held live when this install began, before its publish. */
     private var liveBefore: String? = null
+
+    /** Whether the pointer was malformed when this install began, so its flip heals it ([InstallResult.Installed.healed]). */
+    private var healing = false
 
     /** The directory this install wrote into, deleted on a failure before activation. */
     private var written: String? = null
@@ -223,7 +231,7 @@ private class Install(
         stage = SyncStage.STORE
         store.point(Pointer(directory, previous(directory)))
         updater?.let { store.writeUpdater(it, publication.nowMillis) }
-        return InstallResult.Installed(directory, meta.generationId, epoch, storeFailures)
+        return InstallResult.Installed(directory, meta.generationId, epoch, storeFailures, healing)
     }
 
     /**
@@ -239,7 +247,8 @@ private class Install(
         // #236, fail closed: a malformed pointer may name a directory whose meta.json is present, so it is held: compared,
         // reused when it is this generation, never reopened, rewritten or deleted. The flip then writes a pointer that
         // reads. Only a directory with no meta.json is staged.
-        val unknown = store.pointer() is StoreRead.Malformed && existing !is StoreRead.Absent
+        healing = store.pointer() is StoreRead.Malformed
+        val unknown = healing && existing !is StoreRead.Absent
         val held = directory == liveDirectory() || directory in pointed() || unknown
         if (!held && existing !is StoreRead.Found) written = directory
         return held to existing
@@ -386,9 +395,8 @@ private class Install(
      * The pointer's new `previous`: the first of the old `live` and `previous` that is another complete generation of
      * the same or a higher trust class that reads back ([qualifies], spec §6.5), else none. A malformed pointer, and a
      * pointed directory that does not qualify for a reason other than its class, each count a store failure. Beside a
-     * malformed pointer, the candidate is the
-     * generation the engine holds live, when it is another that qualifies (#236): a running loader keeps its fallback,
-     * while a fresh one has none.
+     * malformed pointer, the candidate is the generation the engine holds live, when it is another that qualifies
+     * (#236): a running loader keeps its fallback, while a fresh one has none, and its heal is not pruned (#256).
      */
     private fun previous(directory: String): String? {
         val pointer =
@@ -419,7 +427,6 @@ private class Install(
     private fun qualifies(candidate: String): Boolean {
         val stored = store.readMeta(candidate)
         if (stored !is StoreRead.Found) {
-            // As in the pointer's branch: a candidate whose meta.json is missing or malformed is a store failure.
             storeFailures++
             return false
         }
