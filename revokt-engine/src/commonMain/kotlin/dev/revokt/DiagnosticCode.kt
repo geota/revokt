@@ -20,7 +20,7 @@ public enum class DiagnosticCode {
     /** V: a required dataset with a local data source and no fetching source. */
     NO_FETCHING_SOURCE,
 
-    /** sync: an over-cap built index (§3.2), an index-name collision (§6.5) or a manifest's names (§7.3). */
+    /** sync: an over-cap built index (§3.2) or an index-name collision (§6.5). */
     INDEX_INCONSISTENT,
 
     /** S: the store was migrated (§6.5). */
@@ -104,7 +104,7 @@ public enum class DiagnosticCode {
     /** R: an Android runtime with a `platformTrust` that is not `AndroidPlatformTrust`. */
     PLATFORM_TRUST_MISMATCH,
 
-    /** sync: a body, record count or manifest above half its `RevoktLimits` constant, or over the cap (§5.1). */
+    /** sync: a body or record count above half its `RevoktLimits` constant, or over the cap (§5.1). */
     CAP_NEAR_LIMIT,
 
     /** sync: a `FAILED`, `STORE_FAILED` or `CLOCK_SKEW` sync, with the cause. */

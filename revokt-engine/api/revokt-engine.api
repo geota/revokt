@@ -602,7 +602,6 @@ public final class dev/revokt/RevoktLimits {
 	public static final field MAX_EXPLORED I
 	public static final field MAX_FILTER_BYTES J
 	public static final field MAX_JSON_BYTES J
-	public static final field MAX_MANIFEST_ENTRIES I
 	public static final field MAX_PRESENTED I
 	public static final field MAX_PRESENTED_BYTES J
 	public static final field MAX_RELATED_PER_LEVEL I

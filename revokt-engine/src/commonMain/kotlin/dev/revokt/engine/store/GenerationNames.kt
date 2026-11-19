@@ -32,9 +32,9 @@ internal object GenerationNames {
         name.length in 1..MAX_SOURCE_FILENAME && name != "." && name != ".." && name.all(StoreKeys::isNameChar)
 
     /**
-     * The file's name in a generation for a §6.3-checked attachment or §7.3-checked manifest [filename]: [filename]
-     * itself when it is a C2SP filename (at most 32 bytes), otherwise its first 15 characters, `-` and the first 16
-     * lowercase hex characters of the SHA-256 of its ASCII bytes, 32 characters in all. Never the attachment's hash.
+     * The file's name in a generation for a §6.3-checked attachment [filename]: [filename] itself when it is a C2SP
+     * filename (at most 32 bytes), otherwise its first 15 characters, `-` and the first 16 lowercase hex characters of the
+     * SHA-256 of its ASCII bytes, 32 characters in all. Never the attachment's hash.
      */
     fun derive(filename: String): String {
         require(isSourceFilename(filename)) { "'$filename' is not a source filename" }
