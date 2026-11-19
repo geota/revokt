@@ -24,6 +24,25 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
   - §4: `build()` refuses a single-label `allowedDomains` entry.
   - §6.5: the 256 MiB seed archive cap is kept, its basis restated for 1,024 records; a larger archive is refused
     whole, never truncated.
+- **#219:** every fetch goes through the platform's trust manager, or the consumer's own client's. The removals:
+  - `FetcherTls`, `HttpFetcher.Factory` (the `http` builder takes an `HttpFetcher`), `fetcherDelegate`,
+    `fetcherTrustManager` and its per-source instances;
+  - `SyncOutcome.BLOCKED_BY_SELF`, `SyncStage.FETCHER_TRUST`, and `SyncResult`'s `blockedSource`,
+    `blockedChainSha256` and `blockedLeafSerial`;
+  - `FEED_HOST_REVOKED`, `FETCHER_TRUST_UNAVAILABLE`, `FEED_HOST_HOLD`, `UnevaluatedReason.FETCHER_SNAPSHOT_UNAVAILABLE`,
+    `RevoktStatus.updateBlockedBySelf` and `feedHostRevoked`;
+  - `updater.json`'s per-source `feedHostBlock`.
+
+  The rest of the trust model's text moved to `docs/design/fetcher-policy.md`. §10's self-lockout bullet now says
+  that the feed host's own revocation does not stop its fetches, as in Firefox and upki. The test plan's (g) loses the
+  hold items and states instead that a revocation of the feed host's own chain does not stop its fetch.
+- **#219, from its review:**
+  - §4 `http` gains "R: `build()` throws `IllegalArgumentException` when the base client's trust manager is revokt's", with a [0.3] test-plan (g) row.
+  - §10's self-lockout bullet names the consumer's client too, which must not be revokt's.
+  - The new (g) item is tagged [0.3].
+- **#255 (#249):** §6.5 states the order of the new `previous`: the generation the engine served before the install,
+  then the old `live`, then the old `previous`, skipping the new `live`. It also fixes the malformed-pointer sentence that revision 60's merge
+  left broken.
 
 ### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 

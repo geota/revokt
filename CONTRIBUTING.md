@@ -171,7 +171,7 @@ Robolectric `android-all` jars cached and `robolectric.offline=true`; runner ima
     structurally: classes named `Builder`, classes whose supertype simple name ends in `Exception`/`Error`,
     `object`/`enum`/`annotation`/`fun interface`, declarations annotated with either opt-in marker, and a
     configured `allowedClasses` FQN list (the §4 service types: `KotlinRevocationEngine`, `JvmPlatformTrust`,
-    `AndroidPlatformTrust`, `JcaSignatureVerifier`, `PkixPathBuilderFallback`, the `HttpFetcher.Factory`
+    `AndroidPlatformTrust`, `JcaSignatureVerifier`, `PkixPathBuilderFallback`, the `HttpFetcher`
     implementations, `RevoktSyncWorker`, `SymVerifier`). No type resolution, so it runs on commonMain.
   - `NoDataOrValueClassOnPublicSurface` on published modules (§4).
   - `ClubcardPortRules` in `…clubcard.port`: no `inline fun`, no `const val` (§3.1 item 5).

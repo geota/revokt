@@ -16,7 +16,4 @@ public enum class SyncOutcome {
     BACKOFF,
     STORE_FAILED,
     STORE_LOCKED,
-
-    /** The §8 fetcher policy found evidence against the source's own host chain; produced from 0.3. */
-    BLOCKED_BY_SELF,
 }
