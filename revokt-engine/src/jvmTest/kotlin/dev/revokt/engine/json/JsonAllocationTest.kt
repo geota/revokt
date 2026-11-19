@@ -65,8 +65,12 @@ class JsonAllocationTest {
     fun `Remote Settings data stays within 4·len + 64 KiB`() {
         within(4, "crlite-changeset.json", resource("crlite-changeset.json"))
         val dir = ExternalCorpus.dir ?: return println("JSON allocation: no large corpus on this run (-Prevokt.corpus)")
-        val file = "issuer/mozilla-intermediates/changeset.json"
-        within(4, file, File(dir, file).readBytes())
+        for (file in listOf(
+            "issuer/mozilla-intermediates/changeset.json",
+            "remote-settings/cert-revocations/2026-11-19/changeset.json",
+        )) {
+            within(4, file, File(dir, file).readBytes())
+        }
     }
 
     @Test
