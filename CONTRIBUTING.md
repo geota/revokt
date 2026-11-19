@@ -220,7 +220,7 @@ Robolectric `android-all` jars cached and `robolectric.offline=true`; runner ima
   chosen for grouping and digest pinning.)
 - `verifyDependencyScopes` (build-logic task on `check`) inspects the outgoing `apiElements`/`jvmApiElements`
   and `runtimeElements` variants: Okio and `revokt-clubcard` never in an api variant; kotlinx-coroutines in
-  `revokt-engine`'s api variant; OkHttp, Ktor and bcprov only in their own binding (§3 "Dependency scopes").
+  `revokt-engine`'s api variant; `revokt-engine` in `revokt-jsse`'s api variant; OkHttp, Ktor and bcprov only in their own binding (§3 "Dependency scopes").
 - The dependency ingress files (`libs.versions.toml`, `verification-metadata.xml`, `verification-keyring.keys`,
   every lockfile, `renovate.json`, `.commitlintrc.cjs`, `REUSE.toml`, `detekt*.yml`) are CODEOWNERS paths.
 
@@ -545,7 +545,7 @@ ADR-0006). Done means merged.
 | Formatting | ktlint | `check` | yes | live |
 | Complexity, forbidden APIs, custom rules | detekt + `revokt-detekt-rules` | `check` | yes | live |
 | commonMain purity | detekt `detektCommonMain` (fast) and the `linuxX64` compile under `-Prevokt.purityGate` (authoritative) | `check`; `ci-extras` | yes | live |
-| API-26 safety of jvm modules | animal-sniffer `gummy-bears-api-26` | `check` | yes | planned: wired in `revokt.jvm-library`, which no module applies until `revokt-jsse` (#110) |
+| API-26 safety of jvm modules | animal-sniffer `gummy-bears-api-26` | `check` | yes | live: `revokt.jvm-library`, on `revokt-jsse` |
 | License headers, per-path licences, header location, POM licences | `reuse lint`; `verifyHeaderLocations`; `verifyPomLicenses` | PR job; `check` | yes | live |
 | Dependency scopes | `verifyDependencyScopes` | `check` | yes | live |
 | Public API freeze | binary-compatibility-validator `apiCheck` with `nonPublicMarkers` | `check` | yes | live |
