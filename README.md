@@ -193,7 +193,11 @@ reads committed results. [`docs/dev/local.md`](docs/dev/local.md) covers the loc
 
 ## Documentation
 
-- [`docs/spec/revokt-spec.md`](docs/spec/revokt-spec.md): the normative design, with each decision and its evidence.
+- [`docs/spec/`](docs/spec): the normative spec, split into the core
+  ([`revokt-spec.md`](docs/spec/revokt-spec.md)), the [test plan](docs/spec/test-plan.md), the
+  [references](docs/spec/references.md) (the verification log) and the [changelog](docs/spec/CHANGELOG.md).
+  [`docs/design/`](docs/design) holds non-normative notes for later milestones, and
+  [`docs/decisions/`](docs/decisions) the decision log and the divergences from the reference implementations.
 - [`ROADMAP.md`](ROADMAP.md): the milestones in plain language, with progress.
 - [`docs/adr/`](docs/adr): the architecture decisions behind the spec and the process.
 - [`docs/dev/`](docs/dev): the corpora, fixtures, dependencies and the keyability audit.

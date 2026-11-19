@@ -38,11 +38,12 @@ internal sealed class StrictUrlRead {
 }
 
 /**
- * The strict URL grammar the x5u URL ([X5uUrl], spec §7.1) is read by. It is deliberately narrow, so no URL parser
- * downstream can see another host than the one checked: `https://` (lowercase), an authority with no userinfo that is
- * a host and an optional port, then the rest. The host is a DNS host name ([isHostName]: labels of ASCII letters,
- * digits and `-`, no trailing dot, a last label that is not a number); never an IP literal, a percent-encoded or a
- * non-ASCII host. What is fetched is re-serialised by the caller from the parts, never the string as given.
+ * The strict URL grammar the x5u URL ([X5uUrl], spec §7.1 "The x5u URL grammar") is read by. It is deliberately
+ * narrow, so no URL parser downstream can see another host than the one checked: `https://` (lowercase), an authority
+ * with no userinfo that is a host and an optional port, then the rest. The host is a DNS host name ([isHostName]:
+ * labels of ASCII letters, digits and `-`, no trailing dot, a last label that is not a number); never an IP literal, a
+ * percent-encoded or a non-ASCII host. What is fetched is re-serialised by the caller from the parts, never the string
+ * as given.
  */
 internal object StrictUrl {
     private const val SCHEME = "https://"

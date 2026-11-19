@@ -40,6 +40,7 @@ class RootPlugin : Plugin<Project> {
             description = "Regenerates docs/dev/status.md from the spec's fixture and deliverable inventory and the test tree."
             group = "revokt"
             spec.set(layout.projectDirectory.file("docs/spec/revokt-spec.md"))
+            testPlan.set(layout.projectDirectory.file("docs/spec/test-plan.md"))
             testRoots.from(subprojects.map { it.layout.projectDirectory.dir("src") })
             output.set(layout.projectDirectory.file("docs/dev/status.md"))
             ctSeedGap.set(layout.projectDirectory.file("revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/ct-seed-gap.tsv"))
@@ -50,6 +51,7 @@ class RootPlugin : Plugin<Project> {
             description = "Fails when docs/dev/status.md is stale or the implemented-fixture count decreased (a ratchet)."
             group = "verification"
             spec.set(layout.projectDirectory.file("docs/spec/revokt-spec.md"))
+            testPlan.set(layout.projectDirectory.file("docs/spec/test-plan.md"))
             testRoots.from(subprojects.map { it.layout.projectDirectory.dir("src") })
             committed.set(layout.projectDirectory.file("docs/dev/status.md"))
             ctSeedGap.set(layout.projectDirectory.file("revokt-engine/src/jvmTest/resources/dev/revokt/engine/parse/ct-seed-gap.tsv"))

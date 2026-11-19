@@ -9,7 +9,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/** [StrictUrl], the grammar of the x5u URL (spec §7.1). */
+/** [StrictUrl], the grammar of the x5u URL (spec §7.1 "The x5u URL grammar"). */
 class StrictUrlTest {
     @Test
     fun `an IP literal is never a host, and the port follows the last colon`() {

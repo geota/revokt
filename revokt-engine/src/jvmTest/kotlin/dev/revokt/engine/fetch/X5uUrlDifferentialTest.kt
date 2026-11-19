@@ -12,10 +12,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * [StrictUrl]'s narrow grammar against the JDK's URL parsers (spec §7.1 "the parsed URI host", #177): every x5u URL
- * [X5uUrl] lets through is one `java.net.URI` and `java.net.URL`, which `HttpsURLConnection` connects with, read as
- * https to the allowlisted host on port 443 with no userinfo, so no fetcher can be pointed at another host than the
- * one checked.
+ * [StrictUrl]'s narrow grammar against the JDK's URL parsers (spec §7.1 "the parsed URI host" and "The x5u URL
+ * grammar", #177): every x5u URL [X5uUrl] lets through is one `java.net.URI` and `java.net.URL`, which
+ * `HttpsURLConnection` connects with, read as https to the allowlisted host on port 443 with no userinfo, so no
+ * fetcher can be pointed at another host than the one checked.
  */
 class X5uUrlDifferentialTest {
     private val host = "content-signature-2.cdn.mozilla.net"
