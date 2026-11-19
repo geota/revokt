@@ -13,14 +13,16 @@ import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
  * Spec §9 "canonical JSON against `canonical_json`" (#92): revokt's parser and canonical serialiser against the
  * goldens `canonical_json` 0.7.0 recorded (native/revokt-oracle/record-canonical-json.sh), byte for byte. Where the
- * oracle accepts, revokt produces the same bytes; where it rejects, revokt rejects. The one declared difference: an
- * object with a duplicated key, whose last member serde_json keeps and revokt rejects (spec §7.1).
+ * oracle accepts, revokt produces the same bytes; where it rejects, revokt rejects. Two declared differences: an
+ * object with a duplicated key, whose last member serde_json keeps and revokt rejects (spec §7.1), and a number that is
+ * not an integer, which revokt refuses to serialise (#227: no signed payload holds one).
  */
 class CanonicalJsonOracleTest {
     private fun resource(name: String): ByteArray =
@@ -51,12 +53,28 @@ class CanonicalJsonOracleTest {
 
     private fun revokt(input: ByteArray): Result<ByteArray> = runCatching { CanonicalJson.write(Json.parse(input)) }
 
+    /** Whether [value] holds a [JsonDecimal], which revokt refuses to serialise (#227). */
+    private fun hasDecimal(value: JsonValue): Boolean =
+        when (value) {
+            is JsonDecimal -> true
+            is JsonArray -> (0 until value.size).any { hasDecimal(value[it]) }
+            is JsonObject -> (0 until value.size).any { hasDecimal(value.valueAt(it)) }
+            else -> false
+        }
+
     @Test
     fun `revokt agrees with canonical_json on every recorded input`() {
         val declared = mutableListOf<String>()
+        val refused = mutableListOf<String>()
         for (g in goldens) {
             val ours = revokt(g.input)
             val error = (ours.exceptionOrNull() as? JsonParseException)?.error
+            if (ours.exceptionOrNull() is NonIntegerNumberException) {
+                // The second declared difference (#227): revokt refuses every non-integer number canonical_json accepts.
+                assertTrue(hasDecimal(Json.parse(g.input)), g.name)
+                if (g.canonical != null) refused += g.name
+                continue
+            }
             ours.exceptionOrNull()?.let { if (it !is JsonParseException) throw AssertionError(g.name, it) }
             when {
                 g.canonical != null && ours.isSuccess -> assertContentEquals(g.canonical, ours.getOrThrow(), g.name)
@@ -66,6 +84,7 @@ class CanonicalJsonOracleTest {
             }
         }
         assertEquals(listOf("duplicate-same", "duplicate-escaped", "duplicate-nested", "duplicate-surrogate"), declared)
+        assertTrue(refused.count { it.startsWith("number-") } > 3000, "the generated non-integer numbers are refused")
         assertTrue(goldens.count { it.name.startsWith("number-") } > 4000)
     }
 
@@ -101,12 +120,17 @@ class CanonicalJsonOracleTest {
     private fun checkChangeset(
         file: String,
         bytes: ByteArray,
+        refused: Boolean = false,
     ) {
         val recorded = rows("remote-settings.tsv").filter { it[0] == file }
         assertEquals(listOf("document", "payload"), recorded.map { it[2] }, file)
         assertEquals(recorded[0][1], bytes.toByteString().sha256().hex(), "$file changed since it was recorded")
         val tree = Json.parse(bytes) as JsonObject
         for ((form, value) in listOf("document" to tree, "payload" to payload(tree))) {
+            if (refused) {
+                assertFailsWith<NonIntegerNumberException>("$file $form") { CanonicalJson.write(value) }
+                continue
+            }
             val canonical = CanonicalJson.write(value)
             val row = recorded.single { it[2] == form }
             assertEquals(
@@ -118,8 +142,8 @@ class CanonicalJsonOracleTest {
     }
 
     @Test
-    fun `the synthetic CRLite changeset's document and signed payload are canonical_json's`() {
-        checkChangeset("crlite-changeset.json", resource("crlite-changeset.json"))
+    fun `the synthetic CRLite changeset's document and payload hold non-integer numbers, which revokt refuses`() {
+        checkChangeset("crlite-changeset.json", resource("crlite-changeset.json"), refused = true)
     }
 
     @Test

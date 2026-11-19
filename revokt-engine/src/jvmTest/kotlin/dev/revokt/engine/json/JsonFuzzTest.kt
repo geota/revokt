@@ -47,7 +47,13 @@ class JsonFuzzTest {
                 check(bytes <= JsonBudget.bound(20, data.size)) { "the parse allocated $bytes bytes for ${data.size}" }
             }
             if (tree == null) return
-            val once = CanonicalJson.write(tree)
+            val once =
+                try {
+                    CanonicalJson.write(tree)
+                } catch (_: NonIntegerNumberException) {
+                    // #227: a tree with a non-integer number has no canonical form; the parse still had to hold.
+                    return
+                }
             check(once.all { it in 0x20..0x7E }) { "the canonical JSON is not printable ASCII" }
             // Escapes can triple a string's length, so the read-back is not held to the input cap.
             val again = Json.parse(once, maxBytes = Long.MAX_VALUE)

@@ -50,7 +50,7 @@ class ContentSignatureTest {
 
     private val stored =
         records(
-            """[{"id":"c","last_modified":3,"v":"é"},{"id":"a","last_modified":1,"n":[1.5,-0]},
+            """[{"id":"c","last_modified":3,"v":"é"},{"id":"a","last_modified":1,"n":[15,0,-7]},
                {"id":"b","last_modified":2}]""",
         )
 
@@ -92,7 +92,7 @@ class ContentSignatureTest {
     fun `the payload is the canonical JSON of the records by id under data and the timestamp as a string`() {
         val withTombstone = stored + records("""[{"id":"0","deleted":true,"last_modified":4}]""")
         assertEquals(
-            """{"data":[{"id":"a","last_modified":1,"n":[1.5E0,-0E0]},{"id":"b","last_modified":2},""" +
+            """{"data":[{"id":"a","last_modified":1,"n":[15,0,-7]},{"id":"b","last_modified":2},""" +
                 """{"id":"c","last_modified":3,"v":"\u00e9"}],"last_modified":"1792587631204"}""",
             payload(withTombstone).decodeToString(),
         )
@@ -306,6 +306,20 @@ class ContentSignatureTest {
     }
 
     @Test
+    fun `a record holding a number that is not an integer has no payload, so it never verifies (#227)`() {
+        for (number in listOf("1.5", "-0", "1e2", "0.0", "18446744073709551616", "[1,2.5]", "{\"x\":-1E-7}")) {
+            val records = stored + records("""[{"id":"f","last_modified":9,"n":$number}]""")
+            assertNull(ContentSignature.recordsJson(records, TS), number)
+            val signature = signPayload(payload())
+            assertEquals(
+                ContentSignatureFailure.RECORDS,
+                ContentSignature.verifyRecords(verifier, records, TS, signature, ContentSignature.MODE, spki).failure,
+                number,
+            )
+        }
+    }
+
+    @Test
     fun `any value the signer reads as true is a tombstone`() {
         for (value in listOf("true", "1", "-1", "0.5", "\"x\"", "\"0\"", "\"false\"", "[0]", "{\"a\":null}")) {
             val tombstone = records("""[{"id":"t","deleted":$value}]""")
@@ -327,7 +341,7 @@ class ContentSignatureTest {
                 "change deleted: $value",
             )
         }
-        for (value in listOf("false", "null", "0", "0.0", "-0", "0e5", "\"\"", "[]", "{}")) {
+        for (value in listOf("false", "null", "0", "\"\"", "[]", "{}")) {
             val kept = records("""[{"id":"t","deleted":$value}]""")
             assertNotEquals(
                 payload(stored).decodeToString(),
@@ -335,6 +349,12 @@ class ContentSignatureTest {
                 "deleted: $value",
             )
             assertEquals(4, ContentSignature.merge(stored, kept)?.size, "deleted: $value")
+        }
+        // A zero that is not an integer is falsy too, so the record stays, and the payload holding it is refused (#227).
+        for (value in listOf("0.0", "-0", "0e5")) {
+            val kept = records("""[{"id":"t","deleted":$value}]""")
+            assertEquals(4, ContentSignature.merge(stored, kept)?.size, "deleted: $value")
+            assertNull(ContentSignature.recordsJson(stored + kept, TS), "deleted: $value")
         }
     }
 
@@ -366,7 +386,7 @@ class ContentSignatureTest {
         val merged = checkNotNull(ContentSignature.merge(stored, changes))
         assertEquals(
             records(
-                """[{"id":"a","last_modified":1,"n":[1.5,-0]},{"id":"c","last_modified":7,"v":"new"},{"id":"d","last_modified":6}]""",
+                """[{"id":"a","last_modified":1,"n":[15,0,-7]},{"id":"c","last_modified":7,"v":"new"},{"id":"d","last_modified":6}]""",
             ),
             merged,
         )
