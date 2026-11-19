@@ -5,6 +5,7 @@ package dev.revokt.engine.update
 
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
+import dev.revokt.DiagnosticCode
 import dev.revokt.RevoktStorage
 import dev.revokt.SyncOutcome
 import dev.revokt.engine.fetch.client
@@ -70,12 +71,14 @@ internal class ModelViolation(
  *   #207's fail-open bootstrap). Damage that leaves `current` readable is the one exception: no reader can tell it from
  *   a write, so the pointer it reads as becomes the held one (#246; a checksum would close it, #229). And the generation
  *   the engine held when a sync began survives that sync, if it read back undamaged: on disk, and as the pointer's live
- *   or previous when the sync flipped (#242's fallback, #249);
+ *   or previous when the sync's write of `current` landed (#242's fallback, #249);
  * - **I3** `updater.json` is written only by a sync whose read of it returned (#209), and its watermark never goes
- *   backwards unless damage hit the file;
- * - **I5** no publication older than the floor by the rollback window ([rollbackWindowMillis]) or more installs. The floor is the stored
- *   watermark, lost only to damage, raised to the timestamp of the generation the snapshot holds live when that is not
- *   ahead of `now` + `clockSkew` (§6.5, revision 56: a malformed `updater.json` keeps the live floor);
+ *   backwards and never falls below the model's own high-water mark (the newest `<ts>` installed with the clock right),
+ *   unless damage hit the file;
+ * - **I5** no publication older than the floor by the rollback window ([rollbackWindowMillis]) or more installs. The
+ *   floor is the model's high-water mark, lost only to damage to `updater.json`, raised to the timestamp of the
+ *   generation the snapshot holds live when that is not ahead of `now` + `clockSkew` (§6.5: a malformed `updater.json`
+ *   keeps the live floor);
  * - **I4** every sync returns, and once the faults stop the store recovers: within [RECOVERY] clean syncs the last
  *   publication is installed, unchanged or refused as a rollback (an orphan never loops, #205's bug), unless its
  *   directory is held and damaged, and a new publication then installs.
@@ -114,6 +117,9 @@ internal class StoreModel(
         /** The operation and key the armed throw or stop hit, for the trail. */
         var fault: String? = null
 
+        /** Whether this sync's write of `current` landed (not lost to a stop, not thrown). */
+        var pointerWritten = false
+
         /** Starts a sync's operation count, with its faults. */
         fun arm(
             throwAt: Int,
@@ -124,6 +130,7 @@ internal class StoreModel(
             this.stopAt = stopAt
             updaterRead = false
             fault = null
+            pointerWritten = false
         }
 
         val stopped: Boolean get() = stopAt in 0..<ops
@@ -160,7 +167,10 @@ internal class StoreModel(
             }
             inner.write(name, bytes)
             if (!isBlob(name) || repair) damaged -= name
-            if (name == "$root/current") PointerJson.read(bytes)?.let { pointer = it }
+            if (name == "$root/current") {
+                pointerWritten = true
+                PointerJson.read(bytes)?.let { pointer = it }
+            }
         }
 
         override fun delete(name: String) {
@@ -232,6 +242,9 @@ internal class StoreModel(
         val pool = (1..DELTAS).map { delta(it) }
         var full = filter("full-1", false, ts - day, 1)
         var watermark: Long? = null
+
+        /** The newest `<ts>` a sync installed with the clock right, the model's own; null once damage hit `updater.json`. */
+        var highWater: Long? = null
 
         init {
             storage.snapshotLive = ::liveDirectory
@@ -335,13 +348,17 @@ internal class StoreModel(
                 }
             val stopped = storage.stopped
             val fault = storage.fault
+            val pointerWritten = storage.pointerWritten
             storage.arm(-1, -1)
-            afterSync(run.result, target, liveAtStart, clean = throwAt < 0 && stopAt < 0 && !prepareThrows, stopped)
-            if (run.result.outcome == SyncOutcome.INSTALLED && floor != null &&
-                floor - server.ts >= rollbackWindowMillis
-            ) {
-                fail("I5: ${server.ts} installed, ${floor - server.ts} ms below the floor $floor")
-            }
+            afterSync(
+                run.result,
+                target,
+                liveAtStart,
+                clean = throwAt < 0 && stopAt < 0 && !prepareThrows,
+                stopped,
+                pointerWritten,
+            )
+            rollback(run.result, floor, stopped)
             now += 7 * hour
             if (stopped) restart()
             last =
@@ -354,7 +371,7 @@ internal class StoreModel(
         }
 
         /**
-         * I5's floor for a sync starting now: the stored watermark ([watermark], null once damage hit it), raised to the
+         * I5's floor for a sync starting now: the model's high-water mark ([highWater], null once damage hit `updater.json`), raised to the
          * snapshot's live timestamp unless that is ahead of `now` + `clockSkew` (a clock-behind generation floors nothing).
          */
         private fun rollbackFloor(): Long? {
@@ -363,11 +380,25 @@ internal class StoreModel(
                     ?.takeIf { it.generationId != null }
                     ?.sourceTimestampMillis
                     ?.takeIf { it <= now + day }
-            return listOfNotNull(watermark, live).maxOrNull()
+            return listOfNotNull(highWater, live).maxOrNull()
         }
 
         /** What `current` named when the last sync began (the #249 exemption). */
         private var pointedAtStart: List<String> = emptyList()
+
+        /** I5 after a sync that ended as [result] from [floor], then the high-water mark an install with the clock right raises. */
+        private fun rollback(
+            result: dev.revokt.SyncResult,
+            floor: Long?,
+            stopped: Boolean,
+        ) {
+            if (result.outcome != SyncOutcome.INSTALLED) return
+            if (floor != null && floor - server.ts >= rollbackWindowMillis) {
+                fail("I5: ${server.ts} installed, ${floor - server.ts} ms below the floor $floor")
+            }
+            val clockBehind = result.warnings.any { it.code == DiagnosticCode.CLOCK_BEHIND }
+            if (!stopped && !clockBehind) highWater = maxOf(highWater ?: Long.MIN_VALUE, server.ts)
+        }
 
         /** The directory of the publication the server serves now. */
         private fun servedDirectory(): String =
@@ -383,6 +414,7 @@ internal class StoreModel(
             liveAtStart: String?,
             clean: Boolean,
             stopped: Boolean,
+            pointerWritten: Boolean,
         ) {
             if (clean && result.outcome == SyncOutcome.STORE_FAILED && !held(target)) {
                 fail("I4: a clean sync of the unheld $target is STORE_FAILED: ${result.warnings.map { it.message }}")
@@ -392,9 +424,9 @@ internal class StoreModel(
             // and the next install's fallback is taken from `current`, so that generation is pruned. Exempt until #249's
             // fix merges; then this line goes.
             if (liveAtStart !in pointedAtStart) return
-            // A sync that flipped keeps it as the pointer's live or previous; one that did not (it failed, perhaps after
-            // activating a generation whose flip then failed) leaves it on disk.
-            val flipped = result.outcome == SyncOutcome.INSTALLED
+            // A sync whose write of `current` landed keeps it as the pointer's live or previous, whatever its outcome; one
+            // that wrote none (it failed, perhaps after activating a generation whose flip then threw) leaves it on disk.
+            val flipped = result.outcome == SyncOutcome.INSTALLED || pointerWritten
             val kept = !flipped || liveAtStart == storage.pointer?.live || liveAtStart == storage.pointer?.previous
             if (store.readGeneration(liveAtStart) == null || !kept) {
                 fail(
@@ -542,7 +574,10 @@ internal class StoreModel(
             storage.inner.write(key, written)
             storage.damaged += key
             if (key == "$root/current") adoptPointer(written)
-            if (key == "$root/updater.json") watermark = null
+            if (key == "$root/updater.json") {
+                watermark = null
+                highWater = null
+            }
             trail += "damage $key"
         }
 
@@ -551,7 +586,11 @@ internal class StoreModel(
          * name changed) is a pointer write no reader can tell from the code's own, so what it reads as is held (#246).
          */
         private fun adoptPointer(bytes: ByteArray) {
-            PointerJson.read(bytes)?.let { storage.pointer = it }
+            val read = PointerJson.read(bytes) ?: return
+            // Today only a damaged `previous` member name parses; a damage generator that changed `live` would excuse the
+            // loss of a live generation, so that fails loudly instead.
+            if (read.live != storage.pointer?.live) fail("model: damage to current changed live to ${read.live}")
+            storage.pointer = read
         }
 
         /** [bytes] of [key] damaged: a flipped byte, a truncation, a malformed document, or a too-new `metaVersion`. */
@@ -586,6 +625,11 @@ internal class StoreModel(
                     fail("I1: the snapshot's live $d does not read back")
                 }
             }
+            checkWatermark()
+        }
+
+        /** I3's watermark: never backwards, never below the model's high-water mark, unless damage hit the file. */
+        private fun checkWatermark() {
             val read = store.updater(now)
             val stored = (read as? StoreRead.Found)?.value?.record?.watermarkMillis
             val before = watermark
@@ -593,6 +637,10 @@ internal class StoreModel(
                 (stored == null || stored < before)
             ) {
                 fail("I3: the watermark went from $before to $stored")
+            }
+            val high = highWater
+            if (high != null && (stored == null || stored < high)) {
+                fail("I3: the watermark $stored is below the high-water mark $high")
             }
             watermark = stored
         }
