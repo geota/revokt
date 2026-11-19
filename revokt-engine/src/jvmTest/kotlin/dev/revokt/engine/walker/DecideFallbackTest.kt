@@ -14,6 +14,7 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktTestingApi
 import dev.revokt.TerminalKind
 import dev.revokt.WalkEnd
+import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
 import dev.revokt.engine.walker.FixtureWorld.Companion.TELETEX_STRING
@@ -149,13 +150,16 @@ class DecideFallbackTest {
             assertEquals(WalkerHarness.SNAPSHOT_ID, snapshot.id)
             assertEquals(WalkerHarness.NOW, now)
 
-            // The leaf alone is keyed by its own SPKI; an empty path or an unparseable issuer is a failed fallback.
-            val alone = WalkerHarness.decide(f, FakeFallback.finds(leaf))
-            assertEquals(listOf(leaf.keyHash), alone.issuerKeys)
-            assertTrue(alone.path.usedFallback)
+            // A path must end at an anchor by bytes (#253's review): the leaf alone (it is no anchor, or step 2 would
+            // have decided), the leaf and an end entity, and the leaf and its intermediate without the root (a builder
+            // returning CertPath.getCertificates()) all fail, as do an empty path and an unparseable issuer.
+            val ee = w.cert("EE", intermediate.subject, root.subject, w.leafKey(), signer = root.key)
             for ((case, answer) in listOf(
                 "empty" to emptyList(),
                 "unparseable issuer" to listOf(leaf.der, garbage(9)),
+                "the leaf alone" to listOf(leaf.der),
+                "the leaf and an end entity" to listOf(leaf.der, ee.der),
+                "the leaf and its intermediate, no anchor" to listOf(leaf.der, intermediate.der),
             )) {
                 val d2 = WalkerHarness.decide(f, FakeFallback { answer })
                 assertEquals(PathStatus.NO_ISSUER, d2.path.status, case)
@@ -240,6 +244,92 @@ class DecideFallbackTest {
             // A path of the leaf and its anchor alone has no intermediate to check.
             val short = WalkerHarness.decide(attack, FakeFallback.finds(leaf, root))
             assertEquals(PathStatus.FOUND, short.path.status)
+        }
+    }
+
+    @Test
+    fun `a fallback path breaking pathLen, keyCertSign, extKeyUsage or nameConstraints is a failed fallback`() {
+        with(Honest(leafExtensions = listOf(WalkerFixturesAs.san(WalkerFixturesAs.dns("leaf.example"))))) {
+            fun ca(
+                label: String,
+                issuer: FixtureCert,
+                vararg extensions: ByteArray,
+            ): FixtureCert =
+                w.cert(
+                    label,
+                    intermediate.subject,
+                    issuer.subject,
+                    signer = issuer.key,
+                    extensions = extensions.toList(),
+                )
+
+            val alone = fixture("fb-rules", presented = listOf(leaf), walk = notFound(NoIssuerReason.NO_CANDIDATE))
+            val s =
+                w.cert(
+                    "S",
+                    w.name("Sub-CA"),
+                    root.subject,
+                    w.leafKey(),
+                    signer = root.key,
+                    extensions = listOf(WalkerFixturesAr.caWithPathLen(0)),
+                )
+            val c = w.cert("C", intermediate.subject, s.subject, signer = s.key)
+            val otherOnly = WalkerFixturesAs.nameConstraints(permitted = listOf(WalkerFixturesAs.dns("other.example")))
+            val emailOnly = ca("IE", root, WalkerFixturesAr.eku("1.3.6.1.5.5.7.3.4"))
+            val clientOnly = ca("IC", root, WalkerFixturesAr.eku("1.3.6.1.5.5.7.3.2"))
+            val refused =
+                listOf(
+                    "pathLenConstraint 0 with a CA under it" to FakeFallback.finds(leaf, c, s, root),
+                    "keyUsage without keyCertSign" to
+                        FakeFallback.finds(leaf, ca("IK", root, WalkerFixturesAr.keyUsage(0x07, 0x80)), root),
+                    "extKeyUsage without serverAuth" to FakeFallback.finds(leaf, emailOnly, root),
+                    "an intermediate's nameConstraints" to FakeFallback.finds(leaf, ca("INC", root, otherOnly), root),
+                    "an anchor that does not parse" to
+                        FakeFallback { listOf(leaf.der, intermediate.der, byteArrayOf(0x30, 0x00)) },
+                )
+            for ((case, fallback) in refused) {
+                val d = WalkerHarness.decide(alone, fallback)
+                assertEquals(PathStatus.NO_ISSUER, d.path.status, case)
+                assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings, case)
+                assertEquals(emptyList(), d.issuerKeys, case)
+            }
+            // The controls: pathLen 0 directly over the leaf, the honest path, and clientAuth for a client request.
+            for (used in listOf(FakeFallback.finds(leaf, s, root), FakeFallback.finds(leaf, intermediate, root))) {
+                assertEquals(PathStatus.FOUND, WalkerHarness.decide(alone, used).path.status)
+            }
+            val client =
+                WalkerHarness.decide(
+                    alone,
+                    FakeFallback.finds(leaf, clientOnly, root),
+                    requiredEku = RequiredEku.CLIENT_AUTH,
+                )
+            assertEquals(PathStatus.FOUND, client.path.status, "the request's purpose is read on the fallback path")
+            assertEquals(
+                PathStatus.NO_ISSUER,
+                WalkerHarness.decide(alone, FakeFallback.finds(leaf, clientOnly, root)).path.status,
+            )
+
+            val permitsLeaf = WalkerFixturesAs.nameConstraints(permitted = listOf(WalkerFixturesAs.dns("leaf.example")))
+            val admitted = WalkerHarness.decide(alone, FakeFallback.finds(leaf, ca("IP", root, permitsLeaf), root))
+            assertEquals(PathStatus.FOUND, admitted.path.status, "nameConstraints that admit the leaf")
+        }
+    }
+
+    @Test
+    fun `a fallback path that spends the name-constraint budget is a failed fallback`() {
+        // (as)'s budget case on the fallback path: 500 leaf names against 501 subtrees, each name inside the last.
+        val names = List(500) { WalkerFixturesAs.dns("n$it.leaf.example") }
+        val subtrees = List(500) { WalkerFixturesAs.dns("s$it.leaf.example") } + WalkerFixturesAs.dns("leaf.example")
+        with(
+            Honest(
+                leafExtensions = listOf(WalkerFixturesAs.san(*names.toTypedArray())),
+                intermediateExtensions = listOf(WalkerFixturesAs.nameConstraints(permitted = subtrees)),
+            ),
+        ) {
+            val alone = fixture("fb-budget", presented = listOf(leaf), walk = notFound(NoIssuerReason.NO_CANDIDATE))
+            val d = WalkerHarness.decide(alone, FakeFallback.finds(leaf, intermediate, root))
+            assertEquals(PathStatus.NO_ISSUER, d.path.status)
+            assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings)
         }
     }
 

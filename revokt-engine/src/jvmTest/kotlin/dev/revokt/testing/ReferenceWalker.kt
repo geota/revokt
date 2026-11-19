@@ -40,7 +40,9 @@ import javax.security.auth.x500.X500Principal
  * - A candidate that is not an anchor must be a CA: the JDK reads its basicConstraints with `cA = TRUE`
  *   (`X509Certificate.getBasicConstraints() >= 0`; a certificate the JDK cannot parse is not one). The JDK, not
  *   revokt's extension reader, so the oracle checks the walker's [dev.revokt.engine.walker.Cert.isCa] rather than
- *   sharing it.
+ *   sharing it. #237's other issuer rules (`pathLenConstraint`, keyUsage, extKeyUsage, nameConstraints) are not
+ *   modelled: the generator writes none of those extensions, and `pathLenConstraint` and nameConstraints depend on
+ *   the path below a certificate, which this distance computation does not track. Fixtures (ar) and (as) cover them.
  * - A link is verified only when [verifier] answers `VERIFIED`; a throw counts as not verified, as §5.1 treats a
  *   verifier throw as `INVALID` "for any verifier" (P7 runs a throwing verifier). It catches [Exception], never an
  *   [Error], and must match what the 0.2 walker treats as a verifier throw.

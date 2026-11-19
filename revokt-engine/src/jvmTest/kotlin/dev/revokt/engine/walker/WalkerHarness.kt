@@ -103,13 +103,15 @@ internal object WalkerHarness {
     /**
      * Decision steps 1 to 6 over [f] (spec §5.1, §9): [fallback] null is the harness's disabled path, [platformOnly]
      * the trust-manager bindings' `PLATFORM_ONLY` promotion (off in the harness), and [harness] false applies step
-     * 3's `MAX_PRESENTED` cut as every trust-manager path does. [verifier] wraps the fixture's [SymVerifier].
+     * 3's `MAX_PRESENTED` cut as every trust-manager path does. [verifier] wraps the fixture's [SymVerifier];
+     * [requiredEku] is the request's purpose (#237).
      */
     fun decide(
         f: WalkerFixture,
         fallback: PathBuilderFallback?,
         platformOnly: Boolean = false,
         harness: Boolean = true,
+        requiredEku: RequiredEku = RequiredEku.SERVER_AUTH,
         verifier: (SignatureVerifier) -> SignatureVerifier = { it },
     ): PathDecision {
         val index = CandidateIndex(f.snapshot, customCanonicaliser = f.customCanonicaliser)
@@ -122,6 +124,7 @@ internal object WalkerHarness {
                 fallback,
                 NOW,
                 platformOnly,
+                requiredEku,
             )
         val snapshot = snapshot(f.snapshot)
         return if (harness) {
