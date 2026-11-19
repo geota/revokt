@@ -128,17 +128,89 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         installedOlder(now)
     }
 
-    /** The older changeset installed with no generation loaded: the cursor moved back with it, the watermark stayed. */
+    /**
+     * The older changeset installed with no generation loaded: the watermark and the cursor moved back to its `<ts>`, as
+     * Firefox's local timestamp becomes the imported data's. Now it is live, it is the floor: older is refused, newer
+     * installs.
+     */
     private fun installedOlder(now: Long) {
         assertEquals("$older/${delta.id}", live().generationId)
         assertEquals(olderDirectory, liveDirectory())
         assertEquals(older, sourceRecord(now).lastVerifiedLastModified)
-        assertEquals(ts, updater(now).watermarkMillis)
-        // Now a generation is live, the high-water mark floors again: ts - 1 is refused, ts installs.
-        val server = Server(ts = ts - 1)
-        sync(server, now = now + hour).assert(SyncOutcome.ROLLBACK_REFUSED)
-        sync(Server(), now = now + 2 * hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(older, updater(now).watermarkMillis)
+        sync(Server(ts = older - 1), now = now + hour).assert(SyncOutcome.ROLLBACK_REFUSED)
+        sync(Server(ts = ts - 1), now = now + 2 * hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(ts - 1, updater(now + 2 * hour).watermarkMillis)
+    }
+
+    @Test
+    fun `100, then 80 installed with no generation loaded, then 90 installs, the watermark following each`() {
+        // ts stands for 100: installed, so the watermark is 100.
+        val server = installedFirst()
+        assertEquals(ts, updater().watermarkMillis)
+        // A fresh loader with nothing loaded: 80 installs, and the watermark is lowered to 80 with it.
+        val eighty = ts - 20 * hour
+        server.ts = eighty
+        server.fetcher.requests.clear()
+        freshLoader()
+        sync(server, now = ts + hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(eighty, updater(ts + hour).watermarkMillis)
+        assertEquals(eighty, live().sourceTimestampMillis)
+        // 90 is above the floor, max(80, 80), so it installs, where a kept watermark of 100 would refuse it.
+        val ninety = ts - 10 * hour
+        server.ts = ninety
+        sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(ninety, updater(ts + 2 * hour).watermarkMillis)
+        assertEquals(ninety, live().sourceTimestampMillis)
+    }
+
+    @Test
+    fun `the watermark is lowered only in the install's own write, so a failed install leaves it`() {
+        val server = older(installedFirst())
+        freshLoader()
+        // The install's write of updater.json fails after the flip: the watermark stays where it was.
+        storage.failWrite = { if (it == updaterKey) IllegalStateException("write") else null }
+        sync(server, now = ts + 2 * hour)
+        storage.failWrite = { null }
+        assertEquals(ts, updater(ts + 2 * hour).watermarkMillis)
+        // An install that fails before the flip writes the failure's record, which never lowers it either.
+        val again = older(installedFirstAgain())
+        freshLoader()
+        storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        sync(again, now = ts + 3 * hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        storage.failWrite = { null }
+        assertEquals(ts, updater(ts + 3 * hour).watermarkMillis)
+    }
+
+    /** The first generation installed again over this test's store, for a second arm. */
+    private fun installedFirstAgain(): Server {
+        storage.inner.names().forEach { storage.inner.delete(it) }
+        freshLoader()
+        return installedFirst()
+    }
+
+    @Test
+    fun `beside a live generation a malformed pointer keeps the floor, and an older changeset is refused unfetched`() =
+        refusedBesidePointer { storage.inner.write(currentKey, "{".encodeToByteArray()) }
+
+    @Test
+    fun `beside a live generation an absent pointer keeps the floor, and an older changeset is refused unfetched`() =
+        refusedBesidePointer { storage.inner.delete(currentKey) }
+
+    /**
+     * An older changeset after [damage] to the pointer while the generation stays live in the engine and the snapshot:
+     * `ROLLBACK_REFUSED`, no body fetched, and the pointer left exactly as the damage left it (the retried flip runs
+     * only on `UNCHANGED`).
+     */
+    private fun refusedBesidePointer(damage: () -> Unit) {
+        val server = older(installedFirst())
+        damage()
+        val before = storage.inner.read(currentKey)?.toList()
+        sync(server, now = ts + 2 * hour).assert(SyncOutcome.ROLLBACK_REFUSED)
+        assertEquals(emptyList(), server.attachmentRequests())
+        assertEquals(before, storage.inner.read(currentKey)?.toList())
         assertEquals("$ts/${delta.id}", live().generationId)
+        assertEquals(ts, updater(ts + 2 * hour).watermarkMillis)
     }
 
     @Test
@@ -190,11 +262,11 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `with no generation ever installed a stored watermark far ahead is not read`() {
+    fun `with no generation ever installed a stored watermark far ahead is not read, and is lowered to the install`() {
         store.writeUpdater(UpdaterRecord(watermarkMillis = ts + 30 * day), ts)
         val now = ts + hour
         sync(Server(), now = now).assert(SyncOutcome.INSTALLED)
-        assertEquals(ts + 30 * day, updater(now).watermarkMillis)
+        assertEquals(ts, updater(now).watermarkMillis)
         assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
     }
 

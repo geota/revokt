@@ -228,7 +228,7 @@ internal class CrliteSync(
             gates.nearCap(polled, "monitor/changes", RevoktLimits.MAX_JSON_BYTES)
             val cursor = record.sources[source.sourceId]?.lastVerifiedLastModified
             // The stored records are the merge base of a _since changeset only: the whole collection, fetched when there is
-            // no cursor (a malformed updater.json, a clock-behind install), merges over nothing (#236).
+            // no cursor (an absent or malformed updater.json) or no stored records to merge with, merges over nothing (#236).
             val since = cursor?.takeIf { base != null }
             val merged = if (since != null) base.orEmpty() else emptyList()
             val verified =
@@ -359,15 +359,19 @@ internal class CrliteSync(
             // The live generation's install activated but its flip did not land: retry it, never stop (#190).
             val reflip = decision == SyncDecision.UNCHANGED && !reads.pointed()
             if (!reflip) decided(decision, ts)?.let { return it }
-            return fetched(verified, crlite, records, placed)
+            return fetched(verified, crlite, records, placed, noneLoaded = live == null)
         }
 
-        /** Steps 7 to 9 for the [placed] filters of [records] (the channel's [crlite] records). */
+        /**
+         * Steps 7 to 9 for the [placed] filters of [records] (the channel's [crlite] records); [noneLoaded] when no
+         * generation was live at the decision, so the install sets the watermark to `<ts>` (§7.1).
+         */
         private fun fetched(
             verified: ChangesetVerification.Verified,
             crlite: List<CrliteRecord>,
             records: List<FilterRecord>,
             placed: List<PlacedFilter>,
+            noneLoaded: Boolean,
         ): SyncResult {
             val ts = verified.timestamp
             stage = SyncStage.ATTACHMENT
@@ -393,7 +397,7 @@ internal class CrliteSync(
                 return end(Ended(SyncOutcome.FAILED, SyncStage.PREPARE, DiagnosticCode.FORMAT_UNSUPPORTED, detail))
             }
             val pending = pending(verified, generationId, built, bodies, bodies.format(placed))
-            return installed(pending)
+            return installed(pending, noneLoaded)
         }
 
         /**
@@ -426,7 +430,10 @@ internal class CrliteSync(
         }
 
         /** Runs [install] for [pending] and ends the sync with its outcome; a successful install is then pruned to. */
-        private fun installed(pending: PendingGeneration): SyncResult {
+        private fun installed(
+            pending: PendingGeneration,
+            noneLoaded: Boolean,
+        ): SyncResult {
             val ts = pending.meta.sourceTimestampMillis
             val updated =
                 UpdaterTransitions.after(
@@ -436,6 +443,7 @@ internal class CrliteSync(
                     now,
                     ts,
                     serverBackoffMillis = backoff,
+                    noneLoaded = noneLoaded,
                 )
             val publication = Publication(fromSeed = false, seedFormat = null, staleGateOpen = true, nowMillis = now)
             return when (val result = install(pending, engine, store, snapshot, publication, updated, logger)) {

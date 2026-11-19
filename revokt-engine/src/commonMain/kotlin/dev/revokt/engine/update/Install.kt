@@ -256,8 +256,9 @@ private class Install(
      * the start of the install ([claim]).
      * - A held directory (live, pointed to, or beside a malformed pointer with its `meta.json` present) is never
      *   replaced. When it holds this generation ([sameGeneration]: left by an install that failed after the publish,
-     *   the pointer's `previous` on a rollback inside the window, or the same `<ts>` served again beside a malformed
-     *   pointer) it is prepared as it stands, its stored `meta.json` kept, so a retry can succeed. When it holds another
+     *   the pointer's `previous` when an older changeset installs with no generation loaded, or the same `<ts>` served
+     *   again beside a malformed pointer) it is prepared as it stands, its stored `meta.json` kept, so a retry can
+     *   succeed. When it holds another
      *   generation, a stored delta that does not re-hash included (#201), or its `meta.json` is malformed (a newer
      *   binary's `metaVersion`, say, #178) or missing, it stays and fails the install, `STORE_FAILED`.
      * - Any other directory is referenced by nothing, complete or not (beside a malformed pointer, only one with no

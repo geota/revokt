@@ -37,12 +37,6 @@ tests; **live checks** are informational.
   whose x5u is not PEM or whose chain fails → `FAILED`, stage `SIGNATURE`, and whose x5u is outside its validity →
   `CLOCK_SKEW`, stage `X5U`, each with the whole collection never fetched and nothing advanced; a whole collection
   that does not verify → fetched once; a
-  `_since` changeset that fails the content signature, or has an empty `signatures`, every entry skipped or a `null`
-  entry → the whole collection fetched once, which installs; one with a change that has no `id` → the whole
-  collection fetched once, with no x5u fetched for the `_since` one; one whose x5u fetch fails → `FAILED`, stage `X5U`,
-  whose x5u is not PEM or whose chain fails → `FAILED`, stage `SIGNATURE`, and whose x5u is outside its validity →
-  `CLOCK_SKEW`, stage `X5U`, each with the whole collection never fetched and nothing advanced; a whole collection
-  that does not verify → fetched once; a
   v3 filter with `approx_m` of 2^32, or a rank of 256 → `FAILED`; signature
   over records with a tombstone merged vs not merged.
 - **Data-path fixtures** ((a), (b), (d) and (g) less its fetcher items tagged [0.3] are 0.2 gates; those items and (e), (f), (h) need the store, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) beside a live generation, a changeset older than the
@@ -50,8 +44,11 @@ tests; **live checks** are informational.
   coverage; equal to a watermark above the live `<ts>` → installs; **newer timestamp with lower coverage → installs
   and advances the watermark**; with no generation loaded (a fresh loader beside a stored generation, an absent or
   malformed pointer, or a malformed live `meta.json`) and a stored watermark above it, an older changeset →
-  installs, the watermark kept and the cursor at its `<ts>`, and once it is live the floor holds again; a stored
-  watermark far ahead and no generation ever installed → the changeset installs; with no generation loaded, an
+  installs, the watermark and the cursor set to its `<ts>`, and once it is live it is the floor (100, then 80
+  installed with no generation loaded, then 90 → installs); a stored watermark far ahead and no generation ever
+  installed → the changeset installs and the watermark is its `<ts>`; an install with no generation loaded whose
+  write of `updater.json` or flip fails → the watermark unchanged; beside a live generation whose pointer is
+  malformed, or absent, an older changeset → `ROLLBACK_REFUSED`, no body fetched and the pointer unchanged; with no generation loaded, an
   `updater.json` read that throws → `STORE_FAILED`, the file unchanged and nothing installed; a refused rollback leaves `consecutiveFailures` and `lastVerified*` unchanged;
   `Backoff: 100000000` → next poll ≤ 24 h and `backoffUntilMillis ≤ now + 24 h`; (revision 56, #131) a `CLOCK_SKEW` and
   a `STORE_FAILED` sync each advance `consecutiveFailures`, the first feed failure waiting 15 min, the second 30 min and

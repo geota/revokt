@@ -569,7 +569,9 @@ Appendix A of the spec: what was verified against live sources and reference cod
     when the remote timestamp is below the local one (line 1203), verifies the local data (lines 1206 to 1214); when it
     verifies, the changeset is ignored ("CDN served staled data, ignore", line 1216), and when it does not, or the check
     throws, the older data is imported ("we prefer stale data over corrupt/tempered", lines 1227 to 1230). There is no
-    window, and an equal timestamp is not refused. upki v1.0.1 (`9821cce`, `upki/src/revocation/fetch.rs`) has no
+    window, and an equal timestamp is not refused. The imported data's timestamp is the local one from then on. The
+    local reads before the sync (`getLastModified`, `list`, `getMetadata`, lines 744 to 750) sit outside the
+    import's error handling, so a local read that throws fails the sync rather than counting as no local data. upki v1.0.1 (`9821cce`, `upki/src/revocation/fetch.rs`) has no
     rollback check: the manifest's `generated_at` is never compared and a 200 replaces the cache.
   - **Reset-and-retry**: the same file retries the import from scratch (`{ retry: true }`, no `_since`) only when the
     error is an `InvalidSignatureError` (lines 862 to 889), the class of a failed verification, of

@@ -94,14 +94,41 @@ class SyncRulesTest {
     }
 
     @Test
-    fun `an install keeps the watermark a high-water mark, so an older install never lowers it`() {
-        // With no generation loaded an older changeset installs; the cursor moves back with it, the watermark stays.
+    fun `an install beside a live generation raises the watermark, and one with none loaded sets it to its ts`() {
         val before = updater(watermark = live + day, cursor = live + day)
-        val after = UpdaterTransitions.after(before, RS, SyncOutcome.INSTALLED, now, signedTimestampMillis = live)
-        assertEquals(live + day, after.watermarkMillis)
-        assertEquals(live, after.sources.getValue(RS).lastVerifiedLastModified)
-        assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(live + 1, after.watermarkMillis, live))
-        assertEquals(SyncDecision.INSTALL, decide(live + day, after.watermarkMillis, live))
+        // Beside a live generation the watermark is a high-water mark.
+        val kept = UpdaterTransitions.after(before, RS, SyncOutcome.INSTALLED, now, signedTimestampMillis = live)
+        assertEquals(live + day, kept.watermarkMillis)
+        // With no generation loaded an older changeset installs, and the watermark and the cursor move back with it:
+        // 100, then 80, then 90 installs.
+        val lowered =
+            UpdaterTransitions.after(
+                before,
+                RS,
+                SyncOutcome.INSTALLED,
+                now,
+                signedTimestampMillis = live,
+                noneLoaded = true,
+            )
+        assertEquals(live, lowered.watermarkMillis)
+        assertEquals(live, lowered.sources.getValue(RS).lastVerifiedLastModified)
+        assertEquals(SyncDecision.INSTALL, decide(live + 1, lowered.watermarkMillis, live))
+        assertEquals(SyncDecision.ROLLBACK_REFUSED, decide(live - 1, lowered.watermarkMillis, live))
+        // A newer install with none loaded sets it to its ts too, which is the higher one.
+        val newer =
+            UpdaterTransitions.after(
+                before,
+                RS,
+                SyncOutcome.INSTALLED,
+                now,
+                signedTimestampMillis = live + 2 * day,
+                noneLoaded = true,
+            )
+        assertEquals(live + 2 * day, newer.watermarkMillis)
+        // noneLoaded is an install's.
+        assertFailsWith<IllegalArgumentException> {
+            UpdaterTransitions.after(before, RS, SyncOutcome.FAILED, now, noneLoaded = true)
+        }
     }
 
     @Test

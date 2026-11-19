@@ -73,7 +73,7 @@ internal class ModelViolation(
  *   or previous when the sync's write of `current` landed (#242's fallback, #249);
  * - **I3** `updater.json` is written only by a sync whose read of it returned (#209), and its watermark never goes
  *   backwards and never falls below the model's own high-water mark (the newest `<ts>` installed), unless damage hit
- *   the file;
+ *   the file or an install made with no generation live set it to that install's `<ts>` (§7.1);
  * - **I5** while the snapshot holds a generation live, no publication older than the floor installs, other than the
  *   live one's own (#190's retried flip). The floor is the model's high-water mark, lost only to damage to
  *   `updater.json`, raised to the live generation's timestamp (§7.1: a malformed `updater.json` keeps the live floor).
@@ -386,7 +386,14 @@ internal class StoreModel : CrliteSyncFixture() {
             if (floor != null && server.ts < floor.first && server.ts != floor.second) {
                 fail("I5: ${server.ts} installed, ${floor.first - server.ts} ms below the floor ${floor.first}")
             }
-            if (!stopped) highWater = maxOf(highWater ?: Long.MIN_VALUE, server.ts)
+            if (floor == null) {
+                // §7.1: an install with no generation loaded sets the watermark to its <ts>, lowered if it was higher. A
+                // stopped one may or may not have written it, so either value is allowed then.
+                highWater = if (stopped) highWater?.let { minOf(it, server.ts) } else server.ts
+                watermark = if (stopped) watermark?.let { minOf(it, server.ts) } else server.ts
+            } else if (!stopped) {
+                highWater = maxOf(highWater ?: Long.MIN_VALUE, server.ts)
+            }
         }
 
         /** The directory of the publication the server serves now. */

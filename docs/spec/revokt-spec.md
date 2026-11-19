@@ -1214,8 +1214,8 @@ values are names, never ordinals:
   `meta.json`; when the key exists the stored blob is re-hashed and reused on a match (a mismatch rewrites it, `storeFailures++`; on the delta path, where the full is not being fetched, the full attachment is fetched again in the same sync), so a daily delta install never rewrites the 6 MB full and a bit-rotted blob is never decoded; prune removes unreferenced
   blobs. The upki CI adapter materialises a C2SP directory image from a generation (it already
   copies into a fresh directory, §3.2).
-- `<dataset>/<channel>/updater.json`: **the rollback watermark is per dataset and channel, stored once outside the per-source map** (while a generation is live the floor is the higher of the watermark and the live generation's timestamp, §7.1, so a malformed file, whose dataset-level members are read as absent and count a store failure, reopens no rollback; with no generation loaded the watermark is not read) together with `seedInstalledAtMillis` (written with the watermark when the seed install flips the pointer) and a dataset-level `datasetLastAttemptAtMillis` (written at the end of every sync whatever its outcome, with two exceptions: `STORE_LOCKED`, and a sync whose read of
-  `updater.json` threw, which writes nothing; the §8 `STALE` gate; the loader evaluates the gate when it writes this file and carries the boolean in the published `DataState`, internal field, so handshakes read the snapshot only, never the store) (a changeset installs only if its timestamp passes the dataset watermark, whichever source delivered it, so a relabelled `sourceId` on a private mirror cannot start a fresh watermark and roll back); the per-source map is keyed by a **stable source id** (not the URL, so overriding a
+- `<dataset>/<channel>/updater.json`: **the rollback watermark is per dataset and channel, stored once outside the per-source map** (while a generation is live the floor is the higher of the watermark and the live generation's timestamp, §7.1, so a malformed file, whose dataset-level members are read as absent and count a store failure, reopens no rollback; with no generation loaded, none stored or every stored one absent or malformed and never a read that threw, the watermark is not read, and the install sets it to its `<ts>`) together with `seedInstalledAtMillis` (written with the watermark when the seed install flips the pointer) and a dataset-level `datasetLastAttemptAtMillis` (written at the end of every sync whatever its outcome, with two exceptions: `STORE_LOCKED`, and a sync whose read of
+  `updater.json` threw, which writes nothing; the §8 `STALE` gate; the loader evaluates the gate when it writes this file and carries the boolean in the published `DataState`, internal field, so handshakes read the snapshot only, never the store) (while a generation is live, a changeset installs only if its timestamp passes the dataset watermark, whichever source delivered it, so a relabelled `sourceId` on a private mirror cannot start a fresh watermark and roll back); the per-source map is keyed by a **stable source id** (not the URL, so overriding a
   base URL keeps the cursor): `lastVerifiedLastModified` (the `_since` cursor),
   `lastVerifiedAtMillis`, `lastAttemptAtMillis`, `backoffUntilMillis` (clamped to now + `MAX_BACKOFF` on write and again on read, so a clock that was far ahead at write time cannot leave a years-long backoff),
   `consecutiveFailures`; written atomically. A sync whose read of `updater.json` throws
@@ -1446,14 +1446,18 @@ with (`upki/Cargo.toml:32` at 9821cce), its divergences listed in Appendix A and
 a high-water mark (the watermark) on the signed `last_modified` (`<ts>`, the value the verified payload was built
 from, §7.1: a live sync's envelope `timestamp`, a seed's `records.json` value; never `monitor/changes`' unsigned
 `last_modified`), persisted per dataset and channel in `updater.json` (§6.5) and raised by every install to the
-higher of it and `<ts>`. A verified changeset whose `<ts>` equals the live generation's `sourceTimestampMillis` is
+higher of it and `<ts>` in the same write as the install. A verified changeset whose `<ts>` equals the live generation's `sourceTimestampMillis` is
 `UNCHANGED`, updating the attempt fields only. While a generation is live (stored or seed), the **floor** is the
 higher of the stored watermark and the live `sourceTimestampMillis`, so a malformed or absent `updater.json`
 beside a live generation cannot reopen a rollback to anything older than what is installed; a changeset older
 than the floor is `ROLLBACK_REFUSED`, decided before any body is fetched, and one equal to it installs. With no
 generation loaded (none stored, none readable, no seed) the stored watermark is not read and the changeset
-installs, as Firefox imports older data when its local data does not verify; the watermark stays the high-water
-mark, so the floor holds again once that generation is live. No rule on signed data reads the local clock: a
+installs, as Firefox imports older data when its local data does not verify, and its install sets the watermark to
+its `<ts>`, lowered if it was higher, as Firefox's local timestamp becomes the imported data's; that write is the
+install's own (§6.5), so an install that fails leaves the watermark as it was. "None readable" means a stored
+generation that is absent or malformed, never one whose read threw: a store read that throws is not an empty store,
+and no sync runs after a stored-generation read that threw until that read resolves (Firefox fails its sync when its
+local read throws). No rule on signed data reads the local clock: a
 `<ts>` ahead of it installs and advances the watermark and the cursor (§10), and the one clock check of a sync is
 the x5u validity (`CLOCK_SKEW`, stage `X5U`).
 `ROLLBACK_REFUSED` is not a feed failure, never advances `consecutiveFailures`, and never updates
@@ -1698,8 +1702,10 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
   fire late by as much if the feed then stops; a leaked signing leaf can sign any `<ts>` and coverage, and no
   timestamp rule contains it. The floor is never below the live generation's timestamp, so losing `updater.json`
   reopens no rollback; with no generation loaded the stored watermark is not read and older signed data installs,
-  as Firefox imports when its local data does not verify (residual: a party that can serve stale signed data and
-  damage the local store can roll back to any data Mozilla signed). After `resetState()` the rollback bound is the
+  setting the watermark to its `<ts>`, as Firefox imports when its local data does not verify (residual: a party
+  that can serve stale signed data and damage the local store can roll back to any data Mozilla signed; and a fatal
+  error after `activate` in a process's first install leaves the engine serving that generation with an empty
+  snapshot, so the next sync, seeing no generation loaded, does not read the watermark either). After `resetState()` the rollback bound is the
   seed's timestamp once the start task has swapped the live generation; until then the watermark floor still holds it
   at the old live generation's timestamp, which is stricter (residual: `updater.json` is deleted with the store).
 - No self-lockout: a signed revocation of the feed host's own certificate does not stop its fetches, which run over
