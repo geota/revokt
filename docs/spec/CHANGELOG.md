@@ -5,6 +5,14 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 61
+
+- **#228 (phase 1):**
+  - §3: `KotlinRevocationEngine` and its CRLite evaluation move from `revokt-engine` common to `jvmMain`, with the
+    `AtomicInt32` and `awaitDrain` expect/actual pairs and their linuxX64 stubs. The native compile checks the common
+    parts only.
+  - §4 states why `RevoktPolicy` (jvmMain, `java.time`) and `PolicyTable` (commonMain, the rules' input) stay split.
+
 ### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 
 - **#218, the trust-class cut:**
