@@ -4,11 +4,9 @@
 package dev.revokt
 
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
-import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -42,17 +40,6 @@ class DiagnosticsTest {
             .warnings(listOf(diagnostic().newBuilder().code(DiagnosticCode.SYNC_FAILED).build()))
             .build()
 
-    private fun blocked() =
-        SyncResult
-            .Builder()
-            .outcome(SyncOutcome.BLOCKED_BY_SELF)
-            .atMillis(1_700_000_000_000)
-            .sourceId("private-remote-settings")
-            .blockedSource("private-remote-settings")
-            .blockedChainSha256(ByteArray(32) { 7 })
-            .blockedLeafSerial(byteArrayOf(1, 2, 3))
-            .build()
-
     private fun assertValueSemantics(
         a: Any,
         same: Any,
@@ -76,7 +63,7 @@ class DiagnosticsTest {
         val spec =
             "METERED_DEFERRED, CLOCK_BEHIND, NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, " +
                 "STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, " +
-                "ENGINE_SELF_CHECK_FAILED, FEED_HOST_REVOKED, FETCHER_TRUST_UNAVAILABLE, " +
+                "ENGINE_SELF_CHECK_FAILED, " +
                 "IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, " +
                 "EXEMPTION_ON_EVIDENCE_RULE, NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, STALE_REJECTS_WITHOUT_THRESHOLD, " +
                 "SEED_PAST_REJECT_THRESHOLD, EXEMPT_ON_ALLOW, UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP, " +
@@ -102,13 +89,11 @@ class DiagnosticsTest {
                 "BACKOFF",
                 "STORE_FAILED",
                 "STORE_LOCKED",
-                "BLOCKED_BY_SELF",
             ),
             SyncOutcome.entries.map { it.name },
         )
         assertEquals(
             listOf(
-                "FETCHER_TRUST",
                 "CHANGESET",
                 "X5U",
                 "ATTACHMENT",
@@ -177,12 +162,11 @@ class DiagnosticsTest {
 
     @Test
     fun `a sync result built from equal inputs is equal, and newBuilder round-trips`() {
-        for (result in listOf(failed(), blocked())) {
-            val again = result.newBuilder().build()
-            assertValueSemantics(result, again)
-            assertSame(result.cause, again.cause)
-        }
-        assertValueSemantics(blocked(), blocked())
+        val result = failed()
+        val again = result.newBuilder().build()
+        assertValueSemantics(result, again)
+        assertSame(result.cause, again.cause)
+        assertValueSemantics(failed().newBuilder().cause(null).build(), failed().newBuilder().cause(null).build())
         assertNotEquals<Any>(failed(), "result")
     }
 
@@ -211,21 +195,11 @@ class DiagnosticsTest {
         for ((field, change) in changed) {
             assertNotEquals(base, base.newBuilder().change().build(), field)
         }
-        val blocked = blocked()
-        val changedBlocked =
-            mapOf<String, SyncResult.Builder.() -> SyncResult.Builder>(
-                "blockedSource" to { blockedSource("remoteSettings") },
-                "blockedChainSha256" to { blockedChainSha256(ByteArray(32) { 8 }) },
-                "blockedLeafSerial" to { blockedLeafSerial(null) },
-            )
-        for ((field, change) in changedBlocked) {
-            assertNotEquals(blocked, blocked.newBuilder().change().build(), field)
-        }
     }
 
     @Test
-    fun `toString names every sync result field and prints the blocked bytes in hex`() {
-        val text = blocked().toString()
+    fun `toString names every sync result field`() {
+        val text = failed().toString()
         val fields =
             listOf(
                 "outcome",
@@ -234,15 +208,10 @@ class DiagnosticsTest {
                 "sourceId",
                 "stage",
                 "httpStatus",
-                "blockedSource",
-                "blockedChainSha256",
-                "blockedLeafSerial",
                 "warnings",
             )
         for (field in fields) assertTrue("$field=" in text, "$field missing from $text")
-        assertTrue(text.startsWith("SyncResult(outcome=BLOCKED_BY_SELF, atMillis=1700000000000"), text)
-        assertTrue("blockedChainSha256=${"07".repeat(32)}" in text, text)
-        assertTrue("blockedLeafSerial=010203" in text, text)
+        assertTrue(text.startsWith("SyncResult(outcome="), text)
     }
 
     @Test
@@ -255,58 +224,12 @@ class DiagnosticsTest {
                 .build()
         assertEquals(emptyMap(), r.installed)
         assertEquals(emptyList(), r.warnings)
-        for (field in listOf(r.sourceId, r.stage, r.httpStatus, r.cause, r.blockedSource)) assertNull(field)
-        assertNull(r.blockedChainSha256)
-        assertNull(r.blockedLeafSerial)
+        for (field in listOf(r.sourceId, r.stage, r.httpStatus, r.cause)) assertNull(field)
         val noOutcome = assertFailsWith<IllegalArgumentException> { SyncResult.Builder().atMillis(5).build() }
         assertEquals("outcome is not set", noOutcome.message)
         val noTime =
             assertFailsWith<IllegalArgumentException> { SyncResult.Builder().outcome(SyncOutcome.FAILED).build() }
         assertEquals("atMillis is not set", noTime.message)
-    }
-
-    @Test
-    fun `the blocked fields are set only on a BLOCKED_BY_SELF result`() {
-        val outcomes = SyncOutcome.entries - SyncOutcome.BLOCKED_BY_SELF
-        val each =
-            listOf<SyncResult.Builder.() -> SyncResult.Builder>(
-                { blockedSource("private-remote-settings") },
-                { blockedChainSha256(ByteArray(32)) },
-                { blockedLeafSerial(byteArrayOf(1)) },
-            )
-        for (outcome in outcomes) {
-            for (set in each) {
-                val e =
-                    assertFailsWith<IllegalArgumentException> {
-                        SyncResult
-                            .Builder()
-                            .outcome(outcome)
-                            .atMillis(5)
-                            .set()
-                            .build()
-                    }
-                assertTrue("set only on a BLOCKED_BY_SELF result" in e.message!!, e.message)
-            }
-        }
-        // The fields are optional on a BLOCKED_BY_SELF result.
-        assertNull(
-            blocked()
-                .newBuilder()
-                .blockedLeafSerial(null)
-                .build()
-                .blockedLeafSerial,
-        )
-    }
-
-    @Test
-    fun `byte getters and builder inputs are copies`() {
-        val chain = ByteArray(32) { 9 }
-        val r = blocked().newBuilder().blockedChainSha256(chain).build()
-        chain[0] = 0
-        assertContentEquals(ByteArray(32) { 9 }, r.blockedChainSha256)
-        assertNotSame(r.blockedChainSha256, r.blockedChainSha256)
-        r.blockedLeafSerial!![0] = 42
-        assertContentEquals(byteArrayOf(1, 2, 3), r.blockedLeafSerial)
     }
 
     @Test

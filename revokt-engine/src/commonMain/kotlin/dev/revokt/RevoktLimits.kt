@@ -44,9 +44,6 @@ public object RevoktLimits {
 
     @JvmField public val ACCEPTANCE_MEMO_TTL: Long = 24L * 60 * 60 * 1_000
 
-    /** The signed source's `BLOCKED_BY_SELF` hold, millis (spec §8). */
-    @JvmField public val FEED_HOST_HOLD: Long = 24L * 60 * 60 * 1_000
-
     @JvmField public val ENGINE_CLOSE_DRAIN: Long = 5_000
 
     @JvmField public val FETCH_TIMEOUT: Long = 30_000

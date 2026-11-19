@@ -136,8 +136,8 @@ internal object UpdaterTransitions {
                 attempted.copy(backoffUntilMillis = backoffUntil(nowMillis, serverBackoffMillis, null))
             }
 
-            SyncOutcome.STORE_LOCKED, SyncOutcome.BLOCKED_BY_SELF -> {
-                // STORE_LOCKED returns before this; the BLOCKED_BY_SELF hold (feedHostBlock) is 0.3 (§8, §11).
+            SyncOutcome.STORE_LOCKED -> {
+                // STORE_LOCKED returns before this.
                 throw IllegalArgumentException("no 0.2 transition for $outcome")
             }
         }
