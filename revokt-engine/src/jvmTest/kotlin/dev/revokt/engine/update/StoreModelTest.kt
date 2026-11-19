@@ -13,11 +13,18 @@ internal class StoreModelTest {
     @Test
     fun `the store, install and sync keep the model's invariants under faults, stops and damage`() {
         val model = StoreModel()
-        for (seed in 1L..SEEDS) {
+        // `./gradlew :revokt-engine:jvmTest --tests '*StoreModelTest' -Drevokt.storeModel.seed=<n>` replays one seed.
+        val seeds = System.getProperty("revokt.storeModel.seed")?.toLong()?.let { it..it } ?: 1L..SEEDS
+        for (seed in seeds) {
             try {
                 model.run(Choices.seeded(seed), STEPS)
             } catch (v: ModelViolation) {
                 throw ModelViolation("seed $seed: ${v.message}", v)
+            } catch (
+                @Suppress("TooGenericExceptionCaught") t: Throwable,
+            ) {
+                // The model's own failure keeps its seed too.
+                throw ModelViolation("seed $seed: the model threw $t", t)
             }
         }
     }

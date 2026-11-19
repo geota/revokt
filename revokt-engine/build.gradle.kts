@@ -35,9 +35,17 @@ kotlin {
 
 val corpus: File? = providers.gradleProperty("revokt.corpus").orNull?.let { rootProject.file(it) }
 
-// The replay's recording hooks (native/*/record-goldens.sh) pass their output paths through.
+// The replay's recording hooks (native/*/record-goldens.sh) pass their output paths through, and
+// `-Drevokt.storeModel.seed=<n>` replays one seed of StoreModelTest.
 tasks.withType<Test>().configureEach {
-    for (name in listOf("revokt.writeProducerInputs", "revokt.writeRecords", "revokt.writeOracleInputs")) {
+    val passed =
+        listOf(
+            "revokt.writeProducerInputs",
+            "revokt.writeRecords",
+            "revokt.writeOracleInputs",
+            "revokt.storeModel.seed",
+        )
+    for (name in passed) {
         providers.systemProperty(name).orNull?.let { systemProperty(name, it) }
     }
     // The zlint pin test reads the pin: go.mod is an input, so a bump that touches only go.mod re-runs it, and its

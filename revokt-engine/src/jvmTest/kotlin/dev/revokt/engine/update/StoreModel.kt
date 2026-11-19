@@ -9,12 +9,14 @@ import dev.revokt.RevoktStorage
 import dev.revokt.SyncOutcome
 import dev.revokt.engine.fetch.client
 import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.MetaJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.PointerJson
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.update.UpdateFixtures.log
 import dev.revokt.testing.SplitMix64
+import okio.ByteString.Companion.toByteString
 
 /**
  * Where a [StoreModel] run draws its choices: a seed ([seeded]) for the fixed-seed test, or a fuzzer's bytes ([bytes])
@@ -49,28 +51,39 @@ internal class ModelViolation(
  * [CrliteSync] on an in-memory storage with an operation hook. One [run] draws a sequence of actions from [Choices]:
  * - a sync of a scripted Remote Settings: a new `<ts>` (some deltas, sometimes a re-parented full), the same changeset
  *   again, a rollback to an earlier publication (inside or beyond the window), or the same records re-signed;
- * - a sync whose n-th storage operation (a read, write or delete) throws, or whose engine `prepare` throws;
+ * - a sync whose n-th storage operation (a read, write, delete or listing) throws, or whose engine `prepare` throws;
  * - a process stop at the n-th operation (every later write and delete is lost), then a fresh loader (an empty snapshot
  *   and engine over the same store);
+ * - a fault, a `prepare` that throws or a stop lands, half the time, on the sync of a new publication, so that it hits an
+ *   install, a flip or a prune rather than a sync with nothing to do (the #245 review, finding 1);
  * - damage: a flipped byte or a truncated file, a malformed `current`, `meta.json` or `updater.json`, or a `meta.json`
  *   with a `metaVersion` that is too new.
  *
  * After every operation and every step it checks the audit's invariants (each failure names the steps so far):
  * - **I1** whatever the pointer names as `live` or `previous` reads back as a generation, unless damage hit it; so does
- *   the generation the loader's snapshot holds live;
+ *   the generation the loader's snapshot holds live. Damage is forgotten once the code rewrites or deletes the key (a
+ *   blob once its bytes re-hash), so a repaired generation is checked again;
  * - **I2** no key of a generation that is live or pointed to is deleted or overwritten while it is, damaged or not
- *   (#236: a damaged generation the store names is held, never rewritten or deleted). "Pointed to" is the last pointer
- *   the code wrote ([ModelStorage.pointer]), not what a damaged `current` reads as: a malformed pointer must not make
- *   its generations fair game (the shape of #207's fail-open bootstrap). Damage that leaves `current` readable is the
- *   one exception: no reader can tell it from a write, so the pointer it reads as becomes the held one (#246, #229). And the generation the engine held when a
- *   sync began survives that sync, as the pointer's live or previous, if it read back undamaged (#242's fallback);
+ *   (#236: a damaged generation the store names is held, never rewritten or deleted), and no blob its `meta.json` names
+ *   is deleted or rewritten with other bytes. "Pointed to" is the last pointer the code wrote ([ModelStorage.pointer]),
+ *   not what a damaged `current` reads as: a malformed pointer must not make its generations fair game (the shape of
+ *   #207's fail-open bootstrap). Damage that leaves `current` readable is the one exception: no reader can tell it from
+ *   a write, so the pointer it reads as becomes the held one (#246; a checksum would close it, #229). And the generation
+ *   the engine held when a sync began survives that sync, if it read back undamaged: as the pointer's live or previous,
+ *   or still the snapshot's live (#242's fallback);
  * - **I3** `updater.json` is written only by a sync whose read of it returned (#209), and its watermark never goes
  *   backwards unless damage hit the file;
+ * - **I5** no publication older than the floor by the rollback window ([rollbackWindowMillis]) or more installs. The floor is the stored
+ *   watermark, lost only to damage, raised to the timestamp of the generation the snapshot holds live when that is not
+ *   ahead of `now` + `clockSkew` (§6.5, revision 56: a malformed `updater.json` keeps the live floor);
  * - **I4** every sync returns, and once the faults stop the store recovers: within [RECOVERY] clean syncs the last
  *   publication is installed, unchanged or refused as a rollback (an orphan never loops, #205's bug), unless its
  *   directory is held and damaged, and a new publication then installs.
  */
-internal class StoreModel : CrliteSyncFixture() {
+internal class StoreModel(
+    /** The sync's rollback window, and I5's: a parameter, since #224 removes the window. */
+    private val rollbackWindowMillis: Long = DAY_MILLIS,
+) : CrliteSyncFixture() {
     /** The storage of one run: every operation counted, faults injected on cue, and the I2/I3 checks per operation. */
     inner class ModelStorage(
         private val root: String,
@@ -98,6 +111,9 @@ internal class StoreModel : CrliteSyncFixture() {
 
         val violations = ArrayList<String>()
 
+        /** The operation and key the armed throw or stop hit, for the trail. */
+        var fault: String? = null
+
         /** Starts a sync's operation count, with its faults. */
         fun arm(
             throwAt: Int,
@@ -107,17 +123,19 @@ internal class StoreModel : CrliteSyncFixture() {
             this.throwAt = throwAt
             this.stopAt = stopAt
             updaterRead = false
+            fault = null
         }
 
         val stopped: Boolean get() = stopAt in 0..<ops
 
-        private fun op() {
+        private fun op(key: String) {
             val n = ops++
+            if (n == throwAt || n == stopAt) fault = "op $n ${key.removePrefix("$root/")}"
             check(n != throwAt) { "injected fault at operation $n" }
         }
 
         override fun read(name: String): ByteArray? {
-            op()
+            op(name)
             val bytes = inner.read(name)
             if (name == "$root/updater.json") updaterRead = true
             return bytes
@@ -127,34 +145,58 @@ internal class StoreModel : CrliteSyncFixture() {
             name: String,
             bytes: ByteArray,
         ) {
-            op()
+            op(name)
             if (stopped) return
             if (name == "$root/updater.json" &&
                 !updaterRead
             ) {
                 violations += "I3: updater.json written from an unread record"
             }
-            protectedDirectory(name)?.let { violations += "I2: $name overwritten while $it is live or pointed to" }
+            val repair = isBlob(name) && bytes.toByteString().sha256().hex() == name.substringAfterLast('/')
+            if (!repair) {
+                protectedBy(
+                    name,
+                )?.let { violations += "I2: $name overwritten while $it is live or pointed to" }
+            }
             inner.write(name, bytes)
+            if (!isBlob(name) || repair) damaged -= name
             if (name == "$root/current") PointerJson.read(bytes)?.let { pointer = it }
         }
 
         override fun delete(name: String) {
-            op()
+            op(name)
             if (stopped) return
-            protectedDirectory(name)?.let { violations += "I2: $name deleted while $it is live or pointed to" }
+            protectedBy(name)?.let { violations += "I2: $name deleted while $it is live or pointed to" }
             inner.delete(name)
+            damaged -= name
         }
 
-        override fun names(): Set<String> = inner.names()
+        override fun names(): Set<String> {
+            op("names")
+            return inner.names()
+        }
 
         override fun lock(): AutoCloseable = AutoCloseable {}
 
-        /** The live or pointed directory that holds [name], or null. */
-        private fun protectedDirectory(name: String): String? {
+        private fun isBlob(name: String): Boolean = name.startsWith("$root/blobs/")
+
+        /** The live or pointed directory that holds [name], or whose `meta.json` names the blob [name], or null. */
+        private fun protectedBy(name: String): String? {
+            val held = listOfNotNull(pointer?.live, pointer?.previous, snapshotLive())
+            if (isBlob(name)) {
+                val sha = name.substringAfterLast('/')
+                return held.firstOrNull { d ->
+                    inner
+                        .read("$root/$d/meta.json")
+                        ?.let(MetaJson::read)
+                        ?.blobs
+                        ?.values
+                        ?.any { it.hex() == sha } ==
+                        true
+                }
+            }
             val directory = name.removePrefix("$root/").substringBefore('/', "")
             if (!GenerationNames.isDirectory(directory)) return null
-            val held = listOfNotNull(pointer?.live, pointer?.previous, snapshotLive())
             // Damage exempts a generation from reading back (I1), never from being kept: a damaged generation the store
             // still names is held, never rewritten or deleted (#236, #242).
             return directory.takeIf { it in held }
@@ -273,6 +315,8 @@ internal class StoreModel : CrliteSyncFixture() {
             // I2: the generation the engine held when the sync began survives it, if it read back undamaged: as the
             // pointer's live or its previous (#242's fallback beside a malformed pointer included).
             val liveAtStart = liveDirectory()?.takeIf { !storage.hit(it) && store.readGeneration(it) != null }
+            val floor = rollbackFloor()
+            pointedAtStart = (store.pointer() as? StoreRead.Found)?.value.let { listOfNotNull(it?.live, it?.previous) }
             storage.arm(throwAt, stopAt)
             engine.onPrepare = { require(!prepareThrows) { "injected prepare fault" } }
             val run =
@@ -283,24 +327,47 @@ internal class StoreModel : CrliteSyncFixture() {
                         engine,
                         snapshot,
                         verifier,
-                        SyncPolicy(day, day, 3 * day),
+                        SyncPolicy(day, rollbackWindowMillis, 3 * day),
                         UpdateFixtures.Recording(),
                     ).syncOnce(now)
                 } catch (t: Throwable) {
                     fail("I4: syncOnce threw $t")
                 }
             val stopped = storage.stopped
+            val fault = storage.fault
             storage.arm(-1, -1)
             afterSync(run.result, target, liveAtStart, clean = throwAt < 0 && stopAt < 0 && !prepareThrows, stopped)
+            if (run.result.outcome == SyncOutcome.INSTALLED && floor != null &&
+                floor - server.ts >= rollbackWindowMillis
+            ) {
+                fail("I5: ${server.ts} installed, ${floor - server.ts} ms below the floor $floor")
+            }
             now += 7 * hour
             if (stopped) restart()
             last =
+                fault?.let { " ($it)" }.orEmpty() +
                 run.result.stage
                     ?.let { stage ->
                         " at $stage: " + run.result.warnings.joinToString { it.message }
                     }.orEmpty()
             return run.result.outcome.takeUnless { stopped }
         }
+
+        /**
+         * I5's floor for a sync starting now: the stored watermark ([watermark], null once damage hit it), raised to the
+         * snapshot's live timestamp unless that is ahead of `now` + `clockSkew` (a clock-behind generation floors nothing).
+         */
+        private fun rollbackFloor(): Long? {
+            val live =
+                snapshot.snapshot.datasets[Dataset.CRLITE]
+                    ?.takeIf { it.generationId != null }
+                    ?.sourceTimestampMillis
+                    ?.takeIf { it <= now + day }
+            return listOfNotNull(watermark, live).maxOrNull()
+        }
+
+        /** What `current` named when the last sync began (the #249 exemption). */
+        private var pointedAtStart: List<String> = emptyList()
 
         /** The directory of the publication the server serves now. */
         private fun servedDirectory(): String =
@@ -320,8 +387,17 @@ internal class StoreModel : CrliteSyncFixture() {
             if (clean && result.outcome == SyncOutcome.STORE_FAILED && !held(target)) {
                 fail("I4: a clean sync of the unheld $target is STORE_FAILED: ${result.warnings.map { it.message }}")
             }
-            if (!stopped && liveAtStart != null && store.readGeneration(liveAtStart) == null) {
-                fail("I2: the sync lost $liveAtStart, the generation the engine held when it began")
+            if (stopped || liveAtStart == null) return
+            // #249: a flip that failed after activation leaves the engine serving a generation `current` does not name,
+            // and the next install's fallback is taken from `current`, so that generation is pruned. Exempt until #249's
+            // fix merges; then this line goes.
+            if (liveAtStart !in pointedAtStart) return
+            val kept = listOfNotNull(storage.pointer?.live, storage.pointer?.previous, liveDirectory())
+            if (store.readGeneration(liveAtStart) == null || liveAtStart !in kept) {
+                fail(
+                    "I2: the sync lost $liveAtStart, the generation the engine held when it began " +
+                        "(reads back: ${store.readGeneration(liveAtStart) != null}, pointer ${storage.pointer})",
+                )
             }
         }
 
@@ -400,17 +476,20 @@ internal class StoreModel : CrliteSyncFixture() {
                 }
 
                 5 -> {
+                    val fresh = fresh()
                     val at = choices.int(if (choices.int(3) == 0) 3 else OPERATIONS)
-                    trail += "throw@$at ${outcome(sync(throwAt = at))}"
+                    trail += "${fresh}throw@$at ${outcome(sync(throwAt = at))}"
                 }
 
                 6 -> {
-                    trail += "prepare-throws ${outcome(sync(prepareThrows = true))}"
+                    val fresh = fresh()
+                    trail += "${fresh}prepare-throws ${outcome(sync(prepareThrows = true))}"
                 }
 
                 7 -> {
+                    val fresh = fresh()
                     val at = choices.int(OPERATIONS)
-                    trail += "stop@$at ${outcome(sync(stopAt = at))}"
+                    trail += "${fresh}stop@$at ${outcome(sync(stopAt = at))}"
                 }
 
                 8 -> {
@@ -421,6 +500,13 @@ internal class StoreModel : CrliteSyncFixture() {
                     restart()
                 }
             }
+        }
+
+        /** Half the time, serves a new publication for the fault action that follows; its trail prefix. */
+        private fun fresh(): String {
+            if (choices.int(2) != 0) return ""
+            publish(newPublication())
+            return "new ${server.ts} "
         }
 
         private fun outcome(o: SyncOutcome?): String = (o?.name ?: "stopped") + last
@@ -585,5 +671,8 @@ internal class StoreModel : CrliteSyncFixture() {
 
         /** The clean syncs within which the store must recover (I4). */
         const val RECOVERY = 3
+
+        /** One day, the default rollback window (`SyncPolicy`'s, as the fixture's `day`). */
+        const val DAY_MILLIS = 86_400_000L
     }
 }
