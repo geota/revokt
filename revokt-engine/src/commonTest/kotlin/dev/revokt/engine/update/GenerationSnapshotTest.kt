@@ -5,7 +5,6 @@ package dev.revokt.engine.update
 
 import dev.revokt.Dataset
 import dev.revokt.Freshness
-import dev.revokt.TrustClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -17,7 +16,6 @@ class GenerationSnapshotTest {
     private val seed =
         DatasetGeneration(
             generationId = "seed-2026-11-01",
-            trustClass = TrustClass.BUNDLED,
             freshness = Freshness.SEED_SIGNED_TIME,
             fromSeed = true,
             sourceTimestampMillis = 1_700_000_000_000,
@@ -45,14 +43,5 @@ class GenerationSnapshotTest {
         assertNotEquals(s, GenerationSnapshot(3, emptyMap(), s.coverageEndMillis))
         assertNotEquals(s, GenerationSnapshot(3, s.datasets, null))
         assertNotEquals<Any>(s, "snapshot")
-    }
-
-    @Test
-    fun `a dataset's trust class is null exactly when its generation id is`() {
-        for (broken in listOf({ seed.copy(trustClass = null) }, { seed.copy(generationId = null) })) {
-            val e = assertFailsWith<IllegalArgumentException> { broken() }
-            assertTrue("trustClass is null exactly when generationId is" in e.message!!, e.message)
-        }
-        seed.copy(trustClass = null, generationId = null, pending = true)
     }
 }

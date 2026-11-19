@@ -5,7 +5,6 @@ package dev.revokt.engine.update
 
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
-import dev.revokt.TrustClass
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreRead
 import kotlin.test.Test
@@ -32,6 +31,21 @@ internal class InstallMalformedPointerTest : InstallFixture() {
         assertEquals(listOf("current"), storage.writes)
         assertTrue(meta.contentEquals(storage.inner.read("crlite/compat/$dir/meta.json")))
         assertEquals(StoreRead.Found(Pointer(dir, null)), store.pointer())
+    }
+
+    @Test
+    fun `a pointer whose previous member name is damaged is malformed, so the generation it named is held (#246)`() {
+        val g1 = assertIs<InstallResult.Installed>(install(pending("g1"))).directory
+        val g2 = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000))).directory
+        storage.inner.write("crlite/compat/current", "{\"live\":\"$g2\",\"p|evious\":\"$g1\"}".encodeToByteArray())
+        assertEquals(StoreRead.Malformed, store.pointer())
+        val meta = checkNotNull(storage.inner.read("crlite/compat/$g1/meta.json"))
+        storage.writes.clear()
+        // g1's publication served again to a fresh loader: g1 is reused as it stands, never reopened as an orphan.
+        val r = install(pending("g1"), engine, store, SnapshotRef(empty), publication, null, logger)
+        assertEquals(g1, assertIs<InstallResult.Installed>(r).directory)
+        assertEquals(listOf("current"), storage.writes)
+        assertTrue(meta.contentEquals(storage.inner.read("crlite/compat/$g1/meta.json")))
     }
 
     @Test
@@ -84,13 +98,5 @@ internal class InstallMalformedPointerTest : InstallFixture() {
                 logger,
             )
         assertIs<InstallResult.Installed>(r)
-    }
-
-    @Test
-    fun `beside a malformed pointer a live generation of a lower trust class is not kept as previous`() {
-        assertIs<InstallResult.Installed>(install(pending("g1", TrustClass.MIRROR)))
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
-        val g2 = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000))).directory
-        assertEquals(StoreRead.Found(Pointer(g2, null)), store.pointer())
     }
 }

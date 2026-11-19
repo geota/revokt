@@ -19,6 +19,9 @@ okio = "3.18.2"
 coroutines = "1.11.0"
 junit = "5.14.4"
 jazzer = "0.30.0"
+# Mutation testing (#215): run by the pitestJvm task on dispatch or weekly, never by check or a PR.
+pitest = "1.30.2"
+pitest-junit5 = "1.2.3"
 okhttp = "5.5.1"
 ktor = "3.6.0"
 robolectric = "4.17"
@@ -35,6 +38,8 @@ junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 jazzer-junit = { module = "com.code-intelligence:jazzer-junit", version.ref = "jazzer" }
+pitest-entry = { module = "org.pitest:pitest-entry", version.ref = "pitest" }
+pitest-junit5-plugin = { module = "org.pitest:pitest-junit5-plugin", version.ref = "pitest-junit5" }
 gummy-bears-api26 = { module = "com.toasttab.android:gummy-bears-api-26", version.ref = "gummy-bears" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }

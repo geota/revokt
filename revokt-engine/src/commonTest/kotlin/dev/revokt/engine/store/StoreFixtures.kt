@@ -8,7 +8,6 @@ import dev.revokt.Dataset
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
 import dev.revokt.RevoktStorage
-import dev.revokt.TrustClass
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.Window
 import okio.ByteString
@@ -32,7 +31,6 @@ internal object StoreFixtures {
         )
 
     fun meta(
-        trustClass: TrustClass = TrustClass.SIGNED,
         generationId: String = "g1",
         sourceTimestampMillis: Long = 1_762_430_400_000,
         blobs: Map<String, ByteString> = emptyMap(),
@@ -41,30 +39,18 @@ internal object StoreFixtures {
         GenerationMeta(
             dataset = Dataset.CRLITE,
             channel = channel,
-            trustClass = trustClass,
             generationId = generationId,
             format = FilterFormat.V3,
-            freshness =
-                if (trustClass ==
-                    TrustClass.MIRROR
-                ) {
-                    Freshness.MANIFEST_LAST_MODIFIED
-                } else {
-                    Freshness.RECORD_LAST_MODIFIED
-                },
+            freshness = Freshness.RECORD_LAST_MODIFIED,
             sourceTimestampMillis = sourceTimestampMillis,
-            collection = if (trustClass == TrustClass.MIRROR) null else "security-state/cert-revocations",
+            collection = "security-state/cert-revocations",
             blobs = blobs,
             signed =
-                if (trustClass == TrustClass.SIGNED) {
-                    SignedMeta(
-                        sourceTimestampMillis + 1,
-                        ByteArray(32) { 7 }.toByteString(),
-                        ByteArray(96) { 9 }.toByteString(),
-                    )
-                } else {
-                    null
-                },
+                SignedMeta(
+                    sourceTimestampMillis + 1,
+                    ByteArray(32) { 7 }.toByteString(),
+                    ByteArray(96) { 9 }.toByteString(),
+                ),
         )
 
     /** A storage that records every write and delete, in order, over an in-memory one. */

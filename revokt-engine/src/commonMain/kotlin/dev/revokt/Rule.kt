@@ -28,7 +28,6 @@ public enum class Rule(
     NO_SCTS(RuleClass.NON_ANSWER, Layer.CRLITE, true),
     NOT_COVERED(RuleClass.NON_ANSWER, Layer.CRLITE, false),
     STALE(RuleClass.DATA_QUALITY, null, true),
-    UNSIGNED_DATA(RuleClass.DATA_QUALITY, null, true),
     ;
 
     public companion object {

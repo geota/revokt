@@ -106,7 +106,6 @@ class FindingTest {
             listOf(
                 "RECORD_LAST_MODIFIED",
                 "LAST_VERIFIED_POLL",
-                "MANIFEST_LAST_MODIFIED",
                 "SEED_SIGNED_TIME",
                 "SEQUENCE_TIME",
                 "ARTIFACT_DATE",
