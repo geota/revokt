@@ -94,8 +94,8 @@ internal fun interface ComparisonBudget {
  * - **dNSName:** [DnsNameConstraint], webpki's `presented_id_matches_reference_id` in the name-constraint role.
  * - **iPAddress:** address and mask, IPv4 against IPv4 only, IPv6 against IPv6 only (`ip_address.rs` 110–180).
  * - **directoryName and URI:** not evaluated, so they fail closed: a permitted one never matches and an excluded one
- *   always does. Every certificate presents its subject, so any directoryName subtree rejects (webpki's TODO,
- *   rustls/webpki#19).
+ *   always does. Every certificate presents its subject, so any directoryName subtree rejects (webpki leaves
+ *   them unimplemented, rustls/webpki#19).
  * - **Any other form** present in both the name and a subtree: a violation.
  * - A comparison error (a malformed dNSName or constraint, a bad mask) is a violation, as webpki returns it.
  *
@@ -130,21 +130,50 @@ internal class NameConstraints private constructor(
         name: PresentedName,
         budget: ComparisonBudget,
     ): Result {
-        for ((role, subtrees) in listOf(Role.PERMITTED to permitted, Role.EXCLUDED to excluded)) {
-            if (subtrees == null) continue
-            var matched = false
-            var mismatched = false
-            for (base in subtrees) {
-                if (!budget.consume()) return Result.EXHAUSTED
-                val m = matches(name, base, role) ?: continue
-                when {
-                    m == Match.ERROR -> return Result.VIOLATION
-                    role == Role.PERMITTED && m == Match.YES -> matched = true
-                    role == Role.PERMITTED -> mismatched = true
-                    m == Match.YES -> return Result.VIOLATION
+        val permittedResult = permitted?.let { within(name, it, budget) } ?: Result.CONFORMS
+        if (permittedResult != Result.CONFORMS) return permittedResult
+        return excluded?.let { outside(name, it, budget) } ?: Result.CONFORMS
+    }
+
+    /** One permitted list: a subtree of [name]'s form must match when the list holds any. */
+    private fun within(
+        name: PresentedName,
+        subtrees: List<Base>,
+        budget: ComparisonBudget,
+    ): Result {
+        var matched = false
+        var mismatched = false
+        for (base in subtrees) {
+            if (!budget.consume()) return Result.EXHAUSTED
+            when (matches(name, base, Role.PERMITTED)) {
+                null -> {}
+
+                Match.ERROR -> {
+                    return Result.VIOLATION
+                }
+
+                Match.YES -> {
+                    matched = true
+                }
+
+                Match.NO -> {
+                    mismatched = true
                 }
             }
-            if (mismatched && !matched) return Result.VIOLATION
+        }
+        return if (mismatched && !matched) Result.VIOLATION else Result.CONFORMS
+    }
+
+    /** One excluded list: no subtree may match [name]. */
+    private fun outside(
+        name: PresentedName,
+        subtrees: List<Base>,
+        budget: ComparisonBudget,
+    ): Result {
+        for (base in subtrees) {
+            if (!budget.consume()) return Result.EXHAUSTED
+            val m = matches(name, base, Role.EXCLUDED)
+            if (m == Match.ERROR || m == Match.YES) return Result.VIOLATION
         }
         return Result.CONFORMS
     }
@@ -152,6 +181,14 @@ internal class NameConstraints private constructor(
     private enum class Role { PERMITTED, EXCLUDED }
 
     private enum class Match { YES, NO, ERROR }
+
+    /** A comparison's answer, null being webpki's error. */
+    private fun match(b: Boolean?): Match =
+        when (b) {
+            true -> Match.YES
+            false -> Match.NO
+            null -> Match.ERROR
+        }
 
     /** null when [base] is of another form than [name], which webpki skips (`continue`). */
     private fun matches(
@@ -163,21 +200,13 @@ internal class NameConstraints private constructor(
         val notEvaluated = if (role == Role.PERMITTED) Match.NO else Match.YES
         return when (name) {
             is PresentedName.Dns -> {
-                if (baseName !is PresentedName.Dns) return null
-                when (DnsNameConstraint.matches(name.id, baseName.id, excluded = role == Role.EXCLUDED)) {
-                    true -> Match.YES
-                    false -> Match.NO
-                    null -> Match.ERROR
+                (baseName as? PresentedName.Dns)?.let {
+                    match(DnsNameConstraint.matches(name.id, it.id, excluded = role == Role.EXCLUDED))
                 }
             }
 
             is PresentedName.Ip -> {
-                if (baseName !is PresentedName.Ip) return null
-                when (ipMatches(name.address, baseName.address)) {
-                    true -> Match.YES
-                    false -> Match.NO
-                    null -> Match.ERROR
-                }
+                (baseName as? PresentedName.Ip)?.let { match(ipMatches(name.address, it.address)) }
             }
 
             PresentedName.Directory -> {
@@ -272,13 +301,8 @@ internal class NameConstraints private constructor(
             name: ByteArray,
             constraint: ByteArray,
         ): Boolean? {
-            when {
-                name.size == IPV4 && constraint.size == 2 * IPV4 -> Unit
-                name.size == IPV6 && constraint.size == 2 * IPV6 -> Unit
-                name.size == IPV4 && constraint.size == 2 * IPV6 -> return false
-                name.size == IPV6 && constraint.size == 2 * IPV4 -> return false
-                else -> return null
-            }
+            val family = sameFamily(name.size, constraint.size) ?: return null
+            if (!family) return false
             var seenZeroBit = false
             for (i in name.indices) {
                 val n = name[i].toInt() and 0xff
@@ -291,6 +315,19 @@ internal class NameConstraints private constructor(
                 if ((n xor a) and m != 0) return false
             }
             return true
+        }
+
+        /**
+         * True for an IPv4 name and constraint, or an IPv6 pair; false for one of each, which never matches; null for
+         * any other length, which is malformed.
+         */
+        private fun sameFamily(
+            nameSize: Int,
+            constraintSize: Int,
+        ): Boolean? {
+            val name = nameSize == IPV4 || nameSize == IPV6
+            val constraint = constraintSize == 2 * IPV4 || constraintSize == 2 * IPV6
+            return if (name && constraint) constraintSize == 2 * nameSize else null
         }
 
         private fun leadingOnes(octet: Int): Int {

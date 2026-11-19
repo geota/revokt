@@ -123,6 +123,12 @@ class NameConstraintsTest {
             v4.check(names(PresentedName.Ip(ByteArray(16))), unlimited),
             "IPv6 never matches",
         )
+        // A mask octet that is not ones then zeros (0x0f), with no zero octet before it, is malformed on its own.
+        val notContiguous = assertNotNull(nc(permitted = listOf(ip(192, 0, 2, 0, 255, 255, 255, 0x0f))))
+        assertEquals(
+            NameConstraints.Result.VIOLATION,
+            notContiguous.check(names(PresentedName.Ip(byteArrayOf(192.toByte(), 0, 2, 0))), unlimited),
+        )
         val badMask = assertNotNull(nc(permitted = listOf(ip(192, 0, 2, 0, 255, 0, 255, 0))))
         assertEquals(
             NameConstraints.Result.VIOLATION,
