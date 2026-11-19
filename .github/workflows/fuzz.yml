@@ -60,7 +60,7 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          cache-read-only: true
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}   # saved from main, read elsewhere (#262)
       # build-logic's FuzzTargets: each method with the -max_len (the cap + 1) and -timeout its source names.
       - name: list
         id: list
@@ -115,7 +115,7 @@ jobs:
             21
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          cache-read-only: true
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}   # saved from main, read elsewhere (#262)
       # Every finding is encrypted to the maintainer's age key (CONTRIBUTING §6), so the run checks the recipient before
       # it fuzzes: a run that could not record a finding does not start. age comes from the Ubuntu archive (signed by its
       # keys; 1.1.x on 24.04).

@@ -82,8 +82,6 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field EVIDENCE_LOWERED_BELOW_PRESET Ldev/revokt/DiagnosticCode;
 	public static final field EXEMPTION_ON_EVIDENCE_RULE Ldev/revokt/DiagnosticCode;
 	public static final field EXEMPT_ON_ALLOW Ldev/revokt/DiagnosticCode;
-	public static final field FEED_HOST_REVOKED Ldev/revokt/DiagnosticCode;
-	public static final field FETCHER_TRUST_UNAVAILABLE Ldev/revokt/DiagnosticCode;
 	public static final field FORMAT_UNSUPPORTED Ldev/revokt/DiagnosticCode;
 	public static final field INDEX_INCONSISTENT Ldev/revokt/DiagnosticCode;
 	public static final field IN_MEMORY_STORE_WITH_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
@@ -234,11 +232,6 @@ public final class dev/revokt/FetchResponse$Companion {
 	public final fun of (ILjava/util/Map;[B)Ldev/revokt/FetchResponse;
 }
 
-public final class dev/revokt/FetcherTls {
-	public final fun getSslSocketFactory ()Ljavax/net/ssl/SSLSocketFactory;
-	public final fun getTrustManager ()Ljavax/net/ssl/X509TrustManager;
-}
-
 public final class dev/revokt/FilterFormat : java/lang/Enum {
 	public static final field V3 Ldev/revokt/FilterFormat;
 	public static final field V4 Ldev/revokt/FilterFormat;
@@ -385,10 +378,6 @@ public abstract interface class dev/revokt/HttpFetcher {
 	public abstract fun fetch (Ldev/revokt/FetchRequest;)Ldev/revokt/FetchResponse;
 }
 
-public abstract interface class dev/revokt/HttpFetcher$Factory {
-	public abstract fun create (Ldev/revokt/FetcherTls;)Ldev/revokt/HttpFetcher;
-}
-
 public final class dev/revokt/JvmGenerationFiles {
 	public static final field INSTANCE Ldev/revokt/JvmGenerationFiles;
 }
@@ -450,6 +439,7 @@ public final class dev/revokt/MozillaRemoteSettings {
 	public synthetic fun <init> (Ldev/revokt/MozillaRemoteSettings$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun collection (Ldev/revokt/Dataset;)Ljava/lang/String;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllowedDomains ()Ljava/util/Set;
 	public final fun getAttachmentBaseUrl ()Ljava/lang/String;
 	public final fun getBaseUrl ()Ljava/lang/String;
 	public final fun getBucket ()Ljava/lang/String;
@@ -457,7 +447,6 @@ public final class dev/revokt/MozillaRemoteSettings {
 	public final fun getSourceId ()Ljava/lang/String;
 	public final fun getUserAgent ()Ljava/lang/String;
 	public final fun getX5uHostRewrites ()Ljava/util/Map;
-	public final fun getX5uHosts ()Ljava/util/Set;
 	public fun hashCode ()I
 	public final fun newBuilder ()Ldev/revokt/MozillaRemoteSettings$Builder;
 	public fun toString ()Ljava/lang/String;
@@ -465,6 +454,7 @@ public final class dev/revokt/MozillaRemoteSettings {
 
 public final class dev/revokt/MozillaRemoteSettings$Builder {
 	public fun <init> ()V
+	public final fun allowedDomains (Ljava/util/Set;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun attachmentBaseUrl (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun baseUrl (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun bucket (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
@@ -474,7 +464,6 @@ public final class dev/revokt/MozillaRemoteSettings$Builder {
 	public final fun sourceId (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun userAgent (Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
 	public final fun x5uHostRewrite (Ljava/lang/String;Ljava/lang/String;)Ldev/revokt/MozillaRemoteSettings$Builder;
-	public final fun x5uHosts (Ljava/util/Set;)Ldev/revokt/MozillaRemoteSettings$Builder;
 }
 
 public final class dev/revokt/MozillaRemoteSettings$Companion {
@@ -592,7 +581,6 @@ public final class dev/revokt/RevoktLimits {
 	public static final field ENGINE_CLOSE_DRAIN J
 	public static final field EVENT_RING_CAPACITY I
 	public static final field FALLBACK_MAX_PRESENTED I
-	public static final field FEED_HOST_HOLD J
 	public static final field FETCH_TIMEOUT J
 	public static final field INSTANCE Ldev/revokt/RevoktLimits;
 	public static final field MAX_BACKOFF J
@@ -794,7 +782,6 @@ public final class dev/revokt/StoreLockedException : java/lang/RuntimeException 
 
 public final class dev/revokt/SyncOutcome : java/lang/Enum {
 	public static final field BACKOFF Ldev/revokt/SyncOutcome;
-	public static final field BLOCKED_BY_SELF Ldev/revokt/SyncOutcome;
 	public static final field CLOCK_SKEW Ldev/revokt/SyncOutcome;
 	public static final field DEFERRED Ldev/revokt/SyncOutcome;
 	public static final field FAILED Ldev/revokt/SyncOutcome;
@@ -812,9 +799,6 @@ public final class dev/revokt/SyncResult {
 	public synthetic fun <init> (Ldev/revokt/SyncResult$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAtMillis ()J
-	public final fun getBlockedChainSha256 ()[B
-	public final fun getBlockedLeafSerial ()[B
-	public final fun getBlockedSource ()Ljava/lang/String;
 	public final fun getCause ()Ljava/lang/Throwable;
 	public final fun getHttpStatus ()Ljava/lang/Integer;
 	public final fun getInstalled ()Ljava/util/Map;
@@ -830,7 +814,6 @@ public final class dev/revokt/SyncStage : java/lang/Enum {
 	public static final field ACTIVATE Ldev/revokt/SyncStage;
 	public static final field ATTACHMENT Ldev/revokt/SyncStage;
 	public static final field CHANGESET Ldev/revokt/SyncStage;
-	public static final field FETCHER_TRUST Ldev/revokt/SyncStage;
 	public static final field INDEX Ldev/revokt/SyncStage;
 	public static final field PREPARE Ldev/revokt/SyncStage;
 	public static final field SCHEMA Ldev/revokt/SyncStage;
