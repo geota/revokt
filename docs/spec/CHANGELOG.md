@@ -5,6 +5,24 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 61 (the fetcher trust cut of #219, and #255's order, 2026-11-19)
+
+- **#219:** every fetch goes through the platform's trust manager, or the consumer's own client's. The removals:
+  - `FetcherTls`, `HttpFetcher.Factory` (the `http` builder takes an `HttpFetcher`), `fetcherDelegate`,
+    `fetcherTrustManager` and its per-source instances;
+  - `SyncOutcome.BLOCKED_BY_SELF`, `SyncStage.FETCHER_TRUST`, and `SyncResult`'s `blockedSource`,
+    `blockedChainSha256` and `blockedLeafSerial`;
+  - `FEED_HOST_REVOKED`, `FETCHER_TRUST_UNAVAILABLE`, `FEED_HOST_HOLD`, `UnevaluatedReason.FETCHER_SNAPSHOT_UNAVAILABLE`,
+    `RevoktStatus.updateBlockedBySelf` and `feedHostRevoked`;
+  - `updater.json`'s per-source `feedHostBlock`.
+
+  The rest of the trust model's text moved to `docs/design/fetcher-policy.md`. §10's self-lockout bullet now says
+  that the feed host's own revocation does not stop its fetches, as in Firefox and upki. The test plan's (g) loses the
+  hold items and states instead that a revocation of the feed host's own chain does not stop its fetch.
+- **#255 (#249):** §6.5 states the order of the new `previous`: the generation the engine served before the install,
+  then the old `live`, then the old `previous`. It also fixes the malformed-pointer sentence that revision 60's merge
+  left broken.
+
 ### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 
 - **#218, the trust-class cut:**
