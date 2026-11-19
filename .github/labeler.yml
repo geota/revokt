@@ -7,6 +7,9 @@
 "area/engine":
   - changed-files:
       - any-glob-to-any-file: ["revokt-engine/**"]
+"area/jsse":
+  - changed-files:
+      - any-glob-to-any-file: ["revokt-jsse/**"]
 "area/bom":
   - changed-files:
       - any-glob-to-any-file: ["revokt-bom/**"]

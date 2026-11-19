@@ -15,7 +15,8 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
 
-  <!-- The Maven consumer references both the KMP root POM and the -jvm artifact (spec §3, BOM row). -->
+  <!-- The Maven consumer references both the KMP root POM and the -jvm artifact (spec §3, BOM row), and revokt-jsse,
+       a plain jvm artifact, at the BOM's managed version. -->
   <dependencyManagement>
     <dependencies>
       <dependency>
@@ -32,6 +33,10 @@
     <dependency>
       <groupId>dev.revokt</groupId>
       <artifactId>revokt-engine-jvm</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>dev.revokt</groupId>
+      <artifactId>revokt-jsse</artifactId>
     </dependency>
     <dependency>
       <groupId>dev.revokt</groupId>

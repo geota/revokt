@@ -19,11 +19,12 @@ import okio.ByteString
  * Spec §5.1 `reconstruct`: every sound path from the leaf, `presented[0]`, to an anchor of [index], under the budgets of
  * §5.1's limits table. It follows §5.1's pseudocode line for line; the comments name the rules it implements.
  *
- * - A candidate that is not an anchor must be a CA ([Cert.isCa]: basicConstraints `cA = TRUE`), as webpki
- *   (`EndEntityUsedAsCa`) and mozilla::pkix (`CheckBasicConstraints`) require of every issuer: anyone can obtain an
- *   end-entity certificate under a real anchor. One that is not is a dead end before its link is verified, as pkix
- *   runs the issuer's checks before `VerifySignedData`; it still counts as explored, and as related, and its own
- *   signature OID is still counted. At the leaf it leaves `ALL_CANDIDATES_INVALID` possible: no issuer verified.
+ * - A candidate that is not an anchor must be able to issue ([IssuerProfile.mayIssue]): a CA (basicConstraints
+ *   `cA = TRUE`, #225), within its `pathLenConstraint`, with `keyCertSign` when it has keyUsage, and listing
+ *   [requiredEku] when it has extKeyUsage (#237), as webpki and mozilla::pkix require of every issuer: anyone can
+ *   obtain an end-entity certificate under a real anchor. One that cannot is a dead end before its link is verified,
+ *   as pkix runs the issuer's checks before `VerifySignedData`; it still counts as explored, and as related, and its
+ *   own signature OID is still counted. At the leaf it leaves `ALL_CANDIDATES_INVALID` possible: no issuer verified.
  * - A link is trusted only when [verifier] answers `VERIFIED`. Each (child, candidate key) pair is verified once per
  *   walk (the per-walk memo), and a `VERIFIED` pair once per [crossCallMemo] lifetime; a memo hit costs an exploration
  *   but no verification. A verifier throw is `INVALID` plus a `Finding.VerifierError` with the child's signature OID;
@@ -53,9 +54,10 @@ internal fun reconstruct(
     verifier: SignatureVerifier,
     probe: Set<String>,
     crossCallMemo: LruMap<Pair<ByteString, ByteString>, VerifyResult>,
+    requiredEku: RequiredEku = RequiredEku.SERVER_AUTH,
 ): Walk {
     require(presented.isNotEmpty()) { "reconstruct needs the leaf: the presented chain is empty" }
-    return Reconstruction(presented, index, verifier, probe, crossCallMemo).run()
+    return Reconstruction(presented, index, verifier, probe, crossCallMemo, requiredEku).run()
 }
 
 /** One walk's state: the pseudocode's locals, with `walk` and `explore` as [Node]'s methods. */
@@ -65,6 +67,7 @@ private class Reconstruction(
     private val verifier: SignatureVerifier,
     private val probe: Set<String>,
     private val crossCallMemo: LruMap<Pair<ByteString, ByteString>, VerifyResult>,
+    private val requiredEku: RequiredEku,
 ) {
     private val found = ArrayList<WalkPath>()
     private val unsupported = LinkedHashSet<String>()
@@ -80,6 +83,13 @@ private class Reconstruction(
 
     /** The path size at the node where a limit was detected, set before unwinding. */
     private var endDepth = 0
+
+    /** Name-constraint comparisons made so far, bounded by [NameConstraints.MAX_COMPARISONS] for the whole walk. */
+    private var comparisons = 0
+    private val comparisonBudget =
+        ComparisonBudget {
+            if (comparisons >= NameConstraints.MAX_COMPARISONS) false else true.also { comparisons++ }
+        }
 
     /** (child bytesHash, candidate spkiHash) → result. */
     private val memo = HashMap<Pair<ByteString, ByteString>, VerifyResult>()
@@ -195,6 +205,16 @@ private class Reconstruction(
             if (!index.isAnchorBytes(candidate)) countOwn(candidate)
         }
 
+        /** [candidate]'s nameConstraints checked against every certificate on [path], the leaf first. */
+        private fun constrains(candidate: Cert): NameConstraints.Result {
+            val nc = candidate.nameConstraints ?: return NameConstraints.Result.CONFORMS
+            for (below in path) {
+                val r = nc.check(below.presentedNames, comparisonBudget)
+                if (r != NameConstraints.Result.CONFORMS) return r
+            }
+            return NameConstraints.Result.CONFORMS
+        }
+
         private fun explore(
             candidate: Cert,
             isRelated: Boolean,
@@ -206,8 +226,17 @@ private class Reconstruction(
             explored++
             if (isRelated) countIssuerIndependent(candidate)
             val anchor = index.isAnchorBytes(candidate)
-            // webpki's EndEntityUsedAsCa and pkix's ERROR_CA_CERT_INVALID, checked before the link as pkix does.
-            if (!anchor && !candidate.isCa) return null
+            // The issuer rules (#225, #237), checked before the link as pkix checks them: the candidate would sit at
+            // path index path.size, with path.size - 1 CAs between it and the leaf.
+            if (!anchor && !candidate.issuer.mayIssue(path.size - 1, requiredEku)) return null
+            // Its nameConstraints, an anchor's included, bind every certificate below it (webpki, pkix); a walk that
+            // spends the comparison budget ends as any other limit does.
+            val constrained = constrains(candidate)
+            if (constrained == NameConstraints.Result.VIOLATION) return null
+            if (constrained == NameConstraints.Result.EXHAUSTED) {
+                endDepth = path.size
+                return WalkEnd.EXPLORATION_BUDGET
+            }
             val result = verifyOnce(child, candidate)
             when (result) {
                 null -> {

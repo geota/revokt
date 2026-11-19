@@ -14,9 +14,14 @@ public interface PathBuilderFallback {
      * as a failed build, `Finding.FallbackNotUsed(FAILED)`, and its outcome is cached in neither the path nor the
      * verdict cache; every `VirtualMachineError` except `StackOverflowError` is rethrown (§5.1 decision step 6).
      *
-     * Every certificate of a returned path between the leaf and the anchor must be a CA under RFC 5280 basicConstraints
-     * (`cA = TRUE`), as `CertPathBuilder("PKIX")` requires. Decision step 6 checks it again (#225): a path with an
-     * intermediate that does not parse or is not a CA is a failed build, `FallbackNotUsed(FAILED)`.
+     * A returned path must meet RFC 5280's issuer rules: every certificate between the leaf and the anchor a CA
+     * (`cA = TRUE`) within its `pathLenConstraint`, with `keyCertSign` when it has keyUsage, and listing the request's
+     * purpose (`serverAuth` for a server) when it has extKeyUsage; and every nameConstraints on the path, the anchor's
+     * included, admitting the certificates below it. Decision step 6 checks them again (#225, #237): a path that fails
+     * one, does not end at a snapshot anchor by bytes, or holds a certificate that does not parse, is a failed build,
+     * `FallbackNotUsed(FAILED)`. The JDK's `CertPathBuilder("PKIX")` enforces less: it exempts self-issued
+     * certificates from `pathLenConstraint` and name constraints, does not apply the anchor certificate's own
+     * nameConstraints, and does not read a CA's extKeyUsage; step 6's check covers all of them.
      */
     public fun build(
         chainDer: List<ByteArray>,
