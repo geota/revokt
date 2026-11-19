@@ -5,10 +5,12 @@ package dev.revokt.engine.walker
 
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
+import dev.revokt.VerifyResult
 import dev.revokt.canonicalSubject
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.verify.JcaSignatureVerifier
+import okio.ByteString
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import kotlin.test.Test
@@ -43,21 +45,24 @@ class HonestCorpusWalkTest {
 
     private fun chain(host: String): List<ByteArray> = (1..chains.getValue(host)).map { der(host, it) }
 
+    /** [host]'s chain walked for [eku], its last certificate the anchor, with the JDK verifier. */
+    private fun walk(
+        host: String,
+        eku: RequiredEku = RequiredEku.SERVER_AUTH,
+    ): Pair<List<Cert>, Walk> {
+        val ders = chain(host)
+        val index = CandidateIndex(listOf(ders.last()))
+        val presented = ders.dropLast(1).map { index.cert(WalkerCerts.parse(it)) }
+        val verifier = JcaSignatureVerifier()
+        val memo = LruMap<Pair<ByteString, ByteString>, VerifyResult>(RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
+        return presented to reconstruct(presented, index, verifier, verifier.unsupportedOids(), memo, eku)
+    }
+
     @Test
-    fun `walker the corpus chains are Found with the CA check`() {
-        for (host in chains.keys) {
+    fun `walker the TLS corpus chains are Found with the issuer rules for serverAuth and clientAuth`() {
+        for (host in chains.keys - CONTENT_SIGNING) {
             val ders = chain(host)
-            val index = CandidateIndex(listOf(ders.last()))
-            val presented = ders.dropLast(1).map { index.cert(WalkerCerts.parse(it)) }
-            val verifier = JcaSignatureVerifier()
-            val walk =
-                reconstruct(
-                    presented,
-                    index,
-                    verifier,
-                    verifier.unsupportedOids(),
-                    LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
-                )
+            val (presented, walk) = walk(host)
             assertIs<Walk.Found>(walk, host)
             assertEquals(
                 ders.size,
@@ -68,7 +73,31 @@ class HonestCorpusWalkTest {
             )
             assertTrue(presented.drop(1).all { it.isCa }, "$host: every intermediate is a CA")
             assertTrue(!presented[0].isCa, "$host: the leaf is not")
+            // For clientAuth the chain is Found exactly when every intermediate, read by the JDK, has no extKeyUsage
+            // or lists clientAuth (Let's Encrypt's current intermediates list serverAuth only).
+            val factory = CertificateFactory.getInstance("X.509")
+            val clientOk =
+                ders.drop(1).dropLast(1).all {
+                    val eku = (factory.generateCertificate(it.inputStream()) as X509Certificate).extendedKeyUsage
+                    eku == null || CLIENT_AUTH in eku
+                }
+            assertEquals(clientOk, walk(host, RequiredEku.CLIENT_AUTH).second is Walk.Found, "$host for clientAuth")
         }
+    }
+
+    @Test
+    fun `walker the content-signing chain is NotFound for serverAuth, its intermediate listing codeSigning only`() {
+        val factory = CertificateFactory.getInstance("X.509")
+        val intermediate = factory.generateCertificate(chain(CONTENT_SIGNING)[1].inputStream()) as X509Certificate
+        assertEquals(listOf("1.3.6.1.5.5.7.3.3"), intermediate.extendedKeyUsage)
+        val (presented, walk) = walk(CONTENT_SIGNING)
+        assertIs<Walk.NotFound>(walk)
+        assertTrue(presented[1].isCa, "a CA, so the extKeyUsage decides")
+    }
+
+    private companion object {
+        const val CONTENT_SIGNING = "mozilla-content-signing"
+        const val CLIENT_AUTH = "1.3.6.1.5.5.7.3.2"
     }
 
     @Test
