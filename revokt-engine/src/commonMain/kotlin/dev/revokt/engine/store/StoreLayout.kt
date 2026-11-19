@@ -124,8 +124,16 @@ internal class StoreLayout(
      * as it is, so a caller that mistakes a pointed generation for an orphan fails loudly rather than deleting it. It
      * fails closed: a pointer that is present but malformed may name any directory, so nothing is reopened then either
      * (a pointer that cannot be read at all throws from the read).
+     *
+     * [unloadable] when the caller found [directory] unloadable as it stands (its stored files do not re-verify) and
+     * completes it again as the same generation from verified data (the seed's rule (b), #138): it is then reopened
+     * whatever the pointer says, its files kept to be re-hashed, so a rotted file is the only one re-staged.
      */
-    fun reopen(directory: String) {
+    fun reopen(
+        directory: String,
+        unloadable: Boolean = false,
+    ) {
+        if (unloadable) return storage.delete(fileKey(directory, META))
         val named =
             when (val read = pointer()) {
                 StoreRead.Absent -> emptySet()

@@ -122,9 +122,28 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
-    fun `a malformed pointer beside the seed's own directory holding something else fails and keeps it`() {
+    fun `beside a malformed pointer the seed's own directory with a rotted delta is completed again from the seed`() {
         val own = installedAt(ts)
-        storage.inner.write("$root/$own/${delta.filename}", ByteArray(3))
+        val deltaKey = "$root/$own/${delta.filename}"
+        storage.inner.write(deltaKey, ByteArray(3))
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        reset(keepStore = true)
+        val load = installed(load(Seed()))
+        assertEquals(own, load.directory)
+        assertEquals(2, load.storeFailures, "the malformed pointer and the rejected directory, each once")
+        assertEquals(delta.body.toList(), storage.inner.read(deltaKey)?.toList(), "the rotted delta is re-staged")
+        assertEquals(Pointer(own, null), (store.pointer() as StoreRead.Found).value)
+    }
+
+    @Test
+    fun `beside a malformed pointer the seed's own directory holding another generation fails and keeps it`() {
+        val own = installedAt(ts)
+        val meta = checkNotNull(store.meta(own))
+        storage.inner.write(
+            "$root/$own/meta.json",
+            dev.revokt.engine.store.MetaJson
+                .write(meta.copy(collection = "security-state/other")),
+        )
         storage.inner.write(pointerKey, "garbage".encodeToByteArray())
         reset(keepStore = true)
         val before = contents()
@@ -154,7 +173,8 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         assertEquals(newer to ts + hour, adopted.directory to adopted.timestampMillis)
         assertEquals(1, adopted.storeFailures, "the malformed pointer, counted where it is found")
         assertEquals(Pointer(newer, null), (store.pointer() as StoreRead.Found).value)
-        assertEquals(before - pointerKey, contents() - pointerKey, "only the pointer is written")
+        val written = setOf(pointerKey, updaterKey)
+        assertEquals(before - written, contents() - written, "only the pointer and updater.json are written")
         // With no pointer at all (a first sync that crashed before its flip), the same.
         storage.inner.delete(pointerKey)
         assertIs<SeedLoad.Adopted>(load(Seed()))
@@ -189,6 +209,142 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
+    fun `adopt writes updater_json from the record read, its watermark raised to the adopted timestamp`() {
+        val newer = installedAt(ts + hour)
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        storage.inner.write(updaterKey, "{not json".encodeToByteArray())
+        reset(keepStore = true)
+        assertIs<SeedLoad.Adopted>(load(Seed()))
+        assertEquals(ts + hour, updater().watermarkMillis, "a malformed updater.json is replaced")
+        storage.inner.delete(updaterKey)
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        assertIs<SeedLoad.Adopted>(load(Seed()))
+        assertEquals(ts + hour, updater().watermarkMillis, "an absent one is written")
+        store.writeUpdater(UpdaterRecord(watermarkMillis = ts + day, seedInstalledAtMillis = 5), ts)
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        assertIs<SeedLoad.Adopted>(load(Seed()))
+        assertEquals(
+            UpdaterRecord(watermarkMillis = ts + day, seedInstalledAtMillis = 5),
+            updater(),
+            "the rest is kept",
+        )
+        assertTrue(store.meta(newer) != null)
+    }
+
+    @Test
+    fun `the seed's own rotted directory is never rewritten while the engine serves it`() {
+        val own = installedAt(ts)
+        storage.inner.write("$root/$own/${delta.filename}", ByteArray(3))
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        val before = contents()
+        failed(load(Seed()), "does not re-hash")
+        assertEquals(before, contents(), "the served directory is byte-identical")
+    }
+
+    @Test
+    fun `adopt never rolls back below the generation the engine serves`() {
+        // The engine serves ts + 2 h, whose delta has rotted on disk; ts + 1 h re-verifies, and the pointer is malformed.
+        installedAt(ts + hour)
+        val serving = installedAt(ts + 2 * hour)
+        storage.inner.write("$root/$serving/${delta.filename}", ByteArray(3))
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        val before = contents()
+        val skipped = assertIs<SeedLoad.Skipped>(load(Seed()))
+        assertEquals(ts + 2 * hour, skipped.storedTimestampMillis)
+        assertEquals(2, skipped.storeFailures, "the malformed pointer and the rejected directory")
+        assertEquals(before, contents())
+    }
+
+    @Test
+    fun `adopt takes a generation not older than the one the engine serves`() {
+        installedAt(ts + hour)
+        val serving = snapshot.snapshot
+        val newer = installedAt(ts + 2 * hour)
+        snapshot.publish(serving)
+        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        assertEquals(newer, assertIs<SeedLoad.Adopted>(load(Seed())).directory)
+    }
+
+    @Test
+    fun `a newer generation whose records json no longer verifies under the seed's leaf is not adopted`() {
+        val newer = installedAt(ts + hour)
+        val recordsKey = "$root/$newer/records.json"
+        val records = checkNotNull(storage.inner.read(recordsKey)).decodeToString()
+        storage.inner.write(recordsKey, records.replace("octet-stream", "octet-streax").encodeToByteArray())
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        val load = installed(load(Seed()))
+        assertEquals(1, load.storeFailures, "the rejected directory")
+        assertTrue(store.meta(newer) != null)
+    }
+
+    @Test
+    fun `a newer generation whose meta json timestamps disagree with its records is not adopted`() {
+        val newer = installedAt(ts + hour)
+        val meta = checkNotNull(store.meta(newer))
+        val signed = checkNotNull(meta.signed).copy(changesetTimestampMillis = ts + 2 * hour)
+        storage.inner.write(
+            "$root/$newer/meta.json",
+            dev.revokt.engine.store.MetaJson
+                .write(meta.copy(signed = signed)),
+        )
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        assertEquals(1, installed(load(Seed())).storeFailures, "the rejected directory")
+    }
+
+    @Test
+    fun `a newer generation whose index names fewer files than its records place is not adopted`() {
+        val newer = installedAt(ts + hour)
+        val fullOnly =
+            (
+                dev.revokt.engine.update.buildIndex(
+                    listOf(dev.revokt.engine.update.UpdateFixtures.fullRecord),
+                    dev.revokt.CrliteChannel.COMPAT,
+                ) { full.body } as dev.revokt.engine.update.IndexBuild.Built
+            ).index
+        storage.inner.write("$root/$newer/index.bin", fullOnly)
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        assertEquals(1, installed(load(Seed())).storeFailures, "the rejected directory")
+    }
+
+    @Test
+    fun `a newer generation signed by another leaf is adopted on its stored hashes alone`() {
+        val newer = installedAt(ts + hour)
+        val meta = checkNotNull(store.meta(newer))
+        val other = checkNotNull(meta.signed).copy(signerLeafSha256 = okio.ByteString.of(*ByteArray(32) { 7 }))
+        storage.inner.write(
+            "$root/$newer/meta.json",
+            dev.revokt.engine.store.MetaJson
+                .write(meta.copy(signed = other)),
+        )
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        assertEquals(newer, assertIs<SeedLoad.Adopted>(load(Seed())).directory)
+    }
+
+    @Test
+    fun `a trusted pointer whose live is the engine's and the seed's directory with an unreadable meta counts once`() {
+        val own = installedAt(ts)
+        storage.inner.write("$root/$own/meta.json", "{}".encodeToByteArray())
+        val before = contents()
+        val failed = failed(load(Seed()), "is the engine's live generation")
+        assertEquals(1, failed.storeFailures, "the unreadable pointed meta.json, counted once")
+        assertEquals(before, contents())
+    }
+
+    @Test
+    fun `a trusted older pointed live generation is kept when the engine serves one newer than the seed`() {
+        val older = installedAt(ts - hour)
+        installedAt(ts + hour)
+        store.point(Pointer(older, null))
+        val before = contents()
+        assertEquals(ts + hour, assertIs<SeedLoad.Skipped>(load(Seed())).storedTimestampMillis)
+        assertEquals(before, contents())
+    }
+
+    @Test
     fun `a newer complete generation that does not re-verify is not adopted, and is kept while the seed installs`() {
         val newer = installedAt(ts + hour)
         storage.inner.write("$root/$newer/${delta.filename}", ByteArray(3))
@@ -196,6 +352,7 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         reset(keepStore = true)
         val kept = files(newer)
         val load = installed(load(Seed()))
+        assertEquals(1, load.storeFailures, "the rejected directory, counted once")
         assertEquals(Pointer(load.directory, null), (store.pointer() as StoreRead.Found).value)
         assertEquals(kept, files(newer), "never pruned in a rule (b) load")
     }
