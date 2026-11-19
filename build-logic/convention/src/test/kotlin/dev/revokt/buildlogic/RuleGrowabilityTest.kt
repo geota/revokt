@@ -92,8 +92,8 @@ class RuleGrowabilityTest {
 
     @Test
     fun `a duplicated rule row is reported once, and never thrown`() {
-        val last = committed.lines().first { it.startsWith("NOT_COVERED\t") }
-        assertOne(problems(committed.replace(last, "$last\n$last")), "[rules] has the row NOT_COVERED more than once")
+        val notCovered = committed.lines().first { it.startsWith("NOT_COVERED\t") }
+        assertOne(problems(committed.replace(notCovered, "$notCovered\n$notCovered")), "[rules] has the row NOT_COVERED more than once")
         val stale = committed.lines().first { it.startsWith("STALE\t") }
         assertOne(problems(committed.replace(stale, "$stale\n$stale")), "[rules] has the row STALE more than once")
     }

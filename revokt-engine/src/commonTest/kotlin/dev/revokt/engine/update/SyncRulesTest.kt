@@ -16,7 +16,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Spec §6.3 coverage sanity at install and §7.1's rollback guard (#131): the decision for a verified `SIGNED`
+ * Spec §6.3 coverage sanity at install and §7.1's rollback guard (#131): the decision for a verified signed
  * changeset, the §9 data-path fixtures (a) and (b) and the decision half of the §9 content-signature clock items. Every
  * boundary is tested at the edge and one millisecond either side.
  */
@@ -117,7 +117,7 @@ class SyncRulesTest {
     }
 
     @Test
-    fun `data-path (a) a lost watermark is floored at the live SIGNED generation, so an older changeset is refused`() {
+    fun `data-path (a) a lost watermark is floored at the live generation, so an older changeset is refused`() {
         // A malformed or absent updater.json reads as no watermark (a store failure for a malformed one, #178).
         for (read in listOf(StoreRead.Malformed, StoreRead.Absent)) {
             val lost = LoadedUpdater.of(read).record.watermarkMillis
@@ -164,7 +164,7 @@ class SyncRulesTest {
     }
 
     @Test
-    fun `data-path (b) SIGNED coverage high beyond the signed ts + clockSkew is FAILED at stage INDEX`() {
+    fun `data-path (b) a coverage high beyond the signed ts + clockSkew is FAILED at stage INDEX`() {
         val ts = watermark + 1
         assertEquals(SyncDecision.INSTALL, decide(ts, cov(ts + day)))
         assertEquals(SyncDecision.FAILED, decide(ts, cov(ts + day + 1)))

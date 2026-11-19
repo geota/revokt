@@ -47,8 +47,8 @@ class DiagnosticsTest {
             .Builder()
             .outcome(SyncOutcome.BLOCKED_BY_SELF)
             .atMillis(1_700_000_000_000)
-            .sourceId("c2spMirror")
-            .blockedSource("c2spMirror")
+            .sourceId("private-remote-settings")
+            .blockedSource("private-remote-settings")
             .blockedChainSha256(ByteArray(32) { 7 })
             .blockedLeafSerial(byteArrayOf(1, 2, 3))
             .build()
@@ -270,7 +270,7 @@ class DiagnosticsTest {
         val outcomes = SyncOutcome.entries - SyncOutcome.BLOCKED_BY_SELF
         val each =
             listOf<SyncResult.Builder.() -> SyncResult.Builder>(
-                { blockedSource("c2spMirror") },
+                { blockedSource("private-remote-settings") },
                 { blockedChainSha256(ByteArray(32)) },
                 { blockedLeafSerial(byteArrayOf(1)) },
             )

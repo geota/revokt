@@ -30,14 +30,15 @@ internal enum class SyncDecision(
     /** Older than the watermark by the window or more, or inside it with a lower maximum coverage: not a feed failure. */
     ROLLBACK_REFUSED(null),
 
-    /** A filter's coverage is beyond the trust-class bound ([SyncRules.coverageWithinBound]): cursor and watermark stay. */
+    /** A filter's coverage is beyond the signed bound ([SyncRules.coverageWithinBound]): cursor and watermark stay. */
     FAILED(SyncStage.INDEX),
 }
 
 /**
- * The dataset's live generation as the published snapshot holds it, for [SyncRules]: its `sourceTimestampMillis`, and its maximum coverage `high` (`DatasetGeneration.maxCoverageMillis`, decoded by the
- * loader from the generation's `index.bin` and clamped to [Long.MAX_VALUE]), null when it covers no log. Never read from
- * `updater.json` (§6.5), nor from the engine's `coverageEndMillis`.
+ * The dataset's live generation as the published snapshot holds it, for [SyncRules]: its `sourceTimestampMillis`, and
+ * its maximum coverage `high` (`DatasetGeneration.maxCoverageMillis`, decoded by the loader from the generation's
+ * `index.bin` and clamped to [Long.MAX_VALUE]), null when it covers no log. Never read from `updater.json` (§6.5), nor
+ * from the engine's `coverageEndMillis`.
  */
 internal class LiveGeneration(
     val sourceTimestampMillis: Long,
@@ -69,8 +70,9 @@ internal class SyncClock(
 
 /**
  * Spec §6.3's coverage sanity at install and §7.1's rollback guard, for one verified changeset of a dataset and
- * channel. Every generation is Mozilla-signed (#218 cut the mirror and system-cache sources). Every input is a value the caller passes: the changeset's signed `<ts>` ([signedTimestampMillis], the
- * verified envelope `timestamp` the client returns in `Changeset`, #181; never `pollChanges`' `last_modified`), the
+ * channel. Every generation is Mozilla-signed (#218 cut the mirror and system-cache sources). Every input is a value
+ * the caller passes: the changeset's signed `<ts>` ([signedTimestampMillis], the verified envelope `timestamp` the
+ * client returns in `Changeset`, #181; never `pollChanges`' `last_modified`), the
  * dataset's watermark from `updater.json`, the [LiveGeneration] from the published snapshot (null when the dataset has
  * none: no stored generation, no seed) and the [SyncClock]. The candidate generation's coverage is `coverageHighs`:
  * the latest coverage `high` of each filter, unsigned as decoded; a filter that covers no log contributes none. Nothing

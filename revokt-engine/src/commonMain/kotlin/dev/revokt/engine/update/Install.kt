@@ -106,8 +106,9 @@ internal sealed interface InstallResult {
 
 /**
  * Installs [generation] in spec §6.5's order: the `index.bin` cap → the format check (a format [engine] does not list is
- * never offered to `prepare`) → write the generation directory, `meta.json` last → `engine.prepare` → the [SelfCheck] on the prepared state → `engine.activate` → publish the
- * generation snapshot (`generationEpoch++`) → flip the pointer → write [updater] when given.
+ * never offered to `prepare`) → write the generation directory, `meta.json` last → `engine.prepare` → the [SelfCheck]
+ * on the prepared state → `engine.activate` → publish the generation snapshot (`generationEpoch++`) → flip the
+ * pointer → write [updater] when given.
  *
  * Nothing becomes live before every check passes. A failure before `activate` returns leaves the engine, [snapshot] and
  * the pointer untouched and deletes the directory this install wrote (its blobs stay, content-addressed); a `prepare`,
@@ -267,7 +268,7 @@ private class Install(
 
     /**
      * Whether [directory], whose `meta.json` is [stored], holds this generation: the same `meta.json` but for its
-     * `SIGNED` members (the signature that verified, and its leaf), byte-equal `index.bin` and `records.json`, and each
+     * signed members (the signature that verified, and its leaf), byte-equal `index.bin` and `records.json`, and each
      * delta file re-hashing against its signed record (#201: a stored filter is re-hashed before it is reused, as Firefox's
      * `isFilterOnDisk` and upki's `Plan::construct` re-hash theirs; the full filters' blobs are re-hashed when the
      * directory is read). A collection re-signed under the same `<ts>` is the same signed records, so a retried flip over

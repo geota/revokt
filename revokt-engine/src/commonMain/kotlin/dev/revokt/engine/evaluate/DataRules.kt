@@ -38,7 +38,7 @@ internal class DataRuleRow(
 /**
  * The two data rules, one row each in `Rule.PRECEDENCE` order (spec §4 "Data rules", §8):
  * - `NO_DATA` for a required dataset with no generation that is not `pending` (never with a generation installed from
- *   a seed or a system cache, §5.1 decision step 7);
+ *   a seed, §5.1 decision step 7);
  * - `STALE` for a dataset with a staleness entry whose `rejectStaleAfter` is set, when `ageMillis > rejectStaleAfter`
  *   and, for a `fromSeed` generation, the persisted seed gate is open (a sync attempt has completed since the seed
  *   install, or no fetching source is configured).
