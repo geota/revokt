@@ -74,12 +74,6 @@ public object RevoktLimits {
     @JvmField public val MAX_X5U_BYTES: Long = 64L shl 10
 
     /**
-     * C2SP manifest attachments to fetch; a manifest listing more is rejected before any body fetch. 256 since revision
-     * 56 (32 before; Remote Settings listed 53 records a channel on 2026-11-12).
-     */
-    @JvmField public val MAX_MANIFEST_ENTRIES: Int = 256
-
-    /**
      * Records a changeset may keep after channel filtering; more is rejected before any body fetch. 1,024: at about four
      * deltas a day, some 256 days, so the cap does not freeze a shipped client; the per-file caps still bound the bodies.
      */

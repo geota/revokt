@@ -195,7 +195,7 @@ class RecordsAndAttachmentsTest {
         )) {
             rejected(record(attachment = attachment(filename = name)))
         }
-        // Only a C2SP mirror's manifest names are compared ignoring case (§6.3, §7.3).
+        // Names are compared exactly, ASCII case included (§6.3).
         check(record(attachment = attachment(filename = "Index.bin"))).assertOk()
         assertEquals(7, AttachmentName.RESERVED.size)
     }

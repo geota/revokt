@@ -46,12 +46,13 @@ internal class X5uUrlCheck private constructor(
  * applied to the parsed x5u URI host before the `allowedDomains` check … the https-only, port-443 and no-userinfo rules apply to the mirror host
  * too"), with the #177 review's contract for the rewrite.
  *
- * The URL is read by [StrictUrl], the narrow grammar shared with the redirect hops, DNS host names only, so no URL parser
- * downstream can see another host than the one checked: `https://` (lowercase), an authority that is a DNS host name (labels of ASCII letters, digits and `-`,
+ * The URL is read by [StrictUrl]'s narrow grammar, so no URL parser downstream can see another host than the one
+ * checked: `https://` (lowercase), an authority that is a DNS host name (labels of ASCII letters, digits and `-`,
  * separated by single dots, no trailing dot) and an optional port, then a path starting with `/` whose characters are
- * RFC 3986 `pchar`s, `/` and `?`, with every `%` followed by two hex digits. No fragment, no IP literal (nor a host whose last label is a number), no
- * percent-encoded or non-ASCII host (`java.net.URI.getHost()` would be null for the latter). What is fetched is
- * re-serialised from the parts: `https://`, the checked host, the path; an explicit `:443` is dropped.
+ * RFC 3986 `pchar`s, `/` and `?`, with every `%` followed by two hex digits. No fragment, no IP literal (nor a host
+ * whose last label is a number), no percent-encoded or non-ASCII host (`java.net.URI.getHost()` would be null for the
+ * latter). What is fetched is re-serialised from the parts: `https://`, the checked host, the path; an explicit `:443`
+ * is dropped.
  *
  * Hosts are compared exactly, ASCII case included, against [x5uHostRewrites][dev.revokt.MozillaRemoteSettings.x5uHostRewrites]
  * and [allowedDomains][dev.revokt.MozillaRemoteSettings.allowedDomains] ([AllowedDomains], #177). After a rewrite the rewritten URI is re-parsed and
@@ -118,7 +119,7 @@ internal object X5uUrl {
 
     private fun parse(url: String): Read {
         val read =
-            when (val strict = StrictUrl.parse(url, ipLiterals = false)) {
+            when (val strict = StrictUrl.parse(url)) {
                 is StrictUrlRead.Parsed -> strict
                 is StrictUrlRead.Refused -> return Read.Refused(failure(strict.failure), strict.detail)
             }

@@ -30,7 +30,7 @@ internal object AttachmentBase {
         reject: (String) -> Nothing,
     ): String {
         val read =
-            when (val strict = StrictUrl.parse(url, ipLiterals = false)) {
+            when (val strict = StrictUrl.parse(url)) {
                 is StrictUrlRead.Parsed -> strict
                 is StrictUrlRead.Refused -> reject("${strict.failure}: ${strict.detail}")
             }

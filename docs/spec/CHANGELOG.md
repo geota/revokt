@@ -5,8 +5,27 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
-### Changes in revision 60 (in progress)
+### Changes in revision 60 (the trust-class cut of #218, #246, and the Mozilla constants of #223)
 
+- **#218, the trust-class cut:**
+  - No MIRROR or SYSTEM source. `TrustClass`, `UNSIGNED_DATA`, `minTrustClass`, the bootstrap-only rule,
+    `MANIFEST_LAST_MODIFIED`, `MAX_MANIFEST_ENTRIES` and the diagnostics `MIRROR_WITH_SEED_NEVER_INSTALLED`,
+    `LOWER_CLASS_SOURCE_NEVER_INSTALLED` and `SOURCE_EMPTY` are gone.
+  - The goals: §2 goal 2 is "authenticated data only".
+  - §3.2: the loader builds every index it installs, and only a seed's is byte-compared.
+  - §4: the API sketch, the validation bullets and the golden fixture's columns.
+  - §5.1: the seed rule loses its class condition.
+  - §6.3: the coverage bound applies to every generation.
+  - §6.5: `meta.json` always carries the signed members; `records.json` is in every generation; `previous` has no
+    rank rule.
+  - §7: the source table and §7.3's stub. §7.3's hop grammar and the R diagnostic for a `c2spMirror` URL went with
+    the source, and so did `StrictUrl`'s IP-literal mode.
+  - §8: the `UNSIGNED_DATA` row and floor.
+  - §10: the bootstrap-only and mirror bullets.
+  - §11: the mirror and system-cache deliverables.
+  - The test plan: data-path fixture (c) and the MIRROR, SYSTEM and `UNSIGNED_DATA` items.
+- **#246:** §6.5 reads `current` strictly (an unknown or duplicate member is malformed); `previous` must read back as
+  the loader reads it, `records.json` included; a heal flip is not followed by a prune (the lead's decision on r256).
 - **#223 (audit A-1), Mozilla constants:**
   - §7.1 tries the first 4 `metadata.signatures` entries and ignores the rest, where more than 4 failed the changeset.
   - §5.1 raises `MAX_CHANGESET_RECORDS` from 256 to 1,024.

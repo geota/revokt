@@ -18,7 +18,6 @@ import dev.revokt.RevoktStorage
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
-import dev.revokt.TrustClass
 import dev.revokt.VerifyResult
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.fetch.FetchLimits
@@ -272,7 +271,7 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
         SnapshotRef(
             GenerationSnapshot(
                 0,
-                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, null, false, null, null, false, false, false)),
+                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false, false)),
                 null,
             ),
         )
