@@ -72,7 +72,8 @@ internal data class SymName(
  * One certificate of a world. It is signed by [signer] (its `(CertId, KeyId)` link is in [World.ok]), or carries a
  * signature no key verifies when [signer] is null. [sigOid] is the TBS and outer signature OID; [outerNullParameters]
  * writes NULL parameters in the outer `signatureAlgorithm` only (`AlgMismatch`). With [keyIdentifiers] it carries an
- * SKI of [key] and, unless self-signed or unsigned, an AKI keyIdentifier of [signer].
+ * SKI of [key] and, unless self-signed or unsigned, an AKI keyIdentifier of [signer]. With [ca] (every certificate
+ * but the leaf) it carries a critical basicConstraints `cA = TRUE` first.
  */
 internal data class CertSpec(
     val serial: Int,
@@ -83,22 +84,24 @@ internal data class CertSpec(
     val keyIdentifiers: Boolean,
     val sigOid: String = SymOids.SIGNATURE,
     val outerNullParameters: Boolean = false,
+    val ca: Boolean = true,
 ) {
     val tbs: ByteArray by lazy {
         val extensions =
-            if (!keyIdentifiers) {
-                emptyList()
-            } else {
-                listOfNotNull(
-                    TestDer.extension(Oid.SUBJECT_KEY_IDENTIFIER, TestDer.tlv(0x04, key.keyIdentifier)),
-                    signer?.takeIf { it != key }?.let {
-                        TestDer.extension(
-                            Oid.AUTHORITY_KEY_IDENTIFIER,
-                            TestDer.seq(TestDer.tlv(0x80, it.keyIdentifier)),
-                        )
-                    },
-                )
-            }
+            listOfNotNull(TestDer.basicConstraints(ca = true).takeIf { ca }) +
+                if (!keyIdentifiers) {
+                    emptyList()
+                } else {
+                    listOfNotNull(
+                        TestDer.extension(Oid.SUBJECT_KEY_IDENTIFIER, TestDer.tlv(0x04, key.keyIdentifier)),
+                        signer?.takeIf { it != key }?.let {
+                            TestDer.extension(
+                                Oid.AUTHORITY_KEY_IDENTIFIER,
+                                TestDer.seq(TestDer.tlv(0x80, it.keyIdentifier)),
+                            )
+                        },
+                    )
+                }
         TestDer.seq(
             TestDer.tlv(0xa0, TestDer.tlv(0x02, TestDer.bytes(2))),
             TestDer.tlv(0x02, BigInteger.valueOf(serial.toLong()).toByteArray()),
@@ -195,7 +198,9 @@ internal class WorldModel(
         key: SymKey,
         signer: SymKey?,
         sigOid: String = SymOids.SIGNATURE,
-    ): CertSpec = CertSpec(++serials, subject, issuer, key, signer, keyIdentifiers, sigOid).also { issued += it }
+        ca: Boolean = true,
+    ): CertSpec =
+        CertSpec(++serials, subject, issuer, key, signer, keyIdentifiers, sigOid, ca = ca).also { issued += it }
 
     /**
      * Replaces every occurrence of [old] by [new] (a re-issue: same serial, key and signer). A key recovered for [old]
@@ -306,7 +311,14 @@ internal object ChainGenerator {
             parent = model.issue(model.freshName("Intermediate"), parent.subject, key, parent.key)
             path.add(0, parent)
         }
-        val leaf = model.issue(SymName("leaf.example"), parent.subject, model.freshKey(SymOids.ED25519), parent.key)
+        val leaf =
+            model.issue(
+                SymName("leaf.example"),
+                parent.subject,
+                model.freshKey(SymOids.ED25519),
+                parent.key,
+                ca = false,
+            )
         model.honestPath += listOf(leaf) + path + root
         model.presented += listOf(leaf) + path
         when (rng.nextInt(4)) {

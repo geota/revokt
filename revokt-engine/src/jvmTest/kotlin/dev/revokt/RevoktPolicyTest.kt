@@ -95,7 +95,7 @@ class RevoktPolicyTest {
                 .rule(Rule.NO_SCTS, Outcome.REJECT)
                 .exemptAnchors(listOf(privateCa))
                 .build()
-        // STALE and UNSIGNED_DATA still allow at the call; REVOKED is evidence; NO_ISSUER, ISSUER_UNVERIFIED empty-path.
+        // STALE and UNSIGNED_DATA still allow at the call; REVOKED is evidence; NO_ISSUER is empty-path.
         assertEquals(listOf(Rule.NO_DATA, Rule.NO_SCTS), exempted(policy))
         for (rule in exempted(policy)) {
             assertTrue(policy.exemption(rule)!!.isExempt(context(privateCa)), "$rule under the private CA")
@@ -170,24 +170,13 @@ class RevoktPolicyTest {
     }
 
     @Test
-    fun `rule, exempt and clearExemption on NO_ISSUER or ISSUER_UNVERIFIED apply to both`() {
-        val pair = listOf(Rule.NO_ISSUER, Rule.ISSUER_UNVERIFIED)
-        for ((set, other) in listOf(pair, pair.reversed())) {
-            val raised = RevoktPolicy.DEFAULT.newBuilder().rule(set, Outcome.REJECT)
-            assertEquals(Outcome.REJECT, raised.build().outcome(other), "rule($set)")
-            val exemption = Exemption { true }
-            val exempting = raised.exempt(set, exemption)
-            assertSame(exemption, exempting.build().exemption(other), "exempt($set)")
-            assertNull(exempting.clearExemption(other).build().exemption(set), "clearExemption($other)")
-            assertEquals(Outcome.ALLOW, raised.rule(other, Outcome.ALLOW).build().outcome(set), "rule($other)")
-        }
-        // exemptAnchors still leaves both alone: they fire only on an empty reported path.
+    fun `exemptAnchors leaves NO_ISSUER alone, since it fires only on an empty reported path`() {
         val anchors =
             RevoktPolicy.STRICT
                 .newBuilder()
                 .exemptAnchors(listOf(privateCa))
                 .build()
-        for (rule in pair) assertNull(anchors.exemption(rule), "$rule")
+        assertNull(anchors.exemption(Rule.NO_ISSUER))
     }
 
     @Test

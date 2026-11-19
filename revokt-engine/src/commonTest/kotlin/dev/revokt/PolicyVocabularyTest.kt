@@ -25,7 +25,6 @@ class PolicyVocabularyTest {
                 "NO_DATA",
                 "ENGINE_ERROR",
                 "PARSE_FAILED",
-                "ISSUER_UNVERIFIED",
                 "NO_ISSUER",
                 "NOT_ENROLLED",
                 "NO_SCTS",
@@ -47,12 +46,18 @@ class PolicyVocabularyTest {
                     listOf(
                         "FOUND",
                         "NO_ISSUER",
-                        "ISSUER_UNVERIFIED",
                         "PATH_BUDGET_EXCEEDED",
                         "PARSE_FAILED",
                         "NOT_WALKED",
                     ),
-                "NoIssuerReason" to listOf("NO_CANDIDATE", "ALL_CANDIDATES_INVALID", "UNANCHORED", "PLATFORM_ONLY"),
+                "NoIssuerReason" to
+                    listOf(
+                        "NO_CANDIDATE",
+                        "ALL_CANDIDATES_INVALID",
+                        "UNANCHORED",
+                        "UNSUPPORTED_ALGORITHM",
+                        "PLATFORM_ONLY",
+                    ),
                 "TrustClass" to listOf("SIGNED", "MIRROR", "SYSTEM", "BUNDLED"),
                 "Dataset" to listOf("CRLITE"),
                 "CredentialType" to listOf("X509"),
