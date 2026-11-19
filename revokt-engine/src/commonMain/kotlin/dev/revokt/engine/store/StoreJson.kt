@@ -5,7 +5,6 @@ package dev.revokt.engine.store
 
 import dev.revokt.engine.json.CanonicalJson
 import dev.revokt.engine.json.Json
-import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonInteger
 import dev.revokt.engine.json.JsonNull
 import dev.revokt.engine.json.JsonObject
@@ -58,13 +57,6 @@ internal class StoreFields(
 
     /** Whether [key] holds a value other than `null` that is not an object. */
     fun presentNotObject(key: String): Boolean = obj[key].let { it != null && it != JsonNull && it !is JsonObject }
-
-    fun optArray(key: String): JsonArray? =
-        when (val v = obj[key]) {
-            null, JsonNull -> null
-            is JsonArray -> v
-            else -> wrong(key)
-        }
 
     /** The members of this object, in key order. */
     val members: List<Pair<String, JsonValue>> get() = List(obj.size) { obj.keyAt(it) to obj.valueAt(it) }
