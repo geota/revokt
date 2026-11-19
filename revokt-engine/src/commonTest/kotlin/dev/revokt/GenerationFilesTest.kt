@@ -39,7 +39,6 @@ class GenerationFilesTest {
         GenerationFiles
             .Builder()
             .generationId("g1")
-            .trustClass(TrustClass.SIGNED)
             .format(FilterFormat.V3)
             .sourceTimestampMillis(1_793_000_000_000)
             .also { b -> files.forEach { (name, bytes) -> b.file(name, bytes) } }
@@ -117,10 +116,9 @@ class GenerationFilesTest {
 
         fun bare(): GenerationFiles.Builder =
             GenerationFiles.Builder().also { b -> files.forEach { (n, v) -> b.file(n, v) } }
-        missing("generationId", bare().trustClass(TrustClass.SIGNED).format(FilterFormat.V3).sourceTimestampMillis(1))
-        missing("trustClass", bare().generationId("g").format(FilterFormat.V3).sourceTimestampMillis(1))
-        missing("format", bare().generationId("g").trustClass(TrustClass.SIGNED).sourceTimestampMillis(1))
-        missing("sourceTimestampMillis", bare().generationId("g").trustClass(TrustClass.SIGNED).format(FilterFormat.V3))
+        missing("generationId", bare().format(FilterFormat.V3).sourceTimestampMillis(1))
+        missing("format", bare().generationId("g").sourceTimestampMillis(1))
+        missing("sourceTimestampMillis", bare().generationId("g").format(FilterFormat.V3))
         missing("generationId", builder().generationId(""))
     }
 

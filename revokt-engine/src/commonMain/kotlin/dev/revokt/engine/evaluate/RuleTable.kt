@@ -94,7 +94,6 @@ internal val RULE_TABLE: List<RuleRow> =
         RuleRow(Rule.NO_SCTS) { Rule.NO_SCTS in it.crliteRules },
         RuleRow(Rule.NOT_COVERED) { Rule.NOT_COVERED in it.crliteRules },
         RuleRow(Rule.STALE) { it.dataRule(Rule.STALE) },
-        RuleRow(Rule.UNSIGNED_DATA) { it.dataRule(Rule.UNSIGNED_DATA) },
     )
 
 /**

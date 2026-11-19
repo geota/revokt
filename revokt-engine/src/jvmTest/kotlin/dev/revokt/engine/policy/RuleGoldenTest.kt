@@ -15,8 +15,8 @@ import kotlin.test.assertEquals
  * - `[rules]`, one row per rule in precedence order with §4's tuple: rule, class, layer, exemptable, emptyPath,
  *   basicReason, introducedIn, flippedIn per preset, then the `DEFAULT` and `STRICT` outcomes;
  * - `[presets]`, one row per preset with its `requiredDatasets` and the three time fields;
- * - `[datasets]`, one row per preset and dataset with its staleness thresholds and `minTrustClass`, so a new
- *   dataset adds rows and changes none.
+ * - `[datasets]`, one row per preset and dataset with its staleness thresholds, so a new dataset adds rows and
+ *   changes none.
  *
  * The fixture is edited by hand, under the growability contract, whenever the model changes. This test asserts the
  * model equals it, and `verifyRuleGrowability` (#73) checks that its diff is one the contract permits.
@@ -84,7 +84,6 @@ class RuleGoldenTest {
                         dataset.name,
                         staleness?.staleAfterMillis?.toString() ?: NONE,
                         staleness?.rejectStaleAfterMillis?.toString() ?: NONE,
-                        t.minTrustClass.getValue(dataset).name,
                     ).joinToString(TAB)
             }
         }
@@ -117,6 +116,6 @@ class RuleGoldenTest {
                 "clockSkewMillis",
                 "signedSourceFailingAfterMillis",
             )
-        val DATASET_COLUMNS = listOf("preset", "dataset", "staleAfterMillis", "rejectStaleAfterMillis", "minTrustClass")
+        val DATASET_COLUMNS = listOf("preset", "dataset", "staleAfterMillis", "rejectStaleAfterMillis")
     }
 }

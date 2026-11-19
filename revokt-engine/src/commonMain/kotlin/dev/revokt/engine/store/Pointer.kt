@@ -5,7 +5,7 @@ package dev.revokt.engine.store
 
 /**
  * The `current` pointer file (spec §6.5): the generation directories [live] and [previous]. [StoreLayout.point] writes
- * one only when both name complete generations and [previous]'s trust class ranks at least [live]'s.
+ * one only when both name complete generations.
  */
 internal data class Pointer(
     val live: String,
