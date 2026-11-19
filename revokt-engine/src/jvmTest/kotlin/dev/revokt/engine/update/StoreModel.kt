@@ -262,7 +262,7 @@ internal class StoreModel(
                 GenerationSnapshot(
                     0,
                     mapOf(
-                        Dataset.CRLITE to DatasetGeneration(null, null, null, false, null, null, false, false, false),
+                        Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false, false),
                     ),
                     null,
                 ),
