@@ -89,6 +89,7 @@ internal class X5uChainTest : X5uChainFixture() {
             // Beside the signer name, a wildcard, an empty or a malformed dNSName, or a name of another form, fails.
             san(dns(X5U_LEAF_NAME), dns("*.content-signature.mozilla.org")),
             san(dns(X5U_LEAF_NAME), dns("")),
+            san(dns(X5U_LEAF_NAME), dns(".other.example")),
             san(dns(X5U_LEAF_NAME), dns("a..example")),
             san(dns(X5U_LEAF_NAME), TestDer.tlv(0x86, TestDer.ascii("https://$X5U_LEAF_NAME/"))),
             san(TestDer.tlv(0x86, TestDer.ascii(X5U_LEAF_NAME))),

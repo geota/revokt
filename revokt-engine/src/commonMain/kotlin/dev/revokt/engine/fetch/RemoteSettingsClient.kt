@@ -180,17 +180,7 @@ internal class RemoteSettingsClient(
                 ?: return malformed(body, "changes is not an array")
         val timestamp = count(root["timestamp"]) ?: return malformed(body, "timestamp is not an integer ≥ 0")
         val signatures =
-            ((root["metadata"] as? JsonObject)?.get("signatures") as? JsonArray)?.items.orEmpty().map {
-                if (it == JsonNull) return@map null
-                val fields = it as? JsonObject ?: JsonObject.EMPTY
-                val mode = fields["mode"]
-                SignatureEntry(
-                    string(fields["signature"]),
-                    string(fields["x5u"]),
-                    string(mode),
-                    mode != null && mode != JsonNull,
-                )
-            }
+            ((root["metadata"] as? JsonObject)?.get("signatures") as? JsonArray)?.items.orEmpty().map(::signatureEntry)
         return ClientResult.Ok(Changeset(timestamp, changes, signatures), body.status, body.backoffMillis, body.size)
     }
 
@@ -419,6 +409,19 @@ internal class RemoteSettingsClient(
     ): ClientResult.Failed = body.failed(SyncStage.CHANGESET, ClientFailure.MALFORMED, detail)
 
     private fun string(value: JsonValue?): String? = (value as? JsonString)?.value
+
+    /** One `metadata.signatures[]` element ([SignatureEntry]): null for a JSON `null`. */
+    private fun signatureEntry(element: JsonValue): SignatureEntry? {
+        if (element == JsonNull) return null
+        val fields = element as? JsonObject ?: JsonObject.EMPTY
+        val mode = fields["mode"]
+        return SignatureEntry(
+            string(fields["signature"]),
+            string(fields["x5u"]),
+            string(mode),
+            mode != null && mode != JsonNull,
+        )
+    }
 
     private fun count(value: JsonValue?): Long? = (value as? JsonInteger)?.takeIf { !it.negative }?.toLongOrNull()
 }

@@ -812,8 +812,6 @@ internal class CrliteSync(
             }
         }
 
-        /** [result]'s value, its backoff and status kept; on a failure, [failed] with the sync it ends. */
-
         /** This sync's attachment base, read before its first attachment fetch ([RemoteSettingsClient.attachmentBase]). */
         private var attachmentBase: String? = null
 
@@ -826,6 +824,7 @@ internal class CrliteSync(
             return ok(client.fetchAttachment(r, base), failed).toByteArray()
         }
 
+        /** [result]'s value, its backoff and status kept; on a failure, [failed] with the sync it ends. */
         private inline fun <T> ok(
             result: ClientResult<T>,
             failed: (SyncResult) -> Nothing,

@@ -319,13 +319,13 @@ private fun leaf(c: ParsedCertificate): X5uChainResult.Failed? {
 private fun leafNames(san: SubjectAltNames?): List<String>? =
     san?.names.orEmpty().map { name ->
         val dns = name.content.utf8()
-        if (name.tag != ExtensionValues.DNS_NAME || dns.isEmpty() || dns.startsWith('.') ||
-            !DnsId.validConstraint(dns)
-        ) {
-            return null
-        }
+        if (name.tag != ExtensionValues.DNS_NAME || !isPlainDnsName(dns)) return null
         dns
     }
+
+/** A name-constraint DNS ID ([DnsId.validConstraint]) that is neither empty nor a leading-dot subtree. */
+private fun isPlainDnsName(name: String): Boolean =
+    name.isNotEmpty() && !name.startsWith('.') && DnsId.validConstraint(name)
 
 /**
  * mozilla::pkix's `ExtractSignedCertificateTimestampListFromExtension` on the leaf (`pkixbuild.cpp`): an embedded SCT

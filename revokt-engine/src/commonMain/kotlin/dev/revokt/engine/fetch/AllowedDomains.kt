@@ -36,10 +36,12 @@ internal object AttachmentBase {
             }
         if (read.port != null && read.port != "443") reject("port \"${read.port}\"")
         val path = read.rest
-        if (path.isNotEmpty() && (!path.startsWith('/') || '?' in path || !StrictUrl.isPathAndQuery(path))) {
-            reject("not a plain path")
-        }
+        if (!isPlainPath(path)) reject("not a plain path")
         if (!AllowedDomains.allows(read.host, domains)) reject("host \"${read.host}\" is not under allowedDomains")
         return "https://" + read.host + path
     }
+
+    /** Empty, or `/` and then `pchar`s and `/` only, with no query. */
+    fun isPlainPath(path: String): Boolean =
+        path.isEmpty() || (path.startsWith('/') && '?' !in path && StrictUrl.isPathAndQuery(path))
 }

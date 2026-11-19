@@ -230,6 +230,25 @@ internal class X5uChainRulesTest : X5uChainFixture() {
     }
 
     @Test
+    fun `nameConstraints are checked against every one of the leaf's dNSNames`() {
+        // Not only the signer name: mozilla::pkix checks every name of the end entity.
+        val twoNames =
+            leaf(listOf(ku(DIGITAL_SIGNATURE), eku(CODE_SIGNING), san(dns(X5U_LEAF_NAME), dns("other.example"))))
+        for (tree in listOf(
+            constraints(listOf(dnsTree("content-signature.mozilla.org"))),
+            constraints(permitted = null, excluded = listOf(dnsTree("other.example"))),
+        )) {
+            assertFails(
+                NAME_CONSTRAINTS,
+                1,
+                chain(leaf = twoNames, intermediate = intermediate(caExtensions() + nameConstraints(tree))),
+            )
+        }
+        val both = constraints(listOf(dnsTree("content-signature.mozilla.org"), dnsTree("other.example")))
+        assertLoads(chain(leaf = twoNames, intermediate = intermediate(caExtensions() + nameConstraints(both))))
+    }
+
+    @Test
     fun `nameConstraints are enforced on every CA below the terminal, critical or not`() {
         val mozilla =
             constraints(
@@ -271,21 +290,6 @@ internal class X5uChainRulesTest : X5uChainFixture() {
             val tree = constraints(permitted = null, excluded = listOf(dnsTree(excluded)))
             assertFails(NAME_CONSTRAINTS, 1, chain(intermediate = intermediate(caExtensions() + nameConstraints(tree))))
         }
-        // Every one of the leaf's dNSNames is checked, not only the signer name, as mozilla::pkix checks every name.
-        val twoNames =
-            leaf(listOf(ku(DIGITAL_SIGNATURE), eku(CODE_SIGNING), san(dns(X5U_LEAF_NAME), dns("other.example"))))
-        for (tree in listOf(
-            constraints(listOf(dnsTree("content-signature.mozilla.org"))),
-            constraints(permitted = null, excluded = listOf(dnsTree("other.example"))),
-        )) {
-            assertFails(
-                NAME_CONSTRAINTS,
-                1,
-                chain(leaf = twoNames, intermediate = intermediate(caExtensions() + nameConstraints(tree))),
-            )
-        }
-        val both = constraints(listOf(dnsTree("content-signature.mozilla.org"), dnsTree("other.example")))
-        assertLoads(chain(leaf = twoNames, intermediate = intermediate(caExtensions() + nameConstraints(both))))
         assertLoads(
             chain(
                 intermediate =

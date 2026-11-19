@@ -82,8 +82,8 @@ public class MozillaRemoteSettings private constructor(
             requireBareHost("x5uHostRewrite from", from)
             requireBareHost("x5uHostRewrite to", to)
             require(AllowedDomains.allows(to, allowedDomains)) {
-                "x5uHostRewrite(\"$from\", \"$to\"): \"$to\" is not under allowedDomains $allowedDomains; add it with " +
-                    "allowedDomains(…) (spec §4, §7.1)"
+                "x5uHostRewrite(\"$from\", \"$to\"): \"$to\" is not under allowedDomains $allowedDomains; " +
+                    "add it with allowedDomains(…) (spec §4, §7.1)"
             }
         }
     }

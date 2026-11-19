@@ -130,8 +130,8 @@ class RemoteSettingsClientTest {
             client(
                 ScriptedFetcher {
                     ok(
-                        """{"metadata":{"signatures":[{},{"mode":null},{"mode":5},{"mode":""},{"mode":"p384ecdsa"}]},""" +
-                            """"timestamp":5,"changes":[]}""",
+                        """{"metadata":{"signatures":[{},{"mode":null},{"mode":5},{"mode":""},""" +
+                            """{"mode":"p384ecdsa"}]},"timestamp":5,"changes":[]}""",
                     )
                 },
             ).fetchChangeset(1, null).assertOk().signatures
