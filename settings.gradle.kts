@@ -29,6 +29,7 @@ rootProject.name = "revokt"
 
 include(":revokt-clubcard")
 include(":revokt-engine")
+include(":revokt-jsse")
 include(":revokt-bom")
 
 // CI-only: the upki-backed engine needs JDK 22 and the native shim (native/). Never part of `./gradlew check`.
