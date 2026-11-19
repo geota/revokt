@@ -458,7 +458,8 @@ each, rewrite it while the news holds, close it once the pins are current, and s
 - Fuzzing (`fuzz.yml`, #115, #213): the nightly fuzzing tier, in place of ClusterFuzzLite until OSS-Fuzz admits the
   project (#119 closed). Nightly at 03:47 UTC for 300 s a target, and when a maintainer dispatches it (1 to 3,600 s
   a target), on GitHub-hosted runners, one job per target that `./gradlew fuzzTargets` lists. The fuzz job holds no
-  secret.
+  secret. GitHub disables a public repository's scheduled workflows after 60 days with no repository activity; a
+  maintainer re-enables the nightly from the Actions tab if that happens.
   - On a finding, it minimises each input (libFuzzer's `-minimize_crash=1`). It then seals one file per finding: a
     gzipped tar of the input, the minimised input, the JUnit XML and the fuzzer and minimiser logs (which can quote the
     input), encrypted with `age -a` to the `FUZZ_AGE_RECIPIENT` repository variable (an `age1…` public key; the job
@@ -469,10 +470,15 @@ each, rewrite it while the news holds, close it once the pins are current, and s
   - Each target's generated corpus goes up, from a run without a finding, as the 1-day artifact
     `fuzz-corpus-<target>`; an upload the account's storage quota refuses does not fail the run. The corpus job, on a
     fresh runner that never checks out or runs anything of the repository, for `main` only, checks the artifacts as
-    data (a directory per known target, regular files named as libFuzzer names corpus units, each no larger than its
-    target's `-max_len`, at most 5,000 a target and 512 MiB in all) and adds them, never removing one, under
-    `corpus/<Class>-<method>/` in the private `geota/revokt-fuzz-corpus`. Only it holds `CFL_CORPUS_TOKEN` (contents
-    write on that repository only), read by a git credential helper from the environment.
+    data (a directory per known target, regular files named as libFuzzer names corpus units, the SHA-1 of their
+    content, each no larger than its target's `-max_len`, at most 5,000 a target and 512 MiB in all) and adds them,
+    never removing or overwriting one, under `corpus/<Class>-<method>/` in the private `geota/revokt-fuzz-corpus`. Only
+    it holds `CFL_CORPUS_TOKEN` (contents write on that repository only), read by a git credential helper from the
+    environment.
+  - **The corpus is not treated as secret.** The committed seed inputs are public, and while the 1-day artifact lasts
+    any signed-in GitHub user can download a night's corpus; the corpus repository is private for its size, not its
+    content. Findings are different: a target with a finding uploads no corpus, and its inputs and logs leave the job
+    only sealed with `age`.
   - The advisory job then runs on a fresh runner, only for a run of `main`, with the `FUZZ_ADVISORY_TOKEN` secret
     of the `fuzz-advisory` environment, whose deployment branches are limited to `main`. The token is a fine-grained
     personal access token of an administrator, for this repository only, with "Repository security advisories: Read

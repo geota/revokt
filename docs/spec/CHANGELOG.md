@@ -5,6 +5,12 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 61 (scheduled fuzzing, #213)
+
+- **The nightly fuzzing tier** is `fuzz.yml`, every target for 300 s, one job per target, with each night's corpus
+  added to the private corpus repository, in place of ClusterFuzzLite (#119, superseded), until OSS-Fuzz (test plan
+  §9.1 "Tiers", §9.2 "Tiers and matrix").
+
 ### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 
 - **#218, the trust-class cut:**

@@ -41,6 +41,8 @@ class X5uUrlFuzzTest {
                 "https://",
                 "http://",
                 "HTTPS://",
+                HOST,
+                MIRROR,
                 "evil.example",
                 "@",
                 ":",
@@ -103,6 +105,12 @@ class X5uUrlFuzzTest {
 
         /** One URL of the differential test's generator, checked; true when [X5uUrl] let it through. */
         fun generated(random: Random): Boolean {
+            val (url, rewrites) = case(random)
+            return checkOne(url, rewrites)
+        }
+
+        /** One URL and rewrite map of the generator, drawing from [random] exactly as the differential test always has. */
+        fun case(random: Random): Pair<String, Map<String, String>> {
             val prefix =
                 when (random.nextInt(3)) {
                     0 -> ""
@@ -111,7 +119,7 @@ class X5uUrlFuzzTest {
                 }
             val url = prefix + List(random.nextInt(1, 8)) { PIECES[random.nextInt(PIECES.size)] }.joinToString("")
             val rewrites = if (random.nextBoolean()) mapOf(HOST to MIRROR) else emptyMap()
-            return checkOne(url, rewrites)
+            return url to rewrites
         }
 
         /** [url] through [X5uUrl] twice; when it is let through, the JDK must read it as the rules did. */

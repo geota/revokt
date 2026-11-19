@@ -32,7 +32,7 @@ class RawSignatureFuzzTest {
         private val leaf = JcaFixtures.ec("secp384r1").public.encoded
         private val urlAlphabet = Regex("[A-Za-z0-9_-]*")
 
-        /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
+        /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
             val text = String(data, Charsets.ISO_8859_1)

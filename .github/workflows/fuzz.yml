@@ -320,7 +320,7 @@ jobs:
         with:
           name: fuzz-corpus-${{ matrix.target.name }}
           path: ${{ matrix.target.module }}/.cifuzz-corpus/${{ matrix.target.class }}/${{ matrix.target.method }}/
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 1
 
   # A fresh runner that holds the advisory token and nothing of the fuzzed tree: no checkout of it, no Gradle, nothing
@@ -328,7 +328,7 @@ jobs:
   # fuzz_advisory.py at github.sha, and runs it under a clean environment with python3 -I. The script treats the
   # artifacts as hostile data and files at most 8 private draft advisories, one per new DEDUP_TOKEN (CONTRIBUTING §6).
   # The token lives in the fuzz-advisory environment, whose deployment branches are limited to main, and the job runs
-  # only for a dispatch of main: a workflow or script changed on another branch never gets it.
+  # only for a run of main (the nightly or a dispatch): a workflow or script changed on another branch never gets it.
   advisory:
     name: advisory (private drafts for new findings)
     needs: fuzz
@@ -374,7 +374,7 @@ jobs:
 
   # The corpus push (#213), on a fresh runner that never checks out, builds or runs anything of the repository: it
   # downloads the fuzz-corpus-* artifacts, checks them as data (a directory per known target, regular files only, each
-  # named as libFuzzer names a corpus unit, a SHA-1 in hex, and no larger than its target's -max_len, at most 5,000
+  # named as libFuzzer names a corpus unit, the SHA-1 of its content in hex, and no larger than its target's -max_len, at most 5,000
   # files a target and 512 MiB in all), and adds them, never removing a unit, under corpus/<Class>-<method>/ in the
   # private geota/revokt-fuzz-corpus repository. Only this job holds CFL_CORPUS_TOKEN (contents write on that repository
   # only), through a credential helper that reads it from the environment, so it is in no command's arguments. It runs
@@ -435,6 +435,8 @@ jobs:
             while IFS= read -r -d '' f; do
               unit=${f##*/}
               [[ $unit =~ ^[0-9a-f]{40}$ ]] || fail "a unit name"
+              # libFuzzer names a unit by its SHA-1, so a unit already in the repository is never overwritten.
+              [ "$(sha1sum < "$f" | cut -c1-40)" = "$unit" ] || fail "a unit whose name is not its SHA-1"
               size=$(stat -c %s -- "$f")
               [ "$size" -le "$maxlen" ] || fail "a unit over its target's -max_len"
               total=$((total + size))

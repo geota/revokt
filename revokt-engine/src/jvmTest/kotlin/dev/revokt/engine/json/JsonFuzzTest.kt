@@ -27,7 +27,7 @@ class JsonFuzzTest {
         }
 
         /**
-         * Whether Jazzer is fuzzing, through JUnit (`JAZZER_FUZZ`) or its standalone driver (ClusterFuzzLite, which
+         * Whether Jazzer is fuzzing, through JUnit (`JAZZER_FUZZ`) or its standalone driver (OSS-Fuzz, later, which
          * calls the entry point from `com.code_intelligence.jazzer.driver`). Its data-flow instrumentation allocates
          * inside the parser itself (Jazzer 0.30.0's `TraceDataFlowInstrumentor` builds a `long[]` of case values at
          * every executed switch), so an allocation count there measures the harness; the budget is asserted where the
@@ -39,7 +39,7 @@ class JsonFuzzTest {
                     frames.anyMatch { it.className.startsWith("com.code_intelligence.jazzer.driver.") }
                 }
 
-        /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
+        /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
             val (tree, bytes) = measuredParse(data)
