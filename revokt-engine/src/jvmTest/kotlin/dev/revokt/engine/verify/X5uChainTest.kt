@@ -83,11 +83,17 @@ internal class X5uChainTest : X5uChainFixture() {
     fun `data-path (d) wrong leaf SAN is FAILED`() {
         for (san in listOf(
             san(dns("other.content-signature.mozilla.org")),
-            san(dns(X5U_LEAF_NAME.uppercase())),
             san(dns("*.content-signature.mozilla.org")),
             san(dns("$X5U_LEAF_NAME.")),
-            san(dns(X5U_LEAF_NAME), dns("other.example")),
-            san(dns("other.example"), dns(X5U_LEAF_NAME)),
+            san(dns(".$X5U_LEAF_NAME")),
+            // A name that merely ends with the signer name is another name, on a label boundary or not.
+            san(dns("x.$X5U_LEAF_NAME")),
+            san(dns("x$X5U_LEAF_NAME")),
+            // Beside the signer name, a wildcard, an empty or a malformed dNSName, or a name of another form, fails.
+            san(dns(X5U_LEAF_NAME), dns("*.content-signature.mozilla.org")),
+            san(dns(X5U_LEAF_NAME), dns("")),
+            san(dns(X5U_LEAF_NAME), dns(".other.example")),
+            san(dns(X5U_LEAF_NAME), dns("a..example")),
             san(dns(X5U_LEAF_NAME), TestDer.tlv(0x86, TestDer.ascii("https://$X5U_LEAF_NAME/"))),
             san(TestDer.tlv(0x86, TestDer.ascii(X5U_LEAF_NAME))),
             san(TestDer.tlv(0x81, TestDer.ascii(X5U_LEAF_NAME))),
@@ -98,9 +104,22 @@ internal class X5uChainTest : X5uChainFixture() {
     }
 
     @Test
-    fun `data-path (d) missing codeSigning EKU is FAILED`() {
+    fun `data-path (d) the signer name among other dNSNames, in any ASCII case, loads`() {
+        for (san in listOf(
+            san(dns(X5U_LEAF_NAME.uppercase())),
+            san(dns("Onecrl.Content-Signature.Mozilla.Org")),
+            san(dns(X5U_LEAF_NAME), dns("other.example")),
+            san(dns("other.example"), dns(X5U_LEAF_NAME)),
+        )) {
+            assertLoads(chain(leaf = leaf(listOf(ku(DIGITAL_SIGNATURE), eku(CODE_SIGNING), san))))
+        }
+    }
+
+    @Test
+    fun `data-path (d) missing codeSigning EKU is FAILED, and no EKU loads`() {
         val sanOnly = listOf(ku(DIGITAL_SIGNATURE), san(dns(X5U_LEAF_NAME)))
-        assertFails(EKU, 0, chain(leaf = leaf(sanOnly)))
+        // An absent extKeyUsage passes, as mozilla::pkix's requiredEKUIfPresent reads it.
+        assertLoads(chain(leaf = leaf(sanOnly)))
         assertFails(EKU, 0, chain(leaf = leaf(sanOnly + eku(SERVER_AUTH))))
         assertFails(EKU, 0, chain(leaf = leaf(sanOnly + eku(SERVER_AUTH, "1.3.6.1.5.5.7.3.33"))))
         // A purpose among others is enough, as in mozilla::pkix and webpki.

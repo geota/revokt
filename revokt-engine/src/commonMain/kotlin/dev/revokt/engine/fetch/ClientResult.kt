@@ -44,6 +44,12 @@ internal enum class ClientFailure {
     /** The attachment's SHA-256 is not the signed record's `attachment.hash`. */
     ATTACHMENT_HASH,
 
+    /**
+     * The server root (`GET <baseUrl>/`) is not a JSON object with a string `capabilities.attachments.base_url`, or that
+     * URL fails [AttachmentBase]'s rules, its host under `allowedDomains` included (spec §7.1). Stage `ATTACHMENT`.
+     */
+    ATTACHMENT_BASE,
+
     /** A record fails the collection schema (spec §7.1), `SYNC_SCHEMA_REJECTED`. */
     SCHEMA,
 
