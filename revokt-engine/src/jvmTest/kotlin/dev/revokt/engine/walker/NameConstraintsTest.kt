@@ -198,6 +198,47 @@ class NameConstraintsTest {
     }
 
     @Test
+    fun `walker the subjectAltName reader admits exactly the forms PresentedName maps`() {
+        for (tag in 0..0xff) {
+            val value = TestDer.seq(TestDer.tlv(tag, TestDer.ascii("a")))
+            val read =
+                dev.revokt.engine.parse.ExtensionValues
+                    .subjectAltName(value, Span(0, value.size))
+            assertEquals(
+                PresentedName.general(tag, TestDer.ascii("a")) != null,
+                read is dev.revokt.engine.parse.ExtensionRead.Value,
+                "identifier octet 0x${tag.toString(16)}",
+            )
+        }
+    }
+
+    @Test
+    fun `walker a mask that is not octet-aligned, and IPv4 against lists holding IPv6`() {
+        val slash12 = assertNotNull(nc(permitted = listOf(ip(10, 16, 0, 0, 255, 240, 0, 0))))
+        assertEquals(
+            NameConstraints.Result.VIOLATION,
+            slash12.check(names(PresentedName.Ip(byteArrayOf(10, 0, 0, 1))), unlimited),
+        )
+        assertEquals(
+            NameConstraints.Result.CONFORMS,
+            slash12.check(names(PresentedName.Ip(byteArrayOf(10, 31, 0, 1))), unlimited),
+        )
+        val v6 = ip(*IntArray(16) { if (it == 0) 0x20 else 0 }, *IntArray(16) { if (it < 2) 0xff else 0 })
+        val excludedV6 = assertNotNull(nc(excluded = listOf(v6)))
+        assertEquals(
+            NameConstraints.Result.CONFORMS,
+            excludedV6.check(names(PresentedName.Ip(byteArrayOf(10, 0, 0, 1))), unlimited),
+            "an IPv4 name is outside an IPv6 excluded subtree",
+        )
+        val both = assertNotNull(nc(permitted = listOf(ip(10, 0, 0, 0, 255, 0, 0, 0), v6)))
+        assertEquals(
+            NameConstraints.Result.CONFORMS,
+            both.check(names(PresentedName.Ip(byteArrayOf(10, 0, 0, 1))), unlimited),
+            "the IPv6 subtree beside a matching IPv4 one does not refuse the name",
+        )
+    }
+
+    @Test
     fun `walker comparison errors and spent budgets in either list`() {
         val badPresented = PresentedName.dns("bad..name")
         val permitted = assertNotNull(nc(permitted = listOf(dnsName("example.com"))))

@@ -75,7 +75,10 @@ internal class IssuerProfile private constructor(
             val keyCertSign =
                 when (val ku = ExtensionValues.keyUsage(p)) {
                     is ExtensionRead.Absent -> true
-                    is ExtensionRead.Value -> ku.value.bits.isNotEmpty() && ku.value.keyCertSign
+
+                    // No bits at all (pkix: "Reject empty bit masks") has no keyCertSign either.
+                    is ExtensionRead.Value -> ku.value.keyCertSign
+
                     is ExtensionRead.Failed -> false
                 }
             return IssuerProfile(ca, bc?.pathLen, keyCertSign, ExtensionValues.extendedKeyUsage(p))

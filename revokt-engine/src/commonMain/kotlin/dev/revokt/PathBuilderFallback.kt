@@ -18,8 +18,10 @@ public interface PathBuilderFallback {
      * (`cA = TRUE`) within its `pathLenConstraint`, with `keyCertSign` when it has keyUsage, and listing the request's
      * purpose (`serverAuth` for a server) when it has extKeyUsage; and every nameConstraints on the path, the anchor's
      * included, admitting the certificates below it. Decision step 6 checks them again (#225, #237): a path that fails
-     * one, or holds a certificate that does not parse, is a failed build, `FallbackNotUsed(FAILED)`. The JDK's
-     * `CertPathBuilder("PKIX")` enforces all but the extKeyUsage of a CA.
+     * one, does not end at a snapshot anchor by bytes, or holds a certificate that does not parse, is a failed build,
+     * `FallbackNotUsed(FAILED)`. The JDK's `CertPathBuilder("PKIX")` enforces less: it exempts self-issued
+     * certificates from `pathLenConstraint` and name constraints, does not apply the anchor certificate's own
+     * nameConstraints, and does not read a CA's extKeyUsage; step 6's check covers all of them.
      */
     public fun build(
         chainDer: List<ByteArray>,

@@ -45,7 +45,8 @@ internal object WalkerFixturesAs {
     }
 
     fun `as`(): List<WalkerFixture> =
-        onTheIssuer() + listOf(subCa(), anchor(), wildcardInside(), wildcardOutside(), exhausted())
+        onTheIssuer() +
+            listOf(subCa(), anchor(), wildcardInside(), wildcardOutside(), exhausted(), unreadableSan(), sharedBudget())
 
     /** leaf → I → R with nameConstraints on I. */
     private fun onTheIssuer(): List<WalkerFixture> =
@@ -163,6 +164,42 @@ internal object WalkerFixturesAs {
                 } else {
                     notFound(NoIssuerReason.ALL_CANDIDATES_INVALID).copy(verifications = 0, candidatesExplored = 1)
                 },
+        )
+    }
+
+    /**
+     * A leaf whose subjectAltName does not read (a non-ASCII dNSName) under an issuer with a dNSName-permitted subtree:
+     * no name constraint admits an unreadable list, so I is a dead end, `ALL_CANDIDATES_INVALID`.
+     */
+    private fun unreadableSan(): WalkerFixture {
+        val h =
+            Honest(
+                leafExtensions = listOf(san(TestDer.tlv(0x82, TestDer.bytes(0x6c, 0xe9, 0x2e, 0x78)))),
+                intermediateExtensions = listOf(nameConstraints(permitted = listOf(dns("leaf.example")))),
+            )
+        return h.fixture(
+            "as",
+            "an unreadable leaf subjectAltName",
+            presented = listOf(h.leaf, h.intermediate),
+            walk = notFound(NoIssuerReason.ALL_CANDIDATES_INVALID).copy(verifications = 0, candidatesExplored = 1),
+        )
+    }
+
+    /**
+     * The budget is the walk's, not a candidate's: 300 leaf names against two related candidates of 501 permitted
+     * subtrees each, 150,300 comparisons apiece. J, a junk certificate whose key verifies nothing, conforms and is
+     * tried; the honest I's check then passes 250,000 in total, so the walk is `Budget(EXPLORATION_BUDGET)`.
+     */
+    private fun sharedBudget(): WalkerFixture {
+        val names = List(300) { dns("n$it.leaf.example") }
+        val subtrees = nameConstraints(permitted = List(500) { dns("s$it.leaf.example") } + dns("leaf.example"))
+        val h = Honest(leafExtensions = listOf(san(*names.toTypedArray())), intermediateExtensions = listOf(subtrees))
+        val j = h.w.cert("J", h.intermediate.subject, h.w.name("Junk issuer"), extensions = listOf(subtrees))
+        return h.fixture(
+            "as",
+            "the comparison budget shared by two candidates",
+            presented = listOf(h.leaf, j, h.intermediate),
+            walk = budget(WalkEnd.EXPLORATION_BUDGET, 1).copy(verifications = 1, candidatesExplored = 2),
         )
     }
 

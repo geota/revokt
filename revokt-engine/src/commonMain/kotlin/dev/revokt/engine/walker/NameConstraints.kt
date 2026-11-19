@@ -49,8 +49,9 @@ internal sealed interface PresentedName {
                     is ExtensionRead.Value -> r.value.names
                     is ExtensionRead.Failed -> return null
                 }
-            // ExtensionValues admits exactly webpki's forms, so every entry maps and none is dropped.
-            return san.mapNotNull { general(it.tag, it.content.toByteArray()) } + Directory
+            // ExtensionValues admits exactly webpki's forms (a test pins it); a form [general] does not map makes the
+            // names unreadable rather than dropping one, so a later change to either side fails closed.
+            return san.map { general(it.tag, it.content.toByteArray()) ?: return null } + Directory
         }
 
         /** webpki's `GeneralName::from_der` over identifier octet [tag]; null for a form it does not read. */
@@ -358,8 +359,9 @@ internal class NameConstraints private constructor(
 
 /**
  * webpki's dNSName matching in the name-constraint role (`dns_name.rs` 238–360) and its `is_valid_dns_id`
- * (400–531), ported line for line less the branches these two roles cannot reach. A presented ID may hold a wildcard label (`*` alone, followed by at least two
- * labels); a constraint may not, may be empty (it covers every name) and may start with a dot (subdomains only).
+ * (400–531), ported line for line less the branches these two roles cannot reach. A presented ID may hold a wildcard
+ * label (`*` alone, followed by at least two labels); a constraint may not, may be empty (it covers every name) and may
+ * start with a dot (subdomains only).
  */
 internal object DnsNameConstraint {
     private const val MAX_NAME = 253

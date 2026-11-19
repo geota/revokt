@@ -149,13 +149,16 @@ class DecideFallbackTest {
             assertEquals(WalkerHarness.SNAPSHOT_ID, snapshot.id)
             assertEquals(WalkerHarness.NOW, now)
 
-            // The leaf alone is keyed by its own SPKI; an empty path or an unparseable issuer is a failed fallback.
-            val alone = WalkerHarness.decide(f, FakeFallback.finds(leaf))
-            assertEquals(listOf(leaf.keyHash), alone.issuerKeys)
-            assertTrue(alone.path.usedFallback)
+            // A path must end at an anchor by bytes (#253's review): the leaf alone (it is no anchor, or step 2 would
+            // have decided), the leaf and an end entity, and the leaf and its intermediate without the root (a builder
+            // returning CertPath.getCertificates()) all fail, as do an empty path and an unparseable issuer.
+            val ee = w.cert("EE", intermediate.subject, root.subject, w.leafKey(), signer = root.key)
             for ((case, answer) in listOf(
                 "empty" to emptyList(),
                 "unparseable issuer" to listOf(leaf.der, garbage(9)),
+                "the leaf alone" to listOf(leaf.der),
+                "the leaf and an end entity" to listOf(leaf.der, ee.der),
+                "the leaf and its intermediate, no anchor" to listOf(leaf.der, intermediate.der),
             )) {
                 val d2 = WalkerHarness.decide(f, FakeFallback { answer })
                 assertEquals(PathStatus.NO_ISSUER, d2.path.status, case)
