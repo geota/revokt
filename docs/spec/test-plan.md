@@ -25,15 +25,15 @@ tests; **live checks** are informational.
   disagreement fails the job.
 - **Content-signature fixtures** (0.2 gates, except the item tagged [0.3], which needs the §6.5 store; revision 49) with mutations; incremental fixtures; a seed with an expired signer
   leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; (revision 56) a channel with two full filters, or none → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, the previous generation still live, and `SEED_UNREADABLE` for a seed; a delta whose `parent` names no record → placed by its time and installed; a full record without `parent` → loads, and a delta without one → `SYNC_SCHEMA_REJECTED`; a changeset signed by a P-256 leaf (a 64-byte raw pair) → verifies; a changeset whose first `signatures` entry fails and whose second verifies → installs; one with 5 entries, or
-  whose every entry lacks `mode` → `FAILED`, stage `SIGNATURE`; two entries sharing one `x5u` URL → that URL fetched once; one whose `metadata` holds only `signature`, or an empty `signatures` → `FAILED`, stage `SIGNATURE`; an entry with no `mode` is skipped; (revision 57, #198) an entry whose `x5u` or `signature` is `""` is skipped like a missing one;
-  `signatures` of `[null, a valid entry]` → `FAILED`, stage `SIGNATURE`, and `[a valid entry, null]` → installs; a first entry whose
+  whose every entry has a `mode` other than `p384ecdsa` → `FAILED`, stage `SIGNATURE`; two entries sharing one `x5u` URL → that URL fetched once; one whose `metadata` holds only `signature`, or an empty `signatures` → `FAILED`, stage `SIGNATURE`; an entry with no `mode`, or a `null` one, is tried and verifies, while one whose `mode` is `""` or a number is skipped; (revision 57, #198) an entry whose `x5u` or `signature` is `""` is skipped like a missing one;
+  `signatures` of `[null, a valid entry]` → `FAILED`, stage `SIGNATURE`, and `[a valid entry, null]` → installs; four failing entries and a fifth that would verify → the fourth's failure, `FAILED`, stage `SIGNATURE`, the fifth never read, and four failing entries then `null` → the same, never `NULL_ENTRY`; a channel of `MAX_CHANGESET_RECORDS` (1,024) records after channel filtering → passes the cap, and one more → `FAILED`, stage `CHANGESET`, before any attachment fetch; a first entry whose
   `x5u` fetch fails (404) and a second that verifies → installs; a lone entry whose `x5u` fetch fails → `FAILED`, stage
   `X5U`; a lone entry whose `x5u` body has no `CERTIFICATE` block, or whose chain fails, or whose signature verifier
   answers `UNSUPPORTED`, or whose records share an `id` → `FAILED`, stage `SIGNATURE`; a `_since` delta signed over the
   merged records → verifies over the merge, which is what installs, and fails over the delta's `changes` alone; a
   v3 filter with `approx_m` of 2^32, or a rank of 256 → `FAILED`; signature
   over records with a tombstone merged vs not merged.
-- **Data-path fixtures** ((a), (b), (d) and (g) less its `BLOCKED_BY_SELF` items and its fetcher items tagged [0.3] are 0.2 gates; those items and (e), (f), (h) need the store, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
+- **Data-path fixtures** ((a), (b), (d) and (g) less its fetcher items tagged [0.3] are 0.2 gates; those items and (e), (f), (h) need the store, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
   `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
   with equal coverage → installs; **newer timestamp with lower coverage → installs and advances the
   watermark**; a refused rollback leaves `consecutiveFailures` and `lastVerified*` unchanged;
@@ -47,12 +47,12 @@ tests; **live checks** are informational.
   `rollbackWindow` → `ROLLBACK_REFUSED`;
   a live generation that is `clockBehind` far in the future, then a changeset newer than the stored watermark
   but older than that generation → installs (the feed does not freeze); (b)
-  coverage `high` beyond `last_modified + clockSkew` → `FAILED`, stage `INDEX`; (d) x5u mutations: wrong leaf SAN, missing codeSigning EKU, root not pinned, non-CA
+  coverage `high` beyond `last_modified + clockSkew` → `FAILED`, stage `INDEX`; (d) x5u mutations: wrong leaf SAN (no dNSName equal to the signer name, `x.` or `x` before it included, a wildcard, an empty or malformed dNSName, or a name of another form beside it), a leaf extKeyUsage without codeSigning, root not pinned, non-CA
   certificate as intermediate, name-chaining break, `pathLenConstraint` violation, keyUsage without
-  `keyCertSign`, an x5u URL on a non-allowlisted host, an x5u over 64 KiB, expired intermediate or
+  `keyCertSign`, an x5u URL on a host outside `allowedDomains` (`evilcdn.mozilla.net` included), an x5u over 64 KiB, expired intermediate or
   leaf at live fetch → `CLOCK_SKEW` (stage `X5U`), expired leaf in seed → loads (revision 57: each `FAILED` x5u mutation in this row is at stage
-  `SIGNATURE`, except the non-allowlisted host and the over-cap body, which are fetch failures at stage `X5U`); a pinned SPKI as a non-terminal
-  link → loads with the path truncated there; the pinned terminal expired, or wrapped in a
+  `SIGNATURE`, except the host outside `allowedDomains` and the over-cap body, which are fetch failures at stage `X5U`); a pinned SPKI as a non-terminal
+  link → loads with the path truncated there; a leaf with no extKeyUsage → loads; a leaf SAN holding the signer name in upper or mixed case, or beside another dNSName → loads; a CA nameConstraint that one of the leaf's other dNSNames falls outside → `NAME_CONSTRAINTS`; the pinned terminal expired, or wrapped in a
   self-signed certificate with another subject → loads; (revision 54, each in the leaf and in the intermediate where both apply) a
   non-minimal length in the outer structure, a TLV after the SPKI, a second SEQUENCE inside `[3]`, bytes after an
   `extnValue`, an indefinite-length TBS or outer `signatureAlgorithm`, a constructed unique ID, a `UTCTime` without
@@ -121,13 +121,14 @@ tests; **live checks** are informational.
   the seed's own complete directory → installed as it stands, rotted → completed again with only its
   rotted files re-staged and, when the load fails, left incomplete, never deleted; the directory the engine
   serves never rewritten; a throwing `updater.json` or pointer read → `STORE_FAILED`, nothing written;
-  a seed archive over 256 MiB, or a source that never ends → `SEED_UNREADABLE`, no store failure; (g) fetcher: the feed host's own
-  chain revoked in the stored generation → `BLOCKED_BY_SELF` within the 24 h hold, `blockedSource`, `blockedChainSha256` and `blockedLeafSerial` set,
-  `updateBlockedBySelf = true` (after the hold see below);
+  a seed archive over 256 MiB, or a source that never ends → `SEED_UNREADABLE`, no store failure; (g) fetcher: [0.3] the feed host's own
+  chain revoked in the stored generation → the fetch proceeds over the platform's trust manager and installs; [0.3] an
+  OkHttp base client whose trust manager is revokt's (wired with `.revokt(...)`) → `build()` throws
+  `IllegalArgumentException`;
   a signed `intermediates` changeset served on the `cert-revocations` URL → `FAILED`,
   `SYNC_SCHEMA_REJECTED`, cursor, watermark and `lastVerified*` unchanged; a Remote Settings 3xx → `FAILED`; a gzip
   body inflating past its cap → `FAILED` before the cap is exceeded; a signed attachment whose size
-  exceeds `MAX_FILTER_BYTES` → `FAILED` with `CAP_NEAR_LIMIT`, nothing advanced, not fetched; a signed revocation of the Remote Settings host → `BLOCKED_BY_SELF`; the same hit chain delivered to the public `fetcherTrustManager` by a consumer client → rejected, `feedHostBlock` not written, `updateBlockedBySelf` unchanged, while the same chain on the source's internal instance during its fetch → `BLOCKED_BY_SELF`; two sources with a factory that returns one client built over the first source's `tls` for both → the second source's hit chain, handshaking outside any fetch of the first source, writes nothing; a sync 23 h after the first block (across a process restart) is still `BLOCKED_BY_SELF`; one at 25 h installs with `feedHostRevoked = true` and `FEED_HOST_REVOKED` on `RevoktState.warnings`; a test engine whose `formats` is `{V4}` with the v3 seed and no fetching source → `start()` throws `SEED_UNREADABLE` in the sole-seed `ENFORCE` configuration (V `FORMAT_UNSUPPORTED` cannot fire first, there is no fetching source); a fetch answered 401 or 407 → `FAILED` with `httpStatus` set, on the JDK fetcher; [0.3] the same on the Android and OkHttp fetchers; the JDK fetcher against a server whose certificate lacks the host's SAN → `FAILED` (endpoint identification); [0.3] the same on the Android fetcher;
+  exceeds `MAX_FILTER_BYTES` → `FAILED` with `CAP_NEAR_LIMIT`, nothing advanced, not fetched; a test engine whose `formats` is `{V4}` with the v3 seed and no fetching source → `start()` throws `SEED_UNREADABLE` in the sole-seed `ENFORCE` configuration (V `FORMAT_UNSUPPORTED` cannot fire first, there is no fetching source); a fetch answered 401 or 407 → `FAILED` with `httpStatus` set, on the JDK fetcher; [0.3] the same on the Android and OkHttp fetchers; the JDK fetcher against a server whose certificate lacks the host's SAN → `FAILED` (endpoint identification); [0.3] the same on the Android fetcher;
   (h) lifecycle: `close()` with a live client under `STRICT` → subsequent handshakes succeed on the
   platform verdict, `evaluations` frozen, no events; `close()` before ready → `readyFuture()` fails with
   `IllegalStateException`; `ready` is false in `CREATED` even with `requiredDatasets` empty; a
@@ -142,9 +143,7 @@ tests; **live checks** are informational.
   not held and a second `Revokt` on the same directory starts as owner; `start()` over three
   pre-start instances whose second delegate throws once → the first `start()` throws, the second
   succeeds and all three report a snapshot; `trustManager(d)` racing `start()` → built by exactly
-  one of the two, never left without a snapshot; a read-only instance (lock held by another
-  process) has `fetcherTrustManager.status().anchorCount > 0` when a fetching source is configured
-  (the build precedes the lock); a seed-only configuration with an empty default trust store →
+  one of the two, never left without a snapshot; a seed-only configuration with an empty default trust store →
   `start()` succeeds, and the same configuration after `revokt.trustManager` was read before `start()` → `start()` throws `IllegalStateException`; `revokt.evaluator.evaluate(...)` in `CREATED` and after `close()` → `IllegalStateException`; Android instrumented on API 26: `close()` with a pending `readyFuture()`, a pending `syncAsync()` and a `resetStateAsync()` → every future completes exceptionally, no `NoSuchMethodError`; `limits { maxTrustManagers = 2 }` → the third distinct delegate throws, and after the second client is dropped and collected the third succeeds without waiting for the `ReferenceQueue`; the `STARTING` racers: a second `start()` entering during the sole-seed decode returns after the first completes and throws iff the first threw, with one `prepare` call on the engine; `close()` entering during the decode → the prepared generation is closed, never activated, the store lock released, lifecycle `CLOSED`, `engine.close()` called once after the decode thread returned; a gap trust manager whose delegate throws → `start()` throws after `activate`, the stored generation is complete, and the retry loads it on the loader without a second seed verification; `refreshAnchors()` succeeds → `anchorSnapshotId` advances on that trust
   manager and the next handshake for a previously cached chain misses both caches, `pathCacheHits`
   unchanged; `resetState()` → `anchorSnapshotId` unchanged on every live trust manager, the next
@@ -281,7 +280,7 @@ tests; **live checks** are informational.
   OkHttp (the chain cleaner runs lazily, §5.1 flow step 1); at most two platform validations per 3-arg call, the second only the null-host retry; a direct 3-arg call for a chain and host no socket or engine overload accepted gets no retry; a plain delegate on the JVM throws `IllegalArgumentException` at wiring; an empty or throwing anchor set throws `IllegalStateException`
   at wiring (`STARTED`) or from `start()` (instances created in `CREATED`) on both platforms and
   consumes no cap slot; the cap throws at `maxTrustManagers + 1` live instances and instances are collected when their
-  client is dropped; a trust manager that can go past flow step 1 has a snapshot (`fetcherTrustManager` without one never goes past flow step 1); `enforcement = ENFORCE` after the start task found the sole seed unreadable → `IllegalStateException` `NO_DATA_AT_FLIP`, enforcement unchanged; two concurrent
+  client is dropped; a trust manager that can go past flow step 1 has a snapshot; `enforcement = ENFORCE` after the start task found the sole seed unreadable → `IllegalStateException` `NO_DATA_AT_FLIP`, enforcement unchanged; two concurrent
   `trustManager(d)` calls return the same instance.
 - **API rows** (revision 56; 0.2 gates unless tagged): `Exemptions.and`/`or` as CEL: `broken or true`, `true or
   broken` → exempt, no finding; `false and broken`, `broken and false` → not exempt, no finding; `broken and true` →
@@ -301,11 +300,11 @@ tests; **live checks** are informational.
   only in `elapsedNanos` or `generationEpoch`, and two `SyncResult`s that differ only in `cause`, are equal;
   `validate()` with `ioDispatcher = Dispatchers.Unconfined` → V `IO_DISPATCHER_UNCONFINED`, a `WARNING` under both
   enforcements, and none for `Dispatchers.IO`; `RevoktLoggers.jul()` logs `DEBUG` at `FINE`, `INFO` at `INFO`, `WARN` at `WARNING` and `ERROR` at `SEVERE`;
-  `MozillaRemoteSettings.Builder.build()` with an `x5uHosts` entry, or either side of a rewrite, of `1.2.3.4`, `a.0x7f`,
+  `MozillaRemoteSettings.Builder.build()` with an `allowedDomains` entry, or either side of a rewrite, of `1.2.3.4`, `a.0x7f`,
   `host.`, a 64-character label, a 254-character name, `host:443`, `user@host`,
   `host/x`, `host?x`, `host#x`, `[::1]` or a non-ASCII name → `IllegalArgumentException`, while an upper-case entry
   builds; an x5u URL on
-  `Content-Signature-2.cdn.mozilla.net` against the default allowlist → `FAILED`; [#141] a delta poll's changeset URL carries
+  `content-signature-2.CDN.mozilla.net` or `evilcdn.mozilla.net` against the default `allowedDomains` → `FAILED`, and one on any host under `cdn.mozilla.net` → fetched; a rewrite target outside `allowedDomains`, or a single-label `allowedDomains` entry (`net`) → `IllegalArgumentException`; the attachment base: by default `GET <baseUrl>/` once per sync, before the first attachment fetch, and its `capabilities.attachments.base_url` used; a `base_url` that is not https, carries userinfo, a port other than 443, a query or fragment, or a host outside `allowedDomains` (`evilcdn.mozilla.net`, `cdn.mozilla.net.evil.example`), a root that is not that shape, or a failed root fetch → `FAILED`, stage `ATTACHMENT`, no attachment fetched and nothing advanced; a pinned `attachmentBaseUrl` → no root request; every base the rules accept reads to `java.net.URI` and `java.net.URL` as https on 443 to an allowed host; [#141] a delta poll's changeset URL carries
   `_since=<cursor>` bare and `If-None-Match: "<cursor>"`, and before #141 a sync with a stored cursor sends neither
   (revision 57); decision steps 7 and 8 (#133): a key answered `ENGINE_ERROR`
   while another is `REVOKED` → `Finding.Crlite(ENGINE_ERROR)` for it and no `EngineError(ENGINE)`; a boundary throw

@@ -79,9 +79,10 @@ if (jazzerFuzz == "1" || jazzerFuzz == "true" || jazzerFuzz == "yes") {
 // Spec §9.2 Acceptance and CONTRIBUTING "Coverage": Kover branch coverage of each parser package of at least 90 % over
 // the committed tests (jvmTest), part of `check`: the certificate parser, the C2SP index reader (#86), the CRLite
 // generation (#90), the JSON tokenizer and canonical JSON (#92), the content-signature payload and raw-to-DER
-// conversion (#125) and, under the parser's floor, the seed archive reader (#138). The path walker and the store have
-// floors a little under their measured branch coverage (#161: walker 98.96 %, store 94.26 % at f2c54fc). The floors may
-// only be raised.
+// conversion (#125) and, under the parser's floor, the seed archive reader (#138). The path walker, the store, the
+// updater and the fetch layer have floors a little under their measured branch coverage (#161: walker 98.96 %, store
+// 94.26 % at f2c54fc; #212: update 90.66 %, fetch 95.87 % at 22b2191, as koverVerify computes it). The floors may only
+// be raised.
 kover {
     currentProject {
         createVariant("parser") { add("jvm") }
@@ -91,6 +92,8 @@ kover {
         createVariant("verify") { add("jvm") }
         createVariant("walker") { add("jvm") }
         createVariant("store") { add("jvm") }
+        createVariant("update") { add("jvm") }
+        createVariant("fetch") { add("jvm") }
     }
     reports {
         variant("parser") {
@@ -126,6 +129,14 @@ kover {
             filters { includes { packages("dev.revokt.engine.store") } }
             verify { rule("store package branch coverage") { minBound(93, CoverageUnit.BRANCH) } }
         }
+        variant("update") {
+            filters { includes { packages("dev.revokt.engine.update") } }
+            verify { rule("update package branch coverage") { minBound(90, CoverageUnit.BRANCH) } }
+        }
+        variant("fetch") {
+            filters { includes { packages("dev.revokt.engine.fetch") } }
+            verify { rule("fetch package branch coverage") { minBound(95, CoverageUnit.BRANCH) } }
+        }
     }
 }
 
@@ -138,6 +149,8 @@ tasks.named("check") {
         "koverVerifyVerify",
         "koverVerifyWalker",
         "koverVerifyStore",
+        "koverVerifyUpdate",
+        "koverVerifyFetch",
     )
 }
 

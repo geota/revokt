@@ -46,11 +46,11 @@ class X5uFetchTest {
 
     private fun mirror(
         target: String,
-        vararg hosts: String,
+        vararg domains: String,
     ): MozillaRemoteSettings =
         MozillaRemoteSettings.DEFAULT
             .newBuilder()
-            .x5uHosts(setOf(*hosts))
+            .allowedDomains(setOf(*domains))
             .x5uHostRewrite(host, target)
             .build()
 
@@ -63,8 +63,11 @@ class X5uFetchTest {
     }
 
     @Test
-    fun `data-path (d) a non-allowlisted host, userinfo or port 8443 is FAILED with no fetch`() {
+    fun `data-path (d) a host outside allowedDomains, userinfo or port 8443 is FAILED with no fetch`() {
         refused("https://evil.example$path", X5uUrlFailure.HOST)
+        // The domain rule is on a label boundary.
+        refused("https://evilcdn.mozilla.net$path", X5uUrlFailure.HOST)
+        refused("https://mozilla.net$path", X5uUrlFailure.HOST)
         refused("https://user@$host$path", X5uUrlFailure.USERINFO)
         refused("https://user:pass@$host$path", X5uUrlFailure.USERINFO)
         refused("https://$host@evil.example$path", X5uUrlFailure.USERINFO)
@@ -85,8 +88,20 @@ class X5uFetchTest {
     }
 
     @Test
-    fun `hosts are compared exactly and must be plain ASCII DNS names`() {
-        refused("https://Content-Signature-2.cdn.mozilla.net$path", X5uUrlFailure.HOST)
+    fun `any host under cdn_mozilla_net is fetched, and the domain itself`() {
+        for (other in listOf("content-signature-3.cdn.mozilla.net", "a.b.cdn.mozilla.net", "cdn.mozilla.net")) {
+            assertEquals("https://$other$path", fetched("https://$other$path"))
+        }
+        // Only the domain is compared, exactly: the labels before it are not, so their case is kept as written.
+        assertEquals(
+            "https://Content-Signature-2.cdn.mozilla.net$path",
+            fetched("https://Content-Signature-2.cdn.mozilla.net$path"),
+        )
+    }
+
+    @Test
+    fun `the domain is compared exactly and hosts must be plain ASCII DNS names`() {
+        refused("https://content-signature-2.CDN.mozilla.net$path", X5uUrlFailure.HOST)
         refused("https://$host.$path", X5uUrlFailure.SYNTAX)
         refused("https://content-signature-2.cdn.mozilla.net.evil.example$path", X5uUrlFailure.HOST)
         for (bad in listOf(
@@ -111,7 +126,7 @@ class X5uFetchTest {
         val numericLabels =
             MozillaRemoteSettings.DEFAULT
                 .newBuilder()
-                .x5uHosts(setOf("1a.2b.3c", "x.0xg"))
+                .allowedDomains(setOf("1a.2b.3c", "x.0xg"))
                 .build()
         assertEquals("https://1a.2b.3c$path", fetched("https://1a.2b.3c$path", numericLabels))
         assertEquals("https://x.0xg$path", fetched("https://x.0xg$path", numericLabels))
@@ -143,7 +158,7 @@ class X5uFetchTest {
 
     @Test
     fun `data-path (d) the rewrite is applied before the allowlist check`() {
-        // The original host is not in x5uHosts: only the rewritten one is checked.
+        // The original host is not under allowedDomains: only the rewritten one is checked.
         val source = mirror("x5u.mirror.example", "x5u.mirror.example")
         assertEquals("https://x5u.mirror.example$path", fetched(x5u, source))
         assertEquals("https://x5u.mirror.example$path", fetched("https://$host:443$path", source))

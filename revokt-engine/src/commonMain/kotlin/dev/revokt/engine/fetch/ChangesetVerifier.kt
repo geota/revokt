@@ -22,10 +22,7 @@ internal enum class SignatureFailure {
     /** `metadata.signatures` is absent, not an array, or empty. */
     NO_SIGNATURES,
 
-    /** More than [ChangesetVerifier.MAX_SIGNATURES] entries; none was tried. */
-    TOO_MANY_SIGNATURES,
-
-    /** Every entry was skipped: none has a non-empty `signature`, a non-empty `x5u` and a `mode` of `p384ecdsa`. */
+    /** Every entry was skipped: none has a non-empty `signature`, a non-empty `x5u` and a `mode` absent or `p384ecdsa`. */
     NONE_TRIED,
 
     /** An element reached in the loop is JSON `null`, which Firefox's `const { x5u, signature, mode } = sig` throws on. */
@@ -105,10 +102,11 @@ internal sealed class ChangesetVerification {
  * `cac25a6` reads `metadata.signatures`, lines 1097 to 1132), for one sync: build one per sync and call [verify] for
  * each changeset it fetches. The sync's caller (#137) does everything around it.
  *
- * - **The entries.** An empty `metadata.signatures` is [SignatureFailure.NO_SIGNATURES], and one of more than
- *   [MAX_SIGNATURES] entries is [SignatureFailure.TOO_MANY_SIGNATURES], before anything is fetched. The entries are
- *   then tried in array order. One with no `signature` or `x5u`, an empty one included (Firefox's `!x5u ||
- *   !signature`), or a `mode` other than `p384ecdsa` (none included, a deliberate narrowing from Firefox), is skipped;
+ * - **The entries.** An empty `metadata.signatures` is [SignatureFailure.NO_SIGNATURES], before anything is fetched.
+ *   The first [MAX_SIGNATURES] entries are tried in array order, and any after them are never read (Firefox tries
+ *   every entry; the cap bounds the x5u fetches a changeset can cause). One with no `signature` or `x5u`, an empty one included (Firefox's `!x5u ||
+ *   !signature`), or a `mode` present and other than `p384ecdsa` (Firefox's `mode && mode !== "p384ecdsa"`; a
+ *   non-string or `""` mode is skipped too, where Firefox tries a falsy one), is skipped;
  *   when every one is, [SignatureFailure.NONE_TRIED]. A JSON `null` element reached in the loop is
  *   [SignatureFailure.NULL_ENTRY], as Firefox's destructuring throws on it. These are `FAILED` at stage `SIGNATURE`.
  * - **One entry.** Its `x5u` is fetched through [client] (the §7.1 URL rules, the rewrite and `MAX_X5U_BYTES` are
@@ -157,21 +155,15 @@ internal class ChangesetVerifier(
         if (entries.isEmpty()) {
             return failed(SignatureFailure.NO_SIGNATURES, "metadata.signatures is absent, not an array or empty")
         }
-        if (entries.size > MAX_SIGNATURES) {
-            return failed(
-                SignatureFailure.TOO_MANY_SIGNATURES,
-                "metadata.signatures has ${entries.size} entries; at most $MAX_SIGNATURES are tried",
-            )
-        }
         var backoff: Long? = null
         var last: ChangesetVerification.Failed? = null
-        for ((index, entry) in entries.withIndex()) {
+        for ((index, entry) in entries.take(MAX_SIGNATURES).withIndex()) {
             if (entry == null) {
                 return failed(SignatureFailure.NULL_ENTRY, "metadata.signatures[$index] is null").of(index, backoff)
             }
             val signature = entry.signature
             val url = entry.x5u
-            if (signature.isNullOrEmpty() || url.isNullOrEmpty() || entry.mode != ContentSignature.MODE) continue
+            if (signature.isNullOrEmpty() || url.isNullOrEmpty() || !entry.modeSupported) continue
             val x5u =
                 x5us.getOrPut(url) {
                     val (fetched, fetchBackoff) = fetch(url)
@@ -184,7 +176,10 @@ internal class ChangesetVerifier(
             }
         }
         return last?.of(last.index, backoff)
-            ?: failed(SignatureFailure.NONE_TRIED, "no entry has a signature, an x5u and mode ${ContentSignature.MODE}")
+            ?: failed(
+                SignatureFailure.NONE_TRIED,
+                "no entry has a signature, an x5u and no mode or ${ContentSignature.MODE}",
+            )
     }
 
     /** One tried entry: [signature] over [records] at [timestamp] under [x5u]'s leaf, or [x5u]'s own failure. */
@@ -201,7 +196,16 @@ internal class ChangesetVerifier(
                 is X5u.Invalid -> return x5u.failure.of(index, null)
                 is X5u.Valid -> x5u.path
             }
-        val checked = ContentSignature.verifyRecords(verifier, records, timestamp, signature, entry.mode, path.leafSpki)
+        // The entry's mode is absent or p384ecdsa ([SignatureEntry.modeSupported]), the one algorithm verified.
+        val checked =
+            ContentSignature.verifyRecords(
+                verifier,
+                records,
+                timestamp,
+                signature,
+                ContentSignature.MODE,
+                path.leafSpki,
+            )
         if (checked.verified) {
             return ChangesetVerification.Verified(index, entry, records, timestamp, x5u.body, path, null)
         }
@@ -275,7 +279,7 @@ internal class ChangesetVerifier(
     }
 
     internal companion object {
-        /** The most `metadata.signatures` entries a changeset may carry; all of them may be tried (spec §7.1). */
+        /** The most `metadata.signatures` entries tried, the first in array order; later ones are ignored (spec §7.1). */
         const val MAX_SIGNATURES = 4
 
         /** `FAILED` at stage `SIGNATURE`. */
