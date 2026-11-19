@@ -5,6 +5,12 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
+### Changes in revision 60 (in progress)
+
+- **#223 (audit A-1), Mozilla constants:** §7.1 tries the first 4 `metadata.signatures` entries and ignores the rest,
+  where more than 4 failed the changeset; §5.1 raises `MAX_CHANGESET_RECORDS` from 256 to 1,024; the test plan's
+  content-signature row gains both.
+
 ### Changes in revision 59 (the spec split of #216, and the deltas of #209, #234, #242 and #244, 2026-11-18)
 
 - **The split.** `revokt-spec.md` is the normative core. §9 is now `test-plan.md` (section numbers kept), with the

@@ -459,8 +459,8 @@ Appendix A of the spec: what was verified against live sources and reference cod
     `_since` bare (`params._since = lastEtag`, line 518). Each entry gives `x5u`, `signature` and `mode`; an entry
     missing `x5u` or `signature`, or with a `mode` other than `p384ecdsa`, is skipped with a warning (line 1103), and
     when none verifies the first error is thrown (line 1132). revokt reads `signatures[]` the same way (§7.1),
-    with four differences: it also skips an entry with no `mode` (a deliberate narrowing); it tries at most 4 entries
-    and fails a changeset with more, where Firefox tries them all; it reuses an `x5u` already fetched and validated in
+    with four differences: it also skips an entry with no `mode` (a deliberate narrowing); it tries only the first 4
+    entries and ignores the rest, where Firefox tries them all; it reuses an `x5u` already fetched and validated in
     the same sync, and does not retry one that failed; and when none verifies it reports the last entry's error, where
     Firefox throws the first.
   - **CEL's logical operators**, the model for `Exemptions.and`/`or` (§4): cel-spec `doc/langdef.md` at

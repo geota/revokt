@@ -153,10 +153,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
     }
 
     @Test
-    fun `5 entries is FAILED at SIGNATURE with nothing fetched, and the 4th of 4 is tried`() {
-        val fetcher = served()
-        verify(*Array(5) { entry() }, fetcher = fetcher).assertFailed(SignatureFailure.TOO_MANY_SIGNATURES, null)
-        assertEquals(0, fetcher.requests.size)
+    fun `only the first 4 entries are tried, and the 4th of them is`() {
         // At the cap every entry is tried: three that fail, then one that verifies.
         val fourth =
             verify(
@@ -167,6 +164,14 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
             ).assertVerified(3)
         assertEquals(good, fourth.entry.signature)
         assertEquals(4, ChangesetVerifier.MAX_SIGNATURES)
+        // A 5th entry is never read: one that would verify is not tried, so the 4th's failure is the outcome, and a
+        // null 5th is not NULL_ENTRY.
+        verify(*Array(4) { entry(signature = bad) }, entry()).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 3)
+        verify(*Array(4) { entry(signature = bad) }, null).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 3)
+        // Within the 4 a verifying entry is accepted whatever follows.
+        val fetcher = served()
+        verify(entry(), *Array(5) { entry(x5u = "$host/other-$it.chain") }, fetcher = fetcher).assertVerified(0)
+        assertEquals(1, fetcher.requests.size)
     }
 
     @Test

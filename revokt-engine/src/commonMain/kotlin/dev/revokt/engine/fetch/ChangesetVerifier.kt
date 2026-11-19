@@ -22,9 +22,6 @@ internal enum class SignatureFailure {
     /** `metadata.signatures` is absent, not an array, or empty. */
     NO_SIGNATURES,
 
-    /** More than [ChangesetVerifier.MAX_SIGNATURES] entries; none was tried. */
-    TOO_MANY_SIGNATURES,
-
     /** Every entry was skipped: none has a non-empty `signature`, a non-empty `x5u` and a `mode` of `p384ecdsa`. */
     NONE_TRIED,
 
@@ -105,9 +102,9 @@ internal sealed class ChangesetVerification {
  * `cac25a6` reads `metadata.signatures`, lines 1097 to 1132), for one sync: build one per sync and call [verify] for
  * each changeset it fetches. The sync's caller (#137) does everything around it.
  *
- * - **The entries.** An empty `metadata.signatures` is [SignatureFailure.NO_SIGNATURES], and one of more than
- *   [MAX_SIGNATURES] entries is [SignatureFailure.TOO_MANY_SIGNATURES], before anything is fetched. The entries are
- *   then tried in array order. One with no `signature` or `x5u`, an empty one included (Firefox's `!x5u ||
+ * - **The entries.** An empty `metadata.signatures` is [SignatureFailure.NO_SIGNATURES], before anything is fetched.
+ *   The first [MAX_SIGNATURES] entries are tried in array order, and any after them are never read (Firefox tries
+ *   every entry; the cap bounds the x5u fetches a changeset can cause). One with no `signature` or `x5u`, an empty one included (Firefox's `!x5u ||
  *   !signature`), or a `mode` other than `p384ecdsa` (none included, a deliberate narrowing from Firefox), is skipped;
  *   when every one is, [SignatureFailure.NONE_TRIED]. A JSON `null` element reached in the loop is
  *   [SignatureFailure.NULL_ENTRY], as Firefox's destructuring throws on it. These are `FAILED` at stage `SIGNATURE`.
@@ -157,15 +154,9 @@ internal class ChangesetVerifier(
         if (entries.isEmpty()) {
             return failed(SignatureFailure.NO_SIGNATURES, "metadata.signatures is absent, not an array or empty")
         }
-        if (entries.size > MAX_SIGNATURES) {
-            return failed(
-                SignatureFailure.TOO_MANY_SIGNATURES,
-                "metadata.signatures has ${entries.size} entries; at most $MAX_SIGNATURES are tried",
-            )
-        }
         var backoff: Long? = null
         var last: ChangesetVerification.Failed? = null
-        for ((index, entry) in entries.withIndex()) {
+        for ((index, entry) in entries.take(MAX_SIGNATURES).withIndex()) {
             if (entry == null) {
                 return failed(SignatureFailure.NULL_ENTRY, "metadata.signatures[$index] is null").of(index, backoff)
             }
@@ -275,7 +266,7 @@ internal class ChangesetVerifier(
     }
 
     internal companion object {
-        /** The most `metadata.signatures` entries a changeset may carry; all of them may be tried (spec §7.1). */
+        /** The most `metadata.signatures` entries tried, the first in array order; later ones are ignored (spec §7.1). */
         const val MAX_SIGNATURES = 4
 
         /** `FAILED` at stage `SIGNATURE`. */
