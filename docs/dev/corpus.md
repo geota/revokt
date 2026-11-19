@@ -18,7 +18,7 @@ Two kinds (CONTRIBUTING §3):
 
 | Pin | Value |
 |---|---|
-| `revokt-corpus` tag | `v6` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`; `issuer/`, the issuer corpus's snapshots of 2026-10-25; `ct-seed/`, the CT seed corpus (65 589 log-sample leaves and 71 614 crt.sh leaves, 132 041 of index issuers); and `replay/` (their goldens and records) |
+| `revokt-corpus` tag | `v7` (`gradle/corpus-pin.properties`, with its manifest's SHA-256): `x509-limbo/` at C2SP/x509-limbo@`554528a`; `issuer/`, the issuer corpus's snapshots of 2026-10-25; `ct-seed/`, the CT seed corpus (65 589 log-sample leaves and 71 614 crt.sh leaves, 132 041 of index issuers); `remote-settings/`, the `cert-revocations` changeset of 2026-11-19 and its x5u chain (#113); and `replay/` (their goldens and records) |
 
 ### The large corpus in the replay
 
@@ -63,6 +63,11 @@ jvmTest; the tree but its `.git` is a test input, and the test heap is 8 GB). Th
   a new tag. Then regenerate the corpus's manifest (its README, "Manifest"), commit and tag the corpus, and update the
   pin with the new manifest hash in one revokt PR. D8-gap entries no rule justifies get their written justification
   from the corpus's `tools/limbo-gap-justifications/`; the writer keeps it on every later run.
+- **Remote Settings** (`remote-settings/`, #113): `cert-revocations/2026-11-19/changeset.json`, the CRLite changeset as
+  served (both channels' records), and `x5u.pem`, the x5u chain its signature names, as served. They are not replay
+  inputs. `JsonAllocationTest` holds the changeset to the 4·len + 64 KiB budget beside the intermediates changeset, and
+  `RemoteSettingsCorpusTest` checks that the chain validates to the default pin (`MozillaRemoteSettings.DEFAULT`, spec
+  Appendix A), and fails once its terminal is replaced.
 - **Coverage**: the ubuntu `check` jobs measure the Kover parser gate with the large corpus included; `check-os` (macOS,
   Windows) runs it over the committed replay alone, the measure §9.2's acceptance names.
 
