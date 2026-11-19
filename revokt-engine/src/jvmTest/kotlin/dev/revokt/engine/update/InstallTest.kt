@@ -553,6 +553,17 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
+    fun `a pointed generation that does not read back is no previous, counted (#246)`() {
+        val g1 = assertIs<InstallResult.Installed>(install(pending("g1"))).directory
+        // meta.json reads, records.json is gone: the loader could not load g1, so it is no fallback.
+        storage.inner.delete("crlite/compat/$g1/records.json")
+        assertIs<StoreRead.Found<*>>(store.readMeta(g1))
+        val r = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000)))
+        assertEquals(1, r.storeFailures)
+        assertEquals(StoreRead.Found(Pointer(r.directory, null)), store.pointer())
+    }
+
+    @Test
     fun `a malformed pointer or a pointed directory without meta json counts a store failure`() {
         storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
         val r = assertIs<InstallResult.Installed>(install(pending("g1")))

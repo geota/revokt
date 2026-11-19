@@ -384,8 +384,9 @@ private class Install(
 
     /**
      * The pointer's new `previous`: the first of the old `live` and `previous` that is another complete generation of
-     * the same or a higher trust class (spec §6.5), else none. A malformed pointer, and a pointed directory whose
-     * `meta.json` is missing or malformed, each count a store failure. Beside a malformed pointer, the candidate is the
+     * the same or a higher trust class that reads back ([qualifies], spec §6.5), else none. A malformed pointer, and a
+     * pointed directory that does not qualify for a reason other than its class, each count a store failure. Beside a
+     * malformed pointer, the candidate is the
      * generation the engine holds live, when it is another that qualifies (#236): a running loader keeps its fallback,
      * while a fresh one has none.
      */
@@ -406,36 +407,29 @@ private class Install(
                     read.value
                 }
             }
-        return listOfNotNull(pointer.live, pointer.previous).filter { it != directory }.firstOrNull { candidate ->
-            when (val read = store.readMeta(candidate)) {
-                is StoreRead.Found -> {
-                    read.value.trustClass.rank >= meta.trustClass.rank
-                }
-
-                else -> {
-                    storeFailures++
-                    false
-                }
-            }
-        }
+        return listOfNotNull(pointer.live, pointer.previous).filter { it != directory }.firstOrNull(::qualifies)
     }
 
     /**
-     * Whether [candidate] is a complete generation of the same or a higher trust class, as a `previous` must be; one
-     * whose `meta.json` is missing or malformed counts a store failure.
+     * Whether [candidate] is a complete generation of the same or a higher trust class, as a `previous` must be.
+     * Complete is what loading it needs ([StoreLayout.readGeneration]: `meta.json`, `index.bin`, `records.json` for a
+     * `SIGNED` one, every file it names, each blob re-hashed), so the fallback is always one that can load (#246, the
+     * #247 review). One whose `meta.json` is missing or malformed, or that does not read back, counts a store failure.
      */
-    private fun qualifies(candidate: String): Boolean =
-        when (val read = store.readMeta(candidate)) {
-            is StoreRead.Found -> {
-                read.value.trustClass.rank >= meta.trustClass.rank
-            }
-
-            else -> {
-                // As in the pointer's branch: a candidate whose meta.json is missing or malformed is a store failure.
-                storeFailures++
-                false
-            }
+    private fun qualifies(candidate: String): Boolean {
+        val stored = store.readMeta(candidate)
+        if (stored !is StoreRead.Found) {
+            // As in the pointer's branch: a candidate whose meta.json is missing or malformed is a store failure.
+            storeFailures++
+            return false
         }
+        if (stored.value.trustClass.rank < meta.trustClass.rank) return false
+        if (store.readGeneration(candidate) == null) {
+            storeFailures++
+            return false
+        }
+        return true
+    }
 
     /**
      * Ends the install as [outcome]: before activation, closes the prepared generation and deletes the directory this
