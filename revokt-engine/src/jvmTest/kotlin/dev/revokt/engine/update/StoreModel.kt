@@ -69,8 +69,8 @@ internal class ModelViolation(
  *   not what a damaged `current` reads as: a malformed pointer must not make its generations fair game (the shape of
  *   #207's fail-open bootstrap). Damage that leaves `current` readable is the one exception: no reader can tell it from
  *   a write, so the pointer it reads as becomes the held one (#246; a checksum would close it, #229). And the generation
- *   the engine held when a sync began survives that sync, if it read back undamaged: as the pointer's live or previous,
- *   or still the snapshot's live (#242's fallback);
+ *   the engine held when a sync began survives that sync, if it read back undamaged: on disk, and as the pointer's live
+ *   or previous when the sync flipped (#242's fallback, #249);
  * - **I3** `updater.json` is written only by a sync whose read of it returned (#209), and its watermark never goes
  *   backwards unless damage hit the file;
  * - **I5** no publication older than the floor by the rollback window ([rollbackWindowMillis]) or more installs. The floor is the stored
@@ -392,8 +392,11 @@ internal class StoreModel(
             // and the next install's fallback is taken from `current`, so that generation is pruned. Exempt until #249's
             // fix merges; then this line goes.
             if (liveAtStart !in pointedAtStart) return
-            val kept = listOfNotNull(storage.pointer?.live, storage.pointer?.previous, liveDirectory())
-            if (store.readGeneration(liveAtStart) == null || liveAtStart !in kept) {
+            // A sync that flipped keeps it as the pointer's live or previous; one that did not (it failed, perhaps after
+            // activating a generation whose flip then failed) leaves it on disk.
+            val flipped = result.outcome == SyncOutcome.INSTALLED
+            val kept = !flipped || liveAtStart == storage.pointer?.live || liveAtStart == storage.pointer?.previous
+            if (store.readGeneration(liveAtStart) == null || !kept) {
                 fail(
                     "I2: the sync lost $liveAtStart, the generation the engine held when it began " +
                         "(reads back: ${store.readGeneration(liveAtStart) != null}, pointer ${storage.pointer})",
