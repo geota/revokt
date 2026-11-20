@@ -23,7 +23,7 @@ class CertificateParserFuzzTest {
         /** An empty index: only its canonicaliser (the platform's, §3) is used, to build each `Cert`. */
         private val index = CandidateIndex(emptyList())
 
-        /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
+        /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
             val first = CertificateParser.parse(data)

@@ -31,7 +31,7 @@ class ClubcardDecoderFuzzTest {
     companion object {
         private val serial = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8).toByteString()
 
-        /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
+        /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
             val filter =

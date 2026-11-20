@@ -12,7 +12,7 @@ recorded here after each weekly run (CONTRIBUTING §7).
 | Contributors | not targeted | |
 | Dangerous-Workflow | 10 | |
 | Dependency-Update-Tool | 10 (Renovate) | |
-| Fuzzing | 10 (ClusterFuzzLite, from the parser issue) | |
+| Fuzzing | 10 once OSS-Fuzz admits the project; Scorecard's check looks for OSS-Fuzz or ClusterFuzzLite, which #213 replaced with the scheduled `fuzz.yml` (not measured) | |
 | License | 10 | |
 | Maintained | 10 | |
 | Packaging | 10 (jars attached to GitHub releases) | |

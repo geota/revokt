@@ -40,7 +40,7 @@ class X5uPemFuzzTest {
                 "ECHCONFIG",
             )
 
-        /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
+        /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
             val first = X5uPem.read(data)
