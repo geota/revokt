@@ -54,7 +54,8 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         val load = installed(load(Seed()))
         assertEquals(1, load.storeFailures)
         val record = updater()
-        assertEquals(ts + day, record.watermarkMillis)
+        // The watermark was read (ts + day); with nothing loaded the seed's install sets it to its <ts> (§7.1).
+        assertEquals(ts, record.watermarkMillis)
         assertEquals(setOf("ok"), record.sources.keys)
     }
 

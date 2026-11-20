@@ -58,10 +58,10 @@ class DiagnosticsTest {
 
     @Test
     fun `DiagnosticCode entries are the spec 4 list`() {
-        // Spec §4 (revision 56), `enum class DiagnosticCode`, in its order, 0.3's codes included. Growable: a new code is
+        // Spec §4 (revision 61), `enum class DiagnosticCode`, in its order, 0.3's codes included. Growable: a new code is
         // appended here and there together.
         val spec =
-            "METERED_DEFERRED, CLOCK_BEHIND, NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, " +
+            "NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, " +
                 "STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, " +
                 "ENGINE_SELF_CHECK_FAILED, " +
                 "IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, " +
@@ -82,7 +82,6 @@ class DiagnosticsTest {
             listOf(
                 "INSTALLED",
                 "UNCHANGED",
-                "DEFERRED",
                 "FAILED",
                 "CLOCK_SKEW",
                 "ROLLBACK_REFUSED",

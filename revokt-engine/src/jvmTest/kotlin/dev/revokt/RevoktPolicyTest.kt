@@ -61,11 +61,7 @@ class RevoktPolicyTest {
                     policy.staleness(dataset),
                 )
             }
-            assertEquals(day, policy.rollbackWindowMillis)
-            assertEquals(day, policy.clockSkewMillis)
             assertEquals(day, policy.signedSourceFailingAfterMillis)
-            assertEquals(Duration.ofDays(1), policy.rollbackWindow())
-            assertEquals(Duration.ofDays(1), policy.clockSkew())
             assertEquals(Duration.ofDays(1), policy.signedSourceFailingAfter())
         }
         assertEquals(Staleness.ofMillis(3 * day, null), RevoktPolicy.DEFAULT.staleness(Dataset.CRLITE))
@@ -266,29 +262,27 @@ class RevoktPolicyTest {
         val policy =
             RevoktPolicy.DEFAULT
                 .newBuilder()
-                .rollbackWindowMillis(1_000)
-                .clockSkew(Duration.ofMinutes(5))
                 .signedSourceFailingAfter(6.hours)
                 .build()
-        assertEquals(1_000, policy.rollbackWindowMillis)
-        assertEquals(Duration.ofMinutes(5), policy.clockSkew())
         assertEquals(6 * 60 * 60 * 1_000L, policy.signedSourceFailingAfterMillis)
         val other =
             RevoktPolicy.DEFAULT
                 .newBuilder()
-                .rollbackWindow(Duration.ofSeconds(2))
-                .clockSkew(3.hours)
-                .clockSkewMillis(7)
+                .signedSourceFailingAfter(Duration.ofSeconds(2))
                 .signedSourceFailingAfterMillis(8)
-                .rollbackWindow(1500.milliseconds)
                 .build()
+        assertEquals(8L, other.signedSourceFailingAfterMillis)
         assertEquals(
-            listOf(1_500L, 7L, 8L),
-            listOf(other.rollbackWindowMillis, other.clockSkewMillis, other.signedSourceFailingAfterMillis),
+            Duration.ofMillis(1_500),
+            RevoktPolicy.DEFAULT
+                .newBuilder()
+                .signedSourceFailingAfter(1500.milliseconds)
+                .build()
+                .signedSourceFailingAfter(),
         )
         for (bad in listOf<RevoktPolicy.Builder.() -> Any>(
-            { rollbackWindowMillis(-1) },
-            { clockSkew(Duration.ofMillis(-1)) },
+            { signedSourceFailingAfterMillis(-1) },
+            { signedSourceFailingAfter(Duration.ofMillis(-1)) },
             { signedSourceFailingAfter((-1).milliseconds) },
             { rejectStaleAfterMillis(Dataset.CRLITE, -1) },
         )) {
@@ -297,8 +291,6 @@ class RevoktPolicyTest {
         // A java.time.Duration beyond Long milliseconds is an argument error too, not an ArithmeticException.
         val huge = Duration.ofSeconds(Long.MAX_VALUE)
         for ((name, overflow) in listOf<Pair<String, RevoktPolicy.Builder.() -> Any>>(
-            "rollbackWindow" to { rollbackWindow(huge) },
-            "clockSkew" to { clockSkew(huge) },
             "signedSourceFailingAfter" to { signedSourceFailingAfter(huge) },
             "rejectStaleAfter" to { rejectStaleAfter(Dataset.CRLITE, huge) },
         )) {
@@ -343,10 +335,10 @@ class RevoktPolicyTest {
                     },
                 )
         val first = builder.build()
-        builder.rule(Rule.NO_SCTS, Outcome.REJECT).clearExemption(Rule.NO_DATA).clockSkewMillis(1)
+        builder.rule(Rule.NO_SCTS, Outcome.REJECT).clearExemption(Rule.NO_DATA).signedSourceFailingAfterMillis(1)
         assertEquals(Outcome.ALLOW, first.outcome(Rule.NO_SCTS))
         assertTrue(first.exemption(Rule.NO_DATA) != null)
-        assertEquals(day, first.clockSkewMillis)
+        assertEquals(day, first.signedSourceFailingAfterMillis)
 
         val again = first.newBuilder().build()
         assertEquals(Preset.STRICT, again.form.preset)

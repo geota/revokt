@@ -11,12 +11,6 @@ package dev.revokt
  * state's warnings, **sync** = on [SyncResult.warnings].
  */
 public enum class DiagnosticCode {
-    /** sync: a metered-deferred full download (§7.2), with [SyncOutcome.DEFERRED]. */
-    METERED_DEFERRED,
-
-    /** sync: a future-dated seed or changeset was installed (§6.3); the local clock is behind the signed data. */
-    CLOCK_BEHIND,
-
     /** V: a required dataset with a local data source and no fetching source. */
     NO_FETCHING_SOURCE,
 

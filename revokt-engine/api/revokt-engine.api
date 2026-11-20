@@ -77,7 +77,6 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field BUDGET_ALLOWS Ldev/revokt/DiagnosticCode;
 	public static final field CAP_NEAR_LIMIT Ldev/revokt/DiagnosticCode;
 	public static final field CHANNEL_UNSET Ldev/revokt/DiagnosticCode;
-	public static final field CLOCK_BEHIND Ldev/revokt/DiagnosticCode;
 	public static final field ENGINE_SELF_CHECK_FAILED Ldev/revokt/DiagnosticCode;
 	public static final field EVIDENCE_LOWERED_BELOW_PRESET Ldev/revokt/DiagnosticCode;
 	public static final field EXEMPTION_ON_EVIDENCE_RULE Ldev/revokt/DiagnosticCode;
@@ -86,7 +85,6 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field INDEX_INCONSISTENT Ldev/revokt/DiagnosticCode;
 	public static final field IN_MEMORY_STORE_WITH_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
 	public static final field IO_DISPATCHER_UNCONFINED Ldev/revokt/DiagnosticCode;
-	public static final field METERED_DEFERRED Ldev/revokt/DiagnosticCode;
 	public static final field NO_DATA_AT_FLIP Ldev/revokt/DiagnosticCode;
 	public static final field NO_DATA_REJECTS_WITHOUT_LOCAL_DATA Ldev/revokt/DiagnosticCode;
 	public static final field NO_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
@@ -265,7 +263,6 @@ public final class dev/revokt/Finding$DataState : dev/revokt/Finding {
 	public synthetic fun <init> (Ldev/revokt/Finding$DataState$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAgeMillis ()Ljava/lang/Long;
-	public final fun getClockBehind ()Z
 	public final fun getDataset ()Ldev/revokt/Dataset;
 	public final fun getFreshness ()Ldev/revokt/Freshness;
 	public final fun getFromSeed ()Z
@@ -619,15 +616,11 @@ public final class dev/revokt/RevoktPolicy {
 	public static final field DEFAULT Ldev/revokt/RevoktPolicy;
 	public static final field STRICT Ldev/revokt/RevoktPolicy;
 	public synthetic fun <init> (Ldev/revokt/engine/policy/PolicyForm;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun clockSkew ()Ljava/time/Duration;
 	public final fun exemption (Ldev/revokt/Rule;)Ldev/revokt/Exemption;
-	public final fun getClockSkewMillis ()J
 	public final fun getRequiredDatasets ()Ljava/util/Set;
-	public final fun getRollbackWindowMillis ()J
 	public final fun getSignedSourceFailingAfterMillis ()J
 	public final fun newBuilder ()Ldev/revokt/RevoktPolicy$Builder;
 	public final fun outcome (Ldev/revokt/Rule;)Ldev/revokt/Outcome;
-	public final fun rollbackWindow ()Ljava/time/Duration;
 	public final fun signedSourceFailingAfter ()Ljava/time/Duration;
 	public final fun staleness (Ldev/revokt/Dataset;)Ldev/revokt/Staleness;
 	public fun toString ()Ljava/lang/String;
@@ -638,15 +631,11 @@ public final class dev/revokt/RevoktPolicy$Builder {
 	public final fun build ()Ldev/revokt/RevoktPolicy;
 	public final fun clearExemption (Ldev/revokt/Rule;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun clearStaleness (Ldev/revokt/Dataset;)Ldev/revokt/RevoktPolicy$Builder;
-	public final fun clockSkew (Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
-	public final fun clockSkewMillis (J)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun exempt (Ldev/revokt/Rule;Ldev/revokt/Exemption;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun exemptAnchors (Ljava/util/Collection;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun rejectStaleAfter (Ldev/revokt/Dataset;Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun rejectStaleAfterMillis (Ldev/revokt/Dataset;Ljava/lang/Long;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun requiredDatasets (Ljava/util/Set;)Ldev/revokt/RevoktPolicy$Builder;
-	public final fun rollbackWindow (Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
-	public final fun rollbackWindowMillis (J)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun rule (Ldev/revokt/Rule;Ldev/revokt/Outcome;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun signedSourceFailingAfter (Ljava/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
 	public final fun signedSourceFailingAfterMillis (J)Ldev/revokt/RevoktPolicy$Builder;
@@ -657,9 +646,7 @@ public final class dev/revokt/RevoktPolicy$Companion {
 }
 
 public final class dev/revokt/RevoktPolicyKt {
-	public static final synthetic fun clockSkew-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
 	public static final synthetic fun rejectStaleAfter-moChb0s (Ldev/revokt/RevoktPolicy$Builder;Ldev/revokt/Dataset;Lkotlin/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
-	public static final synthetic fun rollbackWindow-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
 	public static final synthetic fun signedSourceFailingAfter-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
 }
 
@@ -783,7 +770,6 @@ public final class dev/revokt/StoreLockedException : java/lang/RuntimeException 
 public final class dev/revokt/SyncOutcome : java/lang/Enum {
 	public static final field BACKOFF Ldev/revokt/SyncOutcome;
 	public static final field CLOCK_SKEW Ldev/revokt/SyncOutcome;
-	public static final field DEFERRED Ldev/revokt/SyncOutcome;
 	public static final field FAILED Ldev/revokt/SyncOutcome;
 	public static final field INSTALLED Ldev/revokt/SyncOutcome;
 	public static final field ROLLBACK_REFUSED Ldev/revokt/SyncOutcome;

@@ -20,15 +20,13 @@ internal data class StalenessTable(
 )
 
 /**
- * One preset as spec §8 tabulates it: an outcome for every rule, the required datasets, the staleness map and the
- * three time fields, all in milliseconds. The public `RevoktPolicy` (0.2) wraps it.
+ * One preset as spec §8 tabulates it: an outcome for every rule, the required datasets, the staleness map and
+ * `signedSourceFailingAfter`, all in milliseconds. The public `RevoktPolicy` (0.2) wraps it.
  */
 internal class PresetTable(
     private val outcomes: Map<Rule, Outcome>,
     val requiredDatasets: Set<Dataset>,
     val staleness: Map<Dataset, StalenessTable>,
-    val rollbackWindowMillis: Long,
-    val clockSkewMillis: Long,
     val signedSourceFailingAfterMillis: Long,
 ) {
     fun outcome(rule: Rule): Outcome = outcomes.getValue(rule)
@@ -70,8 +68,6 @@ internal object PolicyTable {
             outcomes = Rule.entries.associateWith(::defaultOutcome),
             requiredDatasets = setOf(Dataset.CRLITE),
             staleness = mapOf(Dataset.CRLITE to StalenessTable(3 * DAY_MILLIS, null)),
-            rollbackWindowMillis = DAY_MILLIS,
-            clockSkewMillis = DAY_MILLIS,
             signedSourceFailingAfterMillis = DAY_MILLIS,
         )
 
@@ -80,8 +76,6 @@ internal object PolicyTable {
             outcomes = Rule.entries.associateWith(::strictOutcome),
             requiredDatasets = setOf(Dataset.CRLITE),
             staleness = mapOf(Dataset.CRLITE to StalenessTable(3 * DAY_MILLIS, 30 * DAY_MILLIS)),
-            rollbackWindowMillis = DAY_MILLIS,
-            clockSkewMillis = DAY_MILLIS,
             signedSourceFailingAfterMillis = DAY_MILLIS,
         )
 

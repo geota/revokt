@@ -24,30 +24,44 @@ tests; **live checks** are informational.
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
   disagreement fails the job.
 - **Content-signature fixtures** (0.2 gates, except the item tagged [0.3], which needs the §6.5 store; revision 49) with mutations; incremental fixtures; a seed with an expired signer
-  leaf must load; a seed 25 h ahead of local now loads with `clockBehind = true`, `ageMillis = 0`, `CLOCK_BEHIND` on `RevoktState.warnings`, the watermark at its signed timestamp; a changeset 2 h ahead of that seed then installs with `clockBehind = true`, `lastVerifiedAtMillis` advanced, watermark and cursor unchanged, and the next poll of the same changeset is `UNCHANGED`; after the local clock is advanced 30 h the next changeset installs normally, `clockBehind = false`, `CLOCK_BEHIND` gone, the watermark advanced; [0.3] a restart with the clock still behind republishes `clockBehind = true` from the stored generation; a signed changeset with `last_modified` 25 h ahead of local now against a live generation that is not `clockBehind` → `CLOCK_SKEW`, watermark unchanged, the next poll installs once the timestamp is within `clockSkew`; the same against a dataset with no generation → installs with `clockBehind`, watermark and cursor unchanged; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; (revision 56) a channel with two full filters, or none → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, the previous generation still live, and `SEED_UNREADABLE` for a seed; a delta whose `parent` names no record → placed by its time and installed; a full record without `parent` → loads, and a delta without one → `SYNC_SCHEMA_REJECTED`; a changeset signed by a P-256 leaf (a 64-byte raw pair) → verifies; a changeset whose first `signatures` entry fails and whose second verifies → installs; one with 5 entries, or
+  leaf must load; a seed 25 h ahead of local now loads like any other, with `ageMillis = 0`, no warning and the watermark at its signed timestamp; a signed changeset 25 h ahead of local now installs against a dataset with no generation, and one 2 days ahead installs beside a live generation, each advancing the watermark, the cursor and `lastVerifiedAtMillis` with no warning, the next poll of the same changeset `UNCHANGED`, and the next server `<ts>` installs; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; (revision 56) a channel with two full filters, or none → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, the previous generation still live, and `SEED_UNREADABLE` for a seed; a delta whose `parent` names no record → placed by its time and installed; a full record without `parent` → loads, and a delta without one → `SYNC_SCHEMA_REJECTED`; a changeset signed by a P-256 leaf (a 64-byte raw pair) → verifies; a changeset whose first `signatures` entry fails and whose second verifies → installs; one with 5 entries, or
   whose every entry has a `mode` other than `p384ecdsa` → `FAILED`, stage `SIGNATURE`; two entries sharing one `x5u` URL → that URL fetched once; one whose `metadata` holds only `signature`, or an empty `signatures` → `FAILED`, stage `SIGNATURE`; an entry with no `mode`, or a `null` one, is tried and verifies, while one whose `mode` is `""` or a number is skipped; (revision 57, #198) an entry whose `x5u` or `signature` is `""` is skipped like a missing one;
   `signatures` of `[null, a valid entry]` → `FAILED`, stage `SIGNATURE`, and `[a valid entry, null]` → installs; four failing entries and a fifth that would verify → the fourth's failure, `FAILED`, stage `SIGNATURE`, the fifth never read, and four failing entries then `null` → the same, never `NULL_ENTRY`; a channel of `MAX_CHANGESET_RECORDS` (1,024) records after channel filtering → passes the cap, and one more → `FAILED`, stage `CHANGESET`, before any attachment fetch; a first entry whose
   `x5u` fetch fails (404) and a second that verifies → installs; a lone entry whose `x5u` fetch fails → `FAILED`, stage
   `X5U`; a lone entry whose `x5u` body has no `CERTIFICATE` block, or whose chain fails, or whose signature verifier
   answers `UNSUPPORTED`, or whose records share an `id` → `FAILED`, stage `SIGNATURE`; a `_since` delta signed over the
   merged records → verifies over the merge, which is what installs, and fails over the delta's `changes` alone; a
+  `_since` changeset that fails the content signature, or has an empty `signatures`, every entry skipped or a `null`
+  entry → the whole collection fetched once, which installs; one with a change that has no `id` → the whole
+  collection fetched once, with no x5u fetched for the `_since` one; one whose x5u fetch fails → `FAILED`, stage `X5U`,
+  whose x5u is not PEM or whose chain fails → `FAILED`, stage `SIGNATURE`, and whose x5u is outside its validity →
+  `CLOCK_SKEW`, stage `X5U`, each with the whole collection never fetched and nothing advanced; a whole collection
+  that does not verify → fetched once; a
   v3 filter with `approx_m` of 2^32, or a rank of 256 → `FAILED`; signature
   over records with a tombstone merged vs not merged.
-- **Data-path fixtures** ((a), (b), (d) and (g) less its fetcher items tagged [0.3] are 0.2 gates; those items and (e), (f), (h) need the store, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) changeset older than the watermark beyond the window →
-  `ROLLBACK_REFUSED`, within the window but lower max coverage → `ROLLBACK_REFUSED`, within the window
-  with equal coverage → installs; **newer timestamp with lower coverage → installs and advances the
-  watermark**; a refused rollback leaves `consecutiveFailures` and `lastVerified*` unchanged;
+- **Data-path fixtures** ((a), (b), (d) and (g) less its fetcher items tagged [0.3] are 0.2 gates; those items and (e), (f), (h) need the store, lifecycle machine or the 0.3 fetcher modules and are 0.3 gates): (a) beside a live generation, a changeset older than the
+  higher of the watermark and the live `<ts>`, by 1 ms or more → `ROLLBACK_REFUSED` before any body, whatever its
+  coverage; equal to a watermark above the live `<ts>` → installs; **newer timestamp with lower coverage → installs
+  and advances the watermark**; with no generation loaded (a fresh loader beside a stored generation, an absent or
+  malformed pointer, or a malformed live `meta.json`) and a stored watermark above it, an older changeset →
+  installs, the watermark and the cursor set to its `<ts>`, and once it is live it is the floor (100, then 80
+  installed with no generation loaded, then 90 → installs); a stored watermark far ahead and no generation ever
+  installed → the changeset installs and the watermark is its `<ts>`; an install with no generation loaded whose
+  write of `updater.json` or flip fails → the watermark unchanged; beside a live generation whose pointer is
+  malformed, or absent, an older changeset → `ROLLBACK_REFUSED`, no body fetched and the pointer unchanged; a
+  stored watermark of 100, nothing loadable, a seed at 80 → installs with the watermark at 80, and a sync at 90 then
+  installs; a seed beside a loaded generation (a trusted pointer at a fresh start, or one the engine serves beside a
+  malformed pointer) → the higher watermark kept; with no generation loaded, an
+  `updater.json` read that throws → `STORE_FAILED`, the file unchanged and nothing installed; a refused rollback leaves `consecutiveFailures` and `lastVerified*` unchanged;
   `Backoff: 100000000` → next poll ≤ 24 h and `backoffUntilMillis ≤ now + 24 h`; (revision 56, #131) a `CLOCK_SKEW` and
   a `STORE_FAILED` sync each advance `consecutiveFailures`, the first feed failure waiting 15 min, the second 30 min and
-  the sixth capped at 6 h, while `ROLLBACK_REFUSED`, `BACKOFF` and `DEFERRED` leave the count unchanged; after three
-  failures an `INSTALLED` poll, a clock-behind install, a 304 and a timestamp-match `UNCHANGED` each reset it to 0; a
+  the sixth capped at 6 h, while `ROLLBACK_REFUSED` and `BACKOFF` leave the count unchanged; after three
+  failures an `INSTALLED` poll, a 304 and a timestamp-match `UNCHANGED` each reset it to 0; a
   200 with `Backoff: 600` → `backoffUntilMillis = now + 600 s`; a success without the header clears `backoffUntilMillis`; a
   `FAILED` with `Retry-After: 60` waits 60 s although its computed backoff is 15 min; (revision 56, #190) an absent or
-  malformed `updater.json` beside a live generation, then a changeset older than that generation by more than
-  `rollbackWindow` → `ROLLBACK_REFUSED`;
-  a live generation that is `clockBehind` far in the future, then a changeset newer than the stored watermark
-  but older than that generation → installs (the feed does not freeze); (b)
-  coverage `high` beyond `last_modified + clockSkew` → `FAILED`, stage `INDEX`; (d) x5u mutations: wrong leaf SAN (no dNSName equal to the signer name, `x.` or `x` before it included, a wildcard, an empty or malformed dNSName, or a name of another form beside it), a leaf extKeyUsage without codeSigning, root not pinned, non-CA
+  malformed `updater.json` beside a live generation, then a changeset older than that generation →
+  `ROLLBACK_REFUSED`; an `updater.json` read that throws beside it → `STORE_FAILED`, the file unchanged; (b)
+  a coverage `high` beyond the signed `<ts>` → installs, in a sync and in a seed (no coverage rule, §6.3); (d) x5u mutations: wrong leaf SAN (no dNSName equal to the signer name, `x.` or `x` before it included, a wildcard, an empty or malformed dNSName, or a name of another form beside it), a leaf extKeyUsage without codeSigning, root not pinned, non-CA
   certificate as intermediate, name-chaining break, `pathLenConstraint` violation, keyUsage without
   `keyCertSign`, an x5u URL on a host outside `allowedDomains` (`evilcdn.mozilla.net` included), an x5u over 64 KiB, expired intermediate or
   leaf at live fetch → `CLOCK_SKEW` (stage `X5U`), expired leaf in seed → loads (revision 57: each `FAILED` x5u mutation in this row is at stage
@@ -307,8 +321,8 @@ tests; **live checks** are informational.
   57); a one-certificate `verifiedPath` whose leaf is a snapshot anchor outside the keyability profile → `FOUND` under
   its own key, `anchorSnapshotId` the entry snapshot's; the same leaf when it is not an anchor →
   `PARSE_FAILED(PRODUCER_UNKEYABLE)`, never queried; a longer `verifiedPath` → `anchorSnapshotId = 0`, an anchor at its
-  head gated like any leaf; `STRICT.newBuilder().build().newBuilder()` keeps `STRICT`'s preset; `rollbackWindowMillis(-1)` and
-  `clockSkew(Duration.ofSeconds(Long.MAX_VALUE))` → `IllegalArgumentException`; a policy that is an `ERROR` under
+  head gated like any leaf; `STRICT.newBuilder().build().newBuilder()` keeps `STRICT`'s preset; `signedSourceFailingAfterMillis(-1)` and
+  `signedSourceFailingAfter(Duration.ofSeconds(Long.MAX_VALUE))` → `IllegalArgumentException`; a policy that is an `ERROR` under
   `validate(ENFORCE)` has only `WARNING`s under `validate(OFF)`; a `PresentedChain` whose second certificate does not
   parse → `size = 2`, `parsed(1) = false`, `der(1)` its bytes and its other fields empty; two `Verdict`s that differ
   only in `elapsedNanos` or `generationEpoch`, and two `SyncResult`s that differ only in `cause`, are equal;

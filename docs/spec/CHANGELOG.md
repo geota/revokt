@@ -66,6 +66,28 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
 - **The nightly fuzzing tier** is `fuzz.yml`, every target for 300 s, one job per target, with each night's corpus
   added to the private corpus repository, in place of ClusterFuzzLite (#119, superseded), until OSS-Fuzz (test plan
   §9.1 "Tiers", §9.2 "Tiers and matrix").
+- **#224, the sync rules aligned with Firefox:**
+  - §7.1's rollback guard: a changeset older than the floor, the higher of the stored watermark and the live
+    `<ts>`, is `ROLLBACK_REFUSED` however little older, and one equal to it installs. With no generation loaded the
+    stored watermark is not read, as Firefox imports when its local data does not verify, and that install sets the
+    watermark to its `<ts>` in its own write. "None readable" means absent or malformed, never a read that threw, and
+    no sync runs after a stored-generation read that threw until it resolves. `rollbackWindow`, the
+    in-window coverage-monotonic rule and their policy, golden-fixture and form rows are gone.
+  - §7.1's reset-and-retry runs once, as the whole collection, on a content-signature mismatch, on no usable
+    signature entry (`NO_SIGNATURES`, `NONE_TRIED`, `NULL_ENTRY`) and on an unmergeable change list, which is a
+    trigger of its own; never on an x5u fetch, PEM, chain or validity failure.
+  - §7.2: no metered deferral. The `meteredNetwork` seam, `SyncOutcome.DEFERRED` and `METERED_DEFERRED` are gone.
+  - §6.3, §6.5, §4 and §8: no clock rule on signed data. The changeset `CLOCK_SKEW` at `CHANGESET`, the clock-behind
+    install, `DataState.clockBehind`, `CLOCK_BEHIND` and the coverage bound (a sync's and a seed's) are gone, and so
+    is `clockSkew` from the policy; `SyncOutcome.CLOCK_SKEW` is the x5u validity at stage `X5U` only. `ageMillis` is
+    still clamped at 0.
+  - §6.5's watermark sentence holds while a generation is live. A seed that installs with no generation loaded sets
+    the watermark to its `<ts>` in its own write, as the sync's install does; beside a loaded generation it keeps the
+    higher one.
+  - §10 records the far-future `<ts>` residual (`STALE` fires late) and the residual of the unread watermark, with
+    the fatal error after `activate` that leaves the snapshot empty;
+    Appendix A cites Firefox, upki, Kinto and Mozilla's signer for each rule. The test plan's content-signature row
+    and data-path (a) and (b) follow.
 
 ### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 

@@ -49,7 +49,6 @@ class DataFindingTest {
             .sourceTimestampMillis(1_700_000_000_000)
             .ageMillis(4 * 86_400_000L)
             .pending(true)
-            .clockBehind(true)
             .seedFormat(1)
             .stale(true)
             .rules(setOf(Rule.STALE))
@@ -122,7 +121,6 @@ class DataFindingTest {
                 "sourceTimestampMillis" to { sourceTimestampMillis(1) },
                 "ageMillis" to { ageMillis(0) },
                 "pending" to { pending(false) },
-                "clockBehind" to { clockBehind(false) },
                 "seedFormat" to { seedFormat(null) },
                 "stale" to { stale(false) },
                 "rules" to { rules(setOf(Rule.NO_DATA, Rule.STALE)) },
@@ -165,7 +163,6 @@ class DataFindingTest {
         assertNull(d.seedFormat)
         assertEquals(false, d.fromSeed)
         assertEquals(false, d.pending)
-        assertEquals(false, d.clockBehind)
         assertEquals(false, d.stale)
         assertEquals(emptySet(), d.rules)
         assertEquals("dataset is not set", message { Finding.DataState.Builder().build() })
@@ -179,7 +176,6 @@ class DataFindingTest {
                 .sourceTimestampMillis(null)
                 .ageMillis(null)
                 .pending(false)
-                .clockBehind(false)
                 .seedFormat(null)
                 .stale(false)
                 .rules(emptySet())

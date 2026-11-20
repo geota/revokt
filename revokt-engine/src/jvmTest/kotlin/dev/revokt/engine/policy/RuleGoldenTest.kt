@@ -14,7 +14,7 @@ import kotlin.test.assertEquals
  * The growability golden fixture of spec §4, in three sections:
  * - `[rules]`, one row per rule in precedence order with §4's tuple: rule, class, layer, exemptable, emptyPath,
  *   basicReason, introducedIn, flippedIn per preset, then the `DEFAULT` and `STRICT` outcomes;
- * - `[presets]`, one row per preset with its `requiredDatasets` and the three time fields;
+ * - `[presets]`, one row per preset with its `requiredDatasets` and `signedSourceFailingAfterMillis`;
  * - `[datasets]`, one row per preset and dataset with its staleness thresholds, so a new dataset adds rows and
  *   changes none.
  *
@@ -68,8 +68,6 @@ class RuleGoldenTest {
                         .map { it.name }
                         .sorted()
                         .joinToString(","),
-                    t.rollbackWindowMillis.toString(),
-                    t.clockSkewMillis.toString(),
                     t.signedSourceFailingAfterMillis.toString(),
                 ).joinToString(TAB)
         }
@@ -112,8 +110,6 @@ class RuleGoldenTest {
             listOf(
                 "preset",
                 "requiredDatasets",
-                "rollbackWindowMillis",
-                "clockSkewMillis",
                 "signedSourceFailingAfterMillis",
             )
         val DATASET_COLUMNS = listOf("preset", "dataset", "staleAfterMillis", "rejectStaleAfterMillis")

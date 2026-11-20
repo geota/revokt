@@ -9,7 +9,7 @@ package dev.revokt
  * the fetch it interrupted, [CHANGESET], [X5U] or [ATTACHMENT] (§3).
  */
 public enum class SyncStage {
-    /** The changeset fetch, or its `last_modified` `CLOCK_SKEW`. */
+    /** The changeset fetch. */
     CHANGESET,
 
     /** The x5u fetch, or a validity `CLOCK_SKEW`. */

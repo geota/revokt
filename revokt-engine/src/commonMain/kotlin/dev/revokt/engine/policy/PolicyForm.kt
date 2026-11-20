@@ -12,8 +12,8 @@ import dev.revokt.RuleClass
 /**
  * A policy as decide and evaluate read it (spec §3, §8): the public `RevoktPolicy` (jvmMain) compiles to it, so
  * commonMain never sees `java.time`. One row per rule, an outcome for every rule and an exemption where one is
- * registered, plus the required datasets, the staleness map and the three time fields in milliseconds. Every input is
- * copied into a read-only collection.
+ * registered, plus the required datasets, the staleness map and `signedSourceFailingAfter` in milliseconds. Every
+ * input is copied into a read-only collection.
  *
  * [preset] is the preset the policy derives from (spec §4 "Growability contract": `newBuilder()` only from a preset).
  */
@@ -23,8 +23,6 @@ internal class PolicyForm(
     exemptions: Map<Rule, Exemption>,
     requiredDatasets: Set<Dataset>,
     staleness: Map<Dataset, StalenessTable>,
-    val rollbackWindowMillis: Long,
-    val clockSkewMillis: Long,
     val signedSourceFailingAfterMillis: Long,
 ) {
     val outcomes: Map<Rule, Outcome> = buildMap { putAll(outcomes) }
@@ -56,8 +54,6 @@ internal class PolicyForm(
                 exemptions = emptyMap(),
                 requiredDatasets = table.requiredDatasets,
                 staleness = table.staleness,
-                rollbackWindowMillis = table.rollbackWindowMillis,
-                clockSkewMillis = table.clockSkewMillis,
                 signedSourceFailingAfterMillis = table.signedSourceFailingAfterMillis,
             )
         }

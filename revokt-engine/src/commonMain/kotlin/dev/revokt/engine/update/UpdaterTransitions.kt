@@ -14,7 +14,7 @@ import dev.revokt.engine.store.UpdaterRecord
  * An `updater.json` as the loader reads it: its [record], and the store failures reading it cost (spec §6.5,
  * `storeFailures`, #178): a malformed file is one and reads as an empty record; each dropped source entry and a
  * `sources` member that is not an object are one each. The watermark an empty record loses is floored at the live
- * `SIGNED` generation's timestamp by [SyncRules] (revision 56, #188).
+ * generation's timestamp by [SyncRules].
  */
 internal class LoadedUpdater(
     val record: UpdaterRecord,
@@ -36,17 +36,15 @@ internal class LoadedUpdater(
  * The `updater.json` transition at the end of one sync of one source (spec §6.5, §7.1), over [UpdaterRecord]:
  * - every outcome but `STORE_LOCKED` sets `datasetLastAttemptAtMillis` and the source's `lastAttemptAtMillis` to now
  *   ("written at the end of every sync whatever its outcome, `STORE_LOCKED` excepted"); `STORE_LOCKED` writes nothing;
- * - `INSTALLED` advances the cursor (`lastVerifiedLastModified`) and `lastVerifiedAtMillis`, and the watermark to the
- *   higher of it and `<ts>`, after the pointer flip; under the §6.3 clock-behind carve-out it advances
- *   `lastVerifiedAtMillis` only. The cursor is set to `<ts>`, not to the higher of the two: it names the installed
- *   generation's verified record set, which the next `_since` changeset is merged with and verified against (§6.5),
- *   so an install inside the rollback window moves it back with the generation, while the watermark stays a
- *   high-water mark;
+ * - `INSTALLED` advances the cursor (`lastVerifiedLastModified`) to `<ts>` and `lastVerifiedAtMillis`, after the
+ *   pointer flip, in the same write as the install. The watermark is raised to the higher of it and `<ts>`, except
+ *   for an install made with no generation loaded (§7.1), which sets it to `<ts>`: an older changeset installed then
+ *   moves the watermark and the cursor back with the generation, as Firefox's local timestamp becomes the imported
+ *   data's;
  * - `UNCHANGED` and `INSTALLED` end a run of failures (`consecutiveFailures = 0`);
  * - `FAILED`, `CLOCK_SKEW` and `STORE_FAILED` are failures: `consecutiveFailures + 1`, leaving the cursor,
  *   `lastVerified*` and the watermark untouched;
- * - `ROLLBACK_REFUSED` is not a feed failure (§7.1): `consecutiveFailures` and `lastVerified*` stay; `DEFERRED` leaves
- *   them too;
+ * - `ROLLBACK_REFUSED` is not a feed failure (§7.1): `consecutiveFailures` and `lastVerified*` stay;
  * - `BACKOFF` fetched nothing: the attempt fields only.
  *
  * The backoff (§7.1 "honour `Backoff` and `Retry-After` up to `MAX_BACKOFF`"): every outcome that polled sets
@@ -66,9 +64,10 @@ internal object UpdaterTransitions {
 
     /**
      * [record] after a sync of [sourceId] that ended as [outcome] at [nowMillis]. For `INSTALLED`,
-     * [signedTimestampMillis] is the installed changeset's `<ts>` and [clockBehind] whether it installed under the §6.3
-     * carve-out. [serverBackoffMillis] is the longest `Backoff` or `Retry-After` of the sync's responses
-     * (`ClientResult.backoffMillis`), null when none.
+     * [signedTimestampMillis] is the installed changeset's `<ts>`, and [noneLoaded] whether it installed with no
+     * generation loaded (§7.1): the watermark is then set to `<ts>`, lowered if it was higher, as Firefox's local
+     * timestamp becomes the imported data's; otherwise it is raised to the higher of the two. [serverBackoffMillis] is
+     * the longest `Backoff` or `Retry-After` of the sync's responses (`ClientResult.backoffMillis`), null when none.
      */
     fun after(
         record: UpdaterRecord,
@@ -76,13 +75,13 @@ internal object UpdaterTransitions {
         outcome: SyncOutcome,
         nowMillis: Long,
         signedTimestampMillis: Long? = null,
-        clockBehind: Boolean = false,
         serverBackoffMillis: Long? = null,
+        noneLoaded: Boolean = false,
     ): UpdaterRecord {
         require((outcome == SyncOutcome.INSTALLED) == (signedTimestampMillis != null)) {
             "signedTimestampMillis is given exactly for INSTALLED"
         }
-        require(!clockBehind || outcome == SyncOutcome.INSTALLED) { "clockBehind is an install's" }
+        require(!noneLoaded || outcome == SyncOutcome.INSTALLED) { "noneLoaded is an install's" }
         require(serverBackoffMillis == null || serverBackoffMillis >= 0) { "a server backoff is negative" }
         if (outcome == SyncOutcome.STORE_LOCKED) return record
         val attempted = (record.sources[sourceId] ?: SourceRecord()).copy(lastAttemptAtMillis = nowMillis)
@@ -91,14 +90,10 @@ internal object UpdaterTransitions {
             return record.copy(datasetLastAttemptAtMillis = nowMillis, sources = record.sources + (sourceId to source))
         }
         val verified = source.copy(lastVerifiedAtMillis = nowMillis)
-        if (clockBehind) {
-            return record.copy(
-                datasetLastAttemptAtMillis = nowMillis,
-                sources = record.sources + (sourceId to verified),
-            )
-        }
+        val raised = maxOf(record.watermarkMillis ?: Long.MIN_VALUE, signedTimestampMillis)
+        val watermark = if (noneLoaded) signedTimestampMillis else raised
         return record.copy(
-            watermarkMillis = maxOf(record.watermarkMillis ?: Long.MIN_VALUE, signedTimestampMillis),
+            watermarkMillis = watermark,
             datasetLastAttemptAtMillis = nowMillis,
             sources = record.sources + (sourceId to verified.copy(lastVerifiedLastModified = signedTimestampMillis)),
         )
@@ -132,7 +127,7 @@ internal object UpdaterTransitions {
                 )
             }
 
-            SyncOutcome.ROLLBACK_REFUSED, SyncOutcome.DEFERRED -> {
+            SyncOutcome.ROLLBACK_REFUSED -> {
                 attempted.copy(backoffUntilMillis = backoffUntil(nowMillis, serverBackoffMillis, null))
             }
 
@@ -173,8 +168,8 @@ internal object UpdaterTransitions {
      * §7.2's `signedSourceFailing` for [sourceId] at [nowMillis]: [SIGNED_SOURCE_FAILURES] consecutive failures or
      * more, or more than [signedSourceFailingAfterMillis] since the last verified changeset (`lastVerifiedAtMillis`,
      * else the seed's install, `seedInstalledAtMillis`, the dataset's last verified data). `ROLLBACK_REFUSED` advances
-     * neither, so a source refused on every poll for longer than `signedSourceFailingAfter` is failing (§7.1), and the
-     * §6.3 clock-behind install advances `lastVerifiedAtMillis`, so it is not. Internal in 0.2; `RevoktState` is 0.3.
+     * neither, so a source refused on every poll for longer than `signedSourceFailingAfter` is failing (§7.1). Internal
+     * in 0.2; `RevoktState` is 0.3.
      */
     fun signedSourceFailing(
         record: UpdaterRecord,

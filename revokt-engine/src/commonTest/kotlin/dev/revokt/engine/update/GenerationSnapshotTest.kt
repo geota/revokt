@@ -22,7 +22,6 @@ class GenerationSnapshotTest {
             seedFormat = 1,
             pending = false,
             staleGateOpen = false,
-            clockBehind = false,
         )
 
     @Test

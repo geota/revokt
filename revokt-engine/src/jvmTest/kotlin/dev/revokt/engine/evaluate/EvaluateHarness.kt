@@ -82,14 +82,12 @@ internal open class StubEngine(
 }
 
 /**
- * A published CRLite generation [ageMillis] old; [fromSeed] with the seed gate [gateOpen]. `pending` and
- * `clockBehind` are false unless given.
+ * A published CRLite generation [ageMillis] old; [fromSeed] with the seed gate [gateOpen]. `pending` is false.
  */
 internal fun generation(
     ageMillis: Long = 0,
     fromSeed: Boolean = false,
     gateOpen: Boolean = true,
-    clockBehind: Boolean = false,
 ): DatasetGeneration =
     DatasetGeneration(
         generationId = if (fromSeed) "seed-1" else "1700000000000/rec-1",
@@ -99,7 +97,6 @@ internal fun generation(
         seedFormat = if (fromSeed) 1 else null,
         pending = false,
         staleGateOpen = gateOpen,
-        clockBehind = clockBehind,
     )
 
 /** The dataset with no generation: the start task found nothing ([pending] false), or has not finished. */
@@ -112,7 +109,6 @@ internal fun noGeneration(pending: Boolean = false): DatasetGeneration =
         seedFormat = null,
         pending = pending,
         staleGateOpen = false,
-        clockBehind = false,
     )
 
 internal const val EPOCH: Long = 7
