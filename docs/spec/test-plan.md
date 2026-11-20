@@ -281,8 +281,19 @@ tests; **live checks** are informational.
   signing C, a CA for a key recovered from the leaf's signature, `[L, C, S]`: limited by `pathLen 0` or to
   `emailProtection` → `UNANCHORED`, unconstrained → `Found` through C (§10 residual 15).
   (as) (#237) nameConstraints, the leaf presenting `leaf.example`: on I, permitted `leaf.example` or `.example` →
-  `Found`; excluded `leaf.example`, permitted `other.example`, a directoryName subtree, or unreadable →
-  `ALL_CANDIDATES_INVALID`; a sub-CA name-constrained to `attacker.example` certifying a recovered key → `UNANCHORED`;
+  `Found`; excluded `leaf.example`, permitted `other.example`, or unreadable → `ALL_CANDIDATES_INVALID`;
+  directoryName against the leaf's subject `CN=leaf.example`: permitted that Name, it as a PrintableString, the empty
+  Name, or it beside another → `Found`; it in another case, a longer Name, any excluded Name (the empty one
+  included), or a leaf subjectAltName directoryName outside the permitted Name → `ALL_CANDIDATES_INVALID`; an anchor
+  permitting `O=Example` → `Found` with I and the leaf inside, `UNANCHORED` with either outside; rfc822Name against a
+  subjectAltName `user@mail.example`: permitted `mail.example`, `.example` or `USER@Mail.Example` → `Found`;
+  `example`, `other@mail.example`, excluded `mail.example`, or an invalid presented mailbox →
+  `ALL_CANDIDATES_INVALID`; without a subjectAltName the subject's emailAddress binds (outside, or not an IA5String →
+  `ALL_CANDIDATES_INVALID`), and beside one it does not; the CN-ID of a leaf without a subjectAltName dNSName or
+  iPAddress: `leaf.example` under permitted `other.example`, with no subjectAltName or a mailbox-only one →
+  `ALL_CANDIDATES_INVALID`, under `leaf.example` → `Found`; an IPv4 CN by its address; of two CNs the last counts; a
+  BMPString CN or one that is no host name → `Found`; a clientAuth request and an intermediate present no CN-ID
+  (`PkixNamesTest`), and a fallback path is checked with the same forms; a sub-CA name-constrained to `attacker.example` certifying a recovered key → `UNANCHORED`;
   an anchor's nameConstraints refusing the leaf → `UNANCHORED`; a wildcard `*.leaf.example` → `Found` under permitted
   `leaf.example`, refused under `a.leaf.example`; a leaf subjectAltName that does not read →
   `ALL_CANDIDATES_INVALID`; 500 names against 501 subtrees → `Budget(EXPLORATION_BUDGET)`; 300 names against two
@@ -356,7 +367,8 @@ Mandatory for every component that parses bytes it did not produce; measured by 
 yield. **Targets**: v3/v4 filter decoders (differential against `clubcard-crlite`); `index.bin`
 round trip; JSON and canonical JSON (differential against `canonical_json`); the TBS/DER parser and
 SCT list (§9.2); DER ECDSA conversion and `AlgorithmIdentifier`/PSS parameters; seed archive and x5u
-PEM; the nameConstraints and subjectAltName readers of the walker's issuer rules (`NameConstraintsFuzzTest`, #237);
+PEM; the nameConstraints and subjectAltName readers of the walker's issuer rules, with the directoryName comparison,
+the mailbox grammar, and the subject's emailAddress and CN-ID reader (`NameConstraintsFuzzTest`, #237);
 the path walker (below); [M2] CRX3, zip, `crl-set`, OneCRL, preload DER; [M3] precert TBS, log
 list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput` wrapper;
 `-Xmx256m -rss_limit_mb=1024 -timeout=10` (the §9.2 parser target overrides with `-timeout=1`); `-max_len` = each target's cap + 1 (filters:

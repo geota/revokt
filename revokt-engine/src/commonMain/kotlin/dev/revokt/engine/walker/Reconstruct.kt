@@ -205,11 +205,20 @@ private class Reconstruction(
             if (!index.isAnchorBytes(candidate)) countOwn(candidate)
         }
 
-        /** [candidate]'s nameConstraints checked against every certificate on [path], the leaf first. */
+        /**
+         * [candidate]'s nameConstraints checked against every certificate on [path], the leaf first, whose CN-ID counts
+         * in a serverAuth request.
+         */
         private fun constrains(candidate: Cert): NameConstraints.Result {
             val nc = candidate.nameConstraints ?: return NameConstraints.Result.CONFORMS
-            for (below in path) {
-                val r = nc.check(below.presentedNames, comparisonBudget)
+            for ((i, below) in path.withIndex()) {
+                val names =
+                    if (i == 0 && requiredEku == RequiredEku.SERVER_AUTH) {
+                        below.presentedNamesAsServerLeaf
+                    } else {
+                        below.presentedNames
+                    }
+                val r = nc.check(names, comparisonBudget)
                 if (r != NameConstraints.Result.CONFORMS) return r
             }
             return NameConstraints.Result.CONFORMS

@@ -7,14 +7,15 @@ import dev.revokt.engine.parse.Span
 import dev.revokt.engine.parse.TestCert
 import dev.revokt.engine.parse.TestDer
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
  * #237's name constraints ([NameConstraints], [DnsNameConstraint]) against webpki 0.104.0-alpha.7's rules, read in
- * `subject_name/mod.rs`, `dns_name.rs` and `ip_address.rs`. The cases are written from that code, not copied from its
- * tests.
+ * `subject_name/mod.rs`, `dns_name.rs` and `ip_address.rs`, and the forms that follow mozilla::pkix's `pkixnames.cpp`
+ * at Firefox `cac25a6` (`PkixNamesTest`). The cases are written from that code, not copied from its tests.
  */
 class NameConstraintsTest {
     private val unlimited = ComparisonBudget { true }
@@ -88,7 +89,7 @@ class NameConstraintsTest {
 
     private fun ip(vararg b: Int) = TestDer.tlv(0x87, TestDer.bytes(*b))
 
-    private fun names(vararg n: PresentedName): List<PresentedName> = n.toList() + PresentedName.Directory
+    private fun names(vararg n: PresentedName): List<PresentedName> = n.toList() + PresentedName.Directory(SUBJECT)
 
     private fun PresentedName.Companion.dns(s: String) = PresentedName.Dns(s.encodeToByteArray())
 
@@ -138,17 +139,19 @@ class NameConstraintsTest {
     }
 
     @Test
-    fun `walker directoryName and URI subtrees fail closed, and another shared form is a violation`() {
+    fun `walker URI subtrees fail closed, an excluded directoryName refuses all, another shared form is a violation`() {
         val dir = assertNotNull(nc(permitted = listOf(TestDer.tlv(0xa4, TestDer.seq()))))
-        assertEquals(NameConstraints.Result.VIOLATION, dir.check(names(), unlimited), "every certificate has a subject")
+        assertEquals(NameConstraints.Result.CONFORMS, dir.check(names(), unlimited), "an empty permitted Name: all")
         val excludedDir = assertNotNull(nc(excluded = listOf(TestDer.tlv(0xa4, TestDer.seq()))))
         assertEquals(NameConstraints.Result.VIOLATION, excludedDir.check(names(), unlimited))
         val uri = assertNotNull(nc(permitted = listOf(TestDer.tlv(0x86, TestDer.ascii("https://x")))))
         assertEquals(NameConstraints.Result.CONFORMS, uri.check(names(), unlimited), "no URI presented")
         assertEquals(NameConstraints.Result.VIOLATION, uri.check(names(PresentedName.Uri), unlimited))
-        val rfc822 = assertNotNull(nc(permitted = listOf(TestDer.tlv(0x81, TestDer.ascii("a@x")))))
-        assertEquals(NameConstraints.Result.VIOLATION, rfc822.check(names(PresentedName.Unsupported(1)), unlimited))
-        assertEquals(NameConstraints.Result.CONFORMS, rfc822.check(names(PresentedName.dns("a.x")), unlimited))
+        val excludedUri = assertNotNull(nc(excluded = listOf(TestDer.tlv(0x86, TestDer.ascii("https://x")))))
+        assertEquals(NameConstraints.Result.VIOLATION, excludedUri.check(names(PresentedName.Uri), unlimited))
+        val other = assertNotNull(nc(permitted = listOf(TestDer.tlv(0xa0, TestDer.seq(TestDer.oid("1.2.3"))))))
+        assertEquals(NameConstraints.Result.VIOLATION, other.check(names(PresentedName.Unsupported(0)), unlimited))
+        assertEquals(NameConstraints.Result.CONFORMS, other.check(names(PresentedName.dns("a.x")), unlimited))
     }
 
     @Test
@@ -188,11 +191,13 @@ class NameConstraintsTest {
     }
 
     @Test
-    fun `walker every GeneralName form maps as webpki's GeneralName does`() {
-        for ((tag, number) in listOf(0xa0 to 0, 0x81 to 1, 0xa3 to 3, 0xa5 to 5, 0x88 to 8)) {
+    fun `walker every GeneralName form maps as pkix's ReadGeneralName does`() {
+        for ((tag, number) in listOf(0xa0 to 0, 0xa3 to 3, 0xa5 to 5, 0x88 to 8)) {
             assertEquals(PresentedName.Unsupported(number), PresentedName.general(tag, ByteArray(0)))
         }
-        assertEquals(PresentedName.Directory, PresentedName.general(0xa4, ByteArray(0)))
+        val content = TestDer.ascii("a@x")
+        assertContentEquals(content, (PresentedName.general(0xa4, content) as PresentedName.Directory).name)
+        assertContentEquals(content, (PresentedName.general(0x81, content) as PresentedName.Rfc822).address)
         assertEquals(PresentedName.Uri, PresentedName.general(0x86, ByteArray(0)))
         assertNull(PresentedName.general(0x89, ByteArray(0)))
     }
@@ -355,5 +360,16 @@ class NameConstraintsTest {
             c.check(names(PresentedName.dns("a.example"), PresentedName.dns("b.example")), budget),
         )
         assertEquals(0, left)
+    }
+
+    private companion object {
+        /** `CN=leaf.example`, a UTF8String. */
+        val SUBJECT: ByteArray =
+            TestDer.seq(
+                TestDer.tlv(
+                    0x31,
+                    TestDer.seq(TestDer.oid("2.5.4.3"), TestDer.tlv(0x0c, TestDer.ascii("leaf.example"))),
+                ),
+            )
     }
 }

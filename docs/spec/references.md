@@ -618,8 +618,32 @@ Appendix A of the spec: what was verified against live sources and reference cod
     32–200): dNSName in the name-constraint role (`dns_name.rs` 238–360, the CVE-2025-61727 wildcard rule), iPAddress
     by mask (`ip_address.rs` 110–180), directoryName and URI subtrees failing closed, any other shared form a
     violation; the comparisons of one build are bounded at 250,000 (`verify_cert.rs` 353). pkix checks nameConstraints
-    before the issuer's other checks (`pkixbuild.cpp` 173–186), evaluates directoryName and rfc822Name, and applies
-    dNSName constraints to a SAN-less leaf's CN. revokt follows webpki.
+    before the issuer's other checks (`pkixbuild.cpp` 173–186). From revision 61 revokt follows pkix's
+    `pkixnames.cpp`, read 2026-11-19 at `cac25a6`, for the forms and the names presented, and keeps webpki's
+    comparison bound and iPAddress mask check:
+    - `CheckNameConstraints` (327–357) checks every certificate below the issuer, with no self-issued exemption; a
+      leaf of a `serverAuth` request falls back to its CN (332–336).
+    - `SearchNames` (377–541): each subjectAltName entry, an unreadable one halting; the subject as a directoryName,
+      always (446–452); the subject's `emailAddress` attributes only without a subjectAltName extension (454–461);
+      the CN only while no subjectAltName entry is a dNSName or iPAddress (439–442). The subject walk is `NestedOf`
+      a SEQUENCE of non-empty SETs (535–573).
+    - `MatchAVA` (589–702): the CN-ID is the last commonName, each new one forgetting the last one's result (616–621);
+      only a PrintableString, UTF8String or TeletexString counts (645–649); a valid presented DNS ID is a dNSName,
+      else an IPv4 address from `ParseIPv4Address` (1683–1737) an iPAddress (651–666). An `emailAddress` that is not
+      an IA5String is `ERROR_BAD_DER` (693–695).
+    - `CheckPresentedIDConformsToNameConstraintsSubtrees` (836–977): per form, a permitted list binds only when it
+      holds the form; an excluded match, and a URI, otherName, x400Address, ediPartyName or registeredID shared by a
+      name and a subtree, is `ERROR_CERT_NOT_IN_NAME_SPACE` (937–943).
+    - `MatchPresentedDirectoryNameWithConstraint` (1405–1492): any excluded directoryName refuses (1427–1431); a
+      permitted one is an RDN prefix (1437–1444), AVA by AVA in encoded order with equal counts (1455–1490), type and
+      value bytes equal and value tags equal or UTF8String and PrintableString (1474–1481, bug 1150114); `ReadAVA`
+      (1346–1362).
+    - `IsValidRFC822Name` (1519–1572) and `MatchPresentedRFC822NameWithReferenceRFC822Name` (1576–1651): a valid
+      presented mailbox; a constraint with `@` a valid mailbox equal ignoring ASCII case (1597–1600, 1628–1650); one
+      without matched against the domain by `MatchPresentedDNSIDWithReferenceDNSID` with no wildcard and
+      `AllowDotlessSubdomainMatches::No` (1601–1624).
+    - `MatchPresentedIPAddressWithConstraint` (1278–1336) applies the mask as written, with no contiguity check;
+      revokt keeps webpki's check, which refuses such a mask.
   - **The JDK's `CertPathBuilder`** exempts self-issued certificates from `pathLenConstraint` and name constraints and
     does not apply the anchor certificate's own nameConstraints (`ConstraintsChecker` starts with no constraints);
     revokt re-checks a fallback path against the rules above.

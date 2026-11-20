@@ -211,6 +211,6 @@ class WalkerFixtureTest {
 
     @Test
     fun `walker (as) an issuer's nameConstraints, an anchor's included, bind every certificate below it`() {
-        assertEquals(13, run(WalkerFixturesAs.`as`()).size)
+        assertEquals(44, run(WalkerFixturesAs.`as`()).size)
     }
 }

@@ -369,7 +369,7 @@ private class Decider(
      * The walker's issuer rules over a fallback path [ders], leaf → anchor: each certificate between them may issue
      * with the CAs under it ([IssuerProfile.mayIssue]: `cA`, `pathLenConstraint`, `keyCertSign`, and
      * [DecideContext.requiredEku] in extKeyUsage), and the nameConstraints of each certificate above the leaf, the
-     * anchor's included, admit every certificate below it. The last certificate is exempt from the issuer rules only
+     * anchor's included, admit every certificate below it, the leaf's CN-ID included in a serverAuth request. The last certificate is exempt from the issuer rules only
      * because it is an anchor of the index by exact bytes: a path that ends elsewhere (a builder returning
      * `CertPath.getCertificates()`, which leaves the anchor out) fails. Null when any of this does not hold, a
      * certificate does not parse, or the name-constraint comparisons pass [NameConstraints.MAX_COMPARISONS], which
@@ -392,7 +392,10 @@ private class Decider(
                     true.also { comparisons++ }
                 }
             }
-        val names = parsed.map { PresentedName.of(it) }
+        val names =
+            parsed.mapIndexed { j, p ->
+                PresentedName.of(p, commonName = j == 0 && context.requiredEku == RequiredEku.SERVER_AUTH)
+            }
         for (i in 1 until parsed.size) {
             val nc = NameConstraints.of(parsed[i]) ?: continue
             for (j in 0 until i) {

@@ -75,6 +75,9 @@ internal class Cert private constructor(
 
     /** The names it presents to a name constraint above it, read on first use; null when unreadable. */
     val presentedNames: List<PresentedName>? by lazy { PresentedName.of(p) }
+
+    /** The same as the leaf of a serverAuth request, its CN-ID included ([PresentedName.of]). */
+    val presentedNamesAsServerLeaf: List<PresentedName>? by lazy { PresentedName.of(p, commonName = true) }
     val isCa: Boolean get() = issuer.isCa
 
     override fun toString(): String = "Cert(${bytesHash.hex()})"
