@@ -17,6 +17,7 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -40,10 +41,8 @@ class ContentSignatureCorpusTest {
         private val signature = (tree["metadata"] as JsonObject)["signature"] as JsonObject
         val text = (signature["signature"] as JsonString).value
         val mode = (signature["mode"] as JsonString).value
-        val recordsJson =
-            checkNotNull(
-                ContentSignature.recordsJson(checkNotNull(ContentSignature.merge(emptyList(), changes)), timestamp),
-            )
+        val records = checkNotNull(ContentSignature.merge(emptyList(), changes))
+        val recordsJson by lazy { checkNotNull(ContentSignature.recordsJson(records, timestamp)) }
     }
 
     private fun assertRecorded(
@@ -67,10 +66,12 @@ class ContentSignatureCorpusTest {
     }
 
     @Test
-    fun `records json of the synthetic CRLite changeset, its tombstone removed, is canonical_json's payload`() {
+    fun `the synthetic CRLite changeset, whose record holds a non-integer number, has no payload (#227)`() {
+        // canonical_json would print its 0.1 and -1.5e-07 (remote-settings.tsv); no signed payload holds one, so revokt
+        // builds none and the changeset fails verification, closed.
         val changeset = Changeset(Json.parse(resource("/dev/revokt/engine/json/crlite-changeset.json")) as JsonObject)
         assertTrue(changeset.changes.any { it["deleted"] != null }, "the synthetic changeset carries a tombstone")
-        assertRecorded("crlite-changeset.json", changeset)
+        assertNull(ContentSignature.recordsJson(changeset.records, changeset.timestamp))
     }
 
     @Test

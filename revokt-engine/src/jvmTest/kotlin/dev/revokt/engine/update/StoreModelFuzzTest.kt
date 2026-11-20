@@ -29,7 +29,7 @@ class StoreModelFuzzTest {
 
         private val model by lazy { StoreModel() }
 
-        /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
+        /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
             model.run(Choices.bytes(data), (data.size / BYTES_PER_STEP).coerceIn(STEPS, MAX_STEPS))

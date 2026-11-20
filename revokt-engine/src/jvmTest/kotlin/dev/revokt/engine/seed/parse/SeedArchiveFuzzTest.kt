@@ -25,7 +25,7 @@ class SeedArchiveFuzzTest {
     companion object {
         private const val CAP = 1L shl 20
 
-        /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
+        /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
             asArchive(data)

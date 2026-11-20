@@ -8,11 +8,12 @@ import dev.revokt.VerifyResult
 import dev.revokt.engine.json.CanonicalJson
 import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonBoolean
-import dev.revokt.engine.json.JsonDouble
+import dev.revokt.engine.json.JsonDecimal
 import dev.revokt.engine.json.JsonInteger
 import dev.revokt.engine.json.JsonNull
 import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.json.JsonString
+import dev.revokt.engine.json.NonIntegerNumberException
 import dev.revokt.verify.verifyClassified
 
 /** Why a content signature failed; every one is `SyncOutcome.FAILED` at stage `SIGNATURE` (spec §7.1). */
@@ -23,7 +24,10 @@ internal enum class ContentSignatureFailure {
     /** The `signature` field is absent or not the unpadded base64url of an `r ‖ s` pair ([RawSignature.decode]). */
     ENCODING,
 
-    /** A record has no string `id`, or two records share one, so there is no payload to verify. */
+    /**
+     * A record has no string `id`, two records share one, or a record holds a number that is not an integer, so there
+     * is no payload to verify (#227: a signed payload carries integers only, so one that does not fails closed).
+     */
     RECORDS,
 
     /** The verifier answered `INVALID`, or threw ([ContentSignatureResult.verifierError]). */
@@ -98,7 +102,7 @@ internal object ContentSignature {
     /**
      * The signed payload without its prefix, which is `records.json` (spec §6.5): [records] sorted by `id` in code
      * point order, deleted records removed, under `data`, and [lastModified] as a decimal string under
-     * `last_modified`. Null when a record has no string `id` or two share one.
+     * `last_modified`. Null when a record has no string `id`, two share one, or one holds a non-integer number (#227).
      */
     fun recordsJson(
         records: List<JsonObject>,
@@ -107,7 +111,11 @@ internal object ContentSignature {
         val sorted = sortedOrNull(records.filterNot(::deleted)) ?: return null
         for (i in 1 until sorted.size) if (id(sorted[i - 1]) == id(sorted[i])) return null
         val payload = JsonObject.of("data" to JsonArray(sorted), "last_modified" to JsonString(lastModified.toString()))
-        return CanonicalJson.write(payload)
+        return try {
+            CanonicalJson.write(payload)
+        } catch (ignored: NonIntegerNumberException) {
+            null // #227: no signed payload carries a non-integer number, so this one cannot verify.
+        }
     }
 
     /**
@@ -171,7 +179,7 @@ internal object ContentSignature {
             null, JsonNull -> false
             is JsonBoolean -> value.value
             is JsonInteger -> value.magnitude != 0uL
-            is JsonDouble -> value.value != 0.0
+            is JsonDecimal -> !value.zero
             is JsonString -> value.value.isNotEmpty()
             is JsonArray -> value.size > 0
             is JsonObject -> value.size > 0

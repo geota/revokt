@@ -10,6 +10,7 @@ dependencies {
         // Code artifacts only, including both the KMP root and the -jvm artifact (spec §3). Data artifacts never.
         api(project(":revokt-engine"))
         api("dev.revokt:revokt-engine-jvm:${project.version}")
+        api(project(":revokt-jsse"))
         api(project(":revokt-clubcard"))
         api("dev.revokt:revokt-clubcard-jvm:${project.version}")
     }

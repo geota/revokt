@@ -18,7 +18,7 @@ tests; **live checks** are informational.
   per-extension ∅ expectation as D2 for an inner identifier other than `0x04`, and the §9.2 read for a primitive
   `[3]`; a chain whose leaf `x509-parser` rejects is counted and excluded, not compared; the 0.1 oracle issue verifies its SCT
   path); the 10⁶-key comparison as a second tier; `index.bin` byte comparison (against `upki`'s `Index::write` over the same filters and file names, which revokt's writer reproduces; #86's golden);
-  canonical JSON against `canonical_json`.
+  canonical JSON against `canonical_json`, with three declared differences: duplicate keys, which revokt rejects; every non-integer number `canonical_json` accepts, which revokt refuses (`RECORDS`); and the 60 recorded inputs both refuse, `canonical_json` with "number out of range" (any other oracle error beside a non-integer number fails); a `deleted` of `1e-400` is a tombstone, removed by `merge` (zero is lexical, where Python's `float()` underflows to `0.0`).
 - **Cross-engine suite** (0.2): chain corpus × generations against both `RevocationEngine`s under
   the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
@@ -376,8 +376,8 @@ list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput`
 the `revokt-oracle` Rust cdylib and the Panama shim; the Go producer oracle runs **out of process**
 (the CLI, batched over a pipe: one base64 DER per line in; one line per input out, `OK <serial-hex> <spki-sha256-hex> <ct|lax|zc>` or `REJECT <error>` (an empty line, the encoding of an empty input, is answered `REJECT`), with `##` terminating a batch, so the Go CLI and the Kotlin driver are written independently) during fuzzing, since a third set of signal handlers beside the JVM's
 and libFuzzer's is not safe in-process. **Tiers**: PR = committed-corpus
-replay as unit tests, JDK only; nightly = ClusterFuzzLite batch matrix, one job per target; OSS-Fuzz
-once the project has users. **Findings**: any exception other than the declared result, any
+replay as unit tests, JDK only; nightly = `fuzz.yml`, every target for 300 s, one job per target, with each night's
+corpus kept in the private corpus repository (CONTRIBUTING §6); OSS-Fuzz once the project has users. **Findings**: any exception other than the declared result, any
 allocation above budget, any timeout, any difference between implementations outside a declared
 equivalence class, any non-idempotent round trip. **Acceptance**: no open continuous-tier crash at
 release; Kover branch coverage of each parser package not regressed, 90 % as the target; committed
@@ -908,7 +908,7 @@ coverage (`-merge=1` over the accepted set) or is a D1/D2/D3 divergence; hash-ke
 entry count and bytes, stored in the corpus repository, re-seeded each run.
 
 **Tiers and matrix.** Fuzzing runs on one pinned JDK ≥ 22 (Panama) with oracle 1 of that JDK, one Conscrypt uber
-artifact and 3a/3b/3c in-process, oracle 4 out of process; one ClusterFuzzLite job per generator. The **version
+artifact and 3a/3b/3c in-process, oracle 4 out of process; one `fuzz.yml` job per generator. The **version
 matrix** is a replay of the union corpus (committed, secondary, divergence): one job per JDK, each running every
 Conscrypt version of the matrix, with 3a/3b/4 goldens read from the records so no matrix job needs a native oracle.
 Versions are named in a committed matrix file, `gradle/oracle-matrix.properties` (JDK: 17, 21, the current LTS, the

@@ -220,7 +220,7 @@ Robolectric `android-all` jars cached and `robolectric.offline=true`; runner ima
   chosen for grouping and digest pinning.)
 - `verifyDependencyScopes` (build-logic task on `check`) inspects the outgoing `apiElements`/`jvmApiElements`
   and `runtimeElements` variants: Okio and `revokt-clubcard` never in an api variant; kotlinx-coroutines in
-  `revokt-engine`'s api variant; OkHttp, Ktor and bcprov only in their own binding (§3 "Dependency scopes").
+  `revokt-engine`'s api variant; `revokt-engine` in `revokt-jsse`'s api variant; OkHttp, Ktor and bcprov only in their own binding (§3 "Dependency scopes").
 - The dependency ingress files (`libs.versions.toml`, `verification-metadata.xml`, `verification-keyring.keys`,
   every lockfile, `renovate.json`, `.commitlintrc.cjs`, `REUSE.toml`, `detekt*.yml`) are CODEOWNERS paths.
 
@@ -429,8 +429,8 @@ every required check in Appendix B passes**.
   `NoHttpClientInTests` alone; the table marks them advisory.
 - Coverage: Kover branch floor of 90 % per parser package over the committed replay (§9.1), as a hard rule.
   The path walker, the store, the updater and the fetch layer have floors a little under their measured branch
-  coverage (#161: walker 98.96 %, store 94.26 % at f2c54fc; #212: `update` 91.46 % and `fetch` 96.69 % at 36dafac,
-  floors 91 and 96). The floors may only be raised. They are the coverage ratchet: no check compares with a
+  coverage (#161: walker 98.96 %, store 94.26 % at f2c54fc; #212: `update` 90.66 % and `fetch` 95.87 % at 22b2191,
+  floors 90 and 95). The floors may only be raised. They are the coverage ratchet: no check compares with a
   coverage artifact from `main` (#212 removed that comparison, which failed a PR that deleted well-covered code
   and tied a required check to artifact storage).
 
@@ -456,11 +456,11 @@ each, rewrite it while the news holds, close it once the pins are current, and s
   is a `spec` change: re-verify the Appendix A facts, roll the pin, re-record the index golden
   (`native/revokt-oracle/record-upki-index.sh`; `verifyOracleMatrix` checks it names the pin) and re-run the
   cross-engine suite (0.2+).
-- Fuzzing: ClusterFuzzLite batch matrix, one job per §9.1 target, `base-builder-jvm` pinned by digest, the
-  coverage cron and the corpus storage token configured, corpus merged back weekly; a crash is uploaded as a
-  SARIF artifact and a workflow step files the `security` issue (ClusterFuzzLite does not file issues itself).
-- Ad-hoc fuzzing (`fuzz.yml`, #115): dispatch only, on GitHub-hosted runners, one job per target that
-  `./gradlew fuzzTargets` lists. The fuzz job holds no secret.
+- Fuzzing (`fuzz.yml`, #115, #213): the nightly fuzzing tier, in place of ClusterFuzzLite until OSS-Fuzz admits the
+  project (#119 closed). Nightly at 03:47 UTC for 300 s a target, and when a maintainer dispatches it (1 to 3,600 s
+  a target), on GitHub-hosted runners, one job per target that `./gradlew fuzzTargets` lists. The fuzz job holds no
+  secret. GitHub disables a public repository's scheduled workflows after 60 days with no repository activity; a
+  maintainer re-enables the nightly from the Actions tab if that happens.
   - On a finding, it minimises each input (libFuzzer's `-minimize_crash=1`). It then seals one file per finding: a
     gzipped tar of the input, the minimised input, the JUnit XML and the fuzzer and minimiser logs (which can quote the
     input), encrypted with `age -a` to the `FUZZ_AGE_RECIPIENT` repository variable (an `age1…` public key; the job
@@ -468,7 +468,19 @@ each, rewrite it while the news holds, close it once the pins are current, and s
   - It uploads the sealed files and a manifest (target, module, Jazzer's `DEDUP_TOKEN`) as the 7-day artifact
     `fuzz-finding-<target>`, and fails. Its log shows the target and the `DEDUP_TOKEN` (a hash of the finding's stack
     frames), never the input.
-  - The advisory job then runs on a fresh runner, only for a dispatch of `main`, with the `FUZZ_ADVISORY_TOKEN` secret
+  - Each target's generated corpus goes up, from a run without a finding, as the 1-day artifact
+    `fuzz-corpus-<target>`; an upload the account's storage quota refuses does not fail the run. The corpus job, on a
+    fresh runner that never checks out or runs anything of the repository, for `main` only, checks the artifacts as
+    data (a directory per known target, regular files named as libFuzzer names corpus units, the SHA-1 of their
+    content, each no larger than its target's `-max_len`, at most 5,000 a target and 512 MiB in all) and adds them,
+    never removing or overwriting one, under `corpus/<Class>-<method>/` in the private `geota/revokt-fuzz-corpus`. Only
+    it holds `CFL_CORPUS_TOKEN` (contents write on that repository only), read by a git credential helper from the
+    environment.
+  - **The corpus is not treated as secret.** The committed seed inputs are public, and while the 1-day artifact lasts
+    any signed-in GitHub user can download a night's corpus; the corpus repository is private for its size, not its
+    content. Findings are different: a target with a finding uploads no corpus, and its inputs and logs leave the job
+    only sealed with `age`.
+  - The advisory job then runs on a fresh runner, only for a run of `main`, with the `FUZZ_ADVISORY_TOKEN` secret
     of the `fuzz-advisory` environment, whose deployment branches are limited to `main`. The token is a fine-grained
     personal access token of an administrator, for this repository only, with "Repository security advisories: Read
     and write"; renew it before it expires. The job never checks out the tree or runs Gradle: it fetches only
@@ -520,8 +532,8 @@ each, rewrite it while the news holds, close it once the pins are current, and s
   is **never deleted**: after 14 days it blocks the next release instead. One without a fixture id is fixed or
   deleted within 14 days with a maintainer's written reason.
 - Every parser or decoder that reads bytes it did not produce has a Jazzer `@FuzzTest` (JUnit ≥ 5.9) with the
-  static `fuzzerTestOneInput` wrapper for ClusterFuzzLite in the same PR (§9.1), and registering it in the
-  ClusterFuzzLite matrix is part of that issue.
+  static `fuzzerTestOneInput` wrapper in the same PR (§9.1), and states its `-max_len` (the cap + 1) in its KDoc;
+  `./gradlew fuzzTargets` discovers it, so the nightly runs it with no workflow change.
 - Differential oracles record goldens at corpus admission (§9.2 schema), so PRs never need Rust or Go.
 - **Garbage-collection pass** (OpenAI's practice against "functionally correct but poorly maintainable"
   agent code): the last issue of every milestone is a `kind/chore` pass over the modules the milestone
@@ -545,7 +557,7 @@ ADR-0006). Done means merged.
 | Formatting | ktlint | `check` | yes | live |
 | Complexity, forbidden APIs, custom rules | detekt + `revokt-detekt-rules` | `check` | yes | live |
 | commonMain purity | detekt `detektCommonMain` (fast) and the `linuxX64` compile under `-Prevokt.purityGate` (authoritative) | `check`; `ci-extras` | yes | live |
-| API-26 safety of jvm modules | animal-sniffer `gummy-bears-api-26` | `check` | yes | planned: wired in `revokt.jvm-library`, which no module applies until `revokt-jsse` (#110) |
+| API-26 safety of jvm modules | animal-sniffer `gummy-bears-api-26` | `check` | yes | live: `revokt.jvm-library`, on `revokt-jsse` |
 | License headers, per-path licences, header location, POM licences | `reuse lint`; `verifyHeaderLocations`; `verifyPomLicenses` | PR job; `check` | yes | live |
 | Dependency scopes | `verifyDependencyScopes` | `check` | yes | live |
 | Public API freeze | binary-compatibility-validator `apiCheck` with `nonPublicMarkers` | `check` | yes | live |
@@ -560,7 +572,7 @@ ADR-0006). Done means merged.
 | Spec inventory and ratchets | `specStatus` (stale `docs/dev/status.md` or a decreased fixture count fails) | `check` | yes | live |
 | §9.2 version matrix | `gradle/oracle-matrix.properties`; `verifyOracleMatrix` (CI and the nightly match it); `jvmTestConscryptPrevious`; the nightly EA replay; the Conscrypt and upki release watches (an issue each, never red on news) | `check`; nightly | yes; for a release | live |
 | Independent review in the solo phase | PR-lint requires the `Independent review` comment (ADR-0005) | PR | yes while solo | live |
-| Fuzzing | Jazzer regression on PRs; ClusterFuzzLite nightly; OSS-Fuzz once admitted | `check`; nightly | nightly blocks release | Jazzer regression live; `fuzz.yml` dispatch only and not yet run; the scheduled batch planned (#213, replacing #119); OSS-Fuzz planned |
+| Fuzzing | Jazzer regression on PRs; `fuzz.yml` nightly, with the corpus pushed to the private corpus repository; OSS-Fuzz once admitted | `check`; nightly | nightly blocks release | Jazzer regression live; `fuzz.yml` nightly live from #213; OSS-Fuzz planned |
 | Oracles, cross-engine suite, emulator matrix, minified build | nightly jobs; `run/android` label | nightly | release | native oracles live; cross-engine suite planned (#142); emulator matrix and minified build planned (0.3) |
 | Producer drift and CT sample | the scheduled producer job (spec §9.2) | weekly; pin bumps; release | release | planned |
 | Device benchmarks | the private `revokt-bench` repository's scheduled job on the ephemeral device runner | nightly | release (regression threshold) | planned |
@@ -584,8 +596,8 @@ environments with required reviewers and deployment-branch limits, tag rulesets,
 on standard Linux, macOS, Windows and Linux-ARM runners, self-hosted runners, GitHub Apps owned by the
 account, CodeQL, secret scanning with push protection, dependency graph and `dependency-review-action`,
 private vulnerability reporting and advisories with temporary private forks, artifact attestations on public
-repositories, the DCO app, Mend's hosted Renovate, OSV-Scanner, Scorecard, ClusterFuzzLite (corpus in a
-storage repository, no cloud bucket), Sigstore's public instance and Central Portal publishing. **Not
+repositories, the DCO app, Mend's hosted Renovate, OSV-Scanner, Scorecard, a private corpus repository
+(no cloud bucket), Sigstore's public instance and Central Portal publishing. **Not
 available on a personal account and therefore not relied on**: the merge queue, teams, the path-scoped
 required-reviewer rule, "restrict who can push" by team, and larger hosted runners; paid services (Develocity,
 a remote build cache, cloud fuzzing storage) are not used. If the project moves to an organisation later
