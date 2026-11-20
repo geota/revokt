@@ -8,7 +8,7 @@
   "commitMessagePrefix": "chore(deps): ",
   "commitMessageAction": "update",
   "prBodyNotes": [
-    "A maintainer completes this PR: `./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256,pgp --export-keys -Prevokt.purityGate -Prevokt.ci --no-configuration-cache`, then pushes to this branch and adds the Trailers block (CONTRIBUTING §3)."
+    "A maintainer completes this PR: `./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256,pgp --export-keys -Prevokt.purityGate -Prevokt.ci --no-configuration-cache`, then `./gradlew resolveAndLockAll --write-verification-metadata sha256 -Prevokt.purityGate -Prevokt.ci --no-configuration-cache` (docs/dev/deps.md), then pushes to this branch and adds the Trailers block (CONTRIBUTING §3)."
   ],
   "packageRules": [
     { "matchManagers": ["gradle"], "groupName": "gradle dependencies", "groupSlug": "gradle" },

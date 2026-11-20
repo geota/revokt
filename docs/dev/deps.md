@@ -11,10 +11,18 @@
 ```
 ./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256,pgp --export-keys \
   -Prevokt.purityGate -Prevokt.native -Prevokt.ci --no-configuration-cache
+./gradlew resolveAndLockAll --write-verification-metadata sha256 \
+  -Prevokt.purityGate -Prevokt.native -Prevokt.ci --no-configuration-cache
 ```
 
 `-Prevokt.native` includes `revokt-engine-upki`, which does not exist until the 0.2 upki issue; until then the command
 fails at settings evaluation with it, so drop that flag.
+
+The first command adds trusted keys, and checksums only for the artifacts it cannot verify by signature. The second
+adds a SHA-256 beside every signature: when the `.asc` file cannot be fetched (Maven Central's rate limit), Gradle falls
+back to the checksum, and an artifact with neither fails verification (#275). Gradle's writer drops the comment in
+`<ignored-keys>` and moves the block; put it back. On macOS the second command also adds a checksum for that host's
+`kotlin-native-prebuilt` archive; drop it, as the other hosts' archives are verified by signature only.
 
 Commit the catalog, the lockfiles, `verification-metadata.xml` and `verification-keyring.keys` together. For a new
 trusted key, check the fingerprint against the upstream project's published key before committing it; the reviewer
@@ -38,5 +46,6 @@ The dependency ingress files are protected paths (CODEOWNERS).
 `-sources`/`-javadoc` jars by pattern. At the bootstrap, Gradle could download the signing keys for only a minority of
 the components (the rest carry `reason="A key couldn't be downloaded"` and are verified by SHA-256 only); every
 component is checksum-verified regardless. Raising PGP coverage (re-running with `--refresh-keys` from a network that
-reaches the key servers, checking the JetBrains, JUnit, detekt and Kover fingerprints upstream, and trimming the
-`<component>` entries that then verify by signature) is a `kind/chore` issue on the 0.1 critical path, not a silent gap.
+reaches the key servers and checking the JetBrains, JUnit, detekt and Kover fingerprints upstream) is a `kind/chore`
+issue on the 0.1 critical path, not a silent gap. The checksums stay beside the signatures, as the fallback when a
+signature file cannot be fetched.

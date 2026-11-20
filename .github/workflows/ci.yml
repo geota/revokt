@@ -160,6 +160,19 @@ jobs:
             build-logic/*/build/test-results/**/*.xml
           if-no-files-found: ignore
           retention-days: 7
+      # The HTML report Gradle writes when dependency verification fails says why each artifact failed (a missing
+      # signature file, a key not found, a checksum missing or wrong), which the console message does not (#275).
+      - name: dependency verification report on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-verification-${{ matrix.label }}-${{ github.run_attempt }}
+          path: |
+            build/reports/dependency-verification/
+            build-logic/build/reports/dependency-verification/
+            build-logic/*/build/reports/dependency-verification/
+          if-no-files-found: ignore
+          retention-days: 7
 
   check-os:
     name: check (${{ matrix.os }})
