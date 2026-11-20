@@ -46,7 +46,7 @@ class VerifierInputFuzzTest {
                 "2.16.840.1.101.3.4.2.6" to "SHA-512/256",
             )
 
-        /** The static entry point ClusterFuzzLite drives (CONTRIBUTING §6). */
+        /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
             val algorithm = VerifierInput.algorithm(data)
