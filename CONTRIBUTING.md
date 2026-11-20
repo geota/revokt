@@ -205,8 +205,9 @@ Robolectric `android-all` jars cached and `robolectric.offline=true`; runner ima
 **Dependencies.**
 - Versions only in `libs.versions.toml`. **Locking**: `lockMode = STRICT`, every lockfile committed; a
   build-logic task `resolveAndLockAll` resolves every resolvable configuration so entries for the purity,
-  native and Android configurations are not dropped; the recipe is one line, in `docs/dev/deps.md`:
-  `./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256,pgp --export-keys -Prevokt.purityGate -Prevokt.native -Prevokt.ci --no-configuration-cache`.
+  native and Android configurations are not dropped; the recipe is in `docs/dev/deps.md`:
+  `./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256,pgp --export-keys -Prevokt.purityGate -Prevokt.native -Prevokt.ci --no-configuration-cache`,
+  then the same without `--write-locks`, `pgp` and `--export-keys`, which adds a SHA-256 beside every signature.
 - **Verification**: `verification-metadata.xml` (checksums and PGP) with the exported
   `verification-keyring.keys` committed, so verification is offline; `<trusted-artifacts>` for `-sources`
   and `-javadoc` jars so IDE sync works; the Gradle wrapper JAR is checked by `gradle/actions/wrapper-validation`.

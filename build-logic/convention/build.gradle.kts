@@ -1,8 +1,19 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+buildscript {
+    dependencies {
+        constraints {
+            // kotlin-dsl asks for Gradle's embedded Kotlin Gradle plugin (2.4.0, GHSA-r937-wjx7-w2jp); take the
+            // catalog's, which build-logic/build.gradle.kts loads for both projects (#275).
+            classpath(libs.kotlin.gradle.plugin)
+        }
+    }
+}
+
 plugins {
     `kotlin-dsl`
+    kotlin("jvm")
 }
 
 group = "dev.revokt.build"
