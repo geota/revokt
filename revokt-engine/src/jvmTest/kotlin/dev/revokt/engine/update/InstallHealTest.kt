@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
  * loader's live generation is never rewritten while it is served.
  */
 internal class InstallHealTest : InstallFixture() {
-    private val heal = Publication(true, 1, false, now, 600_000, pointerCounted = true, heal = true)
+    private val heal = Publication(true, 1, false, now, pointerCounted = true, heal = true)
 
     @Test
     fun `under heal the engine's live directory with a damaged meta json is held, never rewritten, STORE_FAILED`() {

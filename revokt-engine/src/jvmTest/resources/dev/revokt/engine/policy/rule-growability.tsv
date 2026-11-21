@@ -24,9 +24,9 @@ NOT_COVERED	NON_ANSWER	CRLITE	false	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-
 STALE	DATA_QUALITY	-	true	false	UNDETERMINED_REVOCATION_STATUS	0.1	-	-	ALLOW	REJECT
 
 [presets]
-preset	requiredDatasets	rollbackWindowMillis	clockSkewMillis	signedSourceFailingAfterMillis
-DEFAULT	CRLITE	86400000	86400000	86400000
-STRICT	CRLITE	86400000	86400000	86400000
+preset	requiredDatasets	signedSourceFailingAfterMillis
+DEFAULT	CRLITE	86400000
+STRICT	CRLITE	86400000
 
 [datasets]
 preset	dataset	staleAfterMillis	rejectStaleAfterMillis

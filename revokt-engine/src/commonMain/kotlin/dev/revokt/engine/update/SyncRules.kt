@@ -3,201 +3,45 @@
 
 package dev.revokt.engine.update
 
-import dev.revokt.SyncStage
-
-/**
- * What [SyncRules] decides for a verified changeset (spec §6.3 "Coverage sanity at install", §7.1 "Rollback
- * guard"). [stage] is the `SyncResult.stage` of a refusal that has one.
- */
-internal enum class SyncDecision(
-    val stage: SyncStage?,
-) {
+/** What [SyncRules] decides for a verified changeset (spec §7.1 "Rollback guard"). */
+internal enum class SyncDecision {
     /** Install, then advance the cursor, `lastVerified*` and the watermark (to the higher of it and `<ts>`). */
-    INSTALL(null),
-
-    /**
-     * The §6.3 bootstrap and clock-behind carve-out: install with `clockBehind`, then advance `lastVerifiedAtMillis`
-     * only, never the watermark or the cursor.
-     */
-    INSTALL_CLOCK_BEHIND(null),
+    INSTALL,
 
     /** `<ts>` is the live generation's: nothing to install; the attempt fields only. */
-    UNCHANGED(null),
+    UNCHANGED,
 
-    /** `<ts>` is beyond local now + `clockSkew` and the carve-out does not apply: nothing advances. */
-    CLOCK_SKEW(SyncStage.CHANGESET),
-
-    /** Older than the watermark by the window or more, or inside it with a lower maximum coverage: not a feed failure. */
-    ROLLBACK_REFUSED(null),
-
-    /** A filter's coverage is beyond the signed bound ([SyncRules.coverageWithinBound]): cursor and watermark stay. */
-    FAILED(SyncStage.INDEX),
+    /** `<ts>` is older than the floor: not installed, and not a feed failure. */
+    ROLLBACK_REFUSED,
 }
 
 /**
- * The dataset's live generation as the published snapshot holds it, for [SyncRules]: its `sourceTimestampMillis`, and
- * its maximum coverage `high` (`DatasetGeneration.maxCoverageMillis`, decoded by the loader from the generation's
- * `index.bin` and clamped to [Long.MAX_VALUE]), null when it covers no log. Never read from `updater.json` (§6.5), nor
- * from the engine's `coverageEndMillis`.
- */
-internal class LiveGeneration(
-    val sourceTimestampMillis: Long,
-    val maxCoverageMillis: Long?,
-) {
-    override fun toString(): String = "LiveGeneration(at $sourceTimestampMillis, maxCoverage=$maxCoverageMillis)"
-}
-
-/**
- * The clock and policy inputs of [SyncRules]: local [nowMillis] and the policy's `clockSkew` and `rollbackWindow`
- * (`RevoktPolicy`, §4), each a non-negative duration.
- */
-internal class SyncClock(
-    val nowMillis: Long,
-    val clockSkewMillis: Long,
-    val rollbackWindowMillis: Long,
-) {
-    init {
-        require(clockSkewMillis >= 0) { "clockSkew is negative" }
-        require(rollbackWindowMillis >= 0) { "rollbackWindow is negative" }
-    }
-
-    /** `now + clockSkew`, saturating at [Long.MAX_VALUE]. */
-    val futureBoundMillis: Long get() = saturatingAdd(nowMillis, clockSkewMillis)
-
-    override fun toString(): String =
-        "SyncClock(now=$nowMillis, clockSkew=$clockSkewMillis, rollbackWindow=$rollbackWindowMillis)"
-}
-
-/**
- * Spec §6.3's coverage sanity at install and §7.1's rollback guard, for one verified changeset of a dataset and
- * channel. Every generation is Mozilla-signed (#218 cut the mirror and system-cache sources). Every input is a value
- * the caller passes: the changeset's signed `<ts>` ([signedTimestampMillis], the verified envelope `timestamp` the
- * client returns in `Changeset`, #181; never `pollChanges`' `last_modified`), the
- * dataset's watermark from `updater.json`, the [LiveGeneration] from the published snapshot (null when the dataset has
- * none: no stored generation, no seed) and the [SyncClock]. The candidate generation's coverage is `coverageHighs`:
- * the latest coverage `high` of each filter, unsigned as decoded; a filter that covers no log contributes none. Nothing
- * here reads the snapshot, the store or the engine.
+ * Spec §7.1's rollback guard, for one verified changeset of a dataset and channel, as Firefox's
+ * `RemoteSettingsClient.sys.mjs` (`cac25a6`, lines 1203 to 1231) compares a changeset's timestamp with its local data's.
+ * Every input is a value the caller passes: the changeset's signed `<ts>` ([signedTimestampMillis], the verified envelope
+ * `timestamp` the client returns in `Changeset`; never `pollChanges`' `last_modified`), the dataset's watermark from
+ * `updater.json`, and the live generation's `sourceTimestampMillis` as the published snapshot holds it
+ * ([liveTimestampMillis], null when no generation loaded: none stored or none readable, and no seed). Nothing here reads
+ * the snapshot, the store, the engine or a clock: no rule on signed data reads local time (§7.1).
  *
- * The coverage tests need the filter bodies, so the decision runs in two phases: [admit] before any body is fetched,
- * and [decide] once every filter's coverage is known, which repeats [admit] and adds the coverage tests. Their order:
- * 1. `UNCHANGED`-by-timestamp: `<ts>` equals the live generation's `sourceTimestampMillis`. It precedes the
- *    `CLOCK_SKEW` test (§6.3).
- * 2. The rollback guard: `<ts>` older than the watermark by `rollbackWindow` or more is `ROLLBACK_REFUSED` (§7.1: older
- *    by less than the window may still install).
- * 3. `CLOCK_SKEW`: `<ts>` beyond local now + `clockSkew`, unless the dataset has no generation or its live generation
- *    is itself `clockBehind` (recomputed here as `sourceTimestampMillis > now + clockSkew`, never read from the last
- *    publish) and `<ts>` is newer than it, which is [SyncDecision.INSTALL_CLOCK_BEHIND].
- * 4. ([decide] only) The coverage bound, [coverageWithinBound]: `FAILED` at stage `INDEX`.
- * 5. ([decide] only) Inside the window (`<ts> ≤ watermark`), a maximum coverage below the live generation's is
- *    `ROLLBACK_REFUSED`; equal or above installs. A changeset newer than the watermark installs whatever its coverage.
- *
- * **The watermark floor** (revision 56, #188): the watermark both phases compare against is the higher of the stored one
- * and the live generation's `sourceTimestampMillis`, when the live generation is not itself `clockBehind`
- * ([floored]). A malformed or absent `updater.json` beside a live generation (#178: it reads as an empty
- * record, a store failure) therefore cannot reopen a rollback to anything older than what is installed, while a
- * far-future live generation installed under the carve-out never pins the watermark, so it cannot freeze the feed.
- *
- * Every sum saturates and every difference is checked, so no input overflows into a wrong answer.
+ * 1. No live generation: install, whatever the stored watermark says. Firefox imports older data when its local data
+ *    does not verify, and a dataset with none to serve has nothing to protect.
+ * 2. `<ts>` equals the live generation's: `UNCHANGED`.
+ * 3. `<ts>` older than the floor, the higher of the stored watermark and the live `<ts>`: `ROLLBACK_REFUSED`. So a
+ *    malformed or absent `updater.json` beside a live generation cannot reopen a rollback to anything older than what
+ *    is installed. A `<ts>` equal to the floor, which can only be the watermark here, installs (Firefox's strict `<`).
+ * 4. Anything else installs.
  */
 internal object SyncRules {
-    /**
-     * The decision for a changeset before its bodies are fetched: [SyncDecision.UNCHANGED],
-     * [SyncDecision.ROLLBACK_REFUSED] beyond the window, [SyncDecision.CLOCK_SKEW], or one of the two installs, which
-     * [decide] then confirms against the coverage.
-     */
-    fun admit(
-        signedTimestampMillis: Long,
-        watermarkMillis: Long?,
-        live: LiveGeneration?,
-        clock: SyncClock,
-    ): SyncDecision {
-        if (live != null && signedTimestampMillis == live.sourceTimestampMillis) return SyncDecision.UNCHANGED
-        val watermark = floored(watermarkMillis, live, clock)
-        if (watermark != null && beyondWindow(signedTimestampMillis, watermark, clock.rollbackWindowMillis)) {
-            return SyncDecision.ROLLBACK_REFUSED
-        }
-        val bound = clock.futureBoundMillis
-        if (signedTimestampMillis <= bound) return SyncDecision.INSTALL
-        val carveOut =
-            live == null || (live.sourceTimestampMillis > bound && signedTimestampMillis > live.sourceTimestampMillis)
-        return if (carveOut) SyncDecision.INSTALL_CLOCK_BEHIND else SyncDecision.CLOCK_SKEW
-    }
-
-    /**
-     * The decision for a changeset whose candidate generation's coverage is [coverageHighs]: [admit], then the coverage
-     * bound, then the coverage-monotonic rule inside the window.
-     */
     fun decide(
         signedTimestampMillis: Long,
         watermarkMillis: Long?,
-        live: LiveGeneration?,
-        coverageHighs: List<ULong>,
-        clock: SyncClock,
+        liveTimestampMillis: Long?,
     ): SyncDecision {
-        val admitted = admit(signedTimestampMillis, watermarkMillis, live, clock)
-        if (admitted != SyncDecision.INSTALL && admitted != SyncDecision.INSTALL_CLOCK_BEHIND) return admitted
-        if (!coverageWithinBound(coverageHighs, signedTimestampMillis, clock)) {
-            return SyncDecision.FAILED
-        }
-        val watermark = floored(watermarkMillis, live, clock)
-        val insideWindow = watermark != null && signedTimestampMillis <= watermark
-        if (insideWindow && live != null) {
-            val liveMax = live.maxCoverageMillis
-            if (liveMax != null && !coverageAtLeast(coverageHighs, liveMax)) return SyncDecision.ROLLBACK_REFUSED
-        }
-        return admitted
-    }
-
-    /**
-     * Spec §6.3's coverage bound: no coverage `high` is later than the changeset's signed `<ts>`
-     * ([signedTimestampMillis]) + `clockSkew` ("the timestamp compared everywhere here (…, coverage bound, `CLOCK_SKEW`)
-     * is the signed `<ts>`"). A `high` is compared unsigned, so one past [Long.MAX_VALUE] is beyond every bound.
-     */
-    fun coverageWithinBound(
-        coverageHighs: List<ULong>,
-        signedTimestampMillis: Long,
-        clock: SyncClock,
-    ): Boolean {
-        val bound = saturatingAdd(signedTimestampMillis, clock.clockSkewMillis)
-        return coverageHighs.all { bound >= 0 && it <= bound.toULong() }
-    }
-
-    /**
-     * Whether the candidate's maximum coverage is at least [liveMaxMillis]: some `high`, clamped to [Long.MAX_VALUE] as
-     * `coverageEndMillis` is, reaches it. A candidate that covers no log is below any live coverage.
-     */
-    private fun coverageAtLeast(
-        coverageHighs: List<ULong>,
-        liveMaxMillis: Long,
-    ): Boolean = coverageHighs.any { minOf(it, Long.MAX_VALUE.toULong()).toLong() >= liveMaxMillis }
-
-    /**
-     * The watermark the rules compare against: [watermarkMillis] raised to the live generation's
-     * `sourceTimestampMillis` when that generation is not `clockBehind` (`sourceTimestampMillis ≤ now + clockSkew`,
-     * recomputed here), else [watermarkMillis] as stored; null when neither gives one.
-     */
-    private fun floored(
-        watermarkMillis: Long?,
-        live: LiveGeneration?,
-        clock: SyncClock,
-    ): Long? {
-        if (live == null || live.sourceTimestampMillis > clock.futureBoundMillis) return watermarkMillis
-        return maxOf(watermarkMillis ?: Long.MIN_VALUE, live.sourceTimestampMillis)
-    }
-
-    /**
-     * Whether [timestamp] is older than [watermark] by [window] or more (§7.1: "older by less than `rollbackWindow`
-     * may still install"). A difference past [Long.MAX_VALUE] is beyond every window.
-     */
-    private fun beyondWindow(
-        timestamp: Long,
-        watermark: Long,
-        window: Long,
-    ): Boolean {
-        if (timestamp > watermark) return false
-        val older = watermark - timestamp
-        // timestamp ≤ watermark, so a negative difference is an overflow: older than any window.
-        return older < 0 || older >= window
+        val live = liveTimestampMillis ?: return SyncDecision.INSTALL
+        if (signedTimestampMillis == live) return SyncDecision.UNCHANGED
+        val floor = maxOf(watermarkMillis ?: live, live)
+        return if (signedTimestampMillis < floor) SyncDecision.ROLLBACK_REFUSED else SyncDecision.INSTALL
     }
 }
 

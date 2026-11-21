@@ -5,7 +5,6 @@ package dev.revokt.engine.update
 
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.RevoktStorage
 import dev.revokt.SyncOutcome
 import dev.revokt.engine.fetch.client
@@ -73,20 +72,18 @@ internal class ModelViolation(
  *   the engine held when a sync began survives that sync, if it read back undamaged: on disk, and as the pointer's live
  *   or previous when the sync's write of `current` landed (#242's fallback, #249);
  * - **I3** `updater.json` is written only by a sync whose read of it returned (#209), and its watermark never goes
- *   backwards and never falls below the model's own high-water mark (the newest `<ts>` installed with the clock right),
- *   unless damage hit the file;
- * - **I5** no publication older than the floor by the rollback window ([rollbackWindowMillis]) or more installs. The
- *   floor is the model's high-water mark, lost only to damage to `updater.json`, raised to the timestamp of the
- *   generation the snapshot holds live when that is not ahead of `now` + `clockSkew` (§6.5: a malformed `updater.json`
- *   keeps the live floor);
+ *   backwards and never falls below the model's own high-water mark (the newest `<ts>` installed), unless damage hit
+ *   the file or an install made with no generation live set it to that install's `<ts>` (§7.1);
+ * - **I5** while the snapshot holds a generation live, no publication older than the floor installs, other than the
+ *   live one's own (#190's retried flip). The floor is the model's high-water mark, lost only to damage to
+ *   `updater.json`, raised to the live generation's timestamp (§7.1: a malformed `updater.json` keeps the live floor).
+ *   With no generation live the stored watermark is not read, so anything may install (§7.1, as Firefox imports when
+ *   its local data does not verify);
  * - **I4** every sync returns, and once the faults stop the store recovers: within [RECOVERY] clean syncs the last
  *   publication is installed, unchanged or refused as a rollback (an orphan never loops, #205's bug), unless its
  *   directory is held and damaged, and a new publication then installs.
  */
-internal class StoreModel(
-    /** The sync's rollback window, and I5's: a parameter, since #224 removes the window. */
-    private val rollbackWindowMillis: Long = DAY_MILLIS,
-) : CrliteSyncFixture() {
+internal class StoreModel : CrliteSyncFixture() {
     /** The storage of one run: every operation counted, faults injected on cue, and the I2/I3 checks per operation. */
     inner class ModelStorage(
         private val root: String,
@@ -243,7 +240,7 @@ internal class StoreModel(
         var full = filter("full-1", false, ts - day, 1)
         var watermark: Long? = null
 
-        /** The newest `<ts>` a sync installed with the clock right, the model's own; null once damage hit `updater.json`. */
+        /** The newest `<ts>` a sync installed, the model's own; null once damage hit `updater.json`. */
         var highWater: Long? = null
 
         init {
@@ -262,7 +259,7 @@ internal class StoreModel(
                 GenerationSnapshot(
                     0,
                     mapOf(
-                        Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false, false),
+                        Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false),
                     ),
                     null,
                 ),
@@ -339,7 +336,6 @@ internal class StoreModel(
                         engine,
                         snapshot,
                         verifier,
-                        SyncPolicy(day, rollbackWindowMillis, 3 * day),
                         UpdateFixtures.Recording(),
                     ).syncOnce(now)
                 } catch (t: Throwable) {
@@ -370,30 +366,34 @@ internal class StoreModel(
         }
 
         /**
-         * I5's floor for a sync starting now: the model's high-water mark ([highWater], null once damage hit `updater.json`), raised to the
-         * snapshot's live timestamp unless that is ahead of `now` + `clockSkew` (a clock-behind generation floors nothing).
+         * I5's floor for a sync starting now, and the live timestamp it was raised to: the model's high-water mark
+         * ([highWater], null once damage hit `updater.json`) raised to the snapshot's live timestamp; null with no
+         * generation live, when the stored watermark is not read (§7.1).
          */
-        private fun rollbackFloor(): Long? {
-            val live =
-                snapshot.snapshot.datasets[Dataset.CRLITE]
-                    ?.takeIf { it.generationId != null }
-                    ?.sourceTimestampMillis
-                    ?.takeIf { it <= now + day }
-            return listOfNotNull(highWater, live).maxOrNull()
+        private fun rollbackFloor(): Pair<Long, Long>? {
+            val generation = snapshot.snapshot.datasets[Dataset.CRLITE]?.takeIf { it.generationId != null }
+            val live = generation?.sourceTimestampMillis
+            return live?.let { maxOf(highWater ?: it, it) to it }
         }
 
-        /** I5 after a sync that ended as [result] from [floor], then the high-water mark an install with the clock right raises. */
+        /** I5 after a sync that ended as [result] from [floor], then the high-water mark an install raises. */
         private fun rollback(
             result: dev.revokt.SyncResult,
-            floor: Long?,
+            floor: Pair<Long, Long>?,
             stopped: Boolean,
         ) {
             if (result.outcome != SyncOutcome.INSTALLED) return
-            if (floor != null && floor - server.ts >= rollbackWindowMillis) {
-                fail("I5: ${server.ts} installed, ${floor - server.ts} ms below the floor $floor")
+            if (floor != null && server.ts < floor.first && server.ts != floor.second) {
+                fail("I5: ${server.ts} installed, ${floor.first - server.ts} ms below the floor ${floor.first}")
             }
-            val clockBehind = result.warnings.any { it.code == DiagnosticCode.CLOCK_BEHIND }
-            if (!stopped && !clockBehind) highWater = maxOf(highWater ?: Long.MIN_VALUE, server.ts)
+            if (floor == null) {
+                // §7.1: an install with no generation loaded sets the watermark to its <ts>, lowered if it was higher. A
+                // stopped one may or may not have written it, so either value is allowed then.
+                highWater = if (stopped) highWater?.let { minOf(it, server.ts) } else server.ts
+                watermark = if (stopped) watermark?.let { minOf(it, server.ts) } else server.ts
+            } else if (!stopped) {
+                highWater = maxOf(highWater ?: Long.MIN_VALUE, server.ts)
+            }
         }
 
         /** The directory of the publication the server serves now. */
@@ -714,8 +714,5 @@ internal class StoreModel(
 
         /** The clean syncs within which the store must recover (I4). */
         const val RECOVERY = 3
-
-        /** One day, the default rollback window (`SyncPolicy`'s, as the fixture's `day`). */
-        const val DAY_MILLIS = 86_400_000L
     }
 }

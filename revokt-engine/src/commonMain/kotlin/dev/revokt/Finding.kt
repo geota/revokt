@@ -343,14 +343,14 @@ public sealed class Finding {
 
         public val sourceTimestampMillis: Long? = builder.sourceTimestampMillis
 
-        /** The generation's age when the verdict was computed; clamped at 0 when [clockBehind]. */
+        /**
+         * The generation's age when the verdict was computed, `now − sourceTimestampMillis`, clamped at 0 when the
+         * signed timestamp is ahead of the local clock.
+         */
         public val ageMillis: Long? = builder.ageMillis
 
         /** True while the loader's start task has not passed the seed step; `NO_DATA` never fires. */
         public val pending: Boolean = builder.pending
-
-        /** `sourceTimestampMillis > now + clockSkew` at the last publish; never persisted. */
-        public val clockBehind: Boolean = builder.clockBehind
 
         /** The seed's format, when [fromSeed]. */
         public val seedFormat: Int? = builder.seedFormat
@@ -372,7 +372,6 @@ public sealed class Finding {
                 .sourceTimestampMillis(sourceTimestampMillis)
                 .ageMillis(ageMillis)
                 .pending(pending)
-                .clockBehind(clockBehind)
                 .seedFormat(seedFormat)
                 .stale(stale)
                 .rules(rules)
@@ -387,7 +386,6 @@ public sealed class Finding {
                 "sourceTimestampMillis" to sourceTimestampMillis,
                 "ageMillis" to ageMillis,
                 "pending" to pending,
-                "clockBehind" to clockBehind,
                 "seedFormat" to seedFormat,
                 "stale" to stale,
                 "rules" to rules,
@@ -418,8 +416,6 @@ public sealed class Finding {
                 private set
             internal var pending: Boolean = false
                 private set
-            internal var clockBehind: Boolean = false
-                private set
             internal var seedFormat: Int? = null
                 private set
             internal var stale: Boolean = false
@@ -440,8 +436,6 @@ public sealed class Finding {
             public fun ageMillis(millis: Long?): Builder = apply { ageMillis = millis }
 
             public fun pending(pending: Boolean): Builder = apply { this.pending = pending }
-
-            public fun clockBehind(behind: Boolean): Builder = apply { clockBehind = behind }
 
             public fun seedFormat(format: Int?): Builder = apply { seedFormat = format }
 

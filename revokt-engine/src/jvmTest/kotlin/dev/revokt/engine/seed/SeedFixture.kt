@@ -125,7 +125,7 @@ internal open class SeedFixture : CrliteSyncFixture() {
         fetchingSource: Boolean = true,
         pins: Set<ByteString> = pinned,
     ): SeedLoader =
-        SeedLoader(source, store, engine, snapshot, verifier, SeedPolicy(pins, collection, day, fetchingSource), logger)
+        SeedLoader(source, store, engine, snapshot, verifier, SeedPolicy(pins, collection, fetchingSource), logger)
 
     protected fun load(
         seed: Seed,
@@ -185,7 +185,7 @@ internal open class SeedFixture : CrliteSyncFixture() {
         snapshot.publish(
             GenerationSnapshot(
                 snapshot.snapshot.generationEpoch,
-                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false, false)),
+                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false)),
                 null,
             ),
         )

@@ -45,7 +45,7 @@ class BuildIndexTest {
     }
 
     @Test
-    fun `coverage highs are each filter's latest high, unsigned, and the published maximum clamps to Long MAX_VALUE`() {
+    fun `index bin keeps each filter's coverage highs unsigned, and a filter covering no log has none`() {
         val records =
             listOf(
                 FilterRecord("f", "compat", false, 1, "f.filter"),
@@ -59,15 +59,20 @@ class BuildIndexTest {
                 "e.delta" to UpdateFixtures.v4(emptyList()),
             )
         val built = UpdateFixtures.built(records, bodies)
-        // e covers no log and contributes none; d's high is u64 max, compared unsigned.
-        assertEquals(listOf(30uL, ULong.MAX_VALUE), built.coverageHighs)
-        assertEquals(Long.MAX_VALUE, maxCoverageMillis(C2spIndex.read(built.index)))
+        // e covers no log and has none; d's high is u64 max, kept unsigned.
+        assertEquals(mapOf(0 to 30uL, 1 to ULong.MAX_VALUE), highs(built.index))
         val bare = UpdateFixtures.built(records.take(1), mapOf("f.filter" to UpdateFixtures.v4(emptyList())))
-        assertEquals(emptyList(), bare.coverageHighs)
-        assertEquals(null, maxCoverageMillis(C2spIndex.read(bare.index)))
-        val one = UpdateFixtures.built(records.take(1), bodies)
-        assertEquals(30L, maxCoverageMillis(C2spIndex.read(one.index)))
+        assertEquals(emptyMap(), highs(bare.index))
     }
+
+    /** Each filter's latest coverage `high` in [index], by filter index. */
+    private fun highs(index: ByteArray): Map<Int, ULong> =
+        C2spIndex
+            .read(index)
+            .logs.values
+            .flatten()
+            .groupBy { it.filterIndex }
+            .mapValues { (_, entries) -> entries.maxOf { it.window.high } }
 
     @Test
     fun `placeFilters refuses from the records alone, and places the full then the deltas by time`() {

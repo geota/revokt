@@ -103,8 +103,6 @@ class ExemptionStageTest {
                 mapOf(Rule.REVOKED to recording, Rule.NOT_COVERED to recording),
                 strict.requiredDatasets,
                 strict.staleness,
-                strict.rollbackWindowMillis,
-                strict.clockSkewMillis,
                 strict.signedSourceFailingAfterMillis,
             )
         for (result in listOf(CrliteQueryResult.REVOKED, CrliteQueryResult.NOT_COVERED)) {

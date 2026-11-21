@@ -271,7 +271,7 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
         SnapshotRef(
             GenerationSnapshot(
                 0,
-                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false, false)),
+                mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false)),
                 null,
             ),
         )
@@ -282,8 +282,6 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
         engine: TestEngine = TestEngine(),
         limits: FetchLimits = FetchLimits(),
         with: SignatureVerifier = verifier,
-        staleAfter: Long? = 3 * day,
-        metered: () -> Boolean = { false },
     ): SyncRun =
         CrliteSync(
             client(server.fetcher, source, limits),
@@ -291,9 +289,7 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
             engine,
             snapshot,
             with,
-            SyncPolicy(day, day, staleAfter),
             logger,
-            metered,
         ).syncOnce(now)
 
     protected fun SyncRun.assert(

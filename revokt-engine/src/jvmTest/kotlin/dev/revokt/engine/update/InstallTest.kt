@@ -70,23 +70,16 @@ internal class InstallTest : InstallFixture() {
                 seedFormat = null,
                 pending = false,
                 staleGateOpen = false,
-                clockBehind = false,
-                // The maximum coverage the loader decoded from index.bin, not the engine's getter (#137, #190).
-                maxCoverageMillis = maxCoverageMillis(C2spIndex.read(p.index)),
             ),
             s.datasets.getValue(Dataset.CRLITE),
         )
-        assertNotNull(s.datasets.getValue(Dataset.CRLITE).maxCoverageMillis)
     }
 
     @Test
-    fun `the published maximum coverage is the loader's own, whatever the engine's getter says`() {
+    fun `an engine that cannot tell its coverage end publishes none`() {
         val engine = TestEngine().apply { coverageEnd = { null } }
         install(pending(), engine = engine)
-        val published = snapshot.snapshot.datasets.getValue(Dataset.CRLITE)
         assertNull(snapshot.snapshot.coverageEndMillis)
-        assertEquals(maxCoverageMillis(C2spIndex.read(pending().index)), published.maxCoverageMillis)
-        assertNotNull(published.maxCoverageMillis)
     }
 
     @Test
@@ -587,27 +580,8 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
-    fun `clockBehind is recomputed at the publish against now and clockSkew`() {
-        val ts = now + 600_000
-        assertIs<InstallResult.Installed>(install(pending("g1", timestamp = ts)))
-        assertEquals(
-            false,
-            snapshot.snapshot.datasets
-                .getValue(Dataset.CRLITE)
-                .clockBehind,
-        )
-        assertIs<InstallResult.Installed>(install(pending("g2", timestamp = ts + 1)))
-        assertEquals(
-            true,
-            snapshot.snapshot.datasets
-                .getValue(Dataset.CRLITE)
-                .clockBehind,
-        )
-    }
-
-    @Test
     fun `a seed install publishes fromSeed, its seedFormat and the STALE gate`() {
-        val seed = Publication(true, 1, true, now, 0)
+        val seed = Publication(true, 1, true, now)
         assertIs<InstallResult.Installed>(
             install(pending("seed", freshness = Freshness.SEED_SIGNED_TIME), publication = seed, updater = null),
         )
@@ -617,9 +591,7 @@ internal class InstallTest : InstallFixture() {
         assertEquals(true, d.staleGateOpen)
         assertEquals(Freshness.SEED_SIGNED_TIME, d.freshness)
         assertEquals(StoreRead.Absent, store.updater(now))
-        for (bad in listOf({
-            Publication(true, null, false, now, 0)
-        }, { Publication(false, 1, false, now, 0) }, { Publication(false, null, false, now, -1) })) {
+        for (bad in listOf({ Publication(true, null, false, now) }, { Publication(false, 1, false, now) })) {
             kotlin.test.assertFailsWith<IllegalArgumentException> { bad() }
         }
     }

@@ -43,12 +43,12 @@ internal open class InstallFixture {
     protected val empty =
         GenerationSnapshot(
             0,
-            mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, true, false, false)),
+            mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, true, false)),
             null,
         )
     protected val snapshot = SnapshotRef(empty)
     protected val now = 1_792_600_000_000
-    protected val publication = Publication(false, null, false, now, 600_000)
+    protected val publication = Publication(false, null, false, now)
 
     protected fun install(
         pending: PendingGeneration,

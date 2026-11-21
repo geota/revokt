@@ -57,11 +57,9 @@ class RuleModelTest {
     }
 
     @Test
-    fun `both presets require CRLite and share the three time fields`() {
+    fun `both presets require CRLite and share signedSourceFailingAfter`() {
         for (table in listOf(PolicyTable.DEFAULT, PolicyTable.STRICT)) {
             assertEquals(setOf(Dataset.CRLITE), table.requiredDatasets)
-            assertEquals(day, table.rollbackWindowMillis)
-            assertEquals(day, table.clockSkewMillis)
             assertEquals(day, table.signedSourceFailingAfterMillis)
         }
     }
