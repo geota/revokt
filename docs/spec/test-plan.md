@@ -390,8 +390,8 @@ list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput`
 the `revokt-oracle` Rust cdylib and the Panama shim; the Go producer oracle runs **out of process**
 (the CLI, batched over a pipe: one base64 DER per line in; one line per input out, `OK <serial-hex> <spki-sha256-hex> <ct|lax|zc>` or `REJECT <error>` (an empty line, the encoding of an empty input, is answered `REJECT`), with `##` terminating a batch, so the Go CLI and the Kotlin driver are written independently) during fuzzing, since a third set of signal handlers beside the JVM's
 and libFuzzer's is not safe in-process. **Tiers**: PR = committed-corpus
-replay as unit tests, JDK only; nightly = `fuzz.yml`, every target for 300 s, one job per target, with each night's
-corpus kept in the private corpus repository (CONTRIBUTING §6); OSS-Fuzz once the project has users. **Findings**: any exception other than the declared result, any
+replay as unit tests, JDK only; nightly = `fuzz.yml`, every target for 300 s, one job per target, seeded from the private corpus repository,
+which keeps each night's new corpus units and is merged weekly with `-merge=1` (CONTRIBUTING §6); OSS-Fuzz once the project has users. **Findings**: any exception other than the declared result, any
 allocation above budget, any timeout, any difference between implementations outside a declared
 equivalence class, any non-idempotent round trip. **Acceptance**: no open continuous-tier crash at
 release; Kover branch coverage of each parser package not regressed, 90 % as the target; committed
