@@ -32,6 +32,7 @@ import kotlin.time.TimeSource
  * A [RevocationEngine] with its [name] read once (spec §3.2: "revokt reads it once per instance"): the `engineName` of
  * every `ENGINE_ERROR` whose producer is the engine, however many queries run.
  */
+@OptIn(RevoktInternalApi::class)
 internal class NamedEngine(
     val engine: RevocationEngine,
 ) {
@@ -137,7 +138,7 @@ private class Outcomes(
  * `Finding.Crlite` per key. With no CRLite generation in the snapshot the engine is never asked: the finding is
  * synthesised as `NO_DATA`, which fires nothing. With no key nothing is queried.
  */
-@OptIn(RevoktTestingApi::class)
+@OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
 private fun queryCrlite(
     decision: PathDecision,
     snapshot: GenerationSnapshot,

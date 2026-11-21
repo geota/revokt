@@ -1,15 +1,9 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package dev.revokt.engine.update
+package dev.revokt
 
-import dev.revokt.CrliteQuery
-import dev.revokt.CrliteQueryResult
-import dev.revokt.CrliteSct
-import dev.revokt.LogLevel
-import dev.revokt.RevoktLogger
-import dev.revokt.RevoktTestingApi
-import dev.revokt.clubcard.RevoktInternalApi
+import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.port.ClubcardIndexEntry
 import dev.revokt.clubcard.port.CrliteClubcard
 import dev.revokt.clubcard.port.CrliteKey
@@ -18,14 +12,14 @@ import dev.revokt.clubcard.port.IssuerSpkiHash
 import dev.revokt.clubcard.port.LogId
 import dev.revokt.clubcard.port.LogTimestamp
 import dev.revokt.clubcard.port.Timestamp
+import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.IndexFile
 import dev.revokt.engine.c2sp.Window
-import dev.revokt.safeLog
 import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
 
-/** What a self-check probe tests (spec §6.5). */
+/** What an engine probe tests (test-plan.md §9.3). */
 internal enum class ProbeKind {
     /** The absent issuer with a filter's inside SCT: the `NOT_ENROLLED` class. */
     ABSENT_INSIDE,
@@ -43,7 +37,7 @@ internal enum class ProbeKind {
     REVOKED_CANDIDATE_MEMBER,
 }
 
-/** One self-check query and the answers that pass it. */
+/** One engine probe's query and the answers that pass it. */
 internal class Probe(
     val kind: ProbeKind,
     val filter: String,
@@ -53,26 +47,27 @@ internal class Probe(
     override fun toString(): String = "Probe($kind, $filter, $query, expected=$expected)"
 }
 
-/** The self-check's verdict on a prepared generation. */
-internal sealed interface SelfCheckResult {
+/** The probes' verdict on a prepared generation. */
+internal sealed interface ProbeResult {
     /** Every probe answered as expected; [probes] is what ran, in order. */
     class Passed(
         val probes: List<Probe>,
-    ) : SelfCheckResult
+    ) : ProbeResult
 
     /** [probe] answered [actual]. */
     class Mismatch(
         val probe: Probe,
         val actual: CrliteQueryResult,
-    ) : SelfCheckResult {
+    ) : ProbeResult {
         override fun toString(): String = "Mismatch($probe answered $actual)"
     }
 }
 
 /**
- * The engine self-check of spec §6.5, run on `prepared.query` between `prepare` and `activate`: deterministic, with
- * every input named, so it catches an engine that answers a constant (its purpose) while the §9 oracle covers decoder
- * bugs the engine and the loader would share.
+ * The engine probes of test-plan.md §9.3, part of the cross-engine suite, run against any [RevocationEngine] on
+ * `prepared.query` before `activate`: deterministic, with every input named, so they catch an engine that answers a
+ * constant (their purpose) while the §9 oracle covers decoder bugs. They ran on every install as the §6.5 self-check
+ * until #220 moved them here: with one in-tree engine, a per-install check compared the clubcard port with itself.
  *
  * Filters are iterated in `index.bin` filename order and each filter's index entries by ascending issuer hash. A
  * filter's inside SCT is (`logId`, `low`) of its first non-empty coverage entry in `index.bin` order (log directory
@@ -81,15 +76,15 @@ internal sealed interface SelfCheckResult {
  * until no filter's index holds it; with serial `0x01` and each filter's inside and outside SCT it must answer in the
  * `{NOT_COVERED, NOT_ENROLLED, NO_SCTS}` class (§3.2), so the upki engine passes.
  *
- * The `REVOKED` probe takes the first branch that yields, each judged by the loader's own `revokt-clubcard` reference
+ * The `REVOKED` probe takes the first branch that yields, each judged by `revokt-clubcard`'s reference
  * evaluator against the block's filter under that filter's inside SCT: the first of the serials `0x01`..`0x1000`
  * (minimal DER INTEGER content, ascending) revoked against some inverted block; else an exception-list serial of an
  * inverted block; else the first candidate that is a member of a non-inverted block. It must answer exactly `REVOKED`.
  * A probe with no input (no coverage entry, every candidate issuer present, no block yielding) is skipped and logged at
  * [LogLevel.INFO].
  */
-@OptIn(RevoktInternalApi::class, RevoktTestingApi::class)
-internal object SelfCheck {
+@OptIn(dev.revokt.clubcard.RevoktInternalApi::class, RevoktInternalApi::class, RevoktTestingApi::class)
+internal object EngineProbes {
     /** The answers spec §3.2 puts in one class, so a not-enrolled or uncovered certificate passes on every engine. */
     val NOT_ENROLLED_CLASS: Set<CrliteQueryResult> =
         setOf(CrliteQueryResult.NOT_COVERED, CrliteQueryResult.NOT_ENROLLED, CrliteQueryResult.NO_SCTS)
@@ -99,10 +94,25 @@ internal object SelfCheck {
 
     /** The last candidate serial of the `REVOKED` probe. */
     private const val LAST_CANDIDATE = 0x1000
+    private const val INDEX = "index.bin"
     private const val BYTE_VALUES = 256
 
     /** The candidate serials `0x01`..`0x1000` as minimal DER INTEGER content bytes, ascending. */
     val CANDIDATES: List<ByteString> = (1..LAST_CANDIDATE).map(::minimalInteger)
+
+    /**
+     * Prepares [files] on [engine], runs the probes on the prepared state, and discards it. The filters are decoded by
+     * `revokt-clubcard`, the reference evaluator the `REVOKED` probe is judged by, whatever [engine] decodes with.
+     */
+    fun check(
+        engine: RevocationEngine,
+        files: GenerationFiles,
+        logger: RevoktLogger,
+    ): ProbeResult {
+        val index = C2spIndex.read(files.bytes(INDEX))
+        val filters = files.names.filter { it != INDEX }.associateWith { ClubcardFilters.decode(files.bytes(it)) }
+        return engine.prepare(files).use { prepared -> run(index, filters, prepared::query, logger) }
+    }
 
     /** Runs [probes] against [query], stopping at the first mismatch. */
     fun run(
@@ -110,13 +120,13 @@ internal object SelfCheck {
         filters: Map<String, CrliteClubcard>,
         query: (CrliteQuery) -> CrliteQueryResult,
         logger: RevoktLogger,
-    ): SelfCheckResult {
+    ): ProbeResult {
         val probes = probes(index, filters, logger)
         for (probe in probes) {
             val actual = query(probe.query)
-            if (actual !in probe.expected) return SelfCheckResult.Mismatch(probe, actual)
+            if (actual !in probe.expected) return ProbeResult.Mismatch(probe, actual)
         }
-        return SelfCheckResult.Passed(probes)
+        return ProbeResult.Passed(probes)
     }
 
     /** The probes for the generation [index] lays out over the decoded [filters] (by name), in the order they run. */
@@ -131,7 +141,7 @@ internal object SelfCheck {
                 inside(index, name)?.let { Tested(name, filter, it.first, it.second) }
             }
         if (tested.isEmpty()) {
-            logger.safeLog(LogLevel.INFO, "engine self-check: no coverage entry, every probe skipped")
+            logger.safeLog(LogLevel.INFO, "engine probes: no coverage entry, every probe skipped")
             return emptyList()
         }
         val out = mutableListOf<Probe>()
@@ -139,7 +149,7 @@ internal object SelfCheck {
         if (absent == null) {
             logger.safeLog(
                 LogLevel.INFO,
-                "engine self-check: every candidate issuer is enrolled, absent probes skipped",
+                "engine probes: every candidate issuer is enrolled, absent probes skipped",
             )
         } else {
             for (t in tested) {
@@ -154,7 +164,7 @@ internal object SelfCheck {
                 if (outside == null) {
                     logger.safeLog(
                         LogLevel.INFO,
-                        "engine self-check: ${t.name} covers every timestamp, outside probe skipped",
+                        "engine probes: ${t.name} covers every timestamp, outside probe skipped",
                     )
                 } else {
                     out +=
@@ -169,7 +179,7 @@ internal object SelfCheck {
         }
         val revoked = revokedProbe(tested)
         if (revoked == null) {
-            logger.safeLog(LogLevel.INFO, "engine self-check: no block yields a REVOKED probe, skipped")
+            logger.safeLog(LogLevel.INFO, "engine probes: no block yields a REVOKED probe, skipped")
         } else {
             out += revoked
         }
@@ -189,7 +199,7 @@ internal object SelfCheck {
                 .sortedBy { it.key }
                 .map { it.toPair() }
 
-        /** Whether the loader's reference evaluator calls (issuer, serial) revoked in this filter at the inside SCT. */
+        /** Whether the reference evaluator calls (issuer, serial) revoked in this filter at the inside SCT. */
         fun revoked(
             issuer: ByteString,
             serial: ByteString,

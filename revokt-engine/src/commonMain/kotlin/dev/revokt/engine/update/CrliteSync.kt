@@ -66,6 +66,7 @@ internal class SyncRun(
  * published snapshot this sync reads the live generation from and publishes to, and [verifier] the content-signature
  * and x5u-chain verifier. No step reads a policy value: the sync rules compare signed timestamps only (§7.1).
  */
+@OptIn(dev.revokt.RevoktInternalApi::class)
 internal class CrliteSync(
     private val client: RemoteSettingsClient,
     private val store: StoreLayout,

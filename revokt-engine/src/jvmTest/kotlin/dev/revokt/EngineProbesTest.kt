@@ -1,18 +1,13 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package dev.revokt.engine.update
+package dev.revokt
 
-import dev.revokt.ClubcardCorpus
-import dev.revokt.CrliteQueryResult
-import dev.revokt.FilterFormat
-import dev.revokt.GenerationFiles
-import dev.revokt.KotlinRevocationEngine
-import dev.revokt.LogLevel
-import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.engine.c2sp.C2spIndex
+import dev.revokt.engine.update.UpdateFixtures
 import dev.revokt.engine.update.UpdateFixtures.Block
+import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import dev.revokt.engine.update.UpdateFixtures.issuer
 import dev.revokt.engine.update.UpdateFixtures.log
 import okio.ByteString
@@ -22,33 +17,38 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
-/** The §6.5 engine self-check (#130): every input named, deterministic, first-match. */
-@OptIn(RevoktInternalApi::class)
-class SelfCheckTest {
+/**
+ * The engine probes of test-plan.md §9.3 (#130, moved out of the install by #220): every input named, deterministic,
+ * first-match. The Kotlin engine passes them on every committed generation; the upki engine runs them in the
+ * cross-engine suite.
+ */
+@OptIn(dev.revokt.clubcard.RevoktInternalApi::class, RevoktInternalApi::class)
+class EngineProbesTest {
     private val logger = UpdateFixtures.Recording()
 
+    /** [EngineProbes.check] on a fresh Kotlin engine, or [EngineProbes.run] against [answer] (a stand-in engine). */
     private fun run(
         files: GenerationFiles,
-        answer: ((dev.revokt.CrliteQuery) -> CrliteQueryResult)? = null,
-    ): SelfCheckResult {
+        answer: ((CrliteQuery) -> CrliteQueryResult)? = null,
+    ): ProbeResult {
+        if (answer == null) return EngineProbes.check(KotlinRevocationEngine(), files, logger)
         val index = C2spIndex.read(files.bytes("index.bin"))
         val filters = files.names.filter { it != "index.bin" }.associateWith { ClubcardFilters.decode(files.bytes(it)) }
-        val query = answer ?: KotlinRevocationEngine().prepare(files)::query
-        return SelfCheck.run(index, filters, query, logger)
+        return EngineProbes.run(index, filters, answer, logger)
     }
 
     private fun generation(vararg filters: ByteArray): GenerationFiles =
         ClubcardCorpus.generation("g", FilterFormat.V4, filters.withIndex().associate { (i, f) -> "f$i" to f })
 
     private fun probes(vararg filters: ByteArray): List<Probe> =
-        assertIs<SelfCheckResult.Passed>(run(generation(*filters))).probes
+        assertIs<ProbeResult.Passed>(run(generation(*filters))).probes
 
     private fun bytes(vararg b: Int): ByteString = ByteArray(b.size) { b[it].toByte() }.toByteString()
 
     private val window = listOf(log(1) to (1_000L to 2_000L))
 
     @Test
-    fun `the self-check passes on every corpus clubcard generation with the Kotlin engine`() {
+    fun `the Kotlin engine passes the probes on every corpus clubcard generation`() {
         val corpus =
             listOf(
                 listOf(UpdateFixtures.FULL_PATH) to ProbeKind.REVOKED_CANDIDATE_INVERTED,
@@ -60,7 +60,7 @@ class SelfCheckTest {
             )
         for ((paths, revoked) in corpus) {
             val files = ClubcardCorpus.generation("g", FilterFormat.V3, *paths.toTypedArray())
-            val passed = assertIs<SelfCheckResult.Passed>(run(files), "$paths")
+            val passed = assertIs<ProbeResult.Passed>(run(files), "$paths")
             val kinds = passed.probes.map { it.kind }
             assertEquals(
                 List(paths.size) {
@@ -74,25 +74,40 @@ class SelfCheckTest {
     }
 
     @Test
-    fun `a constant-answer engine fails it`() {
+    fun `check probes the prepared generation, never activates it, and closes it`() {
+        val files = ClubcardCorpus.generation("g", FilterFormat.V3, UpdateFixtures.FULL_PATH)
+        val engine = TestEngine()
+        assertIs<ProbeResult.Passed>(EngineProbes.check(engine, files, logger))
+        assertEquals(listOf("g"), engine.prepared)
+        assertEquals(listOf("g"), engine.closed)
+        assertEquals(null, engine.live)
+        // A constant answer from the prepared state fails the check: the probes query it, not the live engine.
+        val constant = TestEngine().apply { preparedAnswer = { CrliteQueryResult.NOT_REVOKED } }
+        val m = assertIs<ProbeResult.Mismatch>(EngineProbes.check(constant, files, logger))
+        assertEquals(ProbeKind.ABSENT_INSIDE, m.probe.kind)
+        assertEquals(listOf("g"), constant.closed)
+    }
+
+    @Test
+    fun `a constant-answer engine fails them`() {
         val files = ClubcardCorpus.generation("g", FilterFormat.V3, UpdateFixtures.FULL_PATH, UpdateFixtures.DELTA_PATH)
         for (constant in listOf(
             CrliteQueryResult.NOT_REVOKED,
             CrliteQueryResult.REVOKED,
             CrliteQueryResult.ENGINE_ERROR,
         )) {
-            val m = assertIs<SelfCheckResult.Mismatch>(run(files) { constant }, "$constant")
+            val m = assertIs<ProbeResult.Mismatch>(run(files) { constant }, "$constant")
             assertEquals(ProbeKind.ABSENT_INSIDE, m.probe.kind)
             assertEquals(constant, m.actual)
         }
-        for (constant in SelfCheck.NOT_ENROLLED_CLASS) {
-            val m = assertIs<SelfCheckResult.Mismatch>(run(files) { constant }, "$constant")
+        for (constant in EngineProbes.NOT_ENROLLED_CLASS) {
+            val m = assertIs<ProbeResult.Mismatch>(run(files) { constant }, "$constant")
             assertEquals(ProbeKind.REVOKED_CANDIDATE_INVERTED, m.probe.kind)
         }
         // An engine that answers the absent issuer correctly and NOT_REVOKED for everything else fails the REVOKED probe.
-        val absent = SelfCheck.ABSENT_ISSUER_SEED
+        val absent = EngineProbes.ABSENT_ISSUER_SEED
         val m =
-            assertIs<SelfCheckResult.Mismatch>(
+            assertIs<ProbeResult.Mismatch>(
                 run(files) { q ->
                     if (q.issuerSpkiHash.toByteString() ==
                         absent
@@ -109,17 +124,17 @@ class SelfCheckTest {
     @Test
     fun `the absent issuer and the inside and outside SCTs are the named inputs`() {
         val probes =
-            assertIs<SelfCheckResult.Passed>(
+            assertIs<ProbeResult.Passed>(
                 run(ClubcardCorpus.generation("g", FilterFormat.V3, "synthetic/synthetic.v3.filter")),
             ).probes
         val (inside, outside) = probes
-        assertContentEquals(SelfCheck.ABSENT_ISSUER_SEED.toByteArray(), inside.query.issuerSpkiHash)
+        assertContentEquals(EngineProbes.ABSENT_ISSUER_SEED.toByteArray(), inside.query.issuerSpkiHash)
         val sha256 =
             java.security.MessageDigest
                 .getInstance(
                     "SHA-256",
                 ).digest("revokt-self-check".toByteArray(Charsets.US_ASCII))
-        assertContentEquals(sha256, SelfCheck.ABSENT_ISSUER_SEED.toByteArray())
+        assertContentEquals(sha256, EngineProbes.ABSENT_ISSUER_SEED.toByteArray())
         assertContentEquals(byteArrayOf(1), inside.query.serial)
         // The synthetic filter covers log [0;32] over [1000, 2000] and log [1;32] over everything; the first log in
         // index.bin order is [0;32].
@@ -132,8 +147,8 @@ class SelfCheckTest {
                 .single()
                 .timestampMillis,
         )
-        assertEquals(SelfCheck.NOT_ENROLLED_CLASS, inside.expected)
-        assertEquals(SelfCheck.NOT_ENROLLED_CLASS, outside.expected)
+        assertEquals(EngineProbes.NOT_ENROLLED_CLASS, inside.expected)
+        assertEquals(EngineProbes.NOT_ENROLLED_CLASS, outside.expected)
     }
 
     @Test
@@ -163,14 +178,14 @@ class SelfCheckTest {
         val full = probes(UpdateFixtures.v4(listOf(log(1) to (0L to max))))
         assertEquals(listOf(ProbeKind.ABSENT_INSIDE), full.map { it.kind })
         assertEquals(
-            LogLevel.INFO to "engine self-check: f0 covers every timestamp, outside probe skipped",
+            LogLevel.INFO to "engine probes: f0 covers every timestamp, outside probe skipped",
             logger.messages.first(),
         )
     }
 
     @Test
     fun `the absent issuer is incremented in its last byte until no filter's index holds it`() {
-        val seed = SelfCheck.ABSENT_ISSUER_SEED.toByteArray()
+        val seed = EngineProbes.ABSENT_ISSUER_SEED.toByteArray()
 
         fun plus(k: Int) = seed.copyOf().also { it[31] = (it[31] + k).toByte() }.toByteString()
         val p =
@@ -188,8 +203,8 @@ class SelfCheckTest {
         )
         assertEquals(
             listOf(
-                LogLevel.INFO to "engine self-check: every candidate issuer is enrolled, absent probes skipped",
-                LogLevel.INFO to "engine self-check: no block yields a REVOKED probe, skipped",
+                LogLevel.INFO to "engine probes: every candidate issuer is enrolled, absent probes skipped",
+                LogLevel.INFO to "engine probes: no block yields a REVOKED probe, skipped",
             ),
             logger.messages,
         )
@@ -197,7 +212,7 @@ class SelfCheckTest {
 
     @Test
     fun `the candidates are 0x01 to 0x1000 as minimal DER INTEGER content, ascending`() {
-        val c = SelfCheck.CANDIDATES
+        val c = EngineProbes.CANDIDATES
         assertEquals(4096, c.size)
         assertEquals(bytes(1), c[0])
         assertEquals(bytes(0x7F), c[0x7E])
@@ -276,13 +291,13 @@ class SelfCheckTest {
         val kinds = probes(UpdateFixtures.v4(window, listOf(Block(issuer(1))))).map { it.kind }
         assertEquals(listOf(ProbeKind.ABSENT_INSIDE, ProbeKind.ABSENT_OUTSIDE), kinds)
         assertEquals(
-            listOf(LogLevel.INFO to "engine self-check: no block yields a REVOKED probe, skipped"),
+            listOf(LogLevel.INFO to "engine probes: no block yields a REVOKED probe, skipped"),
             logger.messages,
         )
         logger.messages.clear()
         assertEquals(emptyList(), probes(UpdateFixtures.v4(emptyList(), listOf(Block(issuer(1), inverted = true)))))
         assertEquals(
-            listOf(LogLevel.INFO to "engine self-check: no coverage entry, every probe skipped"),
+            listOf(LogLevel.INFO to "engine probes: no coverage entry, every probe skipped"),
             logger.messages,
         )
     }
@@ -291,9 +306,9 @@ class SelfCheckTest {
     fun `the first mismatch stops the check`() {
         val asked = mutableListOf<ProbeKind>()
         val files = generation(UpdateFixtures.v4(window, listOf(Block(issuer(2), inverted = true))))
-        val probes = assertIs<SelfCheckResult.Passed>(run(files)).probes
+        val probes = assertIs<ProbeResult.Passed>(run(files)).probes
         val m =
-            assertIs<SelfCheckResult.Mismatch>(
+            assertIs<ProbeResult.Mismatch>(
                 run(files) { q ->
                     asked += probes.first { it.query == q }.kind
                     CrliteQueryResult.NOT_REVOKED

@@ -37,6 +37,7 @@ import dev.revokt.engine.walker.verifiedAnchorSnapshotId
  *   leaf (the maintainer's decision on #195).
  * - **The time** is the request's `nowMillis`, else one read of [clock]; the host is host' (§5.1 flow step 2).
  */
+@OptIn(RevoktInternalApi::class)
 internal class RevoktEvaluator(
     private val lifecycle: () -> RevoktLifecycle,
     private val anchors: () -> IndexedSnapshot?,

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(dev.revokt.RevoktInternalApi::class)
+
 package dev.revokt.engine.seed
 
 import dev.revokt.Dataset
@@ -472,12 +474,12 @@ internal class SeedLoaderTest : SeedFixture() {
     }
 
     @Test
-    fun `a failed prepare or self-check is unreadable, counted, and leaves nothing installed`() {
+    fun `a failed prepare or activate is unreadable, counted, and leaves nothing installed`() {
         val throwing = TestEngine().apply { onPrepare = { error("corrupt") } }
         val prepare = assertUnreadable(load(Seed(), engine = throwing), "the install failed")
         assertEquals(1, prepare.storeFailures)
-        val constant = TestEngine().apply { preparedAnswer = { dev.revokt.CrliteQueryResult.NOT_REVOKED } }
-        assertUnreadable(load(Seed(), engine = constant), "ENGINE_SELF_CHECK_FAILED")
+        val activate = TestEngine().apply { onActivate = { error("activate") } }
+        assertEquals(1, assertUnreadable(load(Seed(), engine = activate), "ACTIVATE").storeFailures)
     }
 
     @Test

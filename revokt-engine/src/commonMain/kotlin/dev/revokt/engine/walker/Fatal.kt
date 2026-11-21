@@ -18,7 +18,7 @@ internal expect fun restoreInterrupt(t: Throwable)
 
 /**
  * §5.5's catch rule at a catch of consumer code (a verifier, canonicaliser, fallback, exemption, logger, a
- * throwable's `toString`, an engine's self-check `query` or `coverageEndMillis`) and at the boundary: rethrows [t]
+ * throwable's `toString`, an engine's `coverageEndMillis`) and at the boundary: rethrows [t]
  * when it [isFatal], and otherwise [restoreInterrupt]s, so the caller still sees the interrupt.
  */
 internal fun absorb(t: Throwable) {
