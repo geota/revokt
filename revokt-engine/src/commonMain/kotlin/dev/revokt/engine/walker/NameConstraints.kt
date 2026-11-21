@@ -14,10 +14,9 @@ import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.parse.Span
 
 /**
- * One name a certificate presents to a name constraint (#237), as webpki's `GeneralName` reads it
- * (`subject_name/mod.rs` 287–315): a dNSName, an iPAddress or a URI with its content; a directoryName (the subject,
- * and any in subjectAltName) without it, since no directoryName constraint is evaluated; any other form by its tag
- * number alone.
+ * One name a certificate presents to a name constraint, as mozilla::pkix reads it (`pkixnames.cpp` at Firefox
+ * `cac25a6`): a dNSName, an iPAddress, an rfc822Name or a directoryName with its content; a URI or any other form by
+ * its tag number alone, since no constraint of those forms is evaluated.
  */
 internal sealed interface PresentedName {
     class Dns(
@@ -28,9 +27,16 @@ internal sealed interface PresentedName {
         val address: ByteArray,
     ) : PresentedName
 
-    data object Uri : PresentedName
+    class Rfc822(
+        val address: ByteArray,
+    ) : PresentedName
 
-    data object Directory : PresentedName
+    /** A Name, as its complete `SEQUENCE` TLV. */
+    class Directory(
+        val name: ByteArray,
+    ) : PresentedName
+
+    data object Uri : PresentedName
 
     data class Unsupported(
         val tagNumber: Int,
@@ -38,33 +44,45 @@ internal sealed interface PresentedName {
 
     companion object {
         /**
-         * The names [p] presents: each subjectAltName entry, then its subject as a directoryName, as webpki's
-         * `check_name_constraints` iterates them (`subject_name/mod.rs` 54–82). Null when the subjectAltName cannot
-         * be read, which no name constraint admits.
+         * The names [p] presents, in pkix's order (`SearchNames`, 377–541): each subjectAltName entry; its subject as a
+         * directoryName, always; then [SubjectNames]: its emailAddress attributes when it has no subjectAltName
+         * extension, and its CN-ID when [commonName] (the leaf of a serverAuth request, `CheckNameConstraints` 331–336)
+         * and no subjectAltName entry is a dNSName or an iPAddress. Null when the subjectAltName cannot be read, or the
+         * subject cannot when it must be, which no name constraint admits.
          */
-        fun of(p: ParsedCertificate): List<PresentedName>? {
+        fun of(
+            p: ParsedCertificate,
+            commonName: Boolean,
+        ): List<PresentedName>? {
             val san =
                 when (val r = ExtensionValues.subjectAltName(p)) {
-                    is ExtensionRead.Absent -> emptyList()
+                    is ExtensionRead.Absent -> null
                     is ExtensionRead.Value -> r.value.names
                     is ExtensionRead.Failed -> return null
                 }
-            // ExtensionValues admits exactly webpki's forms (a test pins it); a form [general] does not map makes the
+            // ExtensionValues admits exactly these forms (a test pins it); a form [general] does not map makes the
             // names unreadable rather than dropping one, so a later change to either side fails closed.
-            return san.map { general(it.tag, it.content.toByteArray()) ?: return null } + Directory
+            val names = san.orEmpty().map { general(it.tag, it.content.toByteArray()) ?: return null }
+            val subject = p.rawSubject()
+            val emails = san == null
+            val cn = commonName && names.none { it is Dns || it is Ip }
+            if (!emails && !cn) return names + Directory(subject)
+            val more = SubjectNames.of(subject, emails, cn) ?: return null
+            return names + Directory(subject) + more
         }
 
-        /** webpki's `GeneralName::from_der` over identifier octet [tag]; null for a form it does not read. */
+        /** pkix's `ReadGeneralName` (76–117) over identifier octet [tag]; null for a form it does not read. */
         fun general(
             tag: Int,
             content: ByteArray,
         ): PresentedName? =
             when (tag) {
                 DNS_NAME -> Dns(content)
-                DIRECTORY_NAME -> Directory
+                DIRECTORY_NAME -> Directory(content)
                 IP_ADDRESS -> Ip(content)
+                RFC822_NAME -> Rfc822(content)
                 URI -> Uri
-                OTHER_NAME, RFC822_NAME, X400_ADDRESS, EDI_PARTY_NAME, REGISTERED_ID -> Unsupported(tag and TAG_NUMBER)
+                OTHER_NAME, X400_ADDRESS, EDI_PARTY_NAME, REGISTERED_ID -> Unsupported(tag and TAG_NUMBER)
                 else -> null
             }
 
@@ -81,6 +99,9 @@ internal sealed interface PresentedName {
     }
 }
 
+/** One comparison's answer: [ERROR] is a malformed name or constraint, [EXHAUSTED] a spent [ComparisonBudget]. */
+internal enum class NameMatch { YES, NO, ERROR, EXHAUSTED }
+
 /** A name-constraint comparison budget, webpki's `consume_name_constraint_comparison`. */
 internal fun interface ComparisonBudget {
     /** False when the budget is spent; the comparison is then not made. */
@@ -88,20 +109,22 @@ internal fun interface ComparisonBudget {
 }
 
 /**
- * A `NameConstraints` extension as webpki applies it (`subject_name/mod.rs` 32–200, rustls-webpki 0.104.0-alpha.7):
- * for each presented name, every permitted and then every excluded subtree is compared, a subtree of another form
- * skipped. A permitted list binds a form only when it holds a subtree of that form (one must match); an excluded
- * subtree that matches is a violation. By form:
+ * A `NameConstraints` extension as mozilla::pkix applies it (`CheckPresentedIDConformsToNameConstraintsSubtrees`,
+ * `pkixnames.cpp` 836–977 at Firefox `cac25a6`; webpki's `subject_name/mod.rs` 32–200 has the same shape): for each
+ * presented name, every permitted and then every excluded subtree is compared, a subtree of another form skipped. A
+ * permitted list binds a form only when it holds a subtree of that form (one must match); an excluded subtree that
+ * matches is a violation. By form:
  *
- * - **dNSName:** [DnsNameConstraint], webpki's `presented_id_matches_reference_id` in the name-constraint role.
- * - **iPAddress:** address and mask, IPv4 against IPv4 only, IPv6 against IPv6 only (`ip_address.rs` 110–180).
- * - **directoryName and URI:** not evaluated, so they fail closed: a permitted one never matches and an excluded one
- *   always does. Every certificate presents its subject, so any directoryName subtree rejects (webpki leaves
- *   them unimplemented, rustls/webpki#19).
- * - **Any other form** present in both the name and a subtree: a violation.
- * - A comparison error (a malformed dNSName or constraint, a bad mask) is a violation, as webpki returns it.
+ * - **dNSName:** [DnsNameConstraint] in the name-constraint role, the CVE-2025-61727 wildcard rule included.
+ * - **iPAddress:** address and mask, IPv4 against IPv4 only, IPv6 against IPv6 only.
+ * - **directoryName:** a permitted subtree is [DirectoryNameConstraint]'s RDN prefix; an excluded one refuses every
+ *   name (1427–1431), and since every certificate presents its subject, every certificate below it.
+ * - **rfc822Name:** [Rfc822NameConstraint].
+ * - **URI and any other form** present in both the name and a subtree: a violation (937–943).
+ * - A comparison error (a malformed name or constraint, a bad mask) is a violation.
  *
- * Every comparison consumes one unit of the [ComparisonBudget]; when it is spent the answer is [Result.EXHAUSTED].
+ * Every (name, subtree) comparison consumes one unit of the [ComparisonBudget], and a directoryName comparison one more
+ * per AVA pair it compares; when it is spent the answer is [Result.EXHAUSTED].
  */
 internal class NameConstraints private constructor(
     private val permitted: List<Base>?,
@@ -149,18 +172,22 @@ internal class NameConstraints private constructor(
         var mismatched = false
         for (base in subtrees) {
             if (!budget.consume()) return Result.EXHAUSTED
-            when (matches(name, base, Role.PERMITTED)) {
+            when (matches(name, base, Role.PERMITTED, budget)) {
                 null -> {}
 
-                Match.ERROR -> {
+                NameMatch.ERROR -> {
                     return Result.VIOLATION
                 }
 
-                Match.YES -> {
+                NameMatch.EXHAUSTED -> {
+                    return Result.EXHAUSTED
+                }
+
+                NameMatch.YES -> {
                     matched = true
                 }
 
-                Match.NO -> {
+                NameMatch.NO -> {
                     mismatched = true
                 }
             }
@@ -176,56 +203,84 @@ internal class NameConstraints private constructor(
     ): Result {
         for (base in subtrees) {
             if (!budget.consume()) return Result.EXHAUSTED
-            val m = matches(name, base, Role.EXCLUDED)
-            if (m == Match.ERROR || m == Match.YES) return Result.VIOLATION
+            when (matches(name, base, Role.EXCLUDED, budget)) {
+                NameMatch.EXHAUSTED -> {
+                    return Result.EXHAUSTED
+                }
+
+                NameMatch.ERROR, NameMatch.YES -> {
+                    return Result.VIOLATION
+                }
+
+                NameMatch.NO, null -> {}
+            }
         }
         return Result.CONFORMS
     }
 
     private enum class Role { PERMITTED, EXCLUDED }
 
-    private enum class Match { YES, NO, ERROR }
-
-    /** A comparison's answer, null being webpki's error. */
-    private fun match(b: Boolean?): Match =
+    /** A comparison's answer, null being an error. */
+    private fun match(b: Boolean?): NameMatch =
         when (b) {
-            true -> Match.YES
-            false -> Match.NO
-            null -> Match.ERROR
+            true -> NameMatch.YES
+            false -> NameMatch.NO
+            null -> NameMatch.ERROR
         }
 
-    /** null when [base] is of another form than [name], which webpki skips (`continue`). */
+    /** null when [base] is of another form than [name], which is skipped. */
     private fun matches(
         name: PresentedName,
         base: Base,
         role: Role,
-    ): Match? {
-        val baseName = PresentedName.general(base.tag, base.content) ?: return Match.ERROR
-        val notEvaluated = if (role == Role.PERMITTED) Match.NO else Match.YES
+        budget: ComparisonBudget,
+    ): NameMatch? {
+        val baseName = PresentedName.general(base.tag, base.content) ?: return NameMatch.ERROR
+        val excluded = role == Role.EXCLUDED
         return when (name) {
             is PresentedName.Dns -> {
-                (baseName as? PresentedName.Dns)?.let {
-                    match(DnsNameConstraint.matches(name.id, it.id, excluded = role == Role.EXCLUDED))
-                }
+                (baseName as? PresentedName.Dns)?.let { match(DnsNameConstraint.matches(name.id, it.id, excluded)) }
             }
 
             is PresentedName.Ip -> {
                 (baseName as? PresentedName.Ip)?.let { match(ipMatches(name.address, it.address)) }
             }
 
-            PresentedName.Directory -> {
-                if (baseName == PresentedName.Directory) notEvaluated else null
+            is PresentedName.Rfc822, is PresentedName.Directory -> {
+                mailboxOrName(name, baseName, excluded, budget)
             }
 
             PresentedName.Uri -> {
-                if (baseName == PresentedName.Uri) notEvaluated else null
+                if (baseName == PresentedName.Uri) NameMatch.ERROR else null
             }
 
             is PresentedName.Unsupported -> {
-                if (baseName == name) Match.ERROR else null
+                if (baseName == name) NameMatch.ERROR else null
             }
         }
     }
+
+    /** The rfc822Name and directoryName forms of [matches]. */
+    private fun mailboxOrName(
+        name: PresentedName,
+        baseName: PresentedName,
+        excluded: Boolean,
+        budget: ComparisonBudget,
+    ): NameMatch? =
+        when {
+            name is PresentedName.Rfc822 && baseName is PresentedName.Rfc822 -> {
+                match(Rfc822NameConstraint.matches(name.address, baseName.address, excluded))
+            }
+
+            // pkix refuses every name under an excluded directoryName (1427–1431).
+            name is PresentedName.Directory && baseName is PresentedName.Directory -> {
+                if (excluded) NameMatch.YES else DirectoryNameConstraint.permits(name.name, baseName.name, budget)
+            }
+
+            else -> {
+                null
+            }
+        }
 
     internal companion object {
         private const val SEQUENCE = 0x30
@@ -372,14 +427,21 @@ internal object DnsNameConstraint {
      * Whether [presented] is within the subtree [constraint]; null when either is malformed (webpki's
      * `MalformedDnsIdentifier` and `MalformedNameConstraint`). In an [excluded] subtree a wildcard label is expanded,
      * so a wildcard that could reach into it matches (CVE-2025-61727); in a permitted one it never does.
+     *
+     * pkix's `MatchPresentedDNSIDWithReferenceDNSID` (`pkixnames.cpp` 1099–1267) is the same matcher with two switches,
+     * which a dNSName sets as here and an rfc822Name's domain clears (1620–1624): [presentedWildcards], whether the
+     * presented ID may hold a wildcard label, and [dotless], whether a constraint without a leading dot also covers the
+     * subdomains of its name (`AllowDotlessSubdomainMatches`).
      */
     @Suppress("CyclomaticComplexMethod", "ReturnCount") // a line-for-line port of webpki's branching
     fun matches(
         presented: ByteArray,
         constraint: ByteArray,
         excluded: Boolean,
+        presentedWildcards: Boolean = true,
+        dotless: Boolean = true,
     ): Boolean? {
-        if (!valid(presented, constraintRole = false, wildcards = true)) return null
+        if (!valid(presented, constraintRole = false, wildcards = presentedWildcards)) return null
         if (!valid(constraint, constraintRole = true, wildcards = false)) return null
         var p = 0
         var r = 0
@@ -387,7 +449,7 @@ internal object DnsNameConstraint {
             if (constraint.isEmpty()) return true
             if (constraint[0] == DOT) {
                 p = presented.size - constraint.size
-            } else {
+            } else if (dotless) {
                 p = presented.size - constraint.size - 1
                 if (presented[p++] != DOT) return false
             }
@@ -412,7 +474,8 @@ internal object DnsNameConstraint {
         return r == constraint.size
     }
 
-    private fun lower(b: Byte): Int =
+    /** [b] with ASCII upper case folded to lower case, pkix's `LocaleInsensitveToLower`. */
+    fun lower(b: Byte): Int =
         (b.toInt() and 0xff).let {
             if (it in
                 'A'.code..'Z'.code

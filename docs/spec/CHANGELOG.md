@@ -88,6 +88,18 @@ The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here
     the fatal error after `activate` that leaves the snapshot empty;
     Appendix A cites Firefox, upki, Kinto and Mozilla's signer for each rule. The test plan's content-signature row
     and data-path (a) and (b) follow.
+- **#261, name constraints as mozilla::pkix evaluates them** (`pkixnames.cpp` at Firefox `cac25a6`):
+  - §5.1 "Why this is sound" states the rule in full: the names a certificate presents (each subjectAltName entry,
+    the subject always, the subject's emailAddress attributes when there is no subjectAltName, and a serverAuth
+    leaf's CN-ID when its subjectAltName has no dNSName or iPAddress) and the match for each form. A permitted
+    directoryName is an RDN prefix compared AVA by AVA, and every excluded one refuses. An rfc822Name subtree is a
+    mailbox or a host. URI and the other forms still fail closed. A directoryName comparison costs one more unit of
+    the 250,000 bound per AVA pair.
+  - §10 residual 15: name constraints follow Firefox. It lists where revokt is still stricter (the bound, webpki's
+    mask check, a subjectAltName the reader refuses), and the verdict paragraph drops the directoryName and rfc822Name
+    cases.
+  - Test plan: (as) gains the directoryName, rfc822Name, emailAddress and CN-ID cases, and the scope of
+    `NameConstraintsFuzzTest` widens. References: the `pkixnames.cpp` lines. Divergence W14 is aligned.
 
 ### Changes in revision 60 (the trust-class cut of #218, #246, and the seed loader of #138)
 

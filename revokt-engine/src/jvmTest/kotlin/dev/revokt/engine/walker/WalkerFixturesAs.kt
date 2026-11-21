@@ -12,9 +12,9 @@ import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
 
 /**
  * Row (as), proposed in #237: an issuer's nameConstraints, an anchor's included, bind every certificate below it, as
- * webpki applies them ([NameConstraints]). A violation is a dead end before the link is verified; spending the
- * comparison budget ends the walk `Budget(EXPLORATION_BUDGET)`. The leaf presents the dNSName `leaf.example` unless a
- * case says otherwise.
+ * mozilla::pkix applies them ([NameConstraints]; the directoryName, rfc822Name and CN-ID cases are in
+ * [WalkerFixturesAsPkix]). A violation is a dead end before the link is verified; spending the comparison budget ends
+ * the walk `Budget(EXPLORATION_BUDGET)`. The leaf presents the dNSName `leaf.example` unless a case says otherwise.
  */
 internal object WalkerFixturesAs {
     fun san(vararg names: ByteArray): ByteArray = TestDer.extension("2.5.29.17", TestDer.seq(*names))
@@ -46,7 +46,16 @@ internal object WalkerFixturesAs {
 
     fun `as`(): List<WalkerFixture> =
         onTheIssuer() +
-            listOf(subCa(), anchor(), wildcardInside(), wildcardOutside(), exhausted(), unreadableSan(), sharedBudget())
+            listOf(
+                subCa(),
+                anchor(),
+                wildcardInside(),
+                wildcardOutside(),
+                exhausted(),
+                unreadableSan(),
+                sharedBudget(),
+            ) +
+            WalkerFixturesAsPkix.all()
 
     /** leaf → I → R with nameConstraints on I. */
     private fun onTheIssuer(): List<WalkerFixture> =
@@ -55,11 +64,6 @@ internal object WalkerFixturesAs {
             Triple("permitted .example", nameConstraints(permitted = listOf(dns(".example"))), true),
             Triple("excluded leaf.example", nameConstraints(excluded = listOf(dns("leaf.example"))), false),
             Triple("permitted other.example", nameConstraints(permitted = listOf(dns("other.example"))), false),
-            Triple(
-                "a directoryName subtree",
-                nameConstraints(permitted = listOf(TestDer.tlv(0xa4, TestDer.seq()))),
-                false,
-            ),
             Triple("unreadable: no subtrees", TestDer.extension("2.5.29.30", TestDer.seq()), false),
         ).map { (variant, nc, passes) ->
             val h = Honest(leafExtensions = listOf(san(dns("leaf.example"))), intermediateExtensions = listOf(nc))

@@ -927,29 +927,56 @@ only when the walk completed without exhaustion; a `Budget` may carry partial pa
 within that `pathLenConstraint`, counting every CA between it and the leaf, self-issued ones included; it sets
 `keyCertSign` when it has keyUsage; and it lists the request's purpose (`serverAuth`, or `clientAuth` for a client
 certificate) when it has extKeyUsage, `anyExtendedKeyUsage` not counting. Every nameConstraints on the path, an
-anchor's included, must admit each certificate below it, under webpki's rule (fixture (as)): dNSName and iPAddress
-subtrees are evaluated on each subjectAltName name; directoryName and URI subtrees fail closed, and the subject is
-always presented as a directoryName; any other form shared by a name and a subtree is a violation. A value that does
-not read, or a duplicated extension, fails closed. Each rule is a dead end before the link is verified, as pkix checks
-an issuer before `VerifySignedData`; an anchor by bytes is exempt from all but its nameConstraints, as webpki's
-`TrustAnchor` has no other extension. The name-constraint comparisons of one walk are bounded at webpki's 250,000;
-spending them ends the walk `Budget(EXPLORATION_BUDGET)` (fixture (as), "the comparison budget shared by two
-candidates"). Anyone can obtain an end-entity certificate under a real anchor, and its key can sign a certificate for
-any other key, a recovered one included; the issuer rules remove that route, and with it the limited sub-CAs that
-organisations hold under public roots (a `pathLen 0` one, one name-constrained to its own domains, an EKU-limited
-one; fixtures (ar) and (as)). An `UNSUPPORTED` link is never trusted. Nothing is excluded for a shared property, so a
-same-key decoy or a cross-certificate to a non-anchor listed first cannot hide the real certificate,
-which is related and is explored. The honest issuer's key is the only key that verifies a
-real leaf's signature, other than a recovered key. A recovered key terminates only through CA certificates whose
-constraints admit the real leaf, so a `Found` carrying only benign keys needs the cooperation of an unconstrained CA
-key holder under a real anchor (§10 residual "constrained sub-CA"). Stuffing related junk past the cap, or verifying junk past the
-guards, yields `Budget`, which rejects; an exhaustion in any subtree also yields `Budget`, so a
-stuffed subtree cannot starve the honest key out of a `Found`. Every terminating
-leaf-issuer key is evaluated and `REVOKED` wins. The PKIX fallback covers one residue the walker
-does not: a `NotFound` on a chain of at most `FALLBACK_MAX_PRESENTED` certificates whose honest link
-the walker could not reproduce (a custom delegate's constraints or verifier divergence; canonicalisation alone never yields `NotFound`, §10 residual 1). Beyond the
-guards the walk is `Budget`, which rejects whatever the fallback does, and a `NotFound` too long for
-the fallback is `PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback while `NO_ISSUER` allows.
+anchor's included, must admit each certificate below it, under mozilla::pkix's rule (`pkixnames.cpp` at Firefox
+`cac25a6`, Appendix A; fixture (as)), stated in full here:
+
+- **The names a certificate presents:** each subjectAltName entry; its subject as a directoryName, always; when it has
+  no subjectAltName extension at all, each subject `emailAddress` attribute as an rfc822Name, one that is not an
+  IA5String failing; and, for the leaf of a `serverAuth` request whose subjectAltName holds no dNSName or iPAddress,
+  its CN-ID. The CN-ID is the subject's last commonName: a dNSName when its value is a PrintableString, UTF8String or
+  TeletexString that is a valid presented DNS name (a wildcard allowed), else an iPAddress when it is a dotted IPv4
+  address (four decimal components of 0 to 255 without leading zeros); a last commonName of another string type, or
+  that is neither, presents nothing. A subject read for these attributes must be a well-formed `Name` with no empty
+  RDN.
+- **The subtrees:** a permitted list binds a name only when it holds a subtree of the name's form, and one of those
+  must then match; an excluded subtree that matches is a violation. By form:
+  - **dNSName:** on label boundaries, ignoring ASCII case; `""` matches every name and a leading dot only subdomains;
+    a wildcard name is inside a permitted subtree only when every expansion is, and inside an excluded one when any
+    expansion could be.
+  - **iPAddress:** address and mask of the same family; a mask that is not ones then zeros fails.
+  - **directoryName:** a permitted subtree's RDNs must be a prefix of the name's, so the empty Name admits every name
+    and a non-empty Name never admits an empty subject. RDNs at the same position hold as many AVAs, compared in
+    encoded order, not as sets; two AVAs match when their type OIDs and value bytes are equal and their value tags
+    are equal, a UTF8String and a PrintableString counting as one, with no case or whitespace folding. Any excluded
+    directoryName subtree, the empty Name included, refuses every certificate below it.
+  - **rfc822Name:** a presented mailbox must be valid: dot-separated atoms of RFC 2822 `atext`, no quoted string,
+    `@`, and a valid DNS name without a wildcard. A subtree with an `@` is one mailbox, valid too, and matches the
+    same mailbox ignoring ASCII case. One without is a host: `example.com` matches the mailboxes at that host only,
+    not its subdomains, `.example.com` those at its subdomains only, and `""` every mailbox.
+  - **URI and any other form** that a name and a subtree share: a violation.
+- **Failing closed:** a value that does not read, a duplicated extension, a malformed name or subtree met in a
+  comparison, and a subject that must be read and does not, all fail.
+
+Each rule is a dead end before the link is verified, as pkix checks an issuer before `VerifySignedData`; an anchor by
+bytes is exempt from all but its nameConstraints, as webpki's `TrustAnchor` has no other extension. The
+name-constraint comparisons of one walk are bounded at webpki's 250,000: one per name and subtree compared, and one
+more per AVA pair a directoryName comparison compares. Spending them ends the walk `Budget(EXPLORATION_BUDGET)`
+(fixture (as), "the comparison budget shared by two candidates"). Anyone can obtain an end-entity certificate under a
+real anchor, and its key can sign a certificate for any other key, a recovered one included; the issuer rules remove
+that route, and with it the limited sub-CAs that organisations hold under public roots (a `pathLen 0` one, one
+name-constrained to its own domains, an EKU-limited one; fixtures (ar) and (as)). An `UNSUPPORTED` link is never
+trusted. Nothing is excluded for a shared property, so a same-key decoy or a cross-certificate to a non-anchor listed
+first cannot hide the real certificate, which is related and is explored. The honest issuer's key is the only key that
+verifies a real leaf's signature, other than a recovered key. A recovered key terminates only through CA certificates
+whose constraints admit the real leaf, so a `Found` carrying only benign keys needs the cooperation of an unconstrained
+CA key holder under a real anchor (§10 residual "constrained sub-CA"). Stuffing related junk past the cap, or verifying
+junk past the guards, yields `Budget`, which rejects; an exhaustion in any subtree also yields `Budget`, so a stuffed
+subtree cannot starve the honest key out of a `Found`. Every terminating leaf-issuer key is evaluated and `REVOKED`
+wins. The PKIX fallback covers one residue the walker does not: a `NotFound` on a chain of at most
+`FALLBACK_MAX_PRESENTED` certificates whose honest link the walker could not reproduce (a custom delegate's constraints
+or verifier divergence; canonicalisation alone never yields `NotFound`, §10 residual 1). Beyond the guards the walk is
+`Budget`, which rejects whatever the fallback does, and a `NotFound` too long for the fallback is
+`PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback while `NO_ISSUER` allows.
 
 The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walker-pseudocode.md](../design/walker-pseudocode.md). The code and the §9.1 properties are normative.
 
@@ -1674,21 +1701,27 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      certify a recovered key, and the walker then reports only that benign key as long as the honest intermediate is
      not presented (fixture (ar), "no limit, an unconstrained CA"). A limited sub-CA cannot: `pathLenConstraint`,
      keyUsage `keyCertSign`, extKeyUsage and name constraints are enforced on every issuer (fixtures (ar), (as)).
-     The rules are webpki's, which differ from Firefox's in two places:
-      - **Stricter:** a directoryName or an rfc822Name subtree fails closed, where Firefox evaluates it.
-      - **Looser:** dNSName constraints are not applied to the CN of a leaf without a subjectAltName dNSName, as Firefox
-        applies them. Such a leaf has been outside the CA/B profile since 2012.
+     Name constraints follow Firefox's mozilla::pkix (§5.1 "Why this is sound", pinned to `pkixnames.cpp` at
+     `cac25a6`): directoryName and rfc822Name subtrees are evaluated, the subject's emailAddress attributes stand in
+     for a missing subjectAltName, and a serverAuth leaf's CN-ID is checked when its subjectAltName has no dNSName or
+     iPAddress. Where revokt is stricter than Firefox:
+      - the 250,000-comparison bound, which pkix does not have;
+      - an iPAddress subtree whose mask is not ones then zeros fails, as in webpki, where pkix applies the mask as
+        written;
+      - a subjectAltName that revokt's reader refuses (an empty one, or a dNSName that is not ASCII) fails under any
+        nameConstraints, where pkix reads it and checks each entry against the subtrees of its form only.
 
      Neither RFC 5280 self-issued exemption applies (from `pathLenConstraint`, and from the name constraints on a
      self-issued intermediate); neither reference applies them either.
      **What a refusal means for the verdict.** A `NotFound` caused by these rules is `NO_ISSUER`, which `DEFAULT`
-     allows unchecked and `STRICT` rejects (§8). So a revoked leaf under a directoryName- or rfc822-constrained issuer,
-     under a self-issued key-rollover CA that relies on the RFC 5280 exemption, or under an EKU-limited issuer, is
-     accepted under `DEFAULT` without a revocation check; the same holds for a fallback path that spends the
-     comparison bound. What was checked: the walker test chains of github.com, letsencrypt.org, www.google.com and
-     www.mozilla.org stay `Found` under the JDK verifier (`HonestCorpusWalkTest`); no root in the JDK 21 `cacerts`
-     (118) or macOS `SystemRootCertificates` (158) carries nameConstraints; live Web PKI sub-CAs were not surveyed for
-     directoryName or rfc822Name subtrees. On the bindings the platform validates the chain first (step 1).
+     allows unchecked and `STRICT` rejects (§8). So a revoked leaf under a self-issued key-rollover CA that relies on
+     the RFC 5280 exemption, under an EKU-limited issuer, or under an issuer whose nameConstraints refuse it (an
+     excluded directoryName subtree refuses every certificate), is accepted under `DEFAULT` without a revocation
+     check; the same holds for a fallback path that spends the comparison bound. What was checked: the walker test
+     chains of github.com, letsencrypt.org, www.google.com and www.mozilla.org stay `Found` under the JDK verifier
+     (`HonestCorpusWalkTest`); no root in the JDK 21 `cacerts` (118) or macOS `SystemRootCertificates` (158) carries
+     nameConstraints; live Web PKI sub-CAs were not surveyed for directoryName or rfc822Name subtrees. On the bindings
+     the platform validates the chain first (step 1).
 - Feed authenticity: every generation is verified against Mozilla's content-signature roots, from the feed or from a
   seed (§7.1); there is no unsigned source. The M2 denylist is project-attested and availability-only.
 - Rollback and freeze: a persisted non-decreasing watermark with no tolerance, floored at the live generation's
