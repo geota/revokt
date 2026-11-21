@@ -150,6 +150,8 @@ jobs:
           path: build/corpus
           persist-credentials: false
       - name: diag (temporary, #275)
+        env:
+          DIAG_OFFLINE: "1"
         run: >
           .github/scripts/diag-275.sh check
           -Prevokt.corpus=build/corpus
