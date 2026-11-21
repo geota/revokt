@@ -21,7 +21,10 @@ import kotlin.concurrent.Volatile
  *
  * The internal constructor is the tests' seam (a drain limit, and a hook run before evaluation). It is public in
  * bytecode, so Java can reach it; the hook runs inside evaluation's catch, so even then [query] never throws.
+ *
+ * Internal to revokt with the seam it implements: `Revokt` defaults to it.
  */
+@RevoktInternalApi
 public class KotlinRevocationEngine internal constructor(
     private val drainMillis: Long,
     private val beforeEvaluate: (() -> Unit)?,

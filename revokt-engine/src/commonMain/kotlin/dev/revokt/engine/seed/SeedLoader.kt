@@ -192,6 +192,7 @@ internal class SeedPolicy(
  * archive", issue #138). Blocking: the loader runs it on its dispatcher, or the `start()` caller in the sole-seed
  * `ENFORCE` path (§4 S bullet), never two at once. Every throwable is caught, an `OutOfMemoryError` included.
  */
+@OptIn(dev.revokt.RevoktInternalApi::class)
 internal class SeedLoader(
     private val source: SeedSource,
     private val store: StoreLayout,
@@ -248,9 +249,9 @@ internal class SeedLoader(
      *    at `<ts>` when no generation loaded (§7.1);
      *    then the prune, as after a sync's install, never in a rule (b) load nor past a newer complete directory.
      *
-     * Any seed fault is [SeedLoad.Unreadable]; a failed `prepare`, self-check or `activate` is too (§6.5: "the
-     * corresponding load failure, `SEED_UNREADABLE` for the seed"). Any directory this load staged is deleted on a
-     * failure before the install.
+     * Any seed fault is [SeedLoad.Unreadable]; a failed `prepare` or `activate` is too (§6.5: "the corresponding load
+     * failure, `SEED_UNREADABLE` for the seed"). Any directory this load staged is deleted on a failure before the
+     * install.
      */
     fun load(nowMillis: Long): SeedLoad = Attempt(nowMillis).run()
 

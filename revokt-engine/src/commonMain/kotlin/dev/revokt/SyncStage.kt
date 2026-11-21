@@ -21,7 +21,6 @@ public enum class SyncStage {
     SCHEMA,
     INDEX,
     PREPARE,
-    SELF_CHECK,
     ACTIVATE,
     STORE,
 }
