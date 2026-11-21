@@ -63,6 +63,9 @@ internal object DirectoryNameConstraint {
         presented: DerReader,
         budget: ComparisonBudget,
     ): NameMatch {
+        // A pair of empty RDNs (`SET {}` on both sides, which pkix accepts here) moves this loop forward without
+        // spending a unit. The work stays bounded: every step reads at least two octets of each Name, so one
+        // (name, subtree) comparison is linear in the shorter Name.
         while (true) {
             if (!constraint.hasMore()) return NameMatch.YES
             if (!presented.hasMore()) return NameMatch.NO

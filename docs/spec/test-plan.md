@@ -293,13 +293,13 @@ tests; **live checks** are informational.
   iPAddress: `leaf.example` under permitted `other.example`, with no subjectAltName or a mailbox-only one →
   `ALL_CANDIDATES_INVALID`, under `leaf.example` → `Found`; an IPv4 CN by its address; of two CNs the last counts; a
   BMPString CN or one that is no host name → `Found`; a clientAuth request and an intermediate present no CN-ID
-  (`PkixNamesTest`), and a fallback path is checked with the same forms; a sub-CA name-constrained to `attacker.example` certifying a recovered key → `UNANCHORED`;
-  an anchor's nameConstraints refusing the leaf → `UNANCHORED`; a wildcard `*.leaf.example` → `Found` under permitted
-  `leaf.example`, refused under `a.leaf.example`; a leaf subjectAltName that does not read →
-  `ALL_CANDIDATES_INVALID`; 500 names against 501 subtrees → `Budget(EXPLORATION_BUDGET)`; 300 names against two
-  candidates of 501 subtrees each, neither past 250,000 alone → `Budget(EXPLORATION_BUDGET)`.
-  Fixtures run with the cross-call memo cleared; (aa) presents the root's exact bytes;
-  (z) has a related candidate that verifies but is unanchored; stuffing fixtures present their junk.
+  (`PkixNamesTest`), and a fallback path is checked with the same forms; a sub-CA name-constrained to `attacker.example`
+  certifying a recovered key → `UNANCHORED`; an anchor's nameConstraints refusing the leaf → `UNANCHORED`; a wildcard
+  `*.leaf.example` → `Found` under permitted `leaf.example`, refused under `a.leaf.example`; a leaf subjectAltName that
+  does not read → `ALL_CANDIDATES_INVALID`; 500 names against 501 subtrees → `Budget(EXPLORATION_BUDGET)`; 300 names
+  against two candidates of 501 subtrees each, neither past 250,000 alone → `Budget(EXPLORATION_BUDGET)`. Fixtures run
+  with the cross-call memo cleared; (aa) presents the root's exact bytes; (z) has a related candidate that verifies but
+  is unanchored; stuffing fixtures present their junk.
 - **Trust-manager invariants**: never accept what the platform rejected (the 3-arg overload's null-host retry only after a socket or engine overload accepted the chain and host); under `DEFAULT` never
   reject on a step-2 failure alone except `PATH_BUDGET_EXCEEDED`; at most one event per (connection, verdict-cache TTL window) on Android
   OkHttp (the chain cleaner runs lazily, §5.1 flow step 1); at most two platform validations per 3-arg call, the second only the null-host retry; a direct 3-arg call for a chain and host no socket or engine overload accepted gets no retry; a plain delegate on the JVM throws `IllegalArgumentException` at wiring; an empty or throwing anchor set throws `IllegalStateException`

@@ -369,11 +369,11 @@ private class Decider(
      * The walker's issuer rules over a fallback path [ders], leaf → anchor: each certificate between them may issue
      * with the CAs under it ([IssuerProfile.mayIssue]: `cA`, `pathLenConstraint`, `keyCertSign`, and
      * [DecideContext.requiredEku] in extKeyUsage), and the nameConstraints of each certificate above the leaf, the
-     * anchor's included, admit every certificate below it, the leaf's CN-ID included in a serverAuth request. The last certificate is exempt from the issuer rules only
-     * because it is an anchor of the index by exact bytes: a path that ends elsewhere (a builder returning
-     * `CertPath.getCertificates()`, which leaves the anchor out) fails. Null when any of this does not hold, a
-     * certificate does not parse, or the name-constraint comparisons pass [NameConstraints.MAX_COMPARISONS], which
-     * fails closed here as a failed build; else the parsed path.
+     * anchor's included, admit every certificate below it, the leaf's CN-ID included in a serverAuth request. The last
+     * certificate is exempt from the issuer rules only because it is an anchor of the index by exact bytes: a path that
+     * ends elsewhere (a builder returning `CertPath.getCertificates()`, which leaves the anchor out) fails. Null when
+     * any of this does not hold, a certificate does not parse, or the name-constraint comparisons pass
+     * [NameConstraints.MAX_COMPARISONS], which fails closed here as a failed build; else the parsed path.
      */
     private fun issuersMayIssue(ders: List<ByteArray>): List<ParsedCertificate>? {
         val parsed = ders.map { (CertificateParser.parse(it) as? CertificateParse.Parsed)?.certificate ?: return null }

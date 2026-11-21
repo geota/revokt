@@ -965,22 +965,22 @@ Each rule is a dead end before the link is verified, as pkix checks an issuer be
 bytes is exempt from all but its nameConstraints, as webpki's `TrustAnchor` has no other extension. The
 name-constraint comparisons of one walk are bounded at webpki's 250,000: one per name and subtree compared, and one
 more per AVA pair a directoryName comparison compares. Spending them ends the walk `Budget(EXPLORATION_BUDGET)`
-(fixture (as), "the comparison budget shared by two candidates"). Anyone can obtain an end-entity certificate under a real anchor, and its key can sign a certificate for
-any other key, a recovered one included; the issuer rules remove that route, and with it the limited sub-CAs that
-organisations hold under public roots (a `pathLen 0` one, one name-constrained to its own domains, an EKU-limited
-one; fixtures (ar) and (as)). An `UNSUPPORTED` link is never trusted. Nothing is excluded for a shared property, so a
-same-key decoy or a cross-certificate to a non-anchor listed first cannot hide the real certificate,
-which is related and is explored. The honest issuer's key is the only key that verifies a
-real leaf's signature, other than a recovered key. A recovered key terminates only through CA certificates whose
-constraints admit the real leaf, so a `Found` carrying only benign keys needs the cooperation of an unconstrained CA
-key holder under a real anchor (§10 residual "constrained sub-CA"). Stuffing related junk past the cap, or verifying junk past the
-guards, yields `Budget`, which rejects; an exhaustion in any subtree also yields `Budget`, so a
-stuffed subtree cannot starve the honest key out of a `Found`. Every terminating
-leaf-issuer key is evaluated and `REVOKED` wins. The PKIX fallback covers one residue the walker
-does not: a `NotFound` on a chain of at most `FALLBACK_MAX_PRESENTED` certificates whose honest link
-the walker could not reproduce (a custom delegate's constraints or verifier divergence; canonicalisation alone never yields `NotFound`, §10 residual 1). Beyond the
-guards the walk is `Budget`, which rejects whatever the fallback does, and a `NotFound` too long for
-the fallback is `PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback while `NO_ISSUER` allows.
+(fixture (as), "the comparison budget shared by two candidates"). Anyone can obtain an end-entity certificate under a
+real anchor, and its key can sign a certificate for any other key, a recovered one included; the issuer rules remove
+that route, and with it the limited sub-CAs that organisations hold under public roots (a `pathLen 0` one, one
+name-constrained to its own domains, an EKU-limited one; fixtures (ar) and (as)). An `UNSUPPORTED` link is never
+trusted. Nothing is excluded for a shared property, so a same-key decoy or a cross-certificate to a non-anchor listed
+first cannot hide the real certificate, which is related and is explored. The honest issuer's key is the only key that
+verifies a real leaf's signature, other than a recovered key. A recovered key terminates only through CA certificates
+whose constraints admit the real leaf, so a `Found` carrying only benign keys needs the cooperation of an unconstrained
+CA key holder under a real anchor (§10 residual "constrained sub-CA"). Stuffing related junk past the cap, or verifying
+junk past the guards, yields `Budget`, which rejects; an exhaustion in any subtree also yields `Budget`, so a stuffed
+subtree cannot starve the honest key out of a `Found`. Every terminating leaf-issuer key is evaluated and `REVOKED`
+wins. The PKIX fallback covers one residue the walker does not: a `NotFound` on a chain of at most
+`FALLBACK_MAX_PRESENTED` certificates whose honest link the walker could not reproduce (a custom delegate's constraints
+or verifier divergence; canonicalisation alone never yields `NotFound`, §10 residual 1). Beyond the guards the walk is
+`Budget`, which rejects whatever the fallback does, and a `NotFound` too long for the fallback is
+`PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback while `NO_ISSUER` allows.
 
 The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walker-pseudocode.md](../design/walker-pseudocode.md). The code and the §9.1 properties are normative.
 
@@ -1731,10 +1731,11 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      allows unchecked and `STRICT` rejects (§8). So a revoked leaf under a self-issued key-rollover CA that relies on
      the RFC 5280 exemption, under an EKU-limited issuer, or under an issuer whose nameConstraints refuse it (an
      excluded directoryName subtree refuses every certificate), is accepted under `DEFAULT` without a revocation
-     check; the same holds for a fallback path that spends the comparison bound. What was checked: the walker test chains of github.com, letsencrypt.org, www.google.com and
-     www.mozilla.org stay `Found` under the JDK verifier (`HonestCorpusWalkTest`); no root in the JDK 21 `cacerts`
-     (118) or macOS `SystemRootCertificates` (158) carries nameConstraints; live Web PKI sub-CAs were not surveyed for
-     directoryName or rfc822Name subtrees. On the bindings the platform validates the chain first (step 1).
+     check; the same holds for a fallback path that spends the comparison bound. What was checked: the walker test
+     chains of github.com, letsencrypt.org, www.google.com and www.mozilla.org stay `Found` under the JDK verifier
+     (`HonestCorpusWalkTest`); no root in the JDK 21 `cacerts` (118) or macOS `SystemRootCertificates` (158) carries
+     nameConstraints; live Web PKI sub-CAs were not surveyed for directoryName or rfc822Name subtrees. On the bindings
+     the platform validates the chain first (step 1).
 - Feed authenticity: every generation is verified against Mozilla's content-signature roots, from the feed or from a
   seed (§7.1); there is no unsigned source. The M2 denylist is project-attested and availability-only.
 - Rollback and freeze: a persisted non-decreasing watermark with a 24 h tolerance and a

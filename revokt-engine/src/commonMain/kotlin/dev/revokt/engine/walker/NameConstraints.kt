@@ -52,7 +52,7 @@ internal sealed interface PresentedName {
          */
         fun of(
             p: ParsedCertificate,
-            commonName: Boolean = false,
+            commonName: Boolean,
         ): List<PresentedName>? {
             val san =
                 when (val r = ExtensionValues.subjectAltName(p)) {

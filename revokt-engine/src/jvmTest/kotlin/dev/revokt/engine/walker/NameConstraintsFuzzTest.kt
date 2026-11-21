@@ -52,7 +52,7 @@ class NameConstraintsFuzzTest {
             val withSan = parse(TestCert(subject = subject, extensions = listOf(TestDer.extension("2.5.29.17", rest))))
             val withoutSan = parse(TestCert(subject = subject, extensions = emptyList()))
             for (p in listOfNotNull(withSan, withoutSan)) {
-                val names = PresentedName.of(p)
+                val names = PresentedName.of(p, commonName = false)
                 val asLeaf = PresentedName.of(p, commonName = true)
                 names(p, names, asLeaf)
                 for (list in listOf(names, asLeaf)) {

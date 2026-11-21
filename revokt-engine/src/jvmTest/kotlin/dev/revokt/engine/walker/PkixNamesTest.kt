@@ -245,15 +245,23 @@ class PkixNamesTest {
     @Test
     fun `walker the subject's emailAddress attributes are presented only without a subjectAltName`() {
         val subject = name(rdn(CN, "x"), rdn(EMAIL, "a@mail.example", IA5), rdn(EMAIL, "b@mail.example", IA5))
-        val names = assertNotNull(PresentedName.of(parsed(subject)))
+        val names = assertNotNull(PresentedName.of(parsed(subject), commonName = false))
         assertEquals(3, names.size)
         assertContentEquals(subject, assertIs<PresentedName.Directory>(names[0]).name)
         assertContentEquals(TestDer.ascii("a@mail.example"), assertIs<PresentedName.Rfc822>(names[1]).address)
         assertContentEquals(TestDer.ascii("b@mail.example"), assertIs<PresentedName.Rfc822>(names[2]).address)
-        val withSan = assertNotNull(PresentedName.of(parsed(subject, san(dns("x.example")))))
+        val withSan = assertNotNull(PresentedName.of(parsed(subject, san(dns("x.example"))), commonName = false))
         assertEquals(2, withSan.size, "a subjectAltName: the dNSName and the subject only")
-        assertNull(PresentedName.of(parsed(name(rdn(EMAIL, "a@mail.example", UTF8_STRING)))), "not an IA5String")
-        assertNotNull(PresentedName.of(parsed(name(rdn(EMAIL, "a@mail.example", UTF8_STRING)), san(dns("x.example")))))
+        assertNull(
+            PresentedName.of(parsed(name(rdn(EMAIL, "a@mail.example", UTF8_STRING))), commonName = false),
+            "not an IA5String",
+        )
+        assertNotNull(
+            PresentedName.of(
+                parsed(name(rdn(EMAIL, "a@mail.example", UTF8_STRING)), san(dns("x.example"))),
+                commonName = false,
+            ),
+        )
     }
 
     @Test
@@ -263,7 +271,7 @@ class PkixNamesTest {
             vararg extensions: ByteArray,
         ): PresentedName? {
             val p = parsed(subject, *extensions)
-            val plain = assertNotNull(PresentedName.of(p))
+            val plain = assertNotNull(PresentedName.of(p, commonName = false))
             val leaf = assertNotNull(PresentedName.of(p, commonName = true))
             return if (leaf.size == plain.size) null else leaf.last()
         }
@@ -299,12 +307,12 @@ class PkixNamesTest {
     @Test
     fun `walker a subject that must be walked and does not read fails closed`() {
         val emptyRdn = TestDer.seq(rdn(CN, "a.example"), TestDer.tlv(0x31, ByteArray(0)))
-        assertNull(PresentedName.of(parsed(emptyRdn)), "an empty RDN, no subjectAltName")
+        assertNull(PresentedName.of(parsed(emptyRdn), commonName = false), "an empty RDN, no subjectAltName")
         assertNull(PresentedName.of(parsed(emptyRdn, san(email("a@mail.example"))), commonName = true), "for the CN-ID")
         assertNotNull(PresentedName.of(parsed(emptyRdn, san(dns("a.example"))), commonName = true), "never walked")
         val notSet = TestDer.seq(TestDer.seq(ava(CN, UTF8_STRING, "a.example")))
-        assertNull(PresentedName.of(parsed(notSet)))
-        assertNotNull(PresentedName.of(parsed(name())), "an empty subject reads")
+        assertNull(PresentedName.of(parsed(notSet), commonName = false))
+        assertNotNull(PresentedName.of(parsed(name()), commonName = false), "an empty subject reads")
         assertNull(SubjectNames.avas(byteArrayOf(0x30, 0x81.toByte(), 0x00)), "a non-minimal length")
         val atLimit = name(rdn(CN, "a"))
         assertNull(SubjectNames.avas(atLimit + byteArrayOf(0)), "trailing data")
