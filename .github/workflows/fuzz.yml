@@ -117,7 +117,8 @@ jobs:
   # from the environment. It clones the repository, stages each current target's units as data (fuzz_corpus.py stage:
   # regular files named by their SHA-1, within the target's -max_len and the seed caps) and uploads them as the 1-day
   # artifact fuzz-seed, <Class>-<method>/<unit>. Without the secret it stages nothing, with a notice, and the run goes on
-  # from the committed inputs. units is the number uploaded (0 when nothing was), commit the repository's commit read.
+  # from the committed inputs. units is the number uploaded (0 when nothing was), commit the repository's commit read, and over_caps is true when the
+  # prune had to leave a target out. The token-holding jobs block egress beyond GitHub's hosts.
   seed:
     name: seed (read the private corpus repository)
     needs: targets
@@ -130,10 +131,17 @@ jobs:
     outputs:
       units: ${{ steps.result.outputs.units }}
       commit: ${{ steps.fetch.outputs.commit }}
+      over_caps: ${{ steps.stage.outputs.over_caps }}
     steps:
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
-          egress-policy: audit
+          egress-policy: block   # a token-holding job: GitHub's git, API and artifact hosts only
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            codeload.github.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -145,17 +153,24 @@ jobs:
         id: fetch
         env:
           CFL_CORPUS_READ_TOKEN: ${{ secrets.CFL_CORPUS_READ_TOKEN }}
+          MODE: ${{ needs.targets.outputs.mode }}
         run: |
           set -euo pipefail
           if [ -z "$CFL_CORPUS_READ_TOKEN" ]; then
-            echo "::notice::the fuzz-corpus environment has no CFL_CORPUS_READ_TOKEN (CONTRIBUTING §6); every target starts from its committed inputs, and there is nothing to prune"
+            if [ "$MODE" = prune ]; then
+              echo "::warning::the fuzz-corpus environment has no CFL_CORPUS_READ_TOKEN (CONTRIBUTING §6); the corpus repository is not pruned"
+            else
+              echo "::notice::the fuzz-corpus environment has no CFL_CORPUS_READ_TOKEN (CONTRIBUTING §6); every target starts from its committed inputs"
+            fi
             exit 0
           fi
-          # The helper prints the token from the environment; the token itself is in no argument.
+          # The helper prints the token from the environment; the token itself is in no argument. It answers for
+          # https://github.com only, and with git-lfs's downloads and hooks off nothing else is asked.
           # shellcheck disable=SC2016 # expanded by the helper's shell, not here
           helper='!f() { echo username=x-access-token; echo "password=$CFL_CORPUS_READ_TOKEN"; }; f'
           repo=$RUNNER_TEMP/corpus-repo
-          git -c credential.helper="$helper" clone --quiet --depth 1 https://github.com/geota/revokt-fuzz-corpus.git "$repo"
+          GIT_LFS_SKIP_SMUDGE=1 git -c core.hooksPath=/dev/null -c credential.https://github.com.helper="$helper" \
+            clone --quiet --depth 1 https://github.com/geota/revokt-fuzz-corpus.git "$repo"
           commit=$(git -C "$repo" rev-parse HEAD)
           echo "read geota/revokt-fuzz-corpus at $commit"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
@@ -164,12 +179,19 @@ jobs:
         if: steps.fetch.outputs.commit != ''
         env:
           TARGETS: ${{ needs.targets.outputs.targets }}
+          MODE: ${{ needs.targets.outputs.mode }}
           SCRIPT: ${{ github.workspace }}/corpus-script/.github/scripts/fuzz_corpus.py
         run: |
           set -euo pipefail
           staged=$RUNNER_TEMP/seed
-          /usr/bin/env -i PATH=/usr/bin:/bin TARGETS="$TARGETS" /usr/bin/python3 -I "$SCRIPT" stage \
-            "$RUNNER_TEMP/corpus-repo/corpus" "$staged"
+          # The prune reads under its own, higher caps, so a target that outgrew the seed's is still merged. A target
+          # over even those (exit 3) is left out with an error, and the prune job fails the run once the rest is pruned.
+          flags=()
+          if [ "$MODE" = prune ]; then flags=(--prune); fi
+          status=0
+          /usr/bin/env -i PATH=/usr/bin:/bin TARGETS="$TARGETS" /usr/bin/python3 -I "$SCRIPT" stage "${flags[@]}" \
+            "$RUNNER_TEMP/corpus-repo/corpus" "$staged" || status=$?
+          if [ "$status" -eq 3 ]; then echo "over_caps=true" >> "$GITHUB_OUTPUT"; elif [ "$status" -ne 0 ]; then exit "$status"; fi
           echo "units=$(find "$staged" -type f | wc -l)" >> "$GITHUB_OUTPUT"
       # An upload the account's storage quota refuses does not fail the run: units is then 0, and nothing is seeded.
       - name: upload the seed
@@ -244,7 +266,9 @@ jobs:
       # and the seed caps), then this target's units copied into the directory Jazzer loads and writes its generated
       # corpus to. A malformed artifact fails the job before it fuzzes. Without one the target starts from its committed
       # inputs.
+      # A failed download falls back to the committed inputs; only a complete one is checked and used.
       - name: download the seed
+        id: download-seed
         if: needs.seed.result == 'success' && needs.seed.outputs.units != '0'
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -252,6 +276,7 @@ jobs:
           name: fuzz-seed
           path: ${{ runner.temp }}/seed
       - name: seed
+        if: steps.download-seed.outcome == 'success'
         env:
           TARGETS: ${{ needs.targets.outputs.targets }}
           NAME: ${{ matrix.target.name }}
@@ -261,7 +286,6 @@ jobs:
         run: |
           set -euo pipefail
           seed=$RUNNER_TEMP/seed
-          if [ ! -d "$seed" ]; then echo "$NAME: no seed corpus; it starts from its committed inputs"; exit 0; fi
           /usr/bin/env -i PATH=/usr/bin:/bin TARGETS="$TARGETS" /usr/bin/python3 -I .github/scripts/fuzz_corpus.py check "$seed"
           src=$seed/${NAME/./-}
           if [ ! -d "$src" ]; then echo "$NAME: no seed units"; exit 0; fi
@@ -609,11 +633,13 @@ jobs:
             echo "::error::no CFL_CORPUS_TOKEN secret; the corpus is not pushed"
             exit 1
           fi
-          # The helper prints the token from the environment; the token itself is in no argument.
+          # The helper prints the token from the environment; the token itself is in no argument. It answers for
+          # https://github.com only, and with git-lfs's downloads, pushes and hooks off nothing else is asked.
           # shellcheck disable=SC2016 # expanded by the helper's shell, not here
           helper='!f() { echo username=x-access-token; echo "password=$CFL_CORPUS_TOKEN"; }; f'
           repo=$RUNNER_TEMP/corpus-repo
-          git -c credential.helper="$helper" clone --quiet --depth 1 https://github.com/geota/revokt-fuzz-corpus.git "$repo"
+          GIT_LFS_SKIP_SMUDGE=1 git -c core.hooksPath=/dev/null -c credential.https://github.com.helper="$helper" \
+            clone --quiet --depth 1 https://github.com/geota/revokt-fuzz-corpus.git "$repo"
           mkdir -p "$repo/corpus"
           cp -R "$STAGED/corpus/." "$repo/corpus/"
           git -C "$repo" add corpus
@@ -621,13 +647,15 @@ jobs:
           added=$(git -C "$repo" diff --cached --name-only | wc -l)
           git -C "$repo" -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit --quiet -m "corpus: $added new units from fuzz run $RUN_ID"
-          git -C "$repo" -c credential.helper="$helper" push --quiet origin HEAD:main
+          GIT_LFS_SKIP_PUSH=1 git -C "$repo" -c core.hooksPath=/dev/null -c credential.https://github.com.helper="$helper" \
+            push --quiet origin HEAD:main
           echo "pushed $added new corpus units"
 
   # The weekly prune's merge (#265), one job per target and secret-free, as the fuzz job is: it checks the seed job's
   # fuzz-seed artifact as data, merges this target's units into a fresh directory with libFuzzer's -merge=1 (the
-  # module's fuzzMerge, in the §9.1 harness JVM), checks the result is a subset of what was read and uploads it as
-  # the 1-day artifact fuzz-merged-<target>. The Gradle log stays in $RUNNER_TEMP, as a unit that crashes the target
+  # module's fuzzMerge, in the §9.1 harness JVM), checks the result is a subset of what was read and uploads it, with
+  # the list of its unit names, as the 1-day artifact fuzz-merged-<target> (units/<Class>-<method>/, lists/<Class>-<method>).
+  # It reads under the prune's caps (fuzz_corpus.py --prune), higher than the seed's. The Gradle log stays in $RUNNER_TEMP, as a unit that crashes the target
   # would be in it; the log shows the lines before the task (as the fuzz job) and libFuzzer's MERGE-OUTER counts. A
   # merge that fails, needs more than one attempt (a unit crashed or timed out: the next nightly, seeded with the
   # corpus, files it as a finding) or keeps nothing uploads nothing, so the prune changes nothing for the target.
@@ -638,7 +666,7 @@ jobs:
       !cancelled() && needs.targets.outputs.mode == 'prune' && needs.seed.result == 'success' &&
       needs.seed.outputs.units != '0'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
     strategy:
@@ -679,21 +707,21 @@ jobs:
           # As the targets job checks, before the name is echoed.
           case $NAME in ''|*[!A-Za-z0-9._]*) echo "::error::the target's name has a character outside [A-Za-z0-9._]"; exit 1 ;; esac
           seed=$RUNNER_TEMP/seed
-          check() { /usr/bin/env -i PATH=/usr/bin:/bin TARGETS="$TARGETS" /usr/bin/python3 -I .github/scripts/fuzz_corpus.py check "$@"; }
+          check() { /usr/bin/env -i PATH=/usr/bin:/bin TARGETS="$TARGETS" /usr/bin/python3 -I .github/scripts/fuzz_corpus.py check --prune "$@"; }
           check "$seed"
           src=$seed/${NAME/./-}
           if [ ! -d "$src" ]; then echo "$NAME: no corpus units; nothing to merge"; exit 0; fi
           before=$(find "$src" -type f | wc -l)
           out=$RUNNER_TEMP/merge-out
           mkdir -m 700 "$out"
-          merged=$RUNNER_TEMP/merged/${NAME/./-}
-          mkdir -p "$merged"
+          merged=$RUNNER_TEMP/merged/units/${NAME/./-}
+          mkdir -p "$merged" "$RUNNER_TEMP/merged/lists"
           maxlen=()
           if [ -n "$MAX_LEN" ]; then maxlen=("-Prevokt.fuzzMaxLen=$MAX_LEN"); fi
           status=0
           ./gradlew "$PROJECT:fuzzMerge" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
             "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzCorpus=$src" "-Prevokt.fuzzMerged=$merged" \
-            "-Prevokt.fuzzTimeout=$TIMEOUT" "${maxlen[@]}" --no-daemon < /dev/null > "$out/gradle.log" 2>&1 || status=$?
+            "-Prevokt.fuzzTimeout=$TIMEOUT" -Prevokt.fuzzBudget=3600 "${maxlen[@]}" --no-daemon < /dev/null > "$out/gradle.log" 2>&1 || status=$?
           pkill -KILL -u "$(id -un)" java || true
           awk -v t="> Task $PROJECT:fuzzMerge" '$0 == t || index($0, t " ") == 1 { exit } { print }' "$out/gradle.log" > "$out/before.log"
           if grep -qE 'Base64:|INFO: Seed:|^#[0-9]+[[:space:]]|==[0-9]+==|MERGE-' "$out/before.log"; then
@@ -717,10 +745,12 @@ jobs:
             exit 1
           fi
           if [ "$after" -eq 0 ]; then
-            echo "::warning::$NAME: the merge kept no unit of $before; its corpus is left unchanged"
-            exit 0
+            echo "::error::$NAME: the merge kept no unit of $before; its corpus is left unchanged"
+            exit 1
           fi
-          check "$RUNNER_TEMP/merged" --within "$seed"
+          check "$RUNNER_TEMP/merged/units" --within "$seed"
+          # The unit list goes up with the units: the prune job takes only a download that matches it exactly.
+          find "$merged" -type f -printf '%f\n' | sort > "$RUNNER_TEMP/merged/lists/${NAME/./-}"
           echo "$NAME: $before units merged to $after"
           echo "units=$after" >> "$GITHUB_OUTPUT"
       - name: upload the merged corpus
@@ -738,13 +768,15 @@ jobs:
   # repository is still at the commit the seed job read. It checks each merged corpus as data and as a subset of the
   # target's directory there (a merge only selects units, so the prune can remove units but never add one), replaces
   # each merged target's directory with its merged corpus, and pushes one commit. A target without a merged corpus is
-  # left as it is. A merge job that failed leaves its target unchanged, and the others are still pruned.
+  # left as it is. A merge job that failed leaves its target unchanged, and the others are still pruned. A download
+  # that fails fails the job, and one that does not match the merge jobs' unit lists exactly is rejected, so neither
+  # changes anything. A target the seed job left out over the prune's caps fails the run once the rest is pushed.
   prune:
     name: prune (write the merged corpus to the private corpus repository)
     needs: [targets, seed, merge]
     if: >-
       !cancelled() && needs.targets.outputs.mode == 'prune' && needs.seed.result == 'success' &&
-      needs.seed.outputs.units != '0' && github.ref == 'refs/heads/main'
+      (needs.seed.outputs.units != '0' || needs.seed.outputs.over_caps == 'true') && github.ref == 'refs/heads/main'
     environment: fuzz-corpus
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -753,10 +785,16 @@ jobs:
     steps:
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
-          egress-policy: audit
-      # No match (every merge failed or kept nothing) leaves nothing to prune.
+          egress-policy: block   # a token-holding job: GitHub's git, API and artifact hosts only
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            codeload.github.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+      # No match (every merge failed or kept nothing) succeeds with nothing to prune. Any other failure fails the job
+      # before the clone, so a partial download is never pruned from.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        continue-on-error: true
         with:
           pattern: fuzz-merged-*
           path: ${{ runner.temp }}/merged
@@ -776,7 +814,7 @@ jobs:
           MERGED: ${{ runner.temp }}/merged
         run: |
           set -euo pipefail
-          if [ ! -d "$MERGED" ] || [ -z "$(ls -A "$MERGED")" ]; then echo "::notice::no merged corpus; nothing is pruned"; exit 0; fi
+          if [ ! -d "$MERGED/units" ] || [ -z "$(ls -A "$MERGED/units")" ]; then echo "::notice::no merged corpus; nothing is pruned"; exit 0; fi
           if [ -z "$CFL_CORPUS_TOKEN" ]; then
             echo "::error::no CFL_CORPUS_TOKEN secret; the corpus is not pruned"
             exit 1
@@ -784,7 +822,8 @@ jobs:
           # shellcheck disable=SC2016 # expanded by the helper's shell, not here
           helper='!f() { echo username=x-access-token; echo "password=$CFL_CORPUS_TOKEN"; }; f'
           repo=$RUNNER_TEMP/corpus-repo
-          git -c credential.helper="$helper" clone --quiet --depth 1 https://github.com/geota/revokt-fuzz-corpus.git "$repo"
+          GIT_LFS_SKIP_SMUDGE=1 git -c core.hooksPath=/dev/null -c credential.https://github.com.helper="$helper" \
+            clone --quiet --depth 1 https://github.com/geota/revokt-fuzz-corpus.git "$repo"
           head=$(git -C "$repo" rev-parse HEAD)
           if [ "$head" != "$COMMIT" ]; then
             echo "::warning::the corpus repository moved since the seed job read it ($COMMIT, now $head); nothing is pruned"
@@ -799,8 +838,8 @@ jobs:
           SCRIPT: ${{ github.workspace }}/corpus-script/.github/scripts/fuzz_corpus.py
         run: |
           set -euo pipefail
-          /usr/bin/env -i PATH=/usr/bin:/bin TARGETS="$TARGETS" /usr/bin/python3 -I "$SCRIPT" check "$MERGED" \
-            --within "$RUNNER_TEMP/corpus-repo/corpus"
+          /usr/bin/env -i PATH=/usr/bin:/bin TARGETS="$TARGETS" /usr/bin/python3 -I "$SCRIPT" check --prune "$MERGED/units" \
+            --within "$RUNNER_TEMP/corpus-repo/corpus" --lists "$MERGED/lists"
       - name: push to geota/revokt-fuzz-corpus
         if: steps.clone.outputs.ready == 'true'
         env:
@@ -813,7 +852,7 @@ jobs:
           helper='!f() { echo username=x-access-token; echo "password=$CFL_CORPUS_TOKEN"; }; f'
           repo=$RUNNER_TEMP/corpus-repo
           targets=0
-          for dir in "$MERGED"/*/; do
+          for dir in "$MERGED"/units/*/; do
             name=$(basename "$dir")
             # The check step allowed only current targets' directory names.
             [[ $name =~ ^[A-Za-z0-9_]+-[A-Za-z0-9_]+$ ]] || { echo "::error::a merged directory name"; exit 1; }
@@ -832,5 +871,11 @@ jobs:
           removed=$(git -C "$repo" diff --cached --name-only | wc -l)
           git -C "$repo" -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit --quiet -m "corpus: prune $removed units of $targets targets (fuzz run $RUN_ID, -merge=1)"
-          git -C "$repo" -c credential.helper="$helper" push --quiet origin HEAD:main
+          GIT_LFS_SKIP_PUSH=1 git -C "$repo" -c core.hooksPath=/dev/null -c credential.https://github.com.helper="$helper" \
+            push --quiet origin HEAD:main
           echo "pruned $removed units of $targets targets"
+      - name: targets over the prune's caps
+        if: ${{ !cancelled() && needs.seed.outputs.over_caps == 'true' }}
+        run: |
+          echo "::error::a target's corpus is over the prune's caps (the seed job's log names it); trim it by hand (CONTRIBUTING §6)"
+          exit 1

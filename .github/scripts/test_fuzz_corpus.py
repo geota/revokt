@@ -40,8 +40,9 @@ class Case(unittest.TestCase):
         self.stdout = quiet.__enter__()
         self.addCleanup(quiet.__exit__, None, None, None)
 
-    def stage(self) -> int:
-        return fc.stage(self.corpus, self.out, TARGETS)
+    def stage(self, prune: bool = False) -> int:
+        staged, _ = fc.stage(self.corpus, self.out, TARGETS, prune)
+        return staged
 
     def staged(self, d: str) -> list[str]:
         return sorted(p.name for p in (self.out / d).iterdir())
@@ -94,8 +95,8 @@ class Stage(Case):
         put(self.corpus / "Foo-bar", b"a")
         put(self.corpus / "Foo-bar", b"b")
         kept = put(self.corpus / "Baz-qux", b"c")
-        with mock.patch.object(fc, "MAX_UNITS", 1):
-            self.assertEqual(self.stage(), 1)
+        with mock.patch.object(fc, "SEED", fc.Caps(1, 1 << 20, 1 << 20)):
+            self.assertEqual(fc.stage(self.corpus, self.out, TARGETS), (1, 1))
         self.assertFalse((self.out / "Foo-bar").exists())
         self.assertEqual(self.staged("Baz-qux"), [kept])
         self.assertIn("::warning::Foo-bar", self.stdout.getvalue())
@@ -103,9 +104,31 @@ class Stage(Case):
     def test_total_cap_leaves_out_the_rest(self):
         put(self.corpus / "Baz-qux", b"12345")
         put(self.corpus / "Foo-bar", b"12345")
-        with mock.patch.object(fc, "MAX_TOTAL_BYTES", 7):
+        with mock.patch.object(fc, "SEED", fc.Caps(10, 1 << 20, 7)):
             self.assertEqual(self.stage(), 1)
         self.assertTrue((self.out / "Baz-qux").is_dir())
+        self.assertFalse((self.out / "Foo-bar").exists())
+
+    def test_prune_reads_a_target_over_the_seed_caps(self):
+        a = put(self.corpus / "Foo-bar", b"a")
+        b = put(self.corpus / "Foo-bar", b"b")
+        with mock.patch.object(fc, "SEED", fc.Caps(1, 1 << 20, 1 << 20)), \
+                mock.patch.object(fc, "PRUNE", fc.Caps(2, 1 << 20, 1 << 20)):
+            self.assertEqual(fc.stage(self.corpus, self.out, TARGETS, prune=True), (2, 0))
+        self.assertEqual(self.staged("Foo-bar"), sorted([a, b]))
+
+    def test_prune_over_its_caps_is_an_error_and_stages_the_rest(self):
+        put(self.corpus / "Foo-bar", b"a")
+        put(self.corpus / "Foo-bar", b"b")
+        kept = put(self.corpus / "Baz-qux", b"c")
+        with mock.patch.object(fc, "PRUNE", fc.Caps(1, 1 << 20, 1 << 20)):
+            self.assertEqual(fc.stage(self.corpus, self.out, TARGETS, prune=True), (1, 1))
+        self.assertEqual(self.staged("Baz-qux"), [kept])
+        self.assertIn("::error::Foo-bar", self.stdout.getvalue())
+
+    def test_target_with_only_oversized_units_gets_no_directory(self):
+        put(self.corpus / "Foo-bar", b"123456789")
+        self.assertEqual(self.stage(), 0)
         self.assertFalse((self.out / "Foo-bar").exists())
 
     def test_malformed_rejects_everything(self):
@@ -149,12 +172,22 @@ class Check(Case):
         self.assertEqual(fc.check(self.out, TARGETS, None), 2)
 
     def test_malformed_artifacts(self):
+        # Baz-qux has the default -max_len, so a link or a directory is caught by the regular-file rule alone.
+        target = hashlib.sha1(b"linked").hexdigest()
+
+        def link_unit():
+            # A link named by its target's SHA-1, so only the regular-file rule (and O_NOFOLLOW) stands in its way.
+            put(self.root / "target", b"linked")
+            (self.out / "Baz-qux").mkdir()
+            os.symlink(self.root / "target" / target, self.out / "Baz-qux" / target)
+
         cases = {
             "unknown target": lambda: put(self.out / "Gone-target", b"x"),
             "file at the top": lambda: put(self.out, b"x"),
             "link at the top": lambda: os.symlink("/etc", self.out / "Foo-bar"),
-            "nested directory": lambda: (self.out / "Foo-bar" / ("3" * 40)).mkdir(parents=True),
-            "link unit": lambda: (self.out / "Foo-bar").mkdir() or os.symlink("/etc/passwd", self.out / "Foo-bar" / ("4" * 40)),
+            "empty target directory": lambda: (self.out / "Foo-bar").mkdir(),
+            "nested directory": lambda: (self.out / "Baz-qux" / hashlib.sha1(b"").hexdigest()).mkdir(parents=True),
+            "link unit": link_unit,
             "bad name": lambda: put(self.out / "Foo-bar", b"x", "x" * 40),
             "wrong hash": lambda: put(self.out / "Foo-bar", b"x", "5" * 40),
             "over max_len": lambda: put(self.out / "Foo-bar", b"123456789"),
@@ -162,6 +195,7 @@ class Check(Case):
         for label, make in cases.items():
             with self.subTest(label):
                 shutil.rmtree(self.out, ignore_errors=True)
+                shutil.rmtree(self.root / "target", ignore_errors=True)
                 self.out.mkdir()
                 make()
                 self.rejected(lambda: fc.check(self.out, TARGETS, None))
@@ -169,9 +203,10 @@ class Check(Case):
     def test_caps(self):
         put(self.out / "Foo-bar", b"a")
         put(self.out / "Foo-bar", b"b")
-        with mock.patch.object(fc, "MAX_UNITS", 1):
+        with mock.patch.object(fc, "SEED", fc.Caps(1, 1 << 20, 1 << 20)):
             self.rejected(lambda: fc.check(self.out, TARGETS, None))
-        with mock.patch.object(fc, "MAX_TOTAL_BYTES", 1):
+            self.assertEqual(fc.check(self.out, TARGETS, None, prune=True), 2)
+        with mock.patch.object(fc, "SEED", fc.Caps(10, 1 << 20, 1)):
             self.rejected(lambda: fc.check(self.out, TARGETS, None))
 
     def test_within_accepts_a_subset(self):
@@ -190,6 +225,69 @@ class Check(Case):
         put(self.out / "Foo-bar", b"a")
         self.corpus.mkdir()
         self.rejected(lambda: fc.check(self.out, TARGETS, self.corpus))
+
+    def test_within_rejects_a_linked_reference_unit(self):
+        name = put(self.root / "elsewhere", b"a")
+        (self.corpus / "Foo-bar").mkdir(parents=True)
+        os.symlink(self.root / "elsewhere" / name, self.corpus / "Foo-bar" / name)
+        put(self.out / "Foo-bar", b"a")
+        self.rejected(lambda: fc.check(self.out, TARGETS, self.corpus))
+
+    def test_within_rejects_a_linked_reference_directory(self):
+        put(self.root / "elsewhere", b"a")
+        self.corpus.mkdir()
+        os.symlink(self.root / "elsewhere", self.corpus / "Foo-bar")
+        put(self.out / "Foo-bar", b"a")
+        self.rejected(lambda: fc.check(self.out, TARGETS, self.corpus))
+
+
+class Lists(Case):
+    """The prune's check of the merged corpora against the merge jobs' unit lists: a partial download is rejected."""
+
+    def setUp(self):
+        super().setUp()
+        self.lists = self.root / "lists"
+        self.lists.mkdir()
+        self.a = put(self.out / "Foo-bar", b"a")
+        self.b = put(self.out / "Foo-bar", b"b")
+        self.c = put(self.out / "Baz-qux", b"c")
+        (self.lists / "Foo-bar").write_text(f"{self.a}\n{self.b}\n")
+        (self.lists / "Baz-qux").write_text(f"{self.c}\n")
+
+    def test_complete_download_accepted(self):
+        self.assertEqual(fc.check(self.out, TARGETS, None, self.lists), 3)
+
+    def test_a_missing_unit_rejected(self):
+        (self.out / "Foo-bar" / self.b).unlink()
+        self.rejected(lambda: fc.check(self.out, TARGETS, None, self.lists))
+
+    def test_a_missing_target_directory_rejected(self):
+        shutil.rmtree(self.out / "Baz-qux")
+        self.rejected(lambda: fc.check(self.out, TARGETS, None, self.lists))
+
+    def test_a_directory_without_a_list_rejected(self):
+        (self.lists / "Baz-qux").unlink()
+        self.rejected(lambda: fc.check(self.out, TARGETS, None, self.lists))
+
+    def test_an_unlisted_unit_rejected(self):
+        (self.lists / "Foo-bar").write_text(f"{self.a}\n")
+        self.rejected(lambda: fc.check(self.out, TARGETS, None, self.lists))
+
+    def test_malformed_lists_rejected(self):
+        cases = {
+            "empty": lambda: (self.lists / "Foo-bar").write_text(""),
+            "bad line": lambda: (self.lists / "Foo-bar").write_text(f"{self.a}\n../x\n"),
+            "unknown target": lambda: (self.lists / "Gone-target").write_text(f"{self.a}\n"),
+            "link": lambda: (self.lists / "Foo-bar").unlink() or os.symlink(self.lists / "Baz-qux", self.lists / "Foo-bar"),
+        }
+        for label, make in cases.items():
+            with self.subTest(label):
+                (self.lists / "Gone-target").unlink(missing_ok=True)
+                if (self.lists / "Foo-bar").is_symlink():
+                    (self.lists / "Foo-bar").unlink()
+                (self.lists / "Foo-bar").write_text(f"{self.a}\n{self.b}\n")
+                make()
+                self.rejected(lambda: fc.check(self.out, TARGETS, None, self.lists))
 
 
 class Main(Case):
@@ -210,10 +308,25 @@ class Main(Case):
         self.assertIn("::error::", self.stdout.getvalue())
         self.assertNotIn("6" * 40, self.stdout.getvalue())
 
+    def test_prune_over_caps_is_exit_3(self):
+        put(self.corpus / "Foo-bar", b"a")
+        put(self.corpus / "Foo-bar", b"b")
+        with mock.patch.object(fc, "PRUNE", fc.Caps(1, 1 << 20, 1 << 20)):
+            self.assertEqual(self.run_main("stage", "--prune", str(self.corpus), str(self.out)), fc.OVER_CAPS)
+
+    def test_check_with_lists(self):
+        name = put(self.out / "Foo-bar", b"a")
+        lists = self.root / "lists"
+        lists.mkdir()
+        (lists / "Foo-bar").write_text(name + "\n")
+        self.assertEqual(self.run_main("check", "--prune", str(self.out), "--lists", str(lists)), 0)
+
     def test_usage(self):
         with contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(self.run_main("check"), 2)
-            self.assertEqual(self.run_main("check", "a", "--into", "b"), 2)
+            with self.assertRaises(SystemExit):
+                self.run_main("check")
+            with self.assertRaises(SystemExit):
+                self.run_main("check", "a", "--into", "b")
 
 
 if __name__ == "__main__":
