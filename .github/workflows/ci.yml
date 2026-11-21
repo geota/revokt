@@ -143,6 +143,12 @@ jobs:
           ref: refs/tags/${{ steps.corpus.outputs.tag }}
           path: build/corpus
           persist-credentials: false
+      - name: diag (temporary, #275)
+        run: >
+          .github/scripts/diag-275.sh check
+          -Prevokt.corpus=build/corpus
+          -Prevokt.testJdk=${{ matrix.jdk }}
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_25_X64,JAVA_HOME_27_X64
       - name: check
         run: >
           ./gradlew check
