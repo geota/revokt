@@ -487,6 +487,36 @@ each, rewrite it while the news holds, close it once the pins are current, and s
     never removing or overwriting one, under `corpus/<Class>-<method>/` in the private `geota/revokt-fuzz-corpus`. Only
     it holds `CFL_CORPUS_TOKEN` (contents write on that repository only), read by a git credential helper from the
     environment.
+  - The seed job feeds the corpus back (#265). For `main` only, on a fresh runner that never checks out or runs
+    anything of the repository but `.github/scripts/fuzz_corpus.py`, it clones the corpus repository with
+    `CFL_CORPUS_READ_TOKEN`, a fine-grained personal access token with "Contents: Read" on `geota/revokt-fuzz-corpus`
+    only, in the same `fuzz-corpus` environment (renew it before it expires). It stages each current target's units as
+    data: regular files named by their SHA-1, within the target's `-max_len` (a larger unit is left out), at most
+    40,000 units and 128 MiB a target and 512 MiB in all (a target over them starts from its committed inputs, with a
+    warning, until the prune shrinks it); anything else in a target's directory rejects the whole corpus. It hands
+    them over as the 1-day artifact `fuzz-seed`. The fuzz job checks a complete download of that artifact the same way
+    before it uses any of it (a malformed one fails the job; a failed download falls back to the committed inputs),
+    starts its target from those units and the committed inputs, and uploads only the units it added. Without the
+    secret, or without the artifact, every target starts from its committed inputs. The seed and prune jobs block
+    egress beyond GitHub's git, API and artifact hosts, and their credential helper answers for `https://github.com`
+    only, with git-lfs's downloads, pushes and hooks off.
+  - Weekly, Sunday at 09:17 UTC, or when a maintainer dispatches it with `prune`, the run prunes the corpus
+    repository instead of fuzzing. The seed job then reads under the prune's higher caps (200,000 units and 512 MiB a
+    target, 2 GiB in all), so a target that outgrew the seed's is still merged. One merge job per target, secret-free,
+    checks `fuzz-seed`, merges the target's units into a fresh directory with libFuzzer's `-merge=1` (the module's
+    `fuzzMerge`), checks that the result is a subset of what was read, and uploads it with the list of its unit names.
+    The prune job, on a fresh runner with `CFL_CORPUS_TOKEN`, takes only a download that matches those lists exactly,
+    checks each result again and, only if the repository is still at the commit the seed job read, replaces each merged
+    target's directory with its result in one commit: a prune can remove units, never add one. A merge that fails,
+    needs more than one attempt (a unit crashed or timed out; the next nightly, seeded with that unit, files it as a
+    finding) or keeps no unit fails its job and leaves its target unchanged. A missing `CFL_CORPUS_READ_TOKEN` is a
+    warning in a prune run.
+    - A target over even the prune's caps is left out with an error, and the prune job fails the run once the others
+      are pushed. To recover, trim that target's directory in `geota/revokt-fuzz-corpus` by hand (delete it, or all
+      but a sample of its units; the nightly regrows what still adds coverage), then dispatch `fuzz` with `prune`.
+    - Residual risk, accepted: the merge jobs run the fuzzed code on corpus input, and any job of the run can upload a
+      `fuzz-merged-<target>` artifact for any target. A misbehaving merge job can therefore make the prune delete
+      units of any target, though never add one; the corpus repository's history restores them.
   - **The corpus is not treated as secret.** The committed seed inputs are public, and while the 1-day artifact lasts
     any signed-in GitHub user can download a night's corpus; the corpus repository is private for its size, not its
     content. Findings are different: a target with a finding uploads no corpus, and its inputs and logs leave the job
