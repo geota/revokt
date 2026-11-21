@@ -1,6 +1,6 @@
 # revokt: a pure-Kotlin CRLite engine with JVM and Android bindings, growing into a WebPKI client-policy library
 
-Status: **draft spec, revision 61** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-19
+Status: **draft spec, revision 61** · Target: JVM 17+ and Android API 26+, Kotlin 2.3+ consumers · Date: 2026-11-20
 
 > **Name: `revokt`.** Maven group `dev.revokt`, GitHub repository under the maintainer's own account, domain
 > `revokt.dev`. `revokt.com` is an unrelated SaaS and the GitHub handle `Revokt` is taken; §13 gives the

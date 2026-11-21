@@ -12,20 +12,27 @@ const script = fs.readFileSync(path.join(__dirname, 'pr_lint.js'), 'utf8');
 const template = fs.readFileSync(path.join(__dirname, '..', 'PULL_REQUEST_TEMPLATE.md'), 'utf8');
 
 /** Runs pr_lint.js on one PR; returns the failures, the notices and the labels it added. */
-async function lint({ body, commits = [], comments = [], createdAt = '2026-11-16T00:00:00Z', draft = true }) {
+async function lint({ body, commits = [], comments = [], createdAt = '2026-11-16T00:00:00Z', draft = true, title = 'docs(repo): a change', files = [], baseFiles = {} }) {
   const out = { failures: [], notices: [], added: [] };
   const listCommits = {}; const listComments = {}; const listFiles = {};
   const github = {
     rest: {
       pulls: {
-        get: async () => ({ data: { body, title: 'docs(repo): a change', draft, created_at: createdAt, user: { type: 'User', login: 'someone' }, labels: [] } }),
+        get: async () => ({ data: { body, title, draft, created_at: createdAt, user: { type: 'User', login: 'someone' }, labels: [], base: { sha: 'base' }, head: { sha: 'head' } } }),
         listCommits, listFiles,
       },
       issues: { listComments, addLabels: async ({ labels }) => out.added.push(...labels), removeLabel: async () => {} },
+      repos: {
+        getContent: async ({ path: p, ref }) => {
+          if (ref !== 'base' || !(p in baseFiles)) throw new Error(`no ${p} at ${ref}`);
+          return { data: { content: Buffer.from(baseFiles[p]).toString('base64') } };
+        },
+      },
     },
     paginate: async (fn) => {
       if (fn === listCommits) return commits.map((message) => ({ commit: { message } }));
       if (fn === listComments) return comments.map((b) => ({ body: b }));
+      if (fn === listFiles) return files;
       return [];
     },
   };
@@ -54,6 +61,16 @@ function filled({ coAuthor = '', handoff = null } = {}) {
   if (handoff !== null) b = b.replace('### JDK and OS\n', `### JDK and OS\n\n${handoff}\n`);
   return b;
 }
+
+// Changelog fragments (#272). The base CHANGELOG.md: the newest block is lines 5 to 8.
+const baseLog = '# Spec changelog\n\nIntro.\n\n### Changes in revision 61 (x, 2026-11-20)\n\n- **#1:** a.\n\n### Changes in revision 60 (y)\n\n- **#0:** b.\n';
+const baseFiles = { 'docs/spec/CHANGELOG.md': baseLog };
+const specEdit = { filename: 'docs/spec/revokt-spec.md', status: 'modified', patch: '@@ -10,3 +10,3 @@\n a\n-b\n+B\n c' };
+const fragment = (n) => ({ filename: `docs/spec/changes/${n}.md`, status: 'added', patch: '@@ -0,0 +1 @@\n+- **#1:** x.' });
+const logEdit = (patch) => ({ filename: 'docs/spec/CHANGELOG.md', status: 'modified', patch });
+const fragmentFailures = (r) => r.failures.filter((f) => f.includes('(CONTRIBUTING §1)'));
+const lintFiles = (files, title) => lint({ body: filled(), files, baseFiles, ...(title ? { title } : {}) });
+const cutTitle = 'spec(engine): cut revision 62';
 
 const handoffFailure = (r) => r.failures.some((f) => f.includes('"## Handoff"'));
 const agent = 'Claude Opus 5.5 <noreply@anthropic.com>';
@@ -86,6 +103,51 @@ const cases = {
     assert.equal(before.notices.length, 1);
     const after = await lint({ body, commits: [agentCommit], comments, createdAt: '2026-11-18T00:00:01Z' });
     assert.equal(handoffFailure(after), true);
+  },
+  'a spec edit without a fragment fails, and passes with the fragment of the Why issue': async () => {
+    assert.equal(fragmentFailures(await lintFiles([specEdit])).length, 1);
+    assert.deepEqual(fragmentFailures(await lintFiles([specEdit, fragment(1)])), []);
+    for (const f of ['docs/spec/test-plan.md', 'docs/spec/references.md']) {
+      assert.equal(fragmentFailures(await lintFiles([{ ...specEdit, filename: f }])).length, 1, f);
+    }
+  },
+  'a fragment named after an issue the Why section does not reference fails': async () => {
+    const r = await lintFiles([specEdit, fragment(2)]);
+    assert.ok(fragmentFailures(r).some((f) => f.includes('named after the issue')), r.failures.join('\n'));
+  },
+  'removing a fragment is not adding one': async () => {
+    assert.equal(fragmentFailures(await lintFiles([specEdit, { ...fragment(1), status: 'removed' }])).length, 1);
+  },
+  'a status-line edit fails outside the cut and passes in it': async () => {
+    const status = { ...specEdit, patch: '@@ -1,3 +1,3 @@\n # revokt\n \n-Status: **draft spec, revision 61** · Date: 1\n+Status: **draft spec, revision 62** · Date: 2' };
+    const r = await lintFiles([status, fragment(1)]);
+    assert.ok(fragmentFailures(r).some((f) => f.includes('status line')), r.failures.join('\n'));
+    assert.deepEqual(fragmentFailures(await lintFiles([status], cutTitle)), []);
+  },
+  'a core diff GitHub does not show fails closed': async () => {
+    const r = await lintFiles([{ filename: 'docs/spec/revokt-spec.md', status: 'modified' }, fragment(1)]);
+    assert.ok(fragmentFailures(r).some((f) => f.includes('no diff')), r.failures.join('\n'));
+  },
+  "a new block above the newest one, or a line appended to it, fails outside the cut": async () => {
+    const above = logEdit('@@ -3,3 +3,5 @@\n Intro.\n \n+### Changes in revision 62 (in progress)\n+\n ### Changes in revision 61 (x, 2026-11-20)');
+    const appended = logEdit('@@ -6,4 +6,5 @@\n \n - **#1:** a.\n+- **#2:** c.\n \n ### Changes in revision 60 (y)');
+    const zeroContext = logEdit('@@ -8,0 +9 @@\n+- **#2:** c.');
+    const removed = logEdit('@@ -6,3 +6,2 @@\n \n-- **#1:** a.\n ');
+    for (const f of [above, appended, zeroContext, removed]) {
+      const r = await lintFiles([f]);
+      assert.ok(fragmentFailures(r).some((m) => m.includes('newest block')), `${f.patch}\n${r.failures.join('\n')}`);
+      assert.deepEqual(fragmentFailures(await lintFiles([f], cutTitle)), []);
+    }
+  },
+  'an edit to the intro or an older block passes': async () => {
+    const intro = logEdit('@@ -1,4 +1,4 @@\n # Spec changelog\n \n-Intro.\n+Intro, edited.\n ');
+    const older = logEdit('@@ -9,3 +9,3 @@\n ### Changes in revision 60 (y)\n \n-- **#0:** b.\n+- **#0:** B.');
+    for (const f of [intro, older]) assert.deepEqual(fragmentFailures(await lintFiles([f])), [], f.patch);
+  },
+  'without the base CHANGELOG.md any edit fails closed': async () => {
+    const intro = logEdit('@@ -1,4 +1,4 @@\n # Spec changelog\n \n-Intro.\n+Intro, edited.\n ');
+    const r = await lint({ body: filled(), files: [intro] });
+    assert.ok(fragmentFailures(r).some((m) => m.includes('newest block')), r.failures.join('\n'));
   },
 };
 

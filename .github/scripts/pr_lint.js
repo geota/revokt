@@ -99,6 +99,64 @@ for (const f of files) {
   }
 }
 
+// Changelog fragments (#272, CONTRIBUTING §1): a PR that edits the spec adds docs/spec/changes/<issue>.md, named after
+// an issue its Why section references. Only the cut PR, titled "spec(<scope>): cut revision <N>" (tools/spec_cut.py),
+// writes CHANGELOG.md's newest block or the core's status line, so no two open PRs edit the same spec file region.
+const isCut = /^spec\([a-z]+\): cut revision \d+\b/.test(title);
+const specFile = /^docs\/spec\/(revokt-spec|test-plan|references)\.md$/;
+const fragmentFile = /^docs\/spec\/changes\/(\d+)\.md$/;
+const cutOnly = 'only the cut PR ("spec(<scope>): cut revision <N>", tools/spec_cut.py)';
+if (!isCut && !isRenovate) {
+  if (files.some((f) => specFile.test(f.filename) || specFile.test(f.previous_filename || ''))) {
+    const why = section('Why') || '';
+    const issues = new Set([...why.matchAll(/#(\d+)|\/(?:issues|pull)\/(\d+)/g)].map((m) => m[1] || m[2]));
+    const fragments = files.filter((f) => f.status !== 'removed' && fragmentFile.test(f.filename));
+    if (fragments.length === 0) {
+      failures.push('a PR that edits revokt-spec.md, test-plan.md or references.md adds its changelog bullets as docs/spec/changes/<issue>.md (CONTRIBUTING §1)');
+    } else if (!fragments.some((f) => issues.has(f.filename.match(fragmentFile)[1]))) {
+      failures.push('the changelog fragment is named after the issue: docs/spec/changes/<n>.md for an issue the Why section references (CONTRIBUTING §1)');
+    }
+  }
+  const specCore = files.find((f) => f.filename === 'docs/spec/revokt-spec.md');
+  if (specCore && specCore.status !== 'added') {
+    if (specCore.status === 'removed' || typeof specCore.patch !== 'string') {
+      failures.push('docs/spec/revokt-spec.md: GitHub shows no diff, so the status-line rule cannot be checked; split the PR (CONTRIBUTING §1)');
+    } else if (/^[-+]Status: /m.test(specCore.patch)) {
+      failures.push(`${cutOnly} edits the core's status line (CONTRIBUTING §1)`);
+    }
+  }
+  const log = files.find((f) => f.filename === 'docs/spec/CHANGELOG.md');
+  if (log && log.status !== 'added') {
+    let touched = log.status === 'removed' || typeof log.patch !== 'string';
+    if (!touched) {
+      let base = null;
+      try {
+        const { data } = await github.rest.repos.getContent({ owner, repo, path: 'docs/spec/CHANGELOG.md', ref: pr.base.sha });
+        base = Buffer.from(data.content || '', 'base64').toString('utf8');
+      } catch (e) { core.warning(`CHANGELOG.md not read at the base: ${e.message}`); }
+      // The newest block in the base's 1-based lines: its heading to the line before the next heading. Without a
+      // heading the whole file counts; without the base file every edit does (fail closed).
+      const lines = (base || '').split('\n');
+      const headings = lines.flatMap((l, i) => (/^### Changes in revision /.test(l) ? [i + 1] : []));
+      const start = headings.length ? headings[0] : 1;
+      const end = headings.length > 1 ? headings[1] - 1 : lines.length;
+      if (base === null) touched = true;
+      let old = 0;
+      for (const l of log.patch.split('\n')) {
+        const hunk = l.match(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/);
+        // An empty old range ("-7,0") names the line before the insertion.
+        if (hunk) { old = Number(hunk[1]) + (hunk[2] === '0' ? 1 : 0); continue; }
+        // A removed line is old line `old`; an added line goes between old lines old-1 and old, so one added just
+        // above the newest heading (a new block) or just above the next heading (appended) counts.
+        if (l.startsWith('-')) { if (old >= start && old <= end) touched = true; old++; }
+        else if (l.startsWith('+')) { if (old >= start && old <= end + 1) touched = true; }
+        else if (l.startsWith(' ')) old++;
+      }
+    }
+    if (touched) failures.push(`${cutOnly} writes CHANGELOG.md's newest block; add docs/spec/changes/<issue>.md instead (CONTRIBUTING §1)`);
+  }
+}
+
 // size/XL: more than 1000 added lines of production source (tests, fixtures, corpora, dumps, lockfiles excluded); raised
 // from 400 in #211, when a quarter of all PRs carried the label and it had stopped being a signal.
 const nonProduction = /(\/test\/|\/jvmTest\/|\/commonTest\/|^corpus\/|\.api$|\.lockfile$|verification-metadata\.xml$|verification-keyring\.keys$|^docs\/|\.md$|Cargo\.lock$)/;
