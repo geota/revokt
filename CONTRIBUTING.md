@@ -23,11 +23,20 @@ Agents read `AGENTS.md` first (it points back here). Governance is in `GOVERNANC
    property tests; the core states the present, with no revision, issue or decision references (the changelog and
    `docs/decisions/` carry those); and each milestone ends with a deletion pass against a line budget of 1,500 lines
    for the core.
-2. **Spec changes are `spec` PRs**, reviewed like code, merged before the code that depends on them. A spec PR adds
-   its "Changes in revision N" block to `docs/spec/CHANGELOG.md` and bumps the revision in the core's status line. A spec
+2. **Spec changes are `spec` PRs**, reviewed like code, merged before the code that depends on them. A spec
    diff under 20 lines that is inseparable from its code may ride in the code PR, which then also carries
    the `kind/spec` label and the reviewer checks the spec diff against the three growability contracts
    (§4 Rule model, §3.2 engine seam, §11 milestones).
+   **Changelog fragments** (#272): a PR that edits `revokt-spec.md`, `test-plan.md` or `references.md` adds
+   `docs/spec/changes/<issue>.md`, named after its issue, holding its changelog bullets as they will read in the
+   revision's block (`- **#<issue>:** …`, with nested bullets as needed). A second PR on the same issue appends to
+   that file. No other PR writes `CHANGELOG.md`'s newest block or the core's status line, so two open spec PRs
+   never conflict in `docs/spec/`.
+   **The cut**: when the maintainer decides a revision is done, `uv run --no-project python -I tools/spec_cut.py
+   --summary "<what it is about>"` collects the fragments in issue order under "### Changes in revision N (<summary>,
+   <date>)", deletes them, and sets the status line to revision N and the date. The status line names the newest cut
+   revision. The result is its own PR, titled `spec(<scope>): cut revision N`; that title is how PR-lint recognises
+   the cut, and the only PR allowed to write the newest block and the status line.
 3. **ADRs** (`docs/adr/NNNN-title.md`, MADR format) record decisions the spec states but does not argue.
    Accepted 2026-10-22 unless dated:
    - ADR-0001 `PARSE_FAILED` and `ENGINE_ERROR` allow in `DEFAULT`; a flip is a later minor via the §4 grace rule.
@@ -306,7 +315,8 @@ The template (`.github/PULL_REQUEST_TEMPLATE.md`) has mandatory sections; PR-lin
 a trailer rule is violated:
 
 1. **What** (one paragraph) and **Why** (link the issue).
-2. **Spec**: sections implemented and "no observable behaviour outside the spec", or the `spec` PR link.
+2. **Spec**: sections implemented and "no observable behaviour outside the spec", or the `spec` PR link; a PR
+   that edits the spec names its fragment, `docs/spec/changes/<issue>.md` (section 1).
 3. **Tests**: fixture ids or test names added or changed; for a bug, the test that failed first and the CI
    run or local command that showed it red (the squash hides the first commit, so the PR records it). A change
    to an existing test's assertion is named here, with the reason. Then the commands run and their results,
@@ -552,6 +562,7 @@ ADR-0006). Done means merged.
 |---|---|---|---|---|
 | Title grammar, types, scopes | commitlint (`.commitlintrc.cjs`, Appendix A) on the PR title | PR (`opened`, `edited`, `synchronize`) | yes | live |
 | Trailers, `Spec:` rule, template sections, issue link, AI-assistance section, the Handoff section of an agent-written PR | PR-lint workflow (ours) on the PR body, including the `trailers` check | PR (`opened`, `edited`, `synchronize`) | yes | live |
+| Changelog fragments (section 1): a spec edit adds `docs/spec/changes/<issue>.md`; only the cut PR (`spec(<scope>): cut revision N`) writes `CHANGELOG.md`'s newest block or the core's status line | PR-lint on the PR's file list and diff | PR (`opened`, `edited`, `synchronize`) | yes | live |
 | DCO sign-off on every commit (bots skipped) | DCO GitHub app (free; installed by the owner, after which `DCO` joins the required checks) | PR | yes once installed | planned: the app is not installed, and `DCO` is not a required check yet |
 | Required checks, linear history, no force-push, no deletion, 1 approval, last-push approval, conversation resolution, code-owner review, require up to date before merge (in the solo phase, ADR-0005: 0 approvals and the three approver-dependent rules off) | **rulesets** (free on public repositories, personal accounts included; JSON exported to `docs/dev/rulesets/`), on `main` and `release/*`; tag ruleset on `v*` | GitHub | yes | live, in the solo configuration |
 | Two-person rule on protected paths | CODEOWNERS with every maintainer's handle (one owner approval is what GitHub enforces; the second person is the author) + the `protected-paths` Action counting maintainer approvals from `MAINTAINERS.md` (passes at once in the solo phase, #211) | GitHub; PR | yes | planned: activates with the second maintainer; until then `protected-paths` passes at once |

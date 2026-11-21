@@ -34,9 +34,15 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
 - **Keep the public surface small.** New types are `internal` unless a caller of the public API needs them now.
 - **Spec text.** A behaviour PR that changes what the spec states, or adds behaviour it does not state, edits
   `docs/spec/` in the same PR (the core, or `test-plan.md` for a fixture row), in the present tense and with no
-  issue or revision references, and adds a line to the next revision's block in `docs/spec/CHANGELOG.md`. A larger
-  or separable spec change is a `spec` PR first (CONTRIBUTING §1). The `## Spec` section, which pr-lint requires,
-  cites the sections changed.
+  issue or revision references. A larger or separable spec change is a `spec` PR first (CONTRIBUTING §1). The
+  `## Spec` section, which pr-lint requires, cites the sections changed and names the fragment.
+- **Changelog fragments.** A PR that edits `revokt-spec.md`, `test-plan.md` or `references.md` adds
+  `docs/spec/changes/<n>.md`, holding its changelog bullets as they will read in the revision's block
+  (`- **#<n>:** …`). A second PR on the same issue appends to that file. Never edit `docs/spec/CHANGELOG.md`'s newest
+  block or the core's `Status:` line: pr-lint fails a PR that does, unless it is the cut. **The cut** is the
+  maintainer's: `uv run --no-project python -I tools/spec_cut.py --summary "…"` collects the fragments in issue order
+  into a new "Changes in revision N" block, deletes them and bumps the status line, and goes up as its own PR titled
+  `spec(<scope>): cut revision N`.
 
 ## Worktree and git
 
@@ -55,15 +61,15 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
 
 - Gradle finds the JDKs through `~/.gradle/gradle.properties` (`docs/dev/local.md`). Run `./gradlew <tasks>` (under
   `mise exec --` where the JDKs come from mise) and pass no `-Porg.gradle.java.installations.paths` flag.
-- While developing, run only targeted tasks (for example `:revokt-engine:jvmTest --tests 'dev.revokt.foo.*'`,
-  `:revokt-engine:detekt`, `:revokt-engine:ktlintCheck`).
-- Before every push, even a small fix round, run detekt on every source set, including the type-resolved test tasks
-  (`:revokt-engine:detektJvmTest`, `detektCommonTest`), plus `ktlintCheck`. Plain `detekt` skips the type-resolved
-  tasks, and CI fails on them.
-- The machine is shared with the other builders. Run the full gate at most once or twice, and always under the
-  shared lock: `lockf -k <scratch>/revokt-fullcheck.lock ./gradlew check -Prevokt.purityGate --continue` (macOS
-  `lockf`; `flock` on Linux). Before it, run `./gradlew :<module>:apiDump :<module>:ktlintFormat` when the public
-  API or formatting changed. Also run `reuse lint`: every new file needs an SPDX header or a `.license` sidecar.
+- **Run only targeted tasks locally; the full gate runs in CI on the PR.** Targeted means the tests and checks of
+  what you changed: for example `:revokt-engine:jvmTest --tests 'dev.revokt.foo.*'`, detekt on every source set you
+  touched, the type-resolved test tasks included (`:revokt-engine:detektJvmTest`, `detektCommonTest`; plain `detekt`
+  skips them, and CI fails on them), `ktlintCheck`, and `./gradlew :<module>:apiDump :<module>:ktlintFormat` when the
+  public API or formatting changed. Run them before every push, even a small fix round. Also run `reuse lint`: every
+  new file needs an SPDX header, a `.license` sidecar or a `REUSE.toml` entry.
+- Run a local full gate only to reproduce something CI shows, and then under the shared lock, since the machine is
+  shared with the other builders: `lockf -k <scratch>/revokt-fullcheck.lock ./gradlew check -Prevokt.purityGate
+  --continue` (macOS `lockf`; `flock` on Linux). Put every other Gradle run under the same lock too.
 - Run `actionlint` and `zizmor` on every workflow you change.
 - Shell safety: `set -eu`, guard variables with `${VAR:?}`, write files with `>|`, and put temporary files in
   `<scratch>/<n>/`.
@@ -81,7 +87,8 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
   then Trailers (`Spec: §…`, and the same `Co-authored-by` and `Signed-off-by` lines as the commits). `gh pr view 89
   --json body --jq .body` shows a real body from before the Handoff moved into it.
 - **Tests** names the tests added or changed, discloses any changed assertion, then lists the commands run and their
-  results exactly as run (test counts, the full gate). Report mutation survivors and the tests added for them.
+  results exactly as run (test counts; the full gate is CI's run on the PR). Report mutation survivors and the tests
+  added for them.
 - **AI assistance:** say which model wrote what, operated by the maintainer, and that "a fresh-context review is
   pending; see the Independent review comment below". Do not post that comment yourself; the coordinator does.
 - **Handoff** (AGENTS.md §12, required; PR-lint checks it) has exactly these headings: `JDK and OS` · `Gates not run
@@ -99,11 +106,11 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
 
 ## Messages
 
-Send the coordinator one report per milestone: draft PR up and gate passed, review fixes pushed, or blocked. After
+Send the coordinator one report per milestone: draft PR up and CI green, review fixes pushed, or blocked. After
 a report your final reply is one line. No progress-only notices and no repeat summaries.
 
 ## Report back
 
-When the draft PR is up and the full gate passed (or if you are blocked), end with a report: the PR number and head
-SHA, what you built (files), every assumption or spec reading you chose, anything you could not do, exact test
-counts and the gate result. Keep it factual.
+When the draft PR is up and CI is green (or if you are blocked), end with a report: the PR number and head SHA, what
+you built (files), every assumption or spec reading you chose, anything you could not do, exact local test counts
+and the CI result. Keep it factual.

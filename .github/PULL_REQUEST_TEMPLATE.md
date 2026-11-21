@@ -10,7 +10,9 @@ Fixes: #
 
 ## Spec
 
-<!-- sections implemented, and "no observable behaviour outside the spec", or the spec PR link. `Spec: none (<reason>)` for build/ci/docs/chore. -->
+<!-- sections implemented, and "no observable behaviour outside the spec", or the spec PR link. `Spec: none (<reason>)` for build/ci/docs/chore.
+     A PR that edits revokt-spec.md, test-plan.md or references.md adds its changelog bullets as docs/spec/changes/<issue>.md
+     and names it here; it does not touch CHANGELOG.md's newest block or the status line, which only the cut PR writes (CONTRIBUTING §1). -->
 
 ## Tests
 

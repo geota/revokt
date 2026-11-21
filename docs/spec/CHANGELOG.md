@@ -5,7 +5,9 @@
 
 The "Changes in revision N" blocks of `revokt-spec.md`, newest first, moved here verbatim at revision 59 (#216). Section numbers in them refer to the spec as it stood at that revision; §9 is now [test-plan.md](test-plan.md) and Appendix A [references.md](references.md).
 
-### Changes in revision 61 (in progress)
+From revision 62 each block is cut from the fragments in `docs/spec/changes/`, one per issue (CONTRIBUTING §1).
+
+### Changes in revision 61 (the Firefox alignment of #219, #223, #224, #227, #237 and #261, 2026-11-20)
 
 - **#223 (audit A-1), Mozilla constants:**
   - §7.1 tries the first 4 `metadata.signatures` entries and ignores the rest, where more than 4 failed the changeset.
