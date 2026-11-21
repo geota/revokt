@@ -183,14 +183,22 @@ internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
  * `revokt.fuzzBudget` (the whole task, default 300 s: libFuzzer's loop has no bound of its own, so the task times out
  * and the output holds the smallest input found so far). Jazzer's re-launched JVMs outlive a timeout; fuzz.yml kills
  * them before it encrypts the output.
+ *
+ * `fuzzMerge` (fuzz.yml's weekly prune, #265): libFuzzer's `-merge=1` of one target's corpus into a fresh directory,
+ * which keeps the smallest set of units that covers the corpus's features; units are named by their SHA-1, as the
+ * corpus's own are. The same driver, classpath and harness JVM, with `revokt.fuzzClass`, `revokt.fuzzCorpus` (the
+ * corpus directory), `revokt.fuzzMerged` (the fresh output directory, created empty if absent), `revokt.fuzzTimeout`,
+ * `revokt.fuzzMaxLen` (the target's `-max_len`, unset for libFuzzer's default) and `revokt.fuzzBudget` (default
+ * 1800 s). A unit that crashes or times out is left out by libFuzzer; fuzz.yml keeps a target's corpus unchanged then.
  */
-internal fun Project.registerFuzzMinimize() {
+internal fun Project.registerFuzzDrivers() {
     val property = { name: String -> providers.gradleProperty("revokt.$name") }
     val testJdk = providers.gradleProperty("revokt.testJdk").map { it.toInt() }.orElse(Conventions.JDK_BUILD)
     val launcher = extensions.getByType<JavaToolchainService>().launcherFor { languageVersion.set(testJdk.map { JavaLanguageVersion.of(it) }) }
     // Only for a module with a `jvm` target, selected lazily: a KMP module without one gets no task.
     extensions.getByType<KotlinMultiplatformExtension>().targets.withType<KotlinJvmTarget>().matching { it.name == "jvm" }.configureEach {
         registerFuzzMinimizeTask(compilations.getByName("test"), property, launcher)
+        registerFuzzMergeTask(compilations.getByName("test"), property, launcher)
     }
 }
 
@@ -223,6 +231,42 @@ private fun Project.registerFuzzMinimizeTask(
                     "-rss_limit_mb=1024",
                     "-exact_artifact_path=${output.get()}",
                     input.get(),
+                )
+            },
+        )
+    }
+}
+
+private fun Project.registerFuzzMergeTask(
+    test: KotlinCompilation<*>,
+    property: (String) -> Provider<String>,
+    launcher: Provider<JavaLauncher>,
+) {
+    tasks.register<JavaExec>("fuzzMerge") {
+        description = "Merges one Jazzer target's corpus into a fresh directory with libFuzzer's -merge=1 (fuzz.yml, #265)."
+        group = "revokt"
+        classpath = files(test.output.allOutputs, test.runtimeDependencyFiles ?: files())
+        mainClass.set("com.code_intelligence.jazzer.Jazzer")
+        maxHeapSize = "256m"
+        javaLauncher.set(launcher)
+        val cls = property("fuzzClass")
+        val corpus = property("fuzzCorpus")
+        val merged = property("fuzzMerged")
+        val perInput = property("fuzzTimeout").orElse(FuzzTargets.DEFAULT_TIMEOUT.toString())
+        val maxLen = property("fuzzMaxLen")
+        timeout.set(property("fuzzBudget").orElse("1800").map { Duration.ofSeconds(it.toLong()) })
+        doFirst { File(merged.get()).mkdirs() }
+        argumentProviders.add(
+            CommandLineArgumentProvider {
+                listOfNotNull(
+                    "--target_class=${cls.get()}",
+                    "--instrumentation_includes=dev.revokt.**",
+                    "-merge=1",
+                    "-timeout=${perInput.get()}",
+                    "-rss_limit_mb=1024",
+                    maxLen.orNull?.let { "-max_len=$it" },
+                    merged.get(),
+                    corpus.get(),
                 )
             },
         )

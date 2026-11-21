@@ -296,13 +296,13 @@ jobs:
           ./actionlint -color
       # fuzz.yml's own checks (#115): plain shellcheck over its jobs' run blocks, as actionlint's built-in run does not
       # report every check (it let an unassigned variable, SC2154, through), and the unit tests of fuzz_advisory.py's
-      # handling of hostile artifacts. shellcheck is the runner image's, as actionlint's own is.
-      - name: fuzz.yml's shellcheck and fuzz_advisory.py's tests
+      # and fuzz_corpus.py's handling of hostile artifacts. shellcheck is the runner image's, as actionlint's own is.
+      - name: fuzz.yml's shellcheck and its scripts' tests
         run: |
           shellcheck --version
-          python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml fuzz
-          python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml advisory
-          python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml corpus
+          for job in targets seed fuzz advisory corpus merge prune; do
+            python3 .github/scripts/fuzz_shellcheck.py .github/workflows/fuzz.yml "$job"
+          done
           python3 -I -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: pr_lint.js's body rules (#210)
         run: node .github/scripts/test_pr_lint.js

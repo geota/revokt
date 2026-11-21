@@ -487,6 +487,24 @@ each, rewrite it while the news holds, close it once the pins are current, and s
     never removing or overwriting one, under `corpus/<Class>-<method>/` in the private `geota/revokt-fuzz-corpus`. Only
     it holds `CFL_CORPUS_TOKEN` (contents write on that repository only), read by a git credential helper from the
     environment.
+  - The seed job feeds the corpus back (#265). For `main` only, on a fresh runner that never checks out or runs
+    anything of the repository but `.github/scripts/fuzz_corpus.py`, it clones the corpus repository with
+    `CFL_CORPUS_READ_TOKEN`, a fine-grained personal access token with "Contents: Read" on `geota/revokt-fuzz-corpus`
+    only, in the same `fuzz-corpus` environment (renew it before it expires). It stages each current target's units as
+    data: regular files named by their SHA-1, within the target's `-max_len` (a larger unit is left out), at most
+    40,000 units and 128 MiB a target (a target over them is not seeded or pruned, with a warning) and 512 MiB in all;
+    anything else in a target's directory rejects the whole corpus. It hands them over as the 1-day artifact
+    `fuzz-seed`. The fuzz job checks that artifact the same way before it uses any of it (a malformed one fails the
+    job), starts its target from those units and the committed inputs, and uploads only the units it added. Without
+    the secret, or without the artifact, every target starts from its committed inputs.
+  - Weekly, Sunday at 09:17 UTC, or when a maintainer dispatches it with `prune`, the run prunes the corpus
+    repository instead of fuzzing. One merge job per target, secret-free, checks `fuzz-seed`, merges the target's
+    units into a fresh directory with libFuzzer's `-merge=1` (the module's `fuzzMerge`), and checks that the result
+    is a subset of what was read. The prune job, on a fresh runner with `CFL_CORPUS_TOKEN`, checks each result again
+    and, only if the repository is still at the commit the seed job read, replaces each merged target's directory with
+    its result in one commit: a prune can remove units, never add one. A merge that fails, needs more than one
+    attempt (a unit crashed or timed out; the next nightly, seeded with that unit, files it as a finding) or keeps no
+    unit leaves its target unchanged.
   - **The corpus is not treated as secret.** The committed seed inputs are public, and while the 1-day artifact lasts
     any signed-in GitHub user can download a night's corpus; the corpus repository is private for its size, not its
     content. Findings are different: a target with a finding uploads no corpus, and its inputs and logs leave the job
