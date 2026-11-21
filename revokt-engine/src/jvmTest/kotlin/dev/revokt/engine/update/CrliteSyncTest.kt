@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(dev.revokt.RevoktInternalApi::class)
+
 package dev.revokt.engine.update
 
 import dev.revokt.CrliteChannel
@@ -507,10 +509,10 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `a self-check mismatch is FAILED with ENGINE_SELF_CHECK_FAILED and counts a store failure`() {
-        val engine = TestEngine().apply { preparedAnswer = { CrliteQueryResult.NOT_REVOKED } }
+    fun `an activate that throws is FAILED at ACTIVATE and counts a store failure`() {
+        val engine = TestEngine().apply { onActivate = { error("activate") } }
         val run = sync(Server(), engine = engine)
-        run.assert(SyncOutcome.FAILED, SyncStage.SELF_CHECK, *failed(DiagnosticCode.ENGINE_SELF_CHECK_FAILED))
+        run.assert(SyncOutcome.FAILED, SyncStage.ACTIVATE, *failed())
         assertEquals(1, run.storeFailures)
         assertNothingAdvanced()
     }

@@ -4,13 +4,15 @@
 package dev.revokt
 
 /**
- * The seam a CRLite engine plugs into (spec §3.2). `Revokt` owns the engine, whether defaulted ([KotlinRevocationEngine])
- * or injected, and closes it last; an instance may be injected into one `Revokt` only. The seam carries
- * [Dataset.CRLITE] only. [prepare] and [activate] are serialised by the caller and throw after [close]; [query] is
+ * The seam a CRLite engine plugs into (spec §3.2), internal to revokt: revokt ships one engine
+ * ([KotlinRevocationEngine]), and the CI-only upki engine implements it as the differential test (test-plan.md §9.3).
+ * `Revokt` owns the engine, whether defaulted or injected, and closes it last; an instance may be injected into one
+ * `Revokt` only. The seam carries [Dataset.CRLITE] only. [prepare] and [activate] are serialised by the caller and throw after [close]; [query] is
  * called concurrently from connection threads and observes either the previous or the new generation, never a mix.
  * [close] is idempotent and waits for in-flight queries at most [RevoktLimits.ENGINE_CLOSE_DRAIN]; a query that
  * returns later answers [CrliteQueryResult.ENGINE_ERROR].
  */
+@RevoktInternalApi
 public interface RevocationEngine : AutoCloseable {
     /** The formats this engine reads; a generation in any other format is never offered to [prepare]. */
     public val formats: Set<FilterFormat>
@@ -36,8 +38,8 @@ public interface RevocationEngine : AutoCloseable {
     public fun activate(prepared: PreparedGeneration)
 
     /**
-     * [prepare] then [activate], returning the generation id. A convenience: the loader never calls it, since it runs
-     * the §6.5 self-check on the prepared state between the two calls. An [activate] throw closes the prepared state.
+     * [prepare] then [activate], returning the generation id. A convenience: the loader never calls it, since it calls
+     * the two as separate §6.5 stages, so a failure names its stage. An [activate] throw closes the prepared state.
      */
     public fun install(generation: GenerationFiles): String =
         prepare(generation).use {
@@ -60,10 +62,11 @@ public interface RevocationEngine : AutoCloseable {
 }
 
 /**
- * An inactive generation built by [RevocationEngine.prepare] (spec §3.2). [query] answers against it alone, for the
- * §6.5 self-check. [close] without [RevocationEngine.activate] discards it; after activation the engine owns it and
- * [close] is a no-op.
+ * An inactive generation built by [RevocationEngine.prepare] (spec §3.2). [query] answers against it alone, before
+ * activation; the cross-engine suite's engine probes use it (test-plan.md §9.3). [close] without
+ * [RevocationEngine.activate] discards it; after activation the engine owns it and [close] is a no-op.
  */
+@RevoktInternalApi
 public interface PreparedGeneration : AutoCloseable {
     public val generationId: String
 

@@ -77,7 +77,6 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field BUDGET_ALLOWS Ldev/revokt/DiagnosticCode;
 	public static final field CAP_NEAR_LIMIT Ldev/revokt/DiagnosticCode;
 	public static final field CHANNEL_UNSET Ldev/revokt/DiagnosticCode;
-	public static final field ENGINE_SELF_CHECK_FAILED Ldev/revokt/DiagnosticCode;
 	public static final field EVIDENCE_LOWERED_BELOW_PRESET Ldev/revokt/DiagnosticCode;
 	public static final field EXEMPTION_ON_EVIDENCE_RULE Ldev/revokt/DiagnosticCode;
 	public static final field EXEMPT_ON_ALLOW Ldev/revokt/DiagnosticCode;
@@ -398,20 +397,6 @@ public final class dev/revokt/KeyabilityClause : java/lang/Enum {
 	public static fun values ()[Ldev/revokt/KeyabilityClause;
 }
 
-public final class dev/revokt/KotlinRevocationEngine : dev/revokt/RevocationEngine {
-	public fun <init> ()V
-	public fun activate (Ldev/revokt/PreparedGeneration;)V
-	public fun clear ()V
-	public fun close ()V
-	public fun getCoverageEndMillis ()Ljava/lang/Long;
-	public fun getFormats ()Ljava/util/Set;
-	public fun getName ()Ljava/lang/String;
-	public fun install (Ldev/revokt/GenerationFiles;)Ljava/lang/String;
-	public fun prepare (Ldev/revokt/GenerationFiles;)Ldev/revokt/PreparedGeneration;
-	public fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
-	public fun toString ()Ljava/lang/String;
-}
-
 public final class dev/revokt/Layer : java/lang/Enum {
 	public static final field CRLITE Ldev/revokt/Layer;
 	public static final field PATH Ldev/revokt/Layer;
@@ -521,11 +506,6 @@ public final class dev/revokt/PolicyDiagnostic {
 	public fun toString ()Ljava/lang/String;
 }
 
-public abstract interface class dev/revokt/PreparedGeneration : java/lang/AutoCloseable {
-	public abstract fun getGenerationId ()Ljava/lang/String;
-	public abstract fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
-}
-
 public final class dev/revokt/PresentedChain {
 	public synthetic fun <init> (Ldev/revokt/PresentedChain$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun der (I)[B
@@ -539,23 +519,6 @@ public final class dev/revokt/PresentedChain {
 	public final fun spkiSha256 (I)[B
 	public final fun subject (I)[B
 	public fun toString ()Ljava/lang/String;
-}
-
-public abstract interface class dev/revokt/RevocationEngine : java/lang/AutoCloseable {
-	public abstract fun activate (Ldev/revokt/PreparedGeneration;)V
-	public fun clear ()V
-	public abstract fun getCoverageEndMillis ()Ljava/lang/Long;
-	public abstract fun getFormats ()Ljava/util/Set;
-	public fun getName ()Ljava/lang/String;
-	public fun install (Ldev/revokt/GenerationFiles;)Ljava/lang/String;
-	public abstract fun prepare (Ldev/revokt/GenerationFiles;)Ldev/revokt/PreparedGeneration;
-	public abstract fun query (Ldev/revokt/CrliteQuery;)Ldev/revokt/CrliteQueryResult;
-}
-
-public final class dev/revokt/RevocationEngine$DefaultImpls {
-	public static fun clear (Ldev/revokt/RevocationEngine;)V
-	public static fun getName (Ldev/revokt/RevocationEngine;)Ljava/lang/String;
-	public static fun install (Ldev/revokt/RevocationEngine;Ldev/revokt/GenerationFiles;)Ljava/lang/String;
 }
 
 public abstract interface annotation class dev/revokt/RevoktInternalApi : java/lang/annotation/Annotation {
@@ -803,7 +766,6 @@ public final class dev/revokt/SyncStage : java/lang/Enum {
 	public static final field INDEX Ldev/revokt/SyncStage;
 	public static final field PREPARE Ldev/revokt/SyncStage;
 	public static final field SCHEMA Ldev/revokt/SyncStage;
-	public static final field SELF_CHECK Ldev/revokt/SyncStage;
 	public static final field SIGNATURE Ldev/revokt/SyncStage;
 	public static final field STORE Ldev/revokt/SyncStage;
 	public static final field X5U Ldev/revokt/SyncStage;
