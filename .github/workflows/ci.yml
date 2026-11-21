@@ -119,12 +119,13 @@ jobs:
             21
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          cache-read-only: false   # TEMPORARY experiment (#275): this PR's own entries, scoped to refs/pull/281/merge
+          # TEMPORARY experiment: leg 21 keeps the old cleanup, the other legs never clean up.
+          cache-cleanup: ${{ matrix.jdk == '21' && 'on-success' || 'never' }}
           # Never clean up (#275). The cleanup deletes what the job did not record as used, and Gradle does not record
           # the POM and .module files it re-reads for dependency verification: main's entries kept the jars and .asc
           # files and lost every metadata file, and the next job, finding cached metadata without its file, fetched it
           # again from the plugin portal and Maven Central. Gradle's own cleanup still drops files unused for 30 days.
-          cache-cleanup: never
           validate-wrappers: true
       # The large corpus (docs/dev/corpus.md): the revokt-corpus tag gradle/corpus-pin.properties pins, cached by the pin;
       # verifyCorpusManifest checks it against the pinned manifest hash.
@@ -148,6 +149,12 @@ jobs:
           ref: refs/tags/${{ steps.corpus.outputs.tag }}
           path: build/corpus
           persist-credentials: false
+      - name: diag (temporary, #275)
+        run: >
+          .github/scripts/diag-275.sh check
+          -Prevokt.corpus=build/corpus
+          -Prevokt.testJdk=${{ matrix.jdk }}
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_25_X64,JAVA_HOME_27_X64
       - name: check
         run: >
           ./gradlew check
