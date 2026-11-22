@@ -10,6 +10,7 @@ import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
+import java.security.Provider
 import java.security.Signature
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
@@ -59,18 +60,31 @@ internal object TestPki {
         return SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, null, null) }
     }
 
-    /** A PKIX trust manager over the test CA alone, recording each server check. */
-    fun recordingTrustManager(): RecordingTrustManager {
+    /** A PKIX trust manager over the test CA alone from [provider] (null: the JDK's), recording each server check. */
+    fun recordingTrustManager(provider: Provider? = null): RecordingTrustManager {
         val store = KeyStore.getInstance("PKCS12")
         store.load(null, null)
         store.setCertificateEntry("ca", ca)
-        val tmf = TrustManagerFactory.getInstance("PKIX")
+        val tmf =
+            if (provider ==
+                null
+            ) {
+                TrustManagerFactory.getInstance("PKIX")
+            } else {
+                TrustManagerFactory.getInstance("PKIX", provider)
+            }
         tmf.init(store)
         return RecordingTrustManager(tmf.trustManagers.single() as X509ExtendedTrustManager)
     }
 
-    fun clientContext(trustManager: RecordingTrustManager): SSLContext =
-        SSLContext.getInstance("TLS").apply { init(null, arrayOf(trustManager), null) }
+    /** A client context over [trustManager] alone, from [provider] (null: the JDK's default, SunJSSE). */
+    fun clientContext(
+        trustManager: RecordingTrustManager,
+        provider: Provider? = null,
+    ): SSLContext {
+        val context = if (provider == null) SSLContext.getInstance("TLS") else SSLContext.getInstance("TLS", provider)
+        return context.apply { init(null, arrayOf(trustManager), null) }
+    }
 
     private fun ecKeys(): KeyPair =
         KeyPairGenerator

@@ -10,9 +10,10 @@ package dev.revokt.jsse
 import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.HttpFetcher
-import dev.revokt.jsse.fetch.EndpointIdentifyingSocketFactory
 import dev.revokt.jsse.fetch.JdkOnly
 import dev.revokt.jsse.fetch.ProxyOnlyAuthenticator
+import dev.revokt.jsse.fetch.RefusingHostnameVerifier
+import dev.revokt.jsse.fetch.TlsOnlySocketFactory
 import dev.revokt.jsse.fetch.decodedBody
 import dev.revokt.jsse.fetch.throwIfInterrupted
 import java.io.IOException
@@ -26,8 +27,9 @@ import javax.net.ssl.SSLSocketFactory
  *
  * - **TLS:** every handshake uses `HttpsURLConnection.getDefaultSSLSocketFactory()`, read at each fetch, and so the
  *   platform's trust manager; revokt adds no trust policy (§3 `HttpFetcher`, §5.1 "Fetches run no revokt trust
- *   manager"). Hostname verification is the JDK's endpoint identification (`"HTTPS"`), set on every socket, so a
- *   consumer's global `HttpsURLConnection.setDefaultHostnameVerifier` cannot turn it off.
+ *   manager"). The host is matched against the peer certificate by `HttpsURLConnection` after every handshake, resumed
+ *   ones included, with a per-connection verifier that refuses any mismatch, so neither a consumer's global
+ *   `HttpsURLConnection.setDefaultHostnameVerifier` nor a session another connection cached can turn the check off.
  * - **Proxy:** `ProxySelector.getDefault()`; revokt configures none. A per-connection authenticator answers
  *   `RequestorType.PROXY` from `Authenticator.getDefault()` and never answers a server, so a 401 never reaches the
  *   JVM's default credentials. Basic auth to an HTTPS tunnel stays disabled by the JDK unless
@@ -80,7 +82,8 @@ public class JdkHttpFetcher internal constructor(
 
     @JdkOnly
     private fun HttpsURLConnection.configure(request: FetchRequest) {
-        sslSocketFactory = EndpointIdentifyingSocketFactory(socketFactory())
+        sslSocketFactory = TlsOnlySocketFactory(socketFactory())
+        hostnameVerifier = RefusingHostnameVerifier
         instanceFollowRedirects = false
         useCaches = false
         setAuthenticator(ProxyOnlyAuthenticator)
@@ -89,6 +92,9 @@ public class JdkHttpFetcher internal constructor(
         readTimeout = timeout
         for ((name, value) in request.headers) setRequestProperty(name, value)
         setRequestProperty("Accept-Encoding", "gzip")
+        // The server closes the connection after this response, so the JDK never pools or drains it (the one value of
+        // this restricted header HttpURLConnection sends).
+        setRequestProperty("Connection", "close")
     }
 }
 

@@ -8,6 +8,7 @@ import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.RevoktTestingApi
 import dev.revokt.jsse.JdkHttpFetcher
+import org.conscrypt.Conscrypt
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -20,6 +21,7 @@ import java.net.ResponseCache
 import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.URLConnection
+import java.security.Provider
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -63,7 +65,7 @@ class JdkHttpFetcherTest {
         headers.entries.filter { it.key.equals(name, ignoreCase = true) }.flatMap { it.value }
 
     @Test
-    fun `a 200 returns its status, headers and body, and the request carries its headers and Accept-Encoding gzip`() {
+    fun `a 200 returns status, headers and body, and the request carries its headers, gzip and Connection close`() {
         val handlers = mapOf("/ok" to respond(200, "hello".encodeToByteArray(), "Backoff" to "30"))
         LoopbackHttps(handlers = handlers).use { server ->
             val response = fetcher.fetch(request(server.url("/ok")))
@@ -74,6 +76,7 @@ class JdkHttpFetcherTest {
             assertEquals(listOf("revokt-test"), seen.headers["user-agent"])
             assertEquals(listOf("\"1700000000000\""), seen.headers["if-none-match"])
             assertEquals(listOf("gzip"), seen.headers["accept-encoding"])
+            assertEquals(listOf("close"), seen.headers["connection"])
             assertTrue(trustManager.serverChecks.isNotEmpty(), "the handshake ran through the given trust manager")
         }
     }
@@ -252,16 +255,35 @@ class JdkHttpFetcherTest {
     @Test
     fun `data-path (g) the JDK fetcher fails against a certificate lacking the host's SAN (endpoint identification)`() {
         LoopbackHttps(TestPki.wrongHost, mapOf("/x" to respond(200, "x".encodeToByteArray()))).use { server ->
-            assertFailsWith<SSLHandshakeException> { fetcher.fetch(request(server.url("/x"))) }
-            // A global allow-all hostname verifier does not turn endpoint identification off.
-            val previous = HttpsURLConnection.getDefaultHostnameVerifier()
-            HttpsURLConnection.setDefaultHostnameVerifier(HostnameVerifier { _, _ -> true })
-            try {
-                assertFailsWith<SSLHandshakeException> { fetcher.fetch(request(server.url("/x"))) }
-            } finally {
-                HttpsURLConnection.setDefaultHostnameVerifier(previous)
+            assertFailsWith<IOException> { fetcher.fetch(request(server.url("/x"))) }
+            // A global allow-all hostname verifier does not turn the check off.
+            withAllowAllDefaultVerifier {
+                assertFailsWith<IOException> { fetcher.fetch(request(server.url("/x"))) }
             }
             assertEquals(0, server.hits("/x"), "a request went out over a connection to the wrong host")
+        }
+    }
+
+    @Test
+    fun `the SAN check holds on a resumed session that a lax connection made, on SunJSSE and Conscrypt`() {
+        for (provider in listOf<Provider?>(null, Conscrypt.newProvider())) {
+            val label = provider?.name ?: "SunJSSE"
+            // One client context, so its session cache is shared between the lax connection and the fetcher.
+            val tls = TestPki.clientContext(TestPki.recordingTrustManager(provider), provider).socketFactory
+            LoopbackHttps(TestPki.wrongHost, mapOf("/x" to respond(200, "x".encodeToByteArray()))).use { server ->
+                // Other code in the process accepts any name and leaves a session for this host:port in the cache.
+                val lax = URI(server.url("/x")).toURL().openConnection() as HttpsURLConnection
+                lax.sslSocketFactory = tls
+                lax.hostnameVerifier = HostnameVerifier { _, _ -> true }
+                assertEquals(200, lax.responseCode, label)
+                lax.inputStream.close()
+                lax.disconnect()
+                assertEquals(1, server.hits("/x"), label)
+                withAllowAllDefaultVerifier {
+                    assertFailsWith<IOException>(label) { JdkHttpFetcher { tls }.fetch(request(server.url("/x"))) }
+                }
+                assertEquals(1, server.hits("/x"), "$label: the fetcher's request reached the wrong host")
+            }
         }
     }
 
@@ -458,6 +480,16 @@ class JdkHttpFetcherTest {
             assertEquals(2, reads)
         } finally {
             Thread.interrupted()
+        }
+    }
+
+    private fun withAllowAllDefaultVerifier(block: () -> Unit) {
+        val previous = HttpsURLConnection.getDefaultHostnameVerifier()
+        HttpsURLConnection.setDefaultHostnameVerifier(HostnameVerifier { _, _ -> true })
+        try {
+            block()
+        } finally {
+            HttpsURLConnection.setDefaultHostnameVerifier(previous)
         }
     }
 

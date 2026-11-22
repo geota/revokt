@@ -59,6 +59,7 @@ io.gitlab.arturbosch.detekt:detekt-utils:1.23.8=detekt
 org.apiguardian:apiguardian-api:1.1.2=testCompileClasspath
 org.codehaus.mojo:animal-sniffer-annotations:1.24=animalsniffer
 org.codehaus.mojo:animal-sniffer:1.24=animalsniffer
+org.conscrypt:conscrypt-openjdk-uber:2.8.0=testCompileClasspath,testRuntimeClasspath
 org.ec4j.core:ec4j-core:1.1.1=ktlint,ktlintBaselineReporter,ktlintRuleset
 org.jcommander:jcommander:1.85=detekt
 org.jetbrains.intellij.deps:trove4j:1.0.20200330=detekt

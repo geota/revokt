@@ -10,13 +10,14 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
 /**
- * The platform's [delegate], with endpoint identification `"HTTPS"` set on every socket it makes (spec §3: hostname
- * verification is HttpsURLConnection's endpoint identification). With the algorithm already set, `HttpsURLConnection`
- * neither replaces it nor consults a hostname verifier, so the check holds whatever
- * `HttpsURLConnection.setDefaultHostnameVerifier` was given. A handshake still runs on the delegate's sockets, its
- * trust manager and nothing else.
+ * The platform's [delegate], refusing any socket that is not an `SSLSocket`. A handshake runs on the delegate's sockets,
+ * its trust manager and nothing else (spec §3 `HttpFetcher`). It leaves each socket's endpoint identification as the
+ * delegate made it: unset, `HttpsURLConnection` then checks the host against the session's peer certificate after
+ * every handshake, full or resumed, on any provider (see [RefusingHostnameVerifier]). One instance per fetch, so the
+ * JDK's keep-alive cache, which matches a pooled connection by socket factory identity, never hands this fetch a
+ * connection another made.
  */
-internal class EndpointIdentifyingSocketFactory(
+internal class TlsOnlySocketFactory(
     private val delegate: SSLSocketFactory,
 ) : SSLSocketFactory() {
     override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
@@ -58,14 +59,10 @@ internal class EndpointIdentifyingSocketFactory(
 
     private fun identify(socket: Socket): Socket {
         // A factory that makes a plain socket would carry the request in clear: refuse it.
-        val tls =
-            socket as? SSLSocket ?: run {
-                socket.close()
-                throw SSLException("the default SSLSocketFactory made a socket that is not an SSLSocket")
-            }
-        val parameters = tls.sslParameters
-        parameters.endpointIdentificationAlgorithm = "HTTPS"
-        tls.sslParameters = parameters
-        return tls
+        if (socket !is SSLSocket) {
+            socket.close()
+            throw SSLException("the default SSLSocketFactory made a socket that is not an SSLSocket")
+        }
+        return socket
     }
 }
