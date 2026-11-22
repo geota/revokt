@@ -206,8 +206,8 @@ stays as §6.5 states it. Under content addressing:
   first one that passes. Under I7 the store holds at most `live`, `previous`, one interrupted install's file, and any
   newer file section 7 keeps, so the scan reads about three small files and re-hashes one generation's blobs.
 - **Adopt**, as today:
-  1. Write `updater.json`: the record read, an absent or malformed one replaced, with its watermark raised to the
-     adopted `<ts>`.
+  1. Write `updater.json`: the record read, an absent or malformed one replaced, with its watermark set to
+     max(the stored watermark, the adopted `<ts>`), as `SeedLoader.decide` does today; it never lowers it.
   2. Flip `current` to `{live: H}`. As today's `Pointer(adopted, null)`, it names no `previous`.
 
   Nothing else is written, and nothing is pruned. Writing the watermark first means a failed flip leaves an honest
@@ -478,7 +478,7 @@ and the model must pass at its default seed budget before review.
   - **I6, immutable names:** every write to a key under `blobs/` or `generations/` writes bytes whose SHA-256 is the
     key's name.
   - **I7, bounded garbage:** after an `INSTALLED` sync that pruned, the store holds exactly `store.version`,
-    `current`, `updater.json`, the generation files the pointer names, any newer generation that loads (section 7),
+    `current`, `updater.json`, the generation files the pointer names, any newer generation file that passes section 6's steps 1 and 2 (section 7's keep test),
     and their blobs.
   - **I8, delete order:** a generation file on disk names only blobs on disk, unless damage or a lost delete hit
     them.
