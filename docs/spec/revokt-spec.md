@@ -497,7 +497,7 @@ fun interface Exemption { fun isExempt(context: ExemptionContext): Boolean   // 
         @JvmStatic fun platformOnly(): Exemption } }                         // context.path.reason == PLATFORM_ONLY; a null host or anchorSha256 never matches hostIn/anchorIn
 // Exemptions.kt, @file:JvmName("Exemptions"): infix fun Exemption.and(other: Exemption): Exemption; infix fun Exemption.or(other: Exemption): Exemption   // Java: Exemptions.and(a, b). CEL's && and ||: short-circuiting but commutative; the side that decides the result wins whatever the other side did (true or broken = broken or true = exempt; false and broken = broken and false = not exempt), and its partner's throw is absorbed and not recorded; with no deciding side the first throw propagates and is recorded as not exempt plus the EXEMPTION engine error (when both throw, the left operand's); a fatal error (§5.5's catch rule) propagates at once; the outcome and findings never depend on operand order
 class ExemptionContext private constructor(…) { val rule: Rule; val chain: PresentedChain? /* null for a non-X.509 credential (M5) */; val credentialType: CredentialType; val path: Finding.Path; val host: String? /* normalised */; val nowMillis: Long; val dataStates: Map<Dataset, Finding.DataState> }   // growable: new evidence (M3 SCTs, M4 distrust record) lands as new nullable properties; builder @RevoktTestingApi on the type
-class AnchorSnapshot private constructor(…) { val id: Long /* process-local counter, like generationEpoch; not stable across processes */; val sha256: ByteArray /* of the sorted anchor DERs only (the bytes read, §5.3); stable */; val anchors: List<ByteArray> /* each anchor's bytes read (§5.3); the snapshot also keeps the platform's anchor objects, whose getEncoded() the PKIX fallback is given */; val createdMillis: Long; val preloadGenerationId: String? /* null in M1; M2: the INTERMEDIATES generation the index holds; an INTERMEDIATES install rebuilds every live index and advances id, so both caches miss */ }
+class AnchorSnapshot private constructor(…) { val id: Long /* process-local counter, like generationEpoch; not stable across processes */; val sha256: ByteArray /* SHA-256 of the distinct anchor DERs as read (§5.3), sorted as unsigned bytes and concatenated, so neither the platform's order nor a duplicate changes it; stable */; val anchors: List<ByteArray> /* each anchor's bytes read (§5.3), in the platform's order, duplicates and anchors the parser rejects kept (the index drops them), an anchor whose getEncoded() throws left out; the snapshot also keeps each anchor's getEncoded(), which the PKIX fallback re-parses */; val createdMillis: Long; val preloadGenerationId: String? /* null in M1; M2: the INTERMEDIATES generation the index holds; an INTERMEDIATES install rebuilds every live index and advances id, so both caches miss */ }
 class SyncResult private constructor(…) { val outcome: SyncOutcome; val atMillis: Long; val installed: Map<Dataset, String> /* each dataset this sync installed, with the installed generation's id */; val sourceId: String? /* the source the outcome is about */; val failure: SyncFailure? /* why a SKIPPED or FAILED sync stopped; set exactly for those outcomes, and a code of that outcome */; val httpStatus: Int? /* the last response status when a fetch was involved */; @Transient val cause: Throwable? /* the fetcher's or loader's throwable; not persisted, null when read back; not part of equality or toString */; val warnings: List<RevoktWarning> /* CAP_NEAR_LIMIT */ }
 class RevoktEvent private constructor(…) { val sequence: Long; val atMillis: Long; val policyEpoch: Long; val credentialType: CredentialType; val host: String?; val chainSha256: ByteArray; val leafSerial: ByteArray? /* rawSerial */; val verdict: Verdict; val shadowVerdict: Verdict? /* null when no shadowPolicy is set, and when the enforced evaluate threw before the shadow ran */; val enforcement: Enforcement; val enforced: Boolean /* = verdict is Rejected && enforcement == ENFORCE */ }
 interface RevoktListener { fun onVerdict(event: RevoktEvent); fun onStateChanged(state: RevoktState) {} }   // second method has a default body; Java alternative to the state flow
@@ -1002,10 +1002,16 @@ The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walk
   `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` is emitted once per OID in `Walk.unsupportedOids`
   on **every** outcome, with `outcomeDepended = (reason == UNSUPPORTED_ALGORITHM)`; fixture (n) asserts the
   `false` case on a `Found`.
-- **PKIX fallback contract** (`PathBuilderFallback`; the fallback re-parses the snapshot's anchors' `getEncoded()` with `CertificateFactory` once per `AnchorSnapshot.id`, memoised, and its `CollectionCertStore` holds every presented certificate): result lists the leaf first and **appends the
-  trust anchor's certificate**; the leaf must be in the `CollectionCertStore`; one base
+- **PKIX fallback contract** (`PathBuilderFallback`; the fallback re-parses the snapshot's anchors' `getEncoded()` with `CertificateFactory` once per `AnchorSnapshot.id`, memoised, and its `CollectionCertStore` holds every presented certificate the factory reads): result lists the presented leaf's exact bytes first, each
+  intermediate as the bytes presented for it (its `getEncoded()` only for one the builder found elsewhere, through AIA,
+  §10 item 13), and **appends the trust anchor's certificate** as the snapshot's bytes read for it
+  (`AnchorSnapshot.anchors`), which step 6 matches by exact bytes; the leaf must be in the `CollectionCertStore`, and a
+  leaf the factory rejects, an anchor set none of which it reads, and no path (`CertPathBuilderException`) are null,
+  while a presented intermediate or an anchor it rejects is left out, as webpki and mozilla::pkix skip a candidate that
+  does not parse; one base
   `PKIXBuilderParameters` per snapshot, `clone()` per call; `CertPathBuilder.getInstance("PKIX")` per
-  call; `setRevocationEnabled(false)`, `setPolicyQualifiersRejected(false)`, `setDate(now)`,
+  call; `setRevocationEnabled(false)`, `setPolicyQualifiersRejected(false)`, `setDate(now)`, every other parameter the
+  JDK default as SunJSSE's `PKIXValidator` leaves it (`maxPathLength` 5),
   `X509CertSelector().apply { certificate = leaf }`; Android resolves to ojluni's `SunCertPathBuilder`
   with Conscrypt doing signatures. The builder verifies every link under the platform's providers,
   so its path satisfies the invariant's intent. A returned path must end at the trust anchor's certificate, and meet
@@ -1029,8 +1035,9 @@ the `CandidateIndex` build over `platformTrust.anchors(delegate)`, i.e. `getAcce
 on the trust manager, **on both platforms and regardless of the calling thread**: built synchronously
 inside `start()` for every trust manager created in `CREATED` (the first synchronous step, under the
 factory lock, before the registry and the store lock) and at wiring, inside the factory lock,
-for a trust manager created in `STARTED`. A throw from `getAcceptedIssuers()`, an empty anchor set
-or a build failure throws `IllegalStateException` from `start()` (lifecycle stays `CREATED`, nothing
+for a trust manager created in `STARTED`. A throw from `getAcceptedIssuers()`, a null or empty anchor set, a null
+anchor, or a set none of whose anchors the parser reads (an index that could only answer `NO_ISSUER`) throws
+`IllegalStateException` from `start()` (lifecycle stays `CREATED`, nothing
 held, retryable) or from `trustManager(d)` (nothing registered). There is therefore no snapshot
 future, no snapshot deadline and no `SNAPSHOT_UNAVAILABLE` verdict reason: a trust manager that can go
 past **flow** step 1 has a snapshot (flow step 1 is the platform call; the snapshot id keys the
@@ -1070,7 +1077,10 @@ A reference in this file to one of these names that note.
 Not normative before 0.3: [docs/design/android.md](../design/android.md).
 
 ### 5.3 JVM (`JvmPlatformTrust`)
-- Default delegate: SunJSSE's `X509ExtendedTrustManager`. `requiresExtendedDelegate()` is **true**
+- Default delegate: the default `TrustManagerFactory`'s `X509ExtendedTrustManager` (`getDefaultAlgorithm()` over the
+  default trust store, the providers in their configured order: SunJSSE's on a stock JDK, as the JDK's own default
+  `SSLContext` resolves it), one per `JvmPlatformTrust`. `anchors(d)` is `d.getAcceptedIssuers()`, a null array the
+  empty set; `verifiedChain` is null. `requiresExtendedDelegate()` is **true**
   for every JVM binding (SunJSSE's `AbstractTrustManagerWrapper.checkAdditionalTrust` applies algorithm constraints on both the socket and the engine path and endpoint identification on the engine path; fronting a plain delegate removes them).
 - `pathBuilder` is `CertPathBuilder("PKIX")`; `PlatformTrust.canonicalSubject` defaults to `X500Principal.getName(CANONICAL)`,
   which is what SunJSSE's `X500Name.equals` compares. Every M1 chain is `RECONSTRUCTED`.
@@ -1083,7 +1093,8 @@ Not normative before 0.3: [docs/design/android.md](../design/android.md).
   certificate's DER only where the engine needs it: `Cert.der` and `bytesHash`, the anchor-by-bytes check,
   `reportedPathSha256s`, `anchorSha256`, `AnchorSnapshot.sha256`, `PresentedChain.der` and `MAX_CERT_BYTES`, which is
   checked on `getEncoded()` before any parse and again on the bytes read. The PKIX fallback is given the platform's
-  own anchor objects' `getEncoded()`.
+  own anchor objects' `getEncoded()` and returns an anchor as its bytes read. A certificate whose `getEncoded()` throws
+  has no bytes: an anchor is left out of the snapshot.
 
 ### 5.4 Ktor engine caveats (verified against Ktor 3.6.0 source)
 Not normative before 0.3: [docs/design/okhttp-and-ktor.md](../design/okhttp-and-ktor.md).
@@ -1664,8 +1675,9 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      the default whenever `revokt-okhttp` resolves.
   13. **JVM PKIX fallback and AIA**: with `-Dcom.sun.security.enableAIAcaIssuers=true` the
      `CertPathBuilder` (and the delegate itself) fetches AIA issuers over the network inside the
-     handshake; the fallback may then find a path the walker called `NO_CANDIDATE`; revokt neither sets
-     nor clears the property (unverified beyond `sun.security.provider.certpath.Builder.USE_AIA`).
+     handshake; the fallback may then find a path the walker called `NO_CANDIDATE`, returning a fetched issuer as its
+     `getEncoded()`, to which step 6 applies its rules; revokt neither sets nor clears the property, which the JDK reads
+     once, at class initialisation (`sun.security.provider.certpath.Builder.USE_AIA`).
   14. **Keyability is a prediction.** The producer keys the logged precertificate (about half of CT entries). It also
      needs the logged `chain[0]` to parse, and `chain[1]` behind a precertificate signing certificate. revokt sees
      only the final certificate, so `producerKeyable` predicts the producer's result through RFC 6962's identical-TBS
