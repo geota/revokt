@@ -14,6 +14,7 @@ import dev.revokt.RevoktLimits
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.PlatformRead
+import dev.revokt.engine.parse.producer.ProducerCorpus
 import dev.revokt.verify.JcaSignatureVerifier
 import okio.ByteString.Companion.toByteString
 import java.security.KeyStore
@@ -116,7 +117,9 @@ class AnchorSnapshotsTest {
 
     @Test
     fun `anchors an empty, null or throwing anchor set throws IllegalStateException from the builder`() {
-        assertNull(assertFailsWith<IllegalStateException> { build() }.cause, "empty")
+        val empty = assertFailsWith<IllegalStateException> { build() }
+        assertNull(empty.cause, "empty")
+        assertTrue(empty.message!!.contains("no trust anchors"), empty.message)
         val none =
             assertFailsWith<IllegalStateException> { AnchorSnapshots.build(FakeTrust({ nullList() }), delegate, 0) }
         assertNull(none.cause, "a null list is the empty set, not a throw")
@@ -164,6 +167,21 @@ class AnchorSnapshotsTest {
             built.snapshot.anchors.map { it.toByteString() },
         )
         assertEquals(1, built.index.store.size)
+    }
+
+    @Test
+    fun `anchors an anchor read through the platform canon keeps its getEncoded for the PKIX fallback`() {
+        val bad =
+            PkixPki.x509(
+                ProducerCorpus.inputs.first { it.name == "envelope/letsencrypt.org-1/tbs-indefinite-serial-81" }.der,
+            )
+        val read = checkNotNull(PlatformRead.of(bad))
+        assertTrue(read.platformCanon)
+        val root = PkixPki.root("Snapshot Root Canon").x509
+        val built = build(bad, root)
+        assertEquals(listOf(read.read, root.encoded).map { it.toByteString() }, built.snapshot.anchors.map { it.toByteString() })
+        assertEquals(listOf(bad.encoded, root.encoded).map { it.toByteString() }, built.snapshot.platformEncodings)
+        assertTrue(built.index.isAnchorBytes(built.index.cert(CertificateParser.parse(read.read).let { (it as CertificateParse.Parsed).certificate })))
     }
 
     @Test

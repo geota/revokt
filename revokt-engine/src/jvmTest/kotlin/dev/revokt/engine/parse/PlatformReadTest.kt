@@ -126,6 +126,22 @@ class PlatformReadTest {
     }
 
     @Test
+    fun `read the locator refuses an indefinite length and five length octets`() {
+        val sig = byteArrayOf(1)
+        val body = tbs().copyOfRange(2, tbs().size)
+        // The same content under a four-octet header is located; under five octets it is not.
+        val four = TestDer.bytes(0x30, 0x84, 0, 0, 0, body.size) + body
+        val five = TestDer.bytes(0x30, 0x85, 0, 0, 0, 0, body.size) + body
+        assertTrue(PlatformRead.canon(four, sig) != null, "four length octets")
+        assertNull(PlatformRead.canon(five, sig), "five length octets")
+        // An indefinite header, padded so a reading of 0x80 as a 128-octet length would fit and locate.
+        val indefinite = TestDer.bytes(0x30, 0x80) + body + ByteArray(140)
+        assertNull(PlatformRead.canon(indefinite, sig), "indefinite length")
+        assertEquals(null, Oracle1.platformCanon(five, sig))
+        assertEquals(null, Oracle1.platformCanon(indefinite, sig))
+    }
+
+    @Test
     fun `read the canon is oracle 1's platform canon on generated and mutated TBS bytes`() {
         val rng = SplitMix64(127)
         val base = PkixPki.x509(indefinite).tbsCertificate
