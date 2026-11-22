@@ -179,9 +179,22 @@ class AnchorSnapshotsTest {
         assertTrue(read.platformCanon)
         val root = PkixPki.root("Snapshot Root Canon").x509
         val built = build(bad, root)
-        assertEquals(listOf(read.read, root.encoded).map { it.toByteString() }, built.snapshot.anchors.map { it.toByteString() })
+        assertEquals(
+            listOf(read.read, root.encoded).map {
+                it.toByteString()
+            },
+            built.snapshot.anchors.map { it.toByteString() },
+        )
         assertEquals(listOf(bad.encoded, root.encoded).map { it.toByteString() }, built.snapshot.platformEncodings)
-        assertTrue(built.index.isAnchorBytes(built.index.cert(CertificateParser.parse(read.read).let { (it as CertificateParse.Parsed).certificate })))
+        assertTrue(
+            built.index.isAnchorBytes(
+                built.index.cert(
+                    CertificateParser.parse(read.read).let {
+                        (it as CertificateParse.Parsed).certificate
+                    },
+                ),
+            ),
+        )
     }
 
     @Test
