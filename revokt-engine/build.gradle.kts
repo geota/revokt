@@ -10,8 +10,8 @@ plugins {
 }
 
 kotlin {
-    // Expect classes (Beta in Kotlin 2.4): SeedSource, and the internal LruMap and ReadWriteGuard, until #266 moves
-    // their packages to jvmMain.
+    // Expect classes (Beta in Kotlin 2.4): the internal LruMap and ReadWriteGuard, until #266 settles where the walker
+    // and the store live.
     compilerOptions { freeCompilerArgs.add("-Xexpect-actual-classes") }
     sourceSets {
         commonMain.dependencies {

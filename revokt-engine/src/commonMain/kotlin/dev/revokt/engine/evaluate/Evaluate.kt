@@ -19,9 +19,9 @@ import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
 import dev.revokt.Verdict
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.parse.ParsedCertificate
 import dev.revokt.engine.policy.PolicyForm
-import dev.revokt.engine.update.GenerationSnapshot
 import dev.revokt.engine.walker.PathDecision
 import dev.revokt.engine.walker.absorb
 import dev.revokt.engine.walker.isFatal

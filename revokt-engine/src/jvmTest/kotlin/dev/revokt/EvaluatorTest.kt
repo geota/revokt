@@ -8,7 +8,7 @@ import dev.revokt.engine.evaluate.NOW
 import dev.revokt.engine.evaluate.StubEngine
 import dev.revokt.engine.evaluate.engineErrors
 import dev.revokt.engine.evaluate.generation
-import dev.revokt.engine.update.GenerationSnapshot
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.walker.ExpectedWalk
 import dev.revokt.engine.walker.FakeFallback
 import dev.revokt.engine.walker.FixtureCert

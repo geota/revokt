@@ -24,8 +24,8 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktPolicy
 import dev.revokt.RevoktTestingApi
 import dev.revokt.Verdict
-import dev.revokt.engine.update.DatasetGeneration
-import dev.revokt.engine.update.GenerationSnapshot
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.walker.CandidateIndex
 import dev.revokt.engine.walker.DecideContext
 import dev.revokt.engine.walker.LruMap

@@ -52,7 +52,7 @@ class EvaluateTest {
         f: WalkerFixture = honest,
         policy: RevoktPolicy = RevoktPolicy.DEFAULT,
         crlite: CrliteQueryResult = CrliteQueryResult.NOT_REVOKED,
-        generation: dev.revokt.engine.update.DatasetGeneration? = generation(),
+        generation: dev.revokt.engine.generation.DatasetGeneration? = generation(),
     ): Verdict = Run.of(f, policy, snapshot(generation), StubEngine.always(crlite)).evaluate().verdict
 
     private fun anchorIn(vararg anchors: FixtureCert): Exemption =

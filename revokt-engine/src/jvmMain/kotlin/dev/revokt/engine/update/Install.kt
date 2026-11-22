@@ -12,6 +12,8 @@ import dev.revokt.RevoktLogger
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
 import dev.revokt.engine.c2sp.C2spIndex
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.store.GenerationMeta
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.Pointer

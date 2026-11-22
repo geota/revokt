@@ -8,7 +8,7 @@ package dev.revokt
 import dev.revokt.engine.evaluate.NOW
 import dev.revokt.engine.evaluate.StubEngine
 import dev.revokt.engine.evaluate.snapshot
-import dev.revokt.engine.update.GenerationSnapshot
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.walker.CandidateIndex
 import dev.revokt.engine.walker.DecideContext
 import dev.revokt.engine.walker.DecideInputs

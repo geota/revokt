@@ -10,6 +10,8 @@ import dev.revokt.Dataset
 import dev.revokt.RevoktStorage
 import dev.revokt.SyncOutcome
 import dev.revokt.engine.fetch.client
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.MetaJson
 import dev.revokt.engine.store.Pointer

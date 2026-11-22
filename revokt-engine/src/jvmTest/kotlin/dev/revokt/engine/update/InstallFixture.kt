@@ -9,6 +9,8 @@ import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.Freshness
 import dev.revokt.RevoktStorage
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
