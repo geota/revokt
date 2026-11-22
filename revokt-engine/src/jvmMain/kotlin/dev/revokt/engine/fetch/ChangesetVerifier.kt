@@ -8,8 +8,7 @@
 package dev.revokt.engine.fetch
 
 import dev.revokt.SignatureVerifier
-import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.parse.X5uPem
 import dev.revokt.engine.parse.X5uPemRead
@@ -22,40 +21,14 @@ import dev.revokt.engine.verify.validateX5uChain
 import okio.ByteString
 
 /**
- * Why a changeset's signature did not verify (spec §7.1); [ChangesetVerification.Failed.stage] says where. [resets] when
- * a `_since` changeset that fails this way is fetched once more as the whole collection (§7.1 "reset-and-retry once"):
- * the failures Firefox's `RemoteSettingsClient.sys.mjs` (`cac25a6`, lines 861 to 888) retries as an
- * `InvalidSignatureError` (a mismatch, and its `MissingSignatureError`), whose whole collection carries its own metadata
- * and is verified afresh. An x5u failure never resets: the sync's verifier holds one x5u result per URL (§7.1), so the
- * retry would fail the same way.
+ * The failures a `_since` changeset that fails this way is fetched once more as the whole collection for (spec §7.1
+ * "reset-and-retry once"): the failures Firefox's `RemoteSettingsClient.sys.mjs` (`cac25a6`, lines 861 to 888) retries
+ * as an `InvalidSignatureError` (a mismatch, and its `MissingSignatureError`), whose whole collection carries its own
+ * metadata and is verified afresh. An x5u failure never resets: the sync's verifier holds one x5u result per URL
+ * (§7.1), so the retry would fail the same way.
  */
-internal enum class SignatureFailure(
-    val resets: Boolean,
-) {
-    /** `metadata.signatures` is absent, not an array, or empty. */
-    NO_SIGNATURES(true),
-
-    /** Every entry was skipped: none has a non-empty `signature`, a non-empty `x5u` and a `mode` absent or `p384ecdsa`. */
-    NONE_TRIED(true),
-
-    /** An element reached in the loop is JSON `null`, which Firefox's `const { x5u, signature, mode } = sig` throws on. */
-    NULL_ENTRY(true),
-
-    /** The x5u fetch failed ([ChangesetVerification.Failed.clientFailure] says how), at stage `X5U`. */
-    X5U_FETCH(false),
-
-    /** The x5u body is not a PEM chain as [X5uPem] reads it. */
-    X5U_PEM(false),
-
-    /** The x5u chain failed a check of [validateX5uChain]. */
-    X5U_CHAIN(false),
-
-    /** A link of the x5u path is outside its validity window at the local clock: `CLOCK_SKEW`, stage `X5U`. */
-    X5U_VALIDITY(false),
-
-    /** The content signature did not verify under the x5u leaf ([ContentSignature]). */
-    CONTENT_SIGNATURE(true),
-}
+internal val SyncFailure.resets: Boolean
+    get() = this == SyncFailure.NO_SIGNATURE || this == SyncFailure.SIGNATURE_INVALID
 
 /**
  * What [ChangesetVerifier.verify] found. [backoffMillis] is the longest `Backoff` or `Retry-After` of the x5u fetches
@@ -85,17 +58,14 @@ internal sealed class ChangesetVerification {
     }
 
     /**
-     * Nothing verified: a [SyncOutcome.FAILED] or [SyncOutcome.CLOCK_SKEW] sync at [stage]. For a failure of a tried
-     * entry, [index] is the last tried entry's (spec §7.1: its failure is the outcome) and, for [SignatureFailure.X5U_FETCH],
-     * [clientFailure], [httpStatus] and [cause] are the fetch's; null otherwise.
+     * Nothing verified: a `FAILED` sync with [failure]. For a failure of a tried entry, [index] is the last tried
+     * entry's (spec §7.1: its failure is the outcome) and, for an x5u fetch that failed (`X5U_URL`, `X5U_FETCH`),
+     * [httpStatus] and [cause] are the fetch's; null otherwise.
      */
     class Failed(
-        val outcome: SyncOutcome,
-        val stage: SyncStage,
-        val failure: SignatureFailure,
+        val failure: SyncFailure,
         val detail: String,
         val index: Int? = null,
-        val clientFailure: ClientFailure? = null,
         val httpStatus: Int? = null,
         val cause: Throwable? = null,
         override val backoffMillis: Long? = null,
@@ -104,9 +74,9 @@ internal sealed class ChangesetVerification {
         fun of(
             index: Int?,
             backoff: Long?,
-        ): Failed = Failed(outcome, stage, failure, detail, index, clientFailure, httpStatus, cause, backoff)
+        ): Failed = Failed(failure, detail, index, httpStatus, cause, backoff)
 
-        override fun toString(): String = "Failed($outcome, $stage, $failure at ${index ?: "-"}: $detail)"
+        override fun toString(): String = "Failed($failure at ${index ?: "-"}: $detail)"
     }
 }
 
@@ -115,13 +85,13 @@ internal sealed class ChangesetVerification {
  * `cac25a6` reads `metadata.signatures`, lines 1097 to 1132), for one sync: build one per sync and call [verify] for
  * each changeset it fetches. The sync's caller (#137) does everything around it.
  *
- * - **The entries.** An empty `metadata.signatures` is [SignatureFailure.NO_SIGNATURES], before anything is fetched.
+ * - **The entries.** An empty `metadata.signatures` is `NO_SIGNATURE`, before anything is fetched.
  *   The first [MAX_SIGNATURES] entries are tried in array order, and any after them are never read (Firefox tries
  *   every entry; the cap bounds the x5u fetches a changeset can cause). One with no `signature` or `x5u`, an empty one included (Firefox's `!x5u ||
  *   !signature`), or a `mode` present and other than `p384ecdsa` (Firefox's `mode && mode !== "p384ecdsa"`; a
  *   non-string or `""` mode is skipped too, where Firefox tries a falsy one), is skipped;
- *   when every one is, [SignatureFailure.NONE_TRIED]. A JSON `null` element reached in the loop is
- *   [SignatureFailure.NULL_ENTRY], as Firefox's destructuring throws on it. These are `FAILED` at stage `SIGNATURE`.
+ *   when every one is, `NO_SIGNATURE`. A JSON `null` element reached in the loop is `NO_SIGNATURE` too, as Firefox's
+ *   destructuring throws on it.
  * - **One entry.** Its `x5u` is fetched through [client] (the §7.1 URL rules, the rewrite and `MAX_X5U_BYTES` are
  *   its), read as PEM, validated under the client's source's pinned roots ([validateX5uChain]; taken from the source
  *   that served the changeset, so one source's changeset is never checked under another's pins) and checked at
@@ -133,8 +103,9 @@ internal sealed class ChangesetVerification {
  *   this verifier: a later entry naming it reuses the validated path, and one whose fetch or validation failed is not
  *   retried and fails the same way.
  * - **The failure.** When no tried entry verifies, the last tried entry's failure is the outcome (Firefox throws its
- *   first). A failed x5u fetch keeps the client's stage, `X5U`; a validity failure is `CLOCK_SKEW` at `X5U` (spec §4
- *   `SyncStage`); a PEM, chain or content-signature failure is `FAILED` at `SIGNATURE`.
+ *   first). A failed x5u fetch keeps the client's code, `X5U_URL` or `X5U_FETCH`; a validity failure is `CLOCK_SKEW`;
+ *   a PEM or chain failure is `X5U_CHAIN`, and a content-signature failure `SIGNATURE_INVALID` (spec §4
+ *   `SyncFailure`).
  *
  * Nothing here throws but a fatal error, as in the client and the verifiers it calls.
  */
@@ -166,13 +137,13 @@ internal class ChangesetVerifier(
     ): ChangesetVerification {
         val entries = changeset.signatures
         if (entries.isEmpty()) {
-            return failed(SignatureFailure.NO_SIGNATURES, "metadata.signatures is absent, not an array or empty")
+            return failed(SyncFailure.NO_SIGNATURE, "metadata.signatures is absent, not an array or empty")
         }
         var backoff: Long? = null
         var last: ChangesetVerification.Failed? = null
         for ((index, entry) in entries.take(MAX_SIGNATURES).withIndex()) {
             if (entry == null) {
-                return failed(SignatureFailure.NULL_ENTRY, "metadata.signatures[$index] is null").of(index, backoff)
+                return failed(SyncFailure.NO_SIGNATURE, "metadata.signatures[$index] is null").of(index, backoff)
             }
             val signature = entry.signature
             val url = entry.x5u
@@ -190,7 +161,7 @@ internal class ChangesetVerifier(
         }
         return last?.of(last.index, backoff)
             ?: failed(
-                SignatureFailure.NONE_TRIED,
+                SyncFailure.NO_SIGNATURE,
                 "no entry has a signature, an x5u and no mode or ${ContentSignature.MODE}",
             )
     }
@@ -223,7 +194,7 @@ internal class ChangesetVerifier(
             return ChangesetVerification.Verified(index, entry, records, timestamp, x5u.body, path, null)
         }
         val error = checked.verifierError?.let { ", $it" } ?: ""
-        return failed(SignatureFailure.CONTENT_SIGNATURE, "${checked.failure}$error").of(index, null)
+        return failed(SyncFailure.SIGNATURE_INVALID, "${checked.failure}$error").of(index, null)
     }
 
     /** The x5u at [url], fetched, read as PEM, validated and checked at [nowMillis]; with the fetch's backoff. */
@@ -236,26 +207,20 @@ internal class ChangesetVerifier(
             is ClientResult.Failed -> {
                 val failure =
                     ChangesetVerification.Failed(
-                        SyncOutcome.FAILED,
-                        fetched.stage,
-                        SignatureFailure.X5U_FETCH,
-                        "${fetched.failure}: ${fetched.detail}",
-                        clientFailure = fetched.failure,
+                        fetched.failure,
+                        fetched.detail,
                         httpStatus = fetched.httpStatus,
                         cause = fetched.cause,
                     )
                 X5u.Invalid(failure) to fetched.backoffMillis
             }
 
-            // The x5u fetch is unconditional, so the client answers a 304 with HTTP_STATUS and this is not reached.
+            // The x5u fetch is unconditional, so the client answers a 304 as a failed status and this is not reached.
             is ClientResult.Unchanged -> {
                 val failure =
                     ChangesetVerification.Failed(
-                        SyncOutcome.FAILED,
-                        SyncStage.X5U,
-                        SignatureFailure.X5U_FETCH,
+                        SyncFailure.X5U_FETCH,
                         "304 to an unconditional x5u fetch",
-                        clientFailure = ClientFailure.HTTP_STATUS,
                         httpStatus = fetched.httpStatus,
                     )
                 X5u.Invalid(failure) to fetched.backoffMillis
@@ -266,12 +231,12 @@ internal class ChangesetVerifier(
         val ders =
             when (val read = X5uPem.read(body.toByteArray(), client.limits.maxX5uBytes)) {
                 is X5uPemRead.Certificates -> read.ders
-                is X5uPemRead.Failed -> return invalid(SignatureFailure.X5U_PEM, "${read.reason}: ${read.detail}")
+                is X5uPemRead.Failed -> return invalid(SyncFailure.X5U_CHAIN, "${read.reason}: ${read.detail}")
             }
         val path =
             when (val chain = validateX5uChain(ders, client.source.pinnedRootSpkis, verifier)) {
                 is X5uChainResult.Valid -> chain.path
-                is X5uChainResult.Failed -> return invalid(SignatureFailure.X5U_CHAIN, chain.toString())
+                is X5uChainResult.Failed -> return invalid(SyncFailure.X5U_CHAIN, chain.toString())
             }
         return when (val validity = checkValidity(path, nowMillis)) {
             is X5uValidity.Valid -> {
@@ -281,9 +246,7 @@ internal class ChangesetVerifier(
             is X5uValidity.ClockSkew -> {
                 val failure =
                     ChangesetVerification.Failed(
-                        SyncOutcome.CLOCK_SKEW,
-                        SyncStage.X5U,
-                        SignatureFailure.X5U_VALIDITY,
+                        SyncFailure.CLOCK_SKEW,
                         "link ${validity.certIndex}: ${validity.detail}",
                     )
                 X5u.Invalid(failure)
@@ -295,15 +258,13 @@ internal class ChangesetVerifier(
         /** The most `metadata.signatures` entries tried, the first in array order; later ones are ignored (spec §7.1). */
         const val MAX_SIGNATURES = 4
 
-        /** `FAILED` at stage `SIGNATURE`. */
         private fun failed(
-            failure: SignatureFailure,
+            failure: SyncFailure,
             detail: String,
-        ): ChangesetVerification.Failed =
-            ChangesetVerification.Failed(SyncOutcome.FAILED, SyncStage.SIGNATURE, failure, detail)
+        ): ChangesetVerification.Failed = ChangesetVerification.Failed(failure, detail)
 
         private fun invalid(
-            failure: SignatureFailure,
+            failure: SyncFailure,
             detail: String,
         ): X5u = X5u.Invalid(failed(failure, detail))
 

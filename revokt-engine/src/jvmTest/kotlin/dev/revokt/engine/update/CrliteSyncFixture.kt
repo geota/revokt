@@ -8,7 +8,6 @@ package dev.revokt.engine.update
 import dev.revokt.CrliteChannel
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.FilterFormat
@@ -18,9 +17,10 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktStorage
 import dev.revokt.SignatureVerifier
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
 import dev.revokt.VerifyResult
+import dev.revokt.WarningCode
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.fetch.FetchLimits
 import dev.revokt.engine.fetch.ScriptedFetcher
@@ -296,19 +296,25 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
             logger,
         ).syncOnce(now)
 
+    /** [outcome], `INSTALLED` or `UNCHANGED`, with no failure and the warnings [codes], in order. */
     protected fun SyncRun.assert(
         outcome: SyncOutcome,
-        stage: SyncStage? = null,
-        vararg codes: DiagnosticCode,
+        vararg codes: WarningCode,
     ): SyncRun {
-        assertEquals(outcome to stage, result.outcome to result.stage, "$result")
+        assertEquals(outcome to null, result.outcome to result.failure, "$result")
         assertEquals(codes.toList(), result.warnings.map { it.code }, "$result")
         return this
     }
 
-    /** A failure's warnings: `SYNC_FAILED`, then [codes]. */
-    protected fun failed(vararg codes: DiagnosticCode): Array<DiagnosticCode> =
-        arrayOf(DiagnosticCode.SYNC_FAILED, *codes)
+    /** A sync that stopped with [failure], so with its outcome, `SKIPPED` or `FAILED`, and the warnings [codes]. */
+    protected fun SyncRun.assert(
+        failure: SyncFailure,
+        vararg codes: WarningCode,
+    ): SyncRun {
+        assertEquals(failure.outcome to failure, result.outcome to result.failure, "$result")
+        assertEquals(codes.toList(), result.warnings.map { it.code }, "$result")
+        return this
+    }
 
     protected fun updater(now: Long = ts + hour): UpdaterRecord =
         (store.updater(now) as? StoreRead.Found)?.value?.record ?: UpdaterRecord()

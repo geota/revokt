@@ -8,13 +8,14 @@ import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.HttpFetcher
 import dev.revokt.MozillaRemoteSettings
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonObject
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /** A scripted [HttpFetcher]: answers each request with [answer] and records every request it was handed. */
 internal class ScriptedFetcher(
@@ -54,13 +55,18 @@ internal fun client(
 
 internal fun json(text: String): JsonObject = Json.parse(text.encodeToByteArray()) as JsonObject
 
-/** The result as a [ClientResult.Failed] at [stage] for [failure]. */
+/**
+ * The result as a [ClientResult.Failed] with [failure], whose detail holds [detail] when given: the detail is what
+ * tells one failure of an exchange (a throw, a timeout, a status, an oversize body) from another under one fetch's
+ * code.
+ */
 internal fun ClientResult<*>.assertFailed(
-    stage: SyncStage,
-    failure: ClientFailure,
+    failure: SyncFailure,
+    detail: String? = null,
 ): ClientResult.Failed {
-    val failed = assertIs<ClientResult.Failed>(this, "expected $failure at $stage, got $this")
-    assertEquals(stage to failure, failed.stage to failed.failure, failed.detail)
+    val failed = assertIs<ClientResult.Failed>(this, "expected $failure, got $this")
+    assertEquals(failure, failed.failure, failed.detail)
+    if (detail != null) assertTrue(detail in failed.detail, "expected \"$detail\" in: ${failed.detail}")
     return failed
 }
 

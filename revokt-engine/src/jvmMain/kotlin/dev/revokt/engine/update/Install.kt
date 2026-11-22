@@ -3,14 +3,12 @@
 
 package dev.revokt.engine.update
 
-import dev.revokt.DiagnosticCode
 import dev.revokt.LogLevel
 import dev.revokt.PreparedGeneration
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLogger
-import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
@@ -70,7 +68,7 @@ internal class Publication(
 }
 
 /**
- * How an install ended: typed, so the sync (#137) maps it to `SyncOutcome`/`SyncStage` and the seed loader (#138) to
+ * How an install ended: typed, so the sync (#137) ends with its [SyncFailure] and the seed loader (#138) maps it to
  * `SEED_UNREADABLE`. [storeFailures] is what the install adds to `storeFailures` (spec §6.5).
  */
 internal sealed interface InstallResult {
@@ -92,22 +90,19 @@ internal sealed interface InstallResult {
     }
 
     /**
-     * [outcome] is `FAILED` or `STORE_FAILED`, at [stage], with [code] when the spec names one. [activated] is true when
-     * the failure came after `activate` returned: a store failure at the pointer flip or `updater.json` (`STORE_FAILED`
-     * at `STORE`, the snapshot published), or a fatal error such as an `OutOfMemoryError` while publishing (`FAILED` at
-     * `ACTIVATE`, the snapshot possibly not published). The engine then holds the new generation and its directory
-     * stays. Otherwise the engine, the snapshot and the pointer are untouched, and any directory this install wrote is
-     * deleted.
+     * The install failed with [failure]. [activated] is true when the failure came after `activate` returned: a store
+     * failure at the pointer flip or `updater.json` (`STORE_FAILED`, the snapshot published), or a fatal error such as
+     * an `OutOfMemoryError` while publishing (`INTERNAL_ERROR`, the snapshot possibly not published). The engine then
+     * holds the new generation and its directory stays. Otherwise the engine, the snapshot and the pointer are
+     * untouched, and any directory this install wrote is deleted.
      */
     class Failed(
-        val outcome: SyncOutcome,
-        val stage: SyncStage,
-        val code: DiagnosticCode?,
+        val failure: SyncFailure,
         val cause: Throwable?,
         val activated: Boolean,
         override val storeFailures: Int,
     ) : InstallResult {
-        override fun toString(): String = "Failed($outcome at $stage, code=$code, activated=$activated, cause=$cause)"
+        override fun toString(): String = "Failed($failure, activated=$activated, cause=$cause)"
     }
 }
 
@@ -119,9 +114,9 @@ internal sealed interface InstallResult {
  *
  * Nothing becomes live before every check passes. A failure before `activate` returns leaves the engine, [snapshot] and
  * the pointer untouched and deletes the directory this install wrote (its blobs stay, content-addressed); a `prepare`
- * or `activate` failure counts a store failure. A store write failure is `STORE_FAILED` at `STORE`. Every
- * throwable is caught, an `OutOfMemoryError` included, which is `FAILED` at the stage it hit with a store failure, so
- * nothing escapes the loader thread.
+ * or `activate` failure counts a store failure. A store write failure is `STORE_FAILED`, a `prepare` or `activate`
+ * throw `ENGINE_FAILED`. Every throwable is caught, an `OutOfMemoryError` included, which counts a store failure and is
+ * `ENGINE_FAILED` in the engine's steps and `INTERNAL_ERROR` elsewhere, so nothing escapes the loader thread.
  *
  * The publish follows `activate`: a verdict in between carries the new answer under the old epoch, for at most the
  * verdict-cache TTL (§6.5). The loader runs this on its dispatcher, or the `start()` caller in the sole-seed path, never
@@ -150,7 +145,11 @@ private class Install(
     private val logger: RevoktLogger,
 ) {
     private val meta = generation.meta
-    private var stage = SyncStage.INDEX
+
+    /**
+     * What a throw here fails the install with: `STORE_FAILED` (a non-fatal one), `ENGINE_FAILED` or `INTERNAL_ERROR`.
+     */
+    private var step = SyncFailure.INTERNAL_ERROR
     private var storeFailures = 0
 
     /** The directory of the generation the engine held live when this install began, before its publish. */
@@ -172,35 +171,33 @@ private class Install(
             // An injected engine's prepare or activate may have cleared the interrupt flag; a fatal error is FAILED
             // here, never rethrown, since nothing escapes the loader (§6.5).
             restoreInterrupt(t)
-            val storeWrite = stage == SyncStage.STORE && !isFatal(t)
-            fail(if (storeWrite) SyncOutcome.STORE_FAILED else SyncOutcome.FAILED, null, t)
+            fail(if (step == SyncFailure.STORE_FAILED && isFatal(t)) SyncFailure.INTERNAL_ERROR else step, t)
         }
 
     private fun steps(): InstallResult {
-        stage = SyncStage.STORE
+        step = SyncFailure.STORE_FAILED
         val directory = meta.directory
         val (held, existing) = claim(directory)
-        stage = SyncStage.INDEX
+        step = SyncFailure.INTERNAL_ERROR
         if (generation.index.size > C2spIndex.MAX_BYTES) {
             // §3.2: a built index over the cap fails before the directory is written.
-            return fail(SyncOutcome.FAILED, DiagnosticCode.INDEX_INCONSISTENT, null, counted = false)
+            return fail(SyncFailure.INDEX_INCONSISTENT, null, counted = false)
         }
-        stage = SyncStage.PREPARE
         if (meta.format !in engine.formats) {
-            return fail(SyncOutcome.FAILED, DiagnosticCode.FORMAT_UNSUPPORTED, null, counted = false)
+            return fail(SyncFailure.FORMAT_UNSUPPORTED, null, counted = false)
         }
-        stage = SyncStage.STORE
+        step = SyncFailure.STORE_FAILED
         directory(directory, held, existing)?.let { return it }
         val files =
             store.readGeneration(directory)?.files
-                ?: return fail(SyncOutcome.STORE_FAILED, null, IllegalStateException("$directory does not read back"))
-        stage = SyncStage.PREPARE
+                ?: return fail(SyncFailure.STORE_FAILED, IllegalStateException("$directory does not read back"))
+        step = SyncFailure.ENGINE_FAILED
         val p = engine.prepare(files).also { prepared = it }
-        stage = SyncStage.ACTIVATE
         engine.activate(p)
         activated = true
+        step = SyncFailure.INTERNAL_ERROR
         val epoch = publish()
-        stage = SyncStage.STORE
+        step = SyncFailure.STORE_FAILED
         store.point(Pointer(directory, previous(directory)))
         updater?.let { store.writeUpdater(it, publication.nowMillis) }
         return InstallResult.Installed(directory, meta.generationId, epoch, storeFailures, healing)
@@ -261,10 +258,10 @@ private class Install(
             if (existing is StoreRead.Found) {
                 if (sameGeneration(existing.value, directory)) return null
                 val cause = IllegalStateException("$directory holds another generation")
-                return fail(SyncOutcome.STORE_FAILED, null, cause)
+                return fail(SyncFailure.STORE_FAILED, cause)
             }
             val cause = IllegalStateException("$directory is held, and its meta.json is not readable")
-            return fail(SyncOutcome.STORE_FAILED, null, cause)
+            return fail(SyncFailure.STORE_FAILED, cause)
         }
         if (existing is StoreRead.Found) {
             // A complete orphan: only once reopen accepts it (never a pointed one) is it this install's to delete.
@@ -395,12 +392,11 @@ private class Install(
 
     /**
      * Ends the install as [outcome]: before activation, closes the prepared generation and deletes the directory this
-     * install wrote. [counted] adds the store failure the stage's failure counts.
+     * install wrote. [counted] adds the store failure the step's failure counts.
      */
     @Suppress("TooGenericExceptionCaught") // §6.5: the failure path catches every throwable too.
     private fun fail(
-        outcome: SyncOutcome,
-        code: DiagnosticCode?,
+        failure: SyncFailure,
         cause: Throwable?,
         counted: Boolean = true,
     ): InstallResult {
@@ -420,6 +416,6 @@ private class Install(
                 }
             }
         }
-        return InstallResult.Failed(outcome, stage, code, cause, activated, storeFailures)
+        return InstallResult.Failed(failure, cause, activated, storeFailures)
     }
 }

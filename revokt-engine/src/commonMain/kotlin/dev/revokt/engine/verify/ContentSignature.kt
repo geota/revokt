@@ -16,7 +16,7 @@ import dev.revokt.engine.json.JsonString
 import dev.revokt.engine.json.NonIntegerNumberException
 import dev.revokt.verify.verifyClassified
 
-/** Why a content signature failed; every one is `SyncOutcome.FAILED` at stage `SIGNATURE` (spec §7.1). */
+/** Why a content signature failed; every one is `SyncFailure.SIGNATURE_INVALID` (spec §7.1). */
 internal enum class ContentSignatureFailure {
     /** The entry's `mode` is absent or not [ContentSignature.MODE]. */
     MODE,

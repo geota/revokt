@@ -3,7 +3,7 @@
 
 package dev.revokt.engine.fetch
 
-/** Why an x5u URL is refused before any fetch; each is `SyncOutcome.FAILED` at stage `X5U` (spec §7.1). */
+/** Why an x5u URL is refused before any fetch; each is `SyncFailure.X5U_URL` (spec §7.1). */
 internal enum class X5uUrlFailure {
     /** Not `https://host[:port]/path`, as [X5uUrl] reads it. */
     SYNTAX,
