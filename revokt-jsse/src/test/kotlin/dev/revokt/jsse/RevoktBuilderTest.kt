@@ -340,10 +340,41 @@ class RevoktBuilderTest {
     }
 
     @Test
+    fun `no rejected source URL's message repeats the URL or its credentials`() {
+        val rejected =
+            listOf(
+                "https://user:secret@host/",
+                "http://user:secret@host/",
+                "https:user:secret@host/",
+                "https://host/v1?token=secret",
+                "https://host/v1#secret",
+                "https://host:99999/secret",
+                "ftp://host/secret",
+                "https://under_score/secret",
+                "https:///secret",
+                "https://user:secret@host/v 1",
+            )
+        for (url in rejected) {
+            for (builder in listOf(
+                bare().remoteSettings(remoteSettings(baseUrl = url)),
+                bare().remoteSettings(remoteSettings(attachmentBaseUrl = url)),
+            )) {
+                val e = assertFailsWith<IllegalArgumentException> { builder.build() }
+                val message = e.message.orEmpty()
+                assertTrue(message.startsWith("remoteSettings."), message)
+                assertFalse("secret" in message || url in message, "$url: $message")
+                assertNull(e.cause, url)
+            }
+        }
+        val e = assertRefused("userinfo", bare().remoteSettings(remoteSettings(baseUrl = "https://user:secret@host/")))
+        assertEquals("remoteSettings.baseUrl has userinfo, which a source URL never carries (spec §4)", e.message)
+    }
+
+    @Test
     fun `a base URL with no host, or that is no URL at all, throws`() {
-        assertRefused("no host", bare().remoteSettings(remoteSettings(baseUrl = "https:///v1")))
+        assertRefused("no authority", bare().remoteSettings(remoteSettings(baseUrl = "https:///v1")))
         assertRefused("no host", bare().remoteSettings(remoteSettings(baseUrl = "https://under_score/v1")))
-        assertRefused("no host", bare().remoteSettings(remoteSettings(baseUrl = "https:mirror.example/v1")))
+        assertRefused("no authority", bare().remoteSettings(remoteSettings(baseUrl = "https:mirror.example/v1")))
         val e =
             assertRefused(
                 "not a URL",

@@ -96,8 +96,8 @@ private fun requireBuildable(builder: Revokt.Builder) {
             "configure seed(SeedSource.none()) and no remote settings (spec §4)"
     }
     builder.remoteSettings?.let { source ->
-        requireSourceUrl("baseUrl", source.baseUrl)
-        source.attachmentBaseUrl?.let { requireSourceUrl("attachmentBaseUrl", it) }
+        requireSourceUrl("remoteSettings.baseUrl", source.baseUrl)
+        source.attachmentBaseUrl?.let { requireSourceUrl("remoteSettings.attachmentBaseUrl", it) }
     }
     requireCap("maxFilterBytes", builder.maxFilterBytes, RevoktLimits.MAX_FILTER_BYTES)
     requireCap("maxJsonBytes", builder.maxJsonBytes, RevoktLimits.MAX_JSON_BYTES)
@@ -115,8 +115,10 @@ private fun requireBuildable(builder: Revokt.Builder) {
  * 65535 or none, read by `java.net.URI`. That is what the default fetch path accepts: the client joins each request's
  * path to the base and hands the result to `JdkHttpFetcher`, which parses it with `java.net.URI` and fetches `https`
  * only, so a URL refused here would build and then fail every sync. A query or a fragment would swallow the joined
- * path. A message never repeats a URL that may carry credentials, nor chains the parser's exception, whose message
- * holds the input.
+ * path. A message names the field and the rule that failed, never the URL or any part of it: a rejected URL may
+ * carry credentials (userinfo, or a token in a query) that would otherwise reach the exception and the app's logs. Nor
+ * does it chain the parser's exception, whose message holds the input. An opaque or authority-less URI is refused
+ * first, before any part of it is read.
  */
 internal fun requireSourceUrl(
     what: String,
@@ -131,16 +133,16 @@ internal fun requireSourceUrl(
         ) {
             throw IllegalArgumentException("$what is not a URL (spec §4): ${e.reason} at index ${e.index}")
         }
-    require(
-        uri.rawAuthority?.contains('@') != true,
-    ) { "$what has userinfo, which a source URL never carries (spec §4)" }
-    require("https".equals(uri.scheme, ignoreCase = true)) { "$what \"$url\" is not an https URL (spec §4)" }
-    require(uri.host != null) { "$what \"$url\" has no host (spec §4)" }
+    val authority = uri.rawAuthority
+    require(authority != null) { "$what has no authority, so no host: not an https://host URL (spec §4)" }
+    require('@' !in authority) { "$what has userinfo, which a source URL never carries (spec §4)" }
+    require("https".equals(uri.scheme, ignoreCase = true)) { "$what is not an https URL (spec §4)" }
+    require(uri.host != null) { "$what has no host (spec §4)" }
     require(uri.port == -1 || uri.port in 1..MAX_PORT) {
-        "$what \"$url\" has port ${uri.port}, outside 1 to $MAX_PORT (spec §4)"
+        "$what has port ${uri.port}, outside 1 to $MAX_PORT (spec §4)"
     }
     require(uri.rawQuery == null && uri.rawFragment == null) {
-        "$what \"$url\" has a query or a fragment, which the request path joined to it would end up in (spec §4)"
+        "$what has a query or a fragment, which the request path joined to it would end up in (spec §4)"
     }
 }
 
