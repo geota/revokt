@@ -12,7 +12,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** The path enums and the walk's findings as spec §4 declares them (#104): value types, invariants and fresh copies. */
-@OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
+@OptIn(RevoktTestingApi::class)
 class FindingTest {
     private fun hash(b: Int) = ByteArray(32) { b.toByte() }
 
@@ -21,62 +21,27 @@ class FindingTest {
             .Builder()
             .status(PathStatus.FOUND)
             .source(ChainSource.RECONSTRUCTED)
-            .terminalKind(TerminalKind.ANCHOR)
-            .endReason(WalkEnd.COMPLETE)
-            .endDepth(3)
-            .anchorSnapshotId(7)
-            .pathsFound(1)
-            .reportedPathSha256s(listOf(hash(1), hash(2), hash(3)))
             .issuerSpkiSha256s(listOf(hash(4)))
             .anchorSha256(hash(3))
-            .walkStats(WalkStats(2, 2, 1, 0))
             .build()
 
-    /**
-     * Every field set away from its builder default, so a round trip that drops one shows. The reason fields exclude
-     * each other, so a NO_ISSUER and a PARSE_FAILED fixture between them set all three; credentialType has only X509.
-     */
-    private fun everyField(status: PathStatus): Finding.Path =
+    /** Every field set away from its builder default, so a round trip that drops one shows. */
+    private fun everyField(): Finding.Path =
         Finding.Path
             .Builder()
-            .status(status)
+            .status(PathStatus.NO_ISSUER)
             .source(ChainSource.PLATFORM)
-            .noIssuerReason(NoIssuerReason.PLATFORM_ONLY.takeIf { status == PathStatus.NO_ISSUER })
-            .walkerReason(NoIssuerReason.UNANCHORED)
-            .parseReason(ParseReason.PRODUCER_UNKEYABLE.takeIf { status == PathStatus.PARSE_FAILED })
-            .keyabilityClause(KeyabilityClause.TIME.takeIf { status == PathStatus.PARSE_FAILED })
-            .terminalKind(TerminalKind.ANCHOR)
-            .rewalkEnd(WalkEnd.VERIFICATION_BUDGET)
-            .endReason(WalkEnd.EXPLORATION_BUDGET)
-            .endDepth(2)
-            .cacheHit(true)
-            .anchorSnapshotId(11)
-            .usedFallback(true)
-            .pathsFound(3)
-            .reportedPathSha256s(listOf(hash(1), hash(3)))
+            .reason(PathReason.PLATFORM_ONLY)
             .issuerSpkiSha256s(listOf(hash(4), hash(5)))
-            .candidatesDropped(2)
             .anchorSha256(hash(3))
-            .walkStats(WalkStats(5, 6, 7, 8))
-            .credentialType(CredentialType.X509)
             .build()
 
-    private fun noIssuer(reason: NoIssuerReason) =
+    private fun withReason(reason: PathReason) =
         found()
             .newBuilder()
-            .status(PathStatus.NO_ISSUER)
-            .noIssuerReason(reason)
+            .status(reason.status)
+            .reason(reason)
             .build()
-
-    private fun parseFailed(
-        reason: ParseReason,
-        clause: KeyabilityClause? = null,
-    ) = found()
-        .newBuilder()
-        .status(PathStatus.PARSE_FAILED)
-        .parseReason(reason)
-        .keyabilityClause(clause)
-        .build()
 
     private fun assertValueSemantics(
         a: Any,
@@ -115,80 +80,69 @@ class FindingTest {
     }
 
     @Test
+    fun `PathReason entries are the spec's, each with its status`() {
+        val spec =
+            listOf(
+                "NO_CANDIDATE" to PathStatus.NO_ISSUER,
+                "ALL_CANDIDATES_INVALID" to PathStatus.NO_ISSUER,
+                "UNANCHORED" to PathStatus.NO_ISSUER,
+                "UNSUPPORTED_ALGORITHM" to PathStatus.NO_ISSUER,
+                "PLATFORM_ONLY" to PathStatus.NO_ISSUER,
+                "STRUCTURE" to PathStatus.PARSE_FAILED,
+                "OVERSIZE" to PathStatus.PARSE_FAILED,
+                "PRODUCER_UNKEYABLE" to PathStatus.PARSE_FAILED,
+                "RELATED_BUDGET" to PathStatus.PATH_BUDGET_EXCEEDED,
+                "VERIFICATION_BUDGET" to PathStatus.PATH_BUDGET_EXCEEDED,
+                "EXPLORATION_BUDGET" to PathStatus.PATH_BUDGET_EXCEEDED,
+                "FALLBACK_LIMIT" to PathStatus.PATH_BUDGET_EXCEEDED,
+            )
+        assertEquals(spec, PathReason.entries.map { it.name to it.status })
+        // The union: every walker and parse reason, and every budget a walk ends on, is a reason of its own name.
+        val names = PathReason.entries.map { it.name }
+        assertTrue(names.containsAll(NoIssuerReason.entries.map { it.name }))
+        assertTrue(names.containsAll(ParseReason.entries.map { it.name }))
+        assertTrue(names.containsAll(WalkEnd.entries.filter { it != WalkEnd.COMPLETE }.map { it.name }))
+    }
+
+    @Test
     fun `a path built from equal inputs is equal, and newBuilder round-trips`() {
         assertValueSemantics(found(), found())
         assertValueSemantics(found(), found().newBuilder().build())
-        for (p in listOf(everyField(PathStatus.NO_ISSUER), everyField(PathStatus.PARSE_FAILED))) {
-            assertValueSemantics(p, p.newBuilder().build())
+        assertValueSemantics(everyField(), everyField().newBuilder().build())
+        for (reason in PathReason.entries) {
+            assertValueSemantics(
+                withReason(reason),
+                withReason(reason).newBuilder().build(),
+            )
         }
         assertNotEquals<Any>(found(), "path")
     }
 
     @Test
     fun `every path field takes part in equality`() {
-        val base = found()
+        val base = everyField()
         val changed =
             mapOf<String, Finding.Path.Builder.() -> Finding.Path.Builder>(
-                "status" to { status(PathStatus.PATH_BUDGET_EXCEEDED) },
-                "source" to { source(ChainSource.PLATFORM) },
-                "walkerReason" to { walkerReason(NoIssuerReason.NO_CANDIDATE) },
-                "terminalKind" to { terminalKind(null) },
-                "rewalkEnd" to { rewalkEnd(WalkEnd.COMPLETE) },
-                "endReason" to { endReason(WalkEnd.RELATED_BUDGET) },
-                "endDepth" to { endDepth(4) },
-                "cacheHit" to { cacheHit(true) },
-                "anchorSnapshotId" to { anchorSnapshotId(8) },
-                "usedFallback" to { usedFallback(true) },
-                "pathsFound" to { pathsFound(2) },
-                "reportedPathSha256s" to { reportedPathSha256s(listOf(hash(3), hash(2), hash(1))) },
-                "issuerSpkiSha256s" to { issuerSpkiSha256s(listOf(hash(4), hash(5))) },
-                "candidatesDropped" to { candidatesDropped(1) },
+                "status" to { status(PathStatus.PATH_BUDGET_EXCEEDED).reason(PathReason.RELATED_BUDGET) },
+                "source" to { source(ChainSource.RECONSTRUCTED) },
+                "reason" to { reason(PathReason.UNANCHORED) },
+                "issuerSpkiSha256s" to { issuerSpkiSha256s(listOf(hash(5), hash(4))) },
                 "anchorSha256" to { anchorSha256(null) },
-                "walkStats" to { walkStats(WalkStats(2, 2, 1, 1)) },
-                // credentialType has one value in M1 (X509), so no second value to differ by.
             )
         for ((field, change) in changed) {
             assertNotEquals(base, base.newBuilder().change().build(), field)
         }
-        // The reason fields are set only with their status, so each differs from a sibling of the same status.
-        assertNotEquals(noIssuer(NoIssuerReason.NO_CANDIDATE), noIssuer(NoIssuerReason.UNANCHORED))
-        assertNotEquals(parseFailed(ParseReason.STRUCTURE), parseFailed(ParseReason.OVERSIZE))
-        assertNotEquals(
-            parseFailed(ParseReason.PRODUCER_UNKEYABLE, KeyabilityClause.HEADER),
-            parseFailed(ParseReason.PRODUCER_UNKEYABLE, KeyabilityClause.KEY),
-        )
     }
 
     @Test
     fun `toString names every path field and prints hashes in hex`() {
-        val text = noIssuer(NoIssuerReason.UNANCHORED).toString()
-        val fields =
-            listOf(
-                "status",
-                "source",
-                "noIssuerReason",
-                "walkerReason",
-                "parseReason",
-                "keyabilityClause",
-                "terminalKind",
-                "rewalkEnd",
-                "endReason",
-                "endDepth",
-                "cacheHit",
-                "anchorSnapshotId",
-                "usedFallback",
-                "pathsFound",
-                "reportedPathSha256s",
-                "issuerSpkiSha256s",
-                "candidatesDropped",
-                "anchorSha256",
-                "walkStats",
-                "credentialType",
-            )
-        for (field in fields) assertTrue("$field=" in text, "$field missing from $text")
-        assertTrue(text.startsWith("Path(status=NO_ISSUER, source=RECONSTRUCTED, noIssuerReason=UNANCHORED"), text)
+        val text = everyField().toString()
+        for (field in listOf("status", "source", "reason", "issuerSpkiSha256s", "anchorSha256")) {
+            assertTrue("$field=" in text, "$field missing from $text")
+        }
+        assertTrue(text.startsWith("Path(status=NO_ISSUER, source=PLATFORM, reason=PLATFORM_ONLY"), text)
         assertTrue("anchorSha256=${"03".repeat(32)}" in text, text)
-        assertTrue("issuerSpkiSha256s=[${"04".repeat(32)}]" in text, text)
+        assertTrue("issuerSpkiSha256s=[${"04".repeat(32)}, ${"05".repeat(32)}]" in text, text)
     }
 
     @Test
@@ -199,19 +153,9 @@ class FindingTest {
                 .status(PathStatus.NOT_WALKED)
                 .source(ChainSource.RECONSTRUCTED)
                 .build()
-        assertNull(p.terminalKind)
-        assertNull(p.endReason)
-        assertNull(p.endDepth)
+        assertNull(p.reason)
         assertNull(p.anchorSha256)
-        assertEquals(0, p.anchorSnapshotId)
-        assertEquals(0, p.pathsFound)
-        assertEquals(0, p.candidatesDropped)
-        assertEquals(false, p.cacheHit)
-        assertEquals(false, p.usedFallback)
-        assertEquals(emptyList(), p.reportedPathSha256s)
         assertEquals(emptyList(), p.issuerSpkiSha256s)
-        assertEquals(WalkStats(0, 0, 0, 0), p.walkStats)
-        assertEquals(CredentialType.X509, p.credentialType)
         val noSource =
             assertFailsWith<IllegalArgumentException> {
                 Finding.Path
@@ -231,63 +175,47 @@ class FindingTest {
     }
 
     @Test
-    fun `each path invariant throws when broken, in both directions`() {
-        fun broken(change: Finding.Path.Builder.() -> Finding.Path.Builder): String =
-            assertFailsWith<IllegalArgumentException> { found().newBuilder().change().build() }.message!!
-        assertTrue(
-            "parseReason is set exactly when status is PARSE_FAILED" in broken { parseReason(ParseReason.STRUCTURE) },
-        )
-        assertTrue(
-            "parseReason is set exactly when status is PARSE_FAILED" in broken { status(PathStatus.PARSE_FAILED) },
-        )
-        assertTrue(
-            "keyabilityClause is set exactly when parseReason is PRODUCER_UNKEYABLE" in
-                broken {
-                    status(
-                        PathStatus.PARSE_FAILED,
-                    ).parseReason(ParseReason.STRUCTURE).keyabilityClause(KeyabilityClause.OID)
-                },
-        )
-        assertTrue(
-            "keyabilityClause is set exactly when parseReason is PRODUCER_UNKEYABLE" in
-                broken { status(PathStatus.PARSE_FAILED).parseReason(ParseReason.PRODUCER_UNKEYABLE) },
-        )
-        assertTrue("noIssuerReason is set exactly when status is NO_ISSUER" in broken { status(PathStatus.NO_ISSUER) })
-        assertTrue(
-            "noIssuerReason is set exactly when status is NO_ISSUER" in
-                broken { noIssuerReason(NoIssuerReason.NO_CANDIDATE) },
-        )
-        // The walker's own reason is not tied to the status: PLATFORM_ONLY keeps it after a later promotion.
-        assertEquals(
-            NoIssuerReason.NO_CANDIDATE,
-            found()
-                .newBuilder()
-                .walkerReason(NoIssuerReason.NO_CANDIDATE)
-                .build()
-                .walkerReason,
-        )
+    fun `the reason invariant throws when broken, in both directions`() {
+        fun broken(
+            status: PathStatus,
+            reason: PathReason?,
+        ): String =
+            assertFailsWith<IllegalArgumentException>("$status, $reason") {
+                found()
+                    .newBuilder()
+                    .status(status)
+                    .reason(reason)
+                    .build()
+            }.message!!
+        val explained = setOf(PathStatus.NO_ISSUER, PathStatus.PARSE_FAILED, PathStatus.PATH_BUDGET_EXCEEDED)
+        for (status in PathStatus.entries) {
+            if (status in explained) {
+                assertTrue("reason is set exactly when status is NO_ISSUER" in broken(status, null), "$status")
+                for (reason in PathReason.entries.filter { it.status != status }) {
+                    assertTrue("is not a $status reason" in broken(status, reason), "$status, $reason")
+                }
+            } else {
+                for (reason in PathReason.entries) {
+                    assertTrue("reason is set exactly when status is NO_ISSUER" in broken(status, reason), "$status")
+                }
+            }
+        }
     }
 
     @Test
     fun `the builder copies what it is given and the getters hand out copies`() {
-        val leaf = hash(1)
         val issuer = hash(4)
         val anchor = hash(3)
         val p =
             found()
                 .newBuilder()
-                .reportedPathSha256s(listOf(leaf, anchor))
                 .issuerSpkiSha256s(listOf(issuer))
                 .anchorSha256(anchor)
                 .build()
-        leaf[0] = 9
         issuer[0] = 9
         anchor[0] = 9
-        p.reportedPathSha256s[0][0] = 9
         p.issuerSpkiSha256s[0][0] = 9
         p.anchorSha256!![0] = 9
-        assertContentEquals(hash(1), p.reportedPathSha256s[0])
-        assertContentEquals(hash(3), p.reportedPathSha256s[1])
         assertContentEquals(hash(4), p.issuerSpkiSha256s.single())
         assertContentEquals(hash(3), p.anchorSha256)
     }

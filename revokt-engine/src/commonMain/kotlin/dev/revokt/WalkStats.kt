@@ -4,19 +4,18 @@
 package dev.revokt
 
 /**
- * The walker's own counters for one walk (spec §4, §5.1), carried on `Finding.Path.walkStats`. Walker internals:
- * opt-in at class level, so the type stays out of the API dump. A value type: equality is by content.
+ * The walker's own counters for one walk (spec §5.1), on the decision's `PathDetail` and so on the evaluation's `DEBUG`
+ * line. A value type: equality is by content.
  */
-@RevoktInternalApi
-public class WalkStats(
+internal class WalkStats(
     /** Verifier calls, memo hits excluded (`RevoktLimits.MAX_VERIFICATIONS`). */
-    public val verifications: Int,
+    val verifications: Int,
     /** Candidates for which verification was requested, memo hits included (`RevoktLimits.MAX_EXPLORED`). */
-    public val candidatesExplored: Int,
+    val candidatesExplored: Int,
     /** Related candidates (the candidate index's `related`) explored at the leaf. */
-    public val relatedExploredAtLeaf: Int,
+    val relatedExploredAtLeaf: Int,
     /** Unrelated candidates (the candidate index's `unrelated`) explored at the leaf. */
-    public val unrelatedExploredAtLeaf: Int,
+    val unrelatedExploredAtLeaf: Int,
 ) {
     override fun equals(other: Any?): Boolean =
         other is WalkStats &&

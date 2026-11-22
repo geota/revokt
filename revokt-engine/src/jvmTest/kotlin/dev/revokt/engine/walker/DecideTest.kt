@@ -8,6 +8,7 @@ import dev.revokt.Finding
 import dev.revokt.KeyabilityClause
 import dev.revokt.NoIssuerReason
 import dev.revokt.ParseReason
+import dev.revokt.PathReason
 import dev.revokt.PathStatus
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
@@ -47,8 +48,8 @@ class DecideTest {
             val f = w.fixture("x", case, chain, listOf(root), notFound(NoIssuerReason.NO_CANDIDATE))
             val (d, calls) = cutDecision(f, fallback)
             assertPath(d, case) { status(PathStatus.FOUND).pathsFound(1).reported(root).keys(root) }
-            assertNull(d.path.endReason, case)
-            assertEquals(WalkStats(0, 0, 0, 0), d.path.walkStats, case)
+            assertNull(d.detail.endReason, case)
+            assertEquals(WalkStats(0, 0, 0, 0), d.detail.walkStats, case)
             assertEquals(emptyList(), d.findings, case)
             assertEquals(0, calls, "$case: no walk")
             assertEquals(0, fallback.calls, "$case: no fallback")
@@ -226,7 +227,7 @@ class DecideTest {
                 }
             val g = fixture("cut", "K6", listOf(leaf6) + junk(68) + intermediate, notFound(NoIssuerReason.NO_CANDIDATE))
             val d6 = WalkerHarness.decide(g, null, harness = false)
-            assertEquals(ParseReason.PRODUCER_UNKEYABLE, d6.path.parseReason, "K6 leaf of 70")
+            assertEquals(PathReason.PRODUCER_UNKEYABLE, d6.path.reason, "K6 leaf of 70")
         }
     }
 
@@ -247,7 +248,7 @@ class DecideTest {
         }
         val d = WalkerHarness.decide(f, FakeFallback.fails(), verifier = throwing)
         assertEquals(PathStatus.NO_ISSUER, d.path.status)
-        assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, d.path.walkerReason)
+        assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, d.detail.walkerReason)
         val errors = d.findings.filterIsInstance<Finding.VerifierError>()
         assertEquals(listOf(SymOids.SIGNATURE), errors.map { it.oid })
         assertEquals(notUsed(FallbackReason.FAILED), d.findings.last())

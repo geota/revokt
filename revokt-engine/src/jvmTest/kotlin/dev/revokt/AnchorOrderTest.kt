@@ -43,20 +43,22 @@ class AnchorOrderTest {
                 .exemptAnchors(
                     listOf(privateAnchor.bytesHash.toByteArray()),
                 ).build()
-        return EvaluatorRig(
-            f,
-            policy,
-            snapshot(),
-            StubEngine.always(CrliteQueryResult.NOT_ENROLLED),
-        ).presented(f.presented)
+        val rig =
+            EvaluatorRig(
+                f,
+                policy,
+                snapshot(),
+                StubEngine.always(CrliteQueryResult.NOT_ENROLLED),
+            )
+        this.rig = rig
+        return rig.presented(f.presented)
     }
 
     private fun reported(v: Verdict): List<List<Byte>> =
-        v.findings
-            .filterIsInstance<Finding.Path>()
-            .single()
-            .reportedPathSha256s
-            .map { it.toList() }
+        checkNotNull(rig).detail(v).reportedPathSha256s.map { it.toByteArray().toList() }
+
+    /** The rig of the last [verdict], whose detail [reported] reads. */
+    private var rig: EvaluatorRig? = null
 
     private fun hashes(vararg certs: FixtureCert): List<List<Byte>> = certs.map { it.bytesHash.toByteArray().toList() }
 

@@ -14,11 +14,14 @@ import dev.revokt.engine.walker.DecideContext
 import dev.revokt.engine.walker.DecideInputs
 import dev.revokt.engine.walker.IndexedSnapshot
 import dev.revokt.engine.walker.PathDecision
+import dev.revokt.engine.walker.PathDetail
 import dev.revokt.engine.walker.WalkerFixture
 import dev.revokt.engine.walker.WalkerHarness
 import dev.revokt.engine.walker.decide
+import dev.revokt.engine.walker.decideVerified
 import dev.revokt.engine.walker.lruMap
 import dev.revokt.testing.SymVerifier
+import java.util.IdentityHashMap
 
 /**
  * A [RevoktEvaluator] over one walker fixture's world, its suppliers faked as `Revokt` (#143) will publish them: the
@@ -76,10 +79,35 @@ internal class EvaluatorRig(
                     fallback,
                 ),
             clock = clock,
-            decidePresented = decidePresented,
+            logger = { level, message, _ -> logged += level to message },
+            deciders =
+                Deciders(
+                    presented = { chain, index, snapshot, context ->
+                        decidePresented(chain, index, snapshot, context).also { last = it }
+                    },
+                    verified = { path, index, snapshot -> decideVerified(path, index, snapshot).also { last = it } },
+                ),
         )
 
-    fun evaluate(request: EvaluationRequest): Verdict = evaluator.evaluate(request)
+    /** Every line the evaluator logged, with its level. */
+    val logged = ArrayList<Pair<LogLevel, String>>()
+
+    private var last: PathDecision? = null
+    private val details = IdentityHashMap<Verdict, PathDetail?>()
+
+    fun evaluate(request: EvaluationRequest): Verdict {
+        last = null
+        return evaluator.evaluate(request).also { details[it] = last?.detail }
+    }
+
+    /** The `PathDetail` of [verdict], one this rig returned; null when its evaluation reached no decision. */
+    fun detailOrNull(verdict: Verdict): PathDetail? {
+        check(details.containsKey(verdict)) { "not a verdict of this rig" }
+        return details[verdict]
+    }
+
+    /** The `PathDetail` of [verdict], one this rig returned that reached a decision. */
+    fun detail(verdict: Verdict): PathDetail = checkNotNull(detailOrNull(verdict)) { "no decision for $verdict" }
 
     /** [presented] (default: the fixture's chain) as a request for [host]. */
     fun presented(

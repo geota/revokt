@@ -13,12 +13,13 @@ import okio.ByteString.Companion.toByteString
  */
 public sealed class Finding {
     /**
-     * The path finding (spec §4, §5.1): the status the walk and decision steps 1 to 6 reached and how they reached it.
-     * The builder checks the invariants that need no other finding: [parseReason] is set exactly when [status] is
-     * `PARSE_FAILED`, [keyabilityClause] exactly when [parseReason] is `PRODUCER_UNKEYABLE`, and [noIssuerReason]
-     * exactly when [status] is `NO_ISSUER`.
+     * The path finding (spec §4, §5.1): the status the walk and decision steps 1 to 6 reached, the one [reason] for it,
+     * the leaf-issuer keys evaluated, the reported path's anchor and where the chain came from. The walker's counters
+     * and the rest of its detail are on the evaluation's one `DEBUG` log line, not here. The builder checks that
+     * [reason] is set exactly when [status] is `NO_ISSUER`, `PARSE_FAILED` or `PATH_BUDGET_EXCEEDED`, and is a reason
+     * of that status.
      */
-    @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
+    @OptIn(RevoktTestingApi::class)
     public class Path private constructor(
         builder: Builder,
     ) : Finding() {
@@ -29,78 +30,25 @@ public sealed class Finding {
         public val source: ChainSource = requireNotNull(builder.source) { "source is not set" }
 
         /**
-         * The reported reason, after decide's `UNSUPPORTED_ALGORITHM` label or `PLATFORM_ONLY` promotion; set exactly
-         * when [status] is `NO_ISSUER`.
+         * Why the path is not `FOUND`: the reported reason, after decide's `UNSUPPORTED_ALGORITHM` label or
+         * `PLATFORM_ONLY` promotion; null for `FOUND` and `NOT_WALKED`.
          */
-        public val noIssuerReason: NoIssuerReason? = builder.noIssuerReason
-
-        /** The walker's own reason, before any `UNSUPPORTED_ALGORITHM` label or `PLATFORM_ONLY` promotion. */
-        public val walkerReason: NoIssuerReason? = builder.walkerReason
-
-        /** Set exactly when [status] is `PARSE_FAILED`. */
-        public val parseReason: ParseReason? = builder.parseReason
-
-        /** The first failing §9.2 keyability clause; set exactly when [parseReason] is `PRODUCER_UNKEYABLE`. */
-        public val keyabilityClause: KeyabilityClause? = builder.keyabilityClause
-
-        /** The reported path's terminal; null when the reported path is empty. */
-        public val terminalKind: TerminalKind? = builder.terminalKind
-
-        /** How a re-walk ended; null unless one ran (M2). */
-        public val rewalkEnd: WalkEnd? = builder.rewalkEnd
-
-        /** How the walk ended; null only when no walk ran (`NOT_WALKED`, `PLATFORM`, an anchor leaf). */
-        public val endReason: WalkEnd? = builder.endReason
-
-        /** The path size at which the walk ended (1 = the leaf level). */
-        public val endDepth: Int? = builder.endDepth
-
-        public val cacheHit: Boolean = builder.cacheHit
-
-        /** The id of the `AnchorSnapshot` the decision read; 0 when none was consulted. */
-        public val anchorSnapshotId: Long = builder.anchorSnapshotId
-
-        /** True whenever a PKIX fallback path was evaluated. */
-        public val usedFallback: Boolean = builder.usedFallback
-
-        /** The paths found, or on `PATH_BUDGET_EXCEEDED` the partial paths. */
-        public val pathsFound: Int = builder.pathsFound
-
-        private val reportedPath: List<ByteString> = builder.reportedPathSha256s
+        public val reason: PathReason? = builder.reason
 
         private val issuerSpkis: List<ByteString> = builder.issuerSpkiSha256s
 
-        /** Presented or platform-built certificates the parser rejected and the walker never saw. */
-        public val candidatesDropped: Int = builder.candidatesDropped
-
         private val anchor: ByteString? = builder.anchorSha256
 
-        /** The walker's counters; walker internals. */
-        @RevoktInternalApi
-        public val walkStats: WalkStats = builder.walkStats
-
-        public val credentialType: CredentialType = builder.credentialType
-
         init {
-            require((parseReason != null) == (status == PathStatus.PARSE_FAILED)) {
-                "parseReason is set exactly when status is PARSE_FAILED (spec §4): got status=$status, " +
-                    "parseReason=$parseReason"
+            val explained =
+                status == PathStatus.NO_ISSUER || status == PathStatus.PARSE_FAILED ||
+                    status == PathStatus.PATH_BUDGET_EXCEEDED
+            require((reason != null) == explained) {
+                "reason is set exactly when status is NO_ISSUER, PARSE_FAILED or PATH_BUDGET_EXCEEDED (spec §4): got " +
+                    "status=$status, reason=$reason"
             }
-            require((keyabilityClause != null) == (parseReason == ParseReason.PRODUCER_UNKEYABLE)) {
-                "keyabilityClause is set exactly when parseReason is PRODUCER_UNKEYABLE (spec §4): got " +
-                    "parseReason=$parseReason, keyabilityClause=$keyabilityClause"
-            }
-            require((noIssuerReason != null) == (status == PathStatus.NO_ISSUER)) {
-                "noIssuerReason is set exactly when status is NO_ISSUER (spec §4): got status=$status, " +
-                    "noIssuerReason=$noIssuerReason"
-            }
+            require(reason == null || reason.status == status) { "$reason is not a $status reason (spec §4)" }
         }
-
-        /**
-         * The SHA-256 of each DER of the reported path, leaf to terminal: the first found path, else the first partial
-         * path, else empty. Fresh copies.
-         */
-        public val reportedPathSha256s: List<ByteArray> get() = reportedPath.map { it.toByteArray() }
 
         /**
          * The SHA-256 of every distinct leaf-issuer SPKI evaluated: walker keys in candidate order, then the fallback
@@ -117,48 +65,18 @@ public sealed class Finding {
             Builder()
                 .status(status)
                 .source(source)
-                .noIssuerReason(noIssuerReason)
-                .walkerReason(walkerReason)
-                .parseReason(parseReason)
-                .keyabilityClause(keyabilityClause)
-                .terminalKind(terminalKind)
-                .rewalkEnd(rewalkEnd)
-                .endReason(endReason)
-                .endDepth(endDepth)
-                .cacheHit(cacheHit)
-                .anchorSnapshotId(anchorSnapshotId)
-                .usedFallback(usedFallback)
-                .pathsFound(pathsFound)
-                .reportedPathSha256s(reportedPathSha256s)
+                .reason(reason)
                 .issuerSpkiSha256s(issuerSpkiSha256s)
-                .candidatesDropped(candidatesDropped)
                 .anchorSha256(anchorSha256)
-                .walkStats(walkStats)
-                .credentialType(credentialType)
 
         /** Every field, named, in declaration order: equality, hashing and [toString] all read this one list. */
         private fun fields(): List<Pair<String, Any?>> =
             listOf(
                 "status" to status,
                 "source" to source,
-                "noIssuerReason" to noIssuerReason,
-                "walkerReason" to walkerReason,
-                "parseReason" to parseReason,
-                "keyabilityClause" to keyabilityClause,
-                "terminalKind" to terminalKind,
-                "rewalkEnd" to rewalkEnd,
-                "endReason" to endReason,
-                "endDepth" to endDepth,
-                "cacheHit" to cacheHit,
-                "anchorSnapshotId" to anchorSnapshotId,
-                "usedFallback" to usedFallback,
-                "pathsFound" to pathsFound,
-                "reportedPathSha256s" to reportedPath,
+                "reason" to reason,
                 "issuerSpkiSha256s" to issuerSpkis,
-                "candidatesDropped" to candidatesDropped,
                 "anchorSha256" to anchor,
-                "walkStats" to walkStats,
-                "credentialType" to credentialType,
             )
 
         override fun equals(other: Any?): Boolean = other is Path && fields() == other.fields()
@@ -170,93 +88,29 @@ public sealed class Finding {
 
         /** Builds a [Finding.Path] for tests and fakes; [build] checks the invariants the constructor does. */
         @RevoktTestingApi
-        @Suppress("TooManyFunctions") // One setter per spec §4 field, plus build().
         public class Builder {
             internal var status: PathStatus? = null
                 private set
             internal var source: ChainSource? = null
                 private set
-            internal var noIssuerReason: NoIssuerReason? = null
-                private set
-            internal var walkerReason: NoIssuerReason? = null
-                private set
-            internal var parseReason: ParseReason? = null
-                private set
-            internal var keyabilityClause: KeyabilityClause? = null
-                private set
-            internal var terminalKind: TerminalKind? = null
-                private set
-            internal var rewalkEnd: WalkEnd? = null
-                private set
-            internal var endReason: WalkEnd? = null
-                private set
-            internal var endDepth: Int? = null
-                private set
-            internal var cacheHit: Boolean = false
-                private set
-            internal var anchorSnapshotId: Long = 0
-                private set
-            internal var usedFallback: Boolean = false
-                private set
-            internal var pathsFound: Int = 0
-                private set
-            internal var reportedPathSha256s: List<ByteString> = emptyList()
+            internal var reason: PathReason? = null
                 private set
             internal var issuerSpkiSha256s: List<ByteString> = emptyList()
                 private set
-            internal var candidatesDropped: Int = 0
-                private set
             internal var anchorSha256: ByteString? = null
-                private set
-            internal var walkStats: WalkStats = WalkStats(0, 0, 0, 0)
-                private set
-            internal var credentialType: CredentialType = CredentialType.X509
                 private set
 
             public fun status(status: PathStatus): Builder = apply { this.status = status }
 
             public fun source(source: ChainSource): Builder = apply { this.source = source }
 
-            public fun noIssuerReason(reason: NoIssuerReason?): Builder = apply { noIssuerReason = reason }
-
-            public fun walkerReason(reason: NoIssuerReason?): Builder = apply { walkerReason = reason }
-
-            public fun parseReason(reason: ParseReason?): Builder = apply { parseReason = reason }
-
-            public fun keyabilityClause(clause: KeyabilityClause?): Builder = apply { keyabilityClause = clause }
-
-            public fun terminalKind(kind: TerminalKind?): Builder = apply { terminalKind = kind }
-
-            public fun rewalkEnd(end: WalkEnd?): Builder = apply { rewalkEnd = end }
-
-            public fun endReason(end: WalkEnd?): Builder = apply { endReason = end }
-
-            public fun endDepth(depth: Int?): Builder = apply { endDepth = depth }
-
-            public fun cacheHit(hit: Boolean): Builder = apply { cacheHit = hit }
-
-            public fun anchorSnapshotId(id: Long): Builder = apply { anchorSnapshotId = id }
-
-            public fun usedFallback(used: Boolean): Builder = apply { usedFallback = used }
-
-            public fun pathsFound(count: Int): Builder = apply { pathsFound = count }
-
-            /** Replaces the reported path's hashes with copies of [sha256s]. */
-            public fun reportedPathSha256s(sha256s: List<ByteArray>): Builder =
-                apply { reportedPathSha256s = sha256s.map { it.toByteString() } }
+            public fun reason(reason: PathReason?): Builder = apply { this.reason = reason }
 
             /** Replaces the leaf-issuer key hashes with copies of [sha256s]. */
             public fun issuerSpkiSha256s(sha256s: List<ByteArray>): Builder =
                 apply { issuerSpkiSha256s = sha256s.map { it.toByteString() } }
 
-            public fun candidatesDropped(count: Int): Builder = apply { candidatesDropped = count }
-
             public fun anchorSha256(sha256: ByteArray?): Builder = apply { anchorSha256 = sha256?.toByteString() }
-
-            @RevoktInternalApi
-            public fun walkStats(stats: WalkStats): Builder = apply { walkStats = stats }
-
-            public fun credentialType(type: CredentialType): Builder = apply { credentialType = type }
 
             public fun build(): Path = Path(this)
         }
@@ -553,7 +407,7 @@ public sealed class Finding {
 
     /**
      * Decision step 6 evaluated no PKIX fallback path (spec §4, §5.1): exactly one when the step-5 walk ended `NotFound`
-     * or `Budget` and `Finding.Path.usedFallback` is false. "Not used" rather than "not run": a [FallbackReason.FAILED]
+     * or `Budget` and no fallback path was evaluated. "Not used" rather than "not run": a [FallbackReason.FAILED]
      * fallback did run.
      */
     @OptIn(RevoktTestingApi::class)

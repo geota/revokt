@@ -26,7 +26,7 @@ class ExemptionHelpersTest {
             .Builder()
             .status(if (reason == null) PathStatus.FOUND else PathStatus.NO_ISSUER)
             .source(ChainSource.RECONSTRUCTED)
-            .noIssuerReason(reason)
+            .reason(reason?.let { PathReason.valueOf(it.name) })
             .build()
 
     /** A context as the testing builder makes it: [host] is given raw, and the builder stores host'. */

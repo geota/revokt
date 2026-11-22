@@ -18,7 +18,7 @@ import okio.ByteString.Companion.toByteString
 
 /**
  * The decision for `EvaluationRequest.verifiedPath` (spec §4): the one path, leaf to anchor, is trusted without
- * re-verification, so no walk and no fallback run (`source = PLATFORM`, `endReason` null). The path is both the
+ * re-verification, so no walk and no fallback run (`source = PLATFORM`, no `endReason` in the detail). The path is both the
  * reported path and the chain the exemptions see.
  *
  * - **Step 2, one-certificate paths only:** the caller's path does not make its leaf an anchor. A leaf byte-equal to
@@ -47,10 +47,10 @@ internal fun decideVerified(
         Finding.Path
             .Builder()
             .source(ChainSource.PLATFORM)
-            .anchorSnapshotId(verifiedAnchorSnapshotId(path, snapshot))
+    val snapshotId = verifiedAnchorSnapshotId(path, snapshot)
     val leafParse =
         when (val r = CertificateParser.parse(path[0])) {
-            is CertificateParse.Failed -> return parseFailed(base, r.reason, null, emptyList(), parses)
+            is CertificateParse.Failed -> return parseFailed(base, snapshotId, r.reason, null, emptyList(), parses)
             is CertificateParse.Parsed -> r.certificate.also { parses[0] = it }
         }
     val leaf = index.cert(leafParse)
@@ -67,7 +67,9 @@ internal fun decideVerified(
         }
     // Step 2: only a leaf that is an anchor by bytes in the snapshot read at entry skips the keyability check.
     if (!(path.size == 1 && index.isAnchorBytes(leaf))) {
-        leaf.keyabilityClause?.let { return parseFailed(base, ParseReason.PRODUCER_UNKEYABLE, it, findings, parses) }
+        leaf.keyabilityClause?.let {
+            return parseFailed(base, snapshotId, ParseReason.PRODUCER_UNKEYABLE, it, findings, parses)
+        }
     }
     val key =
         if (path.size == 1) {
@@ -82,18 +84,22 @@ internal fun decideVerified(
     val hashes = path.map { it.toByteString().sha256() }
     base
         .status(PathStatus.FOUND)
-        .pathsFound(1)
         .issuerSpkiSha256s(keys.map { it.toByteArray() })
-        .reportedPathSha256s(hashes.map { it.toByteArray() })
-        .terminalKind(TerminalKind.ANCHOR)
         .anchorSha256(hashes.last().toByteArray())
-    return PathDecision(base.build(), keys, leaf.serial, leaf.scts, findings, false, parses.toList())
+    val detail =
+        PathDetail(
+            anchorSnapshotId = snapshotId,
+            pathsFound = 1,
+            reportedPathSha256s = hashes,
+        )
+    return PathDecision(base.build(), detail, keys, leaf.serial, leaf.scts, findings, false, parses.toList())
 }
 
 /** A `PARSE_FAILED` decision for the verified leaf: no key, no reported path, nothing queried. */
 @OptIn(RevoktTestingApi::class)
 private fun parseFailed(
     base: Finding.Path.Builder,
+    snapshotId: Long,
     reason: ParseReason,
     clause: KeyabilityClause?,
     findings: List<Finding>,
@@ -102,9 +108,9 @@ private fun parseFailed(
     PathDecision(
         base
             .status(PathStatus.PARSE_FAILED)
-            .parseReason(reason)
-            .keyabilityClause(clause)
+            .reason(parseReason(reason))
             .build(),
+        PathDetail(keyabilityClause = clause, anchorSnapshotId = snapshotId),
         emptyList(),
         null,
         emptyList(),
@@ -115,7 +121,7 @@ private fun parseFailed(
 
 /**
  * `anchorSnapshotId` on the verified-path route: [snapshot]'s id for a one-certificate path, whose leaf step 2 compares
- * with the snapshot's anchors, and 0 for a longer path, which consults no snapshot (spec §4 `Finding.Path`).
+ * with the snapshot's anchors, and 0 for a longer path, which consults no snapshot ([PathDetail.anchorSnapshotId]).
  */
 internal fun verifiedAnchorSnapshotId(
     path: List<ByteArray>,

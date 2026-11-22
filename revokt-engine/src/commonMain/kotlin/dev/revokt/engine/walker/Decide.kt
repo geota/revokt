@@ -13,6 +13,7 @@ import dev.revokt.Layer
 import dev.revokt.NoIssuerReason
 import dev.revokt.ParseReason
 import dev.revokt.PathBuilderFallback
+import dev.revokt.PathReason
 import dev.revokt.PathStatus
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
@@ -21,6 +22,7 @@ import dev.revokt.SignatureVerifier
 import dev.revokt.TerminalKind
 import dev.revokt.VerifyResult
 import dev.revokt.WalkEnd
+import dev.revokt.WalkStats
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.ParsedCertificate
@@ -29,7 +31,7 @@ import okio.ByteString.Companion.toByteString
 
 /**
  * What decision steps 1 to 6 hand to `evaluate`, steps 7 and 8 (spec §5.1 decision list): [path] is the
- * `Finding.Path`; [issuerKeys] are its `issuerSpkiSha256s`, the distinct leaf-issuer keys step 7 queries (walker keys
+ * `Finding.Path` and [detail] the rest of how it was reached, for the evaluation's `DEBUG` line; [issuerKeys] are its `issuerSpkiSha256s`, the distinct leaf-issuer keys step 7 queries (walker keys
  * in candidate order, then the fallback key if new); [serial] and [scts] are the leaf's, null and empty when the leaf
  * is `PARSE_FAILED`, which is never queried; [findings] are the parse, walk and step-6 findings. [parses] holds the
  * parse of each presented certificate, in presented order, null where the parser rejected it or decide never read it,
@@ -40,6 +42,7 @@ import okio.ByteString.Companion.toByteString
  */
 internal class PathDecision(
     val path: Finding.Path,
+    val detail: PathDetail,
     val issuerKeys: List<ByteString>,
     val serial: ByteArray?,
     val scts: List<CrliteSct>,
@@ -210,19 +213,17 @@ private class Decider(
         }
     }
 
-    private fun base(status: PathStatus): Finding.Path.Builder =
-        Finding.Path
-            .Builder()
-            .status(status)
-            .source(ChainSource.RECONSTRUCTED)
-            .anchorSnapshotId(snapshot.id)
+    private fun base(status: PathStatus): Draft = Draft(status)
 
     private fun parseFailed(
         reason: ParseReason,
         clause: KeyabilityClause?,
     ): PathDecision =
         result(
-            base(PathStatus.PARSE_FAILED).parseReason(reason).keyabilityClause(clause),
+            base(PathStatus.PARSE_FAILED).apply {
+                this.reason = parseReason(reason)
+                keyabilityClause = clause
+            },
             keys = emptyList(),
             reported = emptyList(),
             leaf = null,
@@ -231,7 +232,7 @@ private class Decider(
     /** Step 2: `Found([WalkPath([leaf], terminal = ANCHOR)])`; no walk ran. */
     private fun anchorLeaf(leaf: Cert): PathDecision =
         result(
-            base(PathStatus.FOUND).pathsFound(1),
+            base(PathStatus.FOUND).apply { pathsFound = 1 },
             keys = listOf(leaf.spkiHash),
             reported = listOf(leaf.bytesHash),
             leaf = leaf,
@@ -240,7 +241,11 @@ private class Decider(
     /** Step 3's `Budget(EXPLORATION_BUDGET)` without a walk: no CRLite query and no `FallbackNotUsed`. */
     private fun presentedCut(leaf: Cert): PathDecision =
         result(
-            base(PathStatus.PATH_BUDGET_EXCEEDED).endReason(WalkEnd.EXPLORATION_BUDGET).endDepth(0),
+            base(PathStatus.PATH_BUDGET_EXCEEDED).apply {
+                reason = PathReason.EXPLORATION_BUDGET
+                endReason = WalkEnd.EXPLORATION_BUDGET
+                endDepth = 0
+            },
             keys = emptyList(),
             reported = emptyList(),
             leaf = leaf,
@@ -252,7 +257,10 @@ private class Decider(
     ): PathDecision =
         walked(
             walk,
-            base(PathStatus.FOUND).endReason(WalkEnd.COMPLETE).pathsFound(walk.paths.size),
+            base(PathStatus.FOUND).apply {
+                endReason = WalkEnd.COMPLETE
+                pathsFound = walk.paths.size
+            },
             keys = walk.leafKeys.toList(),
             reported = walk.paths.first().hashes(),
             leaf = leaf,
@@ -261,7 +269,7 @@ private class Decider(
 
     /**
      * Step 6 on a walk `NotFound`: a fallback path is `FOUND`; otherwise a chain over `FALLBACK_MAX_PRESENTED` is
-     * `PATH_BUDGET_EXCEEDED` (the fallback skipped or disabled, whether or not step 1 ran). Under
+     * `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)` (the fallback skipped or disabled, whether or not step 1 ran). Under
      * [DecideContext.platformOnly] any other is `NO_ISSUER(PLATFORM_ONLY)`: the platform accepted the chain whatever
      * the walk recorded, so a server's unsupported certificate cannot change what `platformOnly()` matches;
      * `walkerReason` and the `UnsupportedAlgorithm` findings keep the detail. Without it, any other is
@@ -273,12 +281,19 @@ private class Decider(
         walk: Walk.NotFound,
         leaf: Cert,
     ): PathDecision {
-        val builder = base(PathStatus.FOUND).endReason(WalkEnd.COMPLETE).walkerReason(walk.reason)
+        val draft =
+            base(PathStatus.FOUND).apply {
+                endReason = WalkEnd.COMPLETE
+                walkerReason = walk.reason
+            }
         val fallback = fallback()
         if (fallback is Fallback.Path) {
             return walked(
                 walk,
-                builder.usedFallback(true).pathsFound(1),
+                draft.apply {
+                    usedFallback = true
+                    pathsFound = 1
+                },
                 keys = listOf(fallback.key),
                 reported = fallback.hashes,
                 leaf = leaf,
@@ -286,17 +301,18 @@ private class Decider(
             )
         }
         if (chain.size > RevoktLimits.FALLBACK_MAX_PRESENTED) {
-            builder.status(PathStatus.PATH_BUDGET_EXCEEDED)
+            draft.status = PathStatus.PATH_BUDGET_EXCEEDED
+            draft.reason = PathReason.FALLBACK_LIMIT
         } else {
-            val reason =
+            draft.status = PathStatus.NO_ISSUER
+            draft.reason =
                 when {
-                    context.platformOnly -> NoIssuerReason.PLATFORM_ONLY
-                    walk.unsupportedOids.isNotEmpty() -> NoIssuerReason.UNSUPPORTED_ALGORITHM
-                    else -> walk.reason
+                    context.platformOnly -> PathReason.PLATFORM_ONLY
+                    walk.unsupportedOids.isNotEmpty() -> PathReason.UNSUPPORTED_ALGORITHM
+                    else -> noIssuerReason(walk.reason)
                 }
-            builder.status(PathStatus.NO_ISSUER).noIssuerReason(reason)
         }
-        return walked(walk, builder, emptyList(), emptyList(), leaf, (fallback as Fallback.NotUsed).reason)
+        return walked(walk, draft, emptyList(), emptyList(), leaf, (fallback as Fallback.NotUsed).reason)
     }
 
     /**
@@ -317,11 +333,13 @@ private class Decider(
         }
         return walked(
             walk,
-            base(PathStatus.PATH_BUDGET_EXCEEDED)
-                .endReason(walk.end)
-                .endDepth(walk.endDepth)
-                .pathsFound(walk.partialPaths.size)
-                .usedFallback(fallback is Fallback.Path),
+            base(PathStatus.PATH_BUDGET_EXCEEDED).apply {
+                reason = budgetReason(walk.end)
+                endReason = walk.end
+                endDepth = walk.endDepth
+                pathsFound = walk.partialPaths.size
+                usedFallback = fallback is Fallback.Path
+            },
             keys = keys.toList(),
             reported = reported.orEmpty(),
             leaf = leaf,
@@ -408,14 +426,14 @@ private class Decider(
     /** An exit after the walk: the walk's stats and `UnsupportedAlgorithm` findings, then any `FallbackNotUsed`. */
     private fun walked(
         walk: Walk,
-        builder: Finding.Path.Builder,
+        draft: Draft,
         keys: List<ByteString>,
         reported: List<ByteString>,
         leaf: Cert,
         notUsed: FallbackReason?,
     ): PathDecision {
-        builder.walkStats(walk.stats)
-        val depended = builder.noIssuerReason == NoIssuerReason.UNSUPPORTED_ALGORITHM
+        draft.walkStats = walk.stats
+        val depended = draft.reason == PathReason.UNSUPPORTED_ALGORITHM
         for (oid in walk.unsupportedOids) {
             findings +=
                 Finding.UnsupportedAlgorithm
@@ -432,27 +450,41 @@ private class Decider(
                     .reason(it)
                     .build()
         }
-        return result(builder, keys, reported, leaf)
+        return result(draft, keys, reported, leaf)
     }
 
     /** The decision: [reported] is the reported path's DER hashes, leaf → anchor, empty when there is none. */
     private fun result(
-        builder: Finding.Path.Builder,
+        draft: Draft,
         keys: List<ByteString>,
         reported: List<ByteString>,
         leaf: Cert?,
     ): PathDecision {
         val path =
-            builder
-                .candidatesDropped(dropped)
+            Finding.Path
+                .Builder()
+                .status(draft.status)
+                .source(ChainSource.RECONSTRUCTED)
+                .reason(draft.reason)
                 .issuerSpkiSha256s(keys.map { it.toByteArray() })
-                .reportedPathSha256s(reported.map { it.toByteArray() })
-                // Every M1 terminal is an anchor; M2's preload-only terminal will need the WalkPath's.
-                .terminalKind(if (reported.isEmpty()) null else TerminalKind.ANCHOR)
                 .anchorSha256(reported.lastOrNull()?.toByteArray())
                 .build()
+        val detail =
+            PathDetail(
+                walkerReason = draft.walkerReason,
+                keyabilityClause = draft.keyabilityClause,
+                endReason = draft.endReason,
+                endDepth = draft.endDepth,
+                anchorSnapshotId = snapshot.id,
+                usedFallback = draft.usedFallback,
+                pathsFound = draft.pathsFound,
+                reportedPathSha256s = reported,
+                candidatesDropped = dropped,
+                walkStats = draft.walkStats,
+            )
         return PathDecision(
             path,
+            detail,
             keys,
             leaf?.serial,
             leaf?.scts.orEmpty(),
@@ -464,3 +496,44 @@ private class Decider(
 
     private fun WalkPath.hashes(): List<ByteString> = certs.map { it.bytesHash }
 }
+
+/** A decision's path as [Decider] builds it: the public finding's [status] and [reason], and the detail beside it. */
+private class Draft(
+    var status: PathStatus,
+) {
+    var reason: PathReason? = null
+    var walkerReason: NoIssuerReason? = null
+    var keyabilityClause: KeyabilityClause? = null
+    var endReason: WalkEnd? = null
+    var endDepth: Int? = null
+    var usedFallback = false
+    var pathsFound = 0
+    var walkStats = WalkStats(0, 0, 0, 0)
+}
+
+/** The [PathReason] of a `PARSE_FAILED` leaf's [reason]. */
+internal fun parseReason(reason: ParseReason): PathReason =
+    when (reason) {
+        ParseReason.STRUCTURE -> PathReason.STRUCTURE
+        ParseReason.OVERSIZE -> PathReason.OVERSIZE
+        ParseReason.PRODUCER_UNKEYABLE -> PathReason.PRODUCER_UNKEYABLE
+    }
+
+/** The [PathReason] of the walker's `NO_ISSUER` [reason]. */
+internal fun noIssuerReason(reason: NoIssuerReason): PathReason =
+    when (reason) {
+        NoIssuerReason.NO_CANDIDATE -> PathReason.NO_CANDIDATE
+        NoIssuerReason.ALL_CANDIDATES_INVALID -> PathReason.ALL_CANDIDATES_INVALID
+        NoIssuerReason.UNANCHORED -> PathReason.UNANCHORED
+        NoIssuerReason.UNSUPPORTED_ALGORITHM -> PathReason.UNSUPPORTED_ALGORITHM
+        NoIssuerReason.PLATFORM_ONLY -> PathReason.PLATFORM_ONLY
+    }
+
+/** The [PathReason] of a walk that ended on the budget [end]. */
+private fun budgetReason(end: WalkEnd): PathReason =
+    when (end) {
+        WalkEnd.RELATED_BUDGET -> PathReason.RELATED_BUDGET
+        WalkEnd.VERIFICATION_BUDGET -> PathReason.VERIFICATION_BUDGET
+        WalkEnd.EXPLORATION_BUDGET -> PathReason.EXPLORATION_BUDGET
+        WalkEnd.COMPLETE -> error("a walk Budget ends on a budget, not COMPLETE")
+    }

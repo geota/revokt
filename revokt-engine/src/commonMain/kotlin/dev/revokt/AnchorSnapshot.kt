@@ -8,7 +8,7 @@ import okio.ByteString.Companion.toByteString
 
 /**
  * The trust anchors one trust manager walks against, read once (spec §4, §5.1 "Anchor snapshot"). A handshake reads the
- * current snapshot once and reports its [id] as `Finding.Path.anchorSnapshotId`. A value type: equality is by content,
+ * current snapshot once and reports its [id] as `anchorSnapshotId` on the evaluation's `DEBUG` line. A value type: equality is by content,
  * and `ByteArray` getters return fresh copies. The snapshot also keeps the platform's own encodings of the anchors
  * (`getEncoded()`), which the PKIX fallback re-parses (§5.1 "PKIX fallback contract").
  */

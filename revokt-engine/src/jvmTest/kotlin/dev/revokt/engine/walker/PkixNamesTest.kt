@@ -6,6 +6,7 @@ package dev.revokt.engine.walker
 import dev.revokt.FallbackReason
 import dev.revokt.Finding
 import dev.revokt.NoIssuerReason
+import dev.revokt.PathReason
 import dev.revokt.PathStatus
 import dev.revokt.RevoktTestingApi
 import dev.revokt.engine.parse.Span
@@ -332,7 +333,7 @@ class PkixNamesTest {
             }
         val server = WalkerHarness.decide(f, null).path
         assertEquals(PathStatus.NO_ISSUER, server.status)
-        assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, server.noIssuerReason)
+        assertEquals(PathReason.ALL_CANDIDATES_INVALID, server.reason)
         assertEquals(PathStatus.FOUND, WalkerHarness.decide(f, null, requiredEku = RequiredEku.CLIENT_AUTH).path.status)
         // An intermediate named CN=leaf.example under a root permitting other.example presents no CN-ID.
         val w = FixtureWorld()
