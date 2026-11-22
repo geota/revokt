@@ -273,3 +273,50 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   Configuration codes join `DiagnosticCode`; store and seed state codes join `WarningCode`. The maintainer decided not
   to cut those bullets from the spec yet. Neither upki nor Firefox has a configuration-lint vocabulary, so the
   references give no guidance.
+- 2026-11-22 (lead, #280 C): when every stored unit of a fuzz target is over its `-max_len`, the weekly prune fails
+  closed. `stage --prune` prints `::error::` and exits 3 once the rest is pushed, and CONTRIBUTING §6 has the
+  hand-trim step. There is no new delete path. When a target has any unit within `-max_len`, its over-length units
+  are dropped, with no cut-down copies kept. ClusterFuzz's `corpus_pruning_task` replaces the corpus with the
+  `-max_len` merge output, which adds cut-down prefixes, and raises `CorpusPruningError` on an empty merge without
+  syncing. ClusterFuzzLite's prune passes no `-max_len` and keeps such units. revokt's prune can only delete, so it
+  takes ClusterFuzz's drop and its fail-on-empty.
+- 2026-11-22 (#229, design note `docs/design/content-addressed-store.md`, #289):
+  - **Q1 (lead):** the pointer keeps `{live, previous}`, as #249 decided. upki keeps the old manifest's files on
+    disk; Firefox keeps nothing.
+  - **Q2 (maintainer):** the seed-load rule (b) adopt scan stays (#256). An offline start adopts a complete, verified
+    generation already on disk, and the watermark is max(stored, adopted `<ts>`). Neither reference scans: Firefox
+    falls back to its dump and syncs again, and upki has no pointer. Keeping the scan avoids the rollback window a
+    lost pointer would otherwise open.
+  - **Q3 (maintainer):** on a lock collision, an unreadable store or a newer layout, the instance runs in memory for
+    the process, with the warning and no retry. The accepted costs are the seed's rollback floor and a full fetch in
+    every such process. Rejected: throwing, as Firefox's profile lock does, and read-only instances, which the audit
+    deferred. upki takes no lock.
+- 2026-11-22 (lead, #226 under the maintainer's B-F7/A-9 acceptance; security review agreed, #291):
+  - **One budget:** one count of candidate explorations at 256, charged for each candidate that passes the loop
+    check. Each charged exploration makes at most one verifier call. Name-constraint comparisons keep an internal
+    250,000 bound in the same budget. `MAX_VERIFICATIONS`, `MAX_RELATED_PER_LEVEL`, `RELATED_BUDGET`,
+    `VERIFICATION_BUDGET` and the public `WalkEnd` are removed. An exhausted budget is `PATH_BUDGET_EXCEEDED`, which
+    fails closed. webpki has three fatal counters (signatures 100, build calls 200,000, name constraints 250,000).
+    mozilla::pkix has one build-call budget (200,000) and reports exhaustion as an unknown issuer.
+  - **The first sound path at every depth, the leaf included:** as mozilla::pkix, which stops on a failed revocation
+    check because "all paths through this certificate will fail". This is stricter than webpki, where `CertRevoked`
+    is not fatal and the next candidate is tried. §10 residual 15 widens: when an unconstrained CA certificate
+    holding a recovered key comes first in candidate order, only its key is queried. It also covers a second SPKI
+    encoding of one honest key. A holder of such a key can mint a fresh leaf anyway. M2's order, with presented
+    certificates before the preload as in Firefox's `FindIssuer`, does not close it.
+  - **No unrelated-candidate loop and no `customCanonicaliser`:** neither reference has a relatedness class. A
+    misclassified honest issuer goes to the PKIX fallback, then `FALLBACK_LIMIT` or `PLATFORM_ONLY`.
+  - **Loop skip:** a candidate whose raw subject and raw SPKI match a certificate already on the path is skipped
+    before the budget is charged, as both references do.
+- 2026-11-22 (lead, #128, PR #290): `JdkHttpFetcher()` runs over the platform default TLS (#219 superseded the
+  issue's `FetcherTls`).
+  - **Host check:** each connection gets a hostname verifier that always refuses, and endpoint identification is left
+    unset, so `HttpsURLConnection` matches the host against the peer certificate after every handshake, resumed ones
+    included. A socket that arrives with an algorithm preset is refused. The first design forced endpoint
+    identification instead. The #290 review showed that on Conscrypt a session resumed from a laxer connection then
+    skipped the SAN check.
+  - **Authentication:** a per-connection authenticator answers proxies only, so a 401 is never answered. upki
+    (reqwest) takes proxy credentials only from the proxy URL.
+  - **Connections and bodies:** `useCaches` is false and `Connection: close` is sent. Only gzip and identity bodies
+    are accepted, and the cap applies while inflating.
+  - **Residuals:** JDK transparent Negotiate/NTLM, and the process `CookieHandler`.
