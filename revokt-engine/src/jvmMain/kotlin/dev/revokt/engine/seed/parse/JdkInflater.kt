@@ -6,7 +6,8 @@ package dev.revokt.engine.seed.parse
 import java.util.zip.DataFormatException
 import java.util.zip.Inflater
 
-internal actual fun rawInflater(): RawInflater = JdkInflater()
+/** A fresh [RawInflater]. */
+internal fun rawInflater(): RawInflater = JdkInflater()
 
 /** [RawInflater] over `java.util.zip.Inflater` with `nowrap`, as `java.util.zip.ZipFile` reads a deflated entry. */
 private class JdkInflater : RawInflater {

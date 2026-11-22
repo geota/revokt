@@ -3,9 +3,11 @@
 
 package dev.revokt.engine.walker
 
-internal actual class LruMap<K, V> actual constructor(
+internal actual fun <K, V> lruMap(capacity: Int): LruMap<K, V> = SynchronizedLruMap(capacity)
+
+private class SynchronizedLruMap<K, V>(
     capacity: Int,
-) {
+) : LruMap<K, V> {
     init {
         require(capacity >= 1) { "capacity must be at least 1, got $capacity" }
     }
@@ -15,14 +17,14 @@ internal actual class LruMap<K, V> actual constructor(
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > capacity
         }
 
-    actual operator fun get(key: K): V? = synchronized(map) { map[key] }
+    override operator fun get(key: K): V? = synchronized(map) { map[key] }
 
-    actual fun put(
+    override fun put(
         key: K,
         value: V,
     ) {
         synchronized(map) { map[key] = value }
     }
 
-    actual val size: Int get() = synchronized(map) { map.size }
+    override val size: Int get() = synchronized(map) { map.size }
 }

@@ -8,16 +8,16 @@ package dev.revokt
 import dev.revokt.engine.evaluate.NOW
 import dev.revokt.engine.evaluate.StubEngine
 import dev.revokt.engine.evaluate.snapshot
-import dev.revokt.engine.update.GenerationSnapshot
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.walker.CandidateIndex
 import dev.revokt.engine.walker.DecideContext
 import dev.revokt.engine.walker.DecideInputs
 import dev.revokt.engine.walker.IndexedSnapshot
-import dev.revokt.engine.walker.LruMap
 import dev.revokt.engine.walker.PathDecision
 import dev.revokt.engine.walker.WalkerFixture
 import dev.revokt.engine.walker.WalkerHarness
 import dev.revokt.engine.walker.decide
+import dev.revokt.engine.walker.lruMap
 import dev.revokt.testing.SymVerifier
 
 /**
@@ -72,7 +72,7 @@ internal class EvaluatorRig(
                 DecideInputs(
                     verifier(counting),
                     sym.unsupportedOids(),
-                    LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
+                    lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
                     fallback,
                 ),
             clock = clock,

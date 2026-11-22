@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package dev.revokt.engine.update
+package dev.revokt.engine.generation
 
 import dev.revokt.Dataset
 import dev.revokt.Freshness

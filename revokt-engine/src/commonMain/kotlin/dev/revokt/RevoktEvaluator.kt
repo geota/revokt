@@ -6,8 +6,8 @@ package dev.revokt
 import dev.revokt.engine.evaluate.EvaluationInput
 import dev.revokt.engine.evaluate.NamedEngine
 import dev.revokt.engine.evaluate.evaluate
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.policy.PolicyForm
-import dev.revokt.engine.update.GenerationSnapshot
 import dev.revokt.engine.walker.CandidateIndex
 import dev.revokt.engine.walker.DecideContext
 import dev.revokt.engine.walker.DecideInputs

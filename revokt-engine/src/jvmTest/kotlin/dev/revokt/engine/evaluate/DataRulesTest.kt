@@ -8,8 +8,8 @@ import dev.revokt.Finding
 import dev.revokt.RevoktPolicy
 import dev.revokt.Rule
 import dev.revokt.Staleness
+import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.policy.PolicyForm
-import dev.revokt.engine.update.DatasetGeneration
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

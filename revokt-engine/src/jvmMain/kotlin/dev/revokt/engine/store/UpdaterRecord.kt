@@ -125,6 +125,8 @@ internal object UpdaterJson {
             ),
         )
 
+    // Used by sourceOrNull as `::source`, which detekt 1.23's type resolution (a Kotlin 2.0 compiler) cannot resolve.
+    @Suppress("UnusedPrivateMember")
     private fun source(obj: JsonObject): SourceRecord {
         val f = StoreFields(obj)
         val failures = f.optLong("consecutiveFailures") ?: 0

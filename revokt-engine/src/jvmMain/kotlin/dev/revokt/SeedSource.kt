@@ -8,22 +8,33 @@ import okio.source
 import java.net.URL
 
 /**
- * The JVM's [SeedSource] (spec §4): the common [none] plus [of], [fromResource] and [bundled]; a file is
- * `JvmSeedSource.fromPath`. A resource is looked up through `SeedSource`'s own class loader, then the thread context
- * class loader captured when the source is created (app servers), in that order, on every open.
+ * Where a seed archive comes from (spec §4, §6.5). The loader re-opens it on every start task and on every seed
+ * re-check of a sync without a fetching source, so a replaced archive is picked up. Reading the archive is the loader's.
+ * The sources are [none], [of], [fromResource] and [bundled]; a file is `JvmSeedSource.fromPath`. A resource is looked up
+ * through `SeedSource`'s own class loader, then the thread context class loader captured when the source is created
+ * (app servers), in that order, on every open.
  */
-public actual class SeedSource internal actual constructor(
+public class SeedSource internal constructor(
     private val opening: SeedOpening,
 ) {
-    internal actual fun open(): Source? = opening.open()
+    /**
+     * A fresh stream over the archive, or null when there is none to open; a throw means it is there but unreadable.
+     * Okio never appears in a public signature.
+     */
+    internal fun open(): Source? = opening.open()
 
+    /**
+     * This source for [channel]: `bundled()` becomes the channel's `/revokt/seed-<channel>.zip`, or null when the
+     * classpath has none (no seed source); any other source is itself. Called when the `Revokt` is built.
+     */
     @RevoktInternalApi
-    public actual fun resolve(channel: CrliteChannel): SeedSource? =
+    public fun resolve(channel: CrliteChannel): SeedSource? =
         opening.resolve(channel)?.let { if (it === opening) this else SeedSource(it) }
 
-    public actual companion object {
+    public companion object {
+        /** No seed: an explicit opt-out of the bundled default. Opens null. */
         @JvmStatic
-        public actual fun none(): SeedSource = SeedSource { null }
+        public fun none(): SeedSource = SeedSource { null }
 
         /**
          * The archive [opener] opens, re-opened on every start task and seed re-check (an asset pack, a downloaded
@@ -53,6 +64,13 @@ public actual class SeedSource internal actual constructor(
         private fun loaders(): List<ClassLoader> =
             listOfNotNull(SeedSource::class.java.classLoader, Thread.currentThread().contextClassLoader).distinct()
     }
+}
+
+/** How a [SeedSource] opens its archive; [resolve] binds a channel-dependent source to a channel. */
+internal fun interface SeedOpening {
+    fun open(): Source?
+
+    fun resolve(channel: CrliteChannel): SeedOpening? = this
 }
 
 /**

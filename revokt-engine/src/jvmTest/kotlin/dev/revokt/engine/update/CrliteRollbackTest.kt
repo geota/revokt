@@ -6,6 +6,8 @@ package dev.revokt.engine.update
 import dev.revokt.Dataset
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.UpdaterRecord
 import kotlin.test.Test

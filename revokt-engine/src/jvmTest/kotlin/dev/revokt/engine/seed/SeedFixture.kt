@@ -10,13 +10,13 @@ import dev.revokt.Dataset
 import dev.revokt.SeedSource
 import dev.revokt.SyncOutcome
 import dev.revokt.engine.fetch.json
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.seed.parse.SeedArchive
 import dev.revokt.engine.seed.parse.TestZip
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.update.CrliteSyncFixture
-import dev.revokt.engine.update.DatasetGeneration
 import dev.revokt.engine.update.FilterRecord
-import dev.revokt.engine.update.GenerationSnapshot
 import dev.revokt.engine.update.IndexBuild
 import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import dev.revokt.engine.update.buildIndex

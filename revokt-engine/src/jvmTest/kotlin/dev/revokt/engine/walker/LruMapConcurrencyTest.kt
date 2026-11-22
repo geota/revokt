@@ -15,7 +15,7 @@ class LruMapConcurrencyTest {
     @Test
     fun `lru map stays bounded and consistent under concurrent use`() {
         val capacity = 64
-        val m = LruMap<Int, Int>(capacity)
+        val m = lruMap<Int, Int>(capacity)
         val threads = 8
         val pool = Executors.newFixedThreadPool(threads)
         val start = CountDownLatch(1)
