@@ -203,31 +203,41 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   seed's (b) loads.
 - 2026-11-19 (lead, #223 under the maintainer's A-1 acceptance): the x5u and attachment hosts become `allowedDomains`
   (default `cdn.mozilla.net`, matched on a label boundary), with `base_url` read from the server when
-  `attachmentBaseUrl` is null, failing closed at ATTACHMENT. An absent signature `mode` passes; a present mode other
-  than `p384ecdsa` still fails (reverses #163). The positional x5u chain is kept, so there is no path search over an
-  unsigned body. The leaf matches any dNSName with no wildcard, and only dNSNames are allowed in its SAN. An absent
-  leaf EKU passes; a present one must include codeSigning. Rows C1, C10, X2, X4 and X5 in DIVERGENCES.md.
+  `attachmentBaseUrl` is null, failing closed at ATTACHMENT (rows S1 and S2 in DIVERGENCES.md). An absent or `null`
+  signature `mode` passes; a present mode other than `p384ecdsa` still fails (reverses #163; row C1). The positional
+  x5u chain is kept, so there is no path search over an unsigned body (X2). The leaf matches any dNSName with no
+  wildcard, and only dNSNames are allowed in its SAN (X4). An absent leaf EKU passes; a present one must include
+  codeSigning (X5).
 - 2026-11-19 (maintainer, #253 review, #261): issuer name constraints in directoryName and rfc822Name form match
   Firefox. webpki refuses an issuer that carries such subtrees (`NameConstraintViolation`; x509-limbo
   `permitted-dn-match`, `nc-permits-email-*`), so the path is `NO_ISSUER`, which `DEFAULT` allows unchecked: a revoked
   leaf below such an issuer was accepted. mozilla::pkix (`pkixnames.cpp`) evaluates them: directoryName as an RDN
-  prefix of the subject, rfc822Name against the presented mailboxes. URI and unknown forms still fail closed.
-  - The #261 readings, pinned to `pkixnames.cpp` at `cac25a6`, are accepted as posted. R4a, the subject
-    `emailAddress` fallback when there is no subjectAltName, is ported. R4b, pkix's CN-ID fallback for a serverAuth
-    leaf whose subjectAltName holds no dNSName or iPAddress, is ported too (maintainer); webpki and upki ignore the CN.
-  - The iPAddress mask check stays webpki's, stricter than pkix (§10 residual 15). W14 in DIVERGENCES.md.
+  prefix of the subject, rfc822Name against the presented mailboxes. URI and unknown forms still fail closed. R4a, the
+  subject `emailAddress` fallback when there is no subjectAltName, and R4b, pkix's CN-ID fallback for a serverAuth
+  leaf whose subjectAltName holds no dNSName or iPAddress, are both ported (maintainer); webpki and upki ignore the CN.
+  W14 in DIVERGENCES.md.
+- 2026-11-19 (lead, #261): the other readings of `pkixnames.cpp` at `cac25a6` posted on #261 are accepted as posted.
+  Among them, R3: the iPAddress constraint keeps webpki's mask check, which refuses a mask that is not ones then zeros,
+  where pkix applies the mask as written. §10 residual 15 lists it with the other two places revokt stays stricter
+  than Firefox there (the 250,000-comparison bound, and a subjectAltName revokt's reader refuses).
 - 2026-11-19 (maintainer, #224): the sync rules follow Firefox.
-  - **Rollback floor:** when no stored generation loads (absent or malformed, never a read that threw), the stored
-    watermark is ignored and older signed data installs. Firefox imports when its local data does not verify ("prefer
-    stale data over corrupt"); upki has no rollback check. With a generation loaded, the floor is max(watermark, live
-    `<ts>`), with no `rollbackWindow`. This reverses part of #190.
-  - **Retry set:** retry once, as the whole collection, on Firefox's InvalidSignatureError family: a signature
-    mismatch, `NO_SIGNATURES`, `NONE_TRIED`, `NULL_ENTRY`, or an unmergeable change list. Never on an x5u failure.
+  - **Rollback floor:** when no stored generation loads, the stored watermark is ignored and older signed data
+    installs. Firefox imports when its local data does not verify ("prefer stale data over corrupt"); upki has no
+    rollback check. With a generation loaded, the floor is max(watermark, live `<ts>`), with no `rollbackWindow`.
+    This reverses part of #190.
+  - **Retry set:** retry once, as the whole collection, on a signature mismatch, `NO_SIGNATURES`, `NONE_TRIED`,
+    `NULL_ENTRY`, or an unmergeable change list. All but `NULL_ENTRY` are Firefox's InvalidSignatureError family. In
+    Firefox a null entry throws a TypeError and is not retried, so `NULL_ENTRY` is revokt's addition, harmless because
+    the retry must verify. Never on an x5u failure, which narrows Firefox: it retries an x5u HTTP-error body (S6).
     upki never retries.
   - **Dropped:** the metered deferral and the clock rules on signed data, which neither reference has. `CLOCK_SKEW`
     stays for x5u validity only. The far-future `<ts>` residual (STALE fires late) is in §10 and DIVERGENCES.md.
-  - **S13 (maintainer):** after a recovery install (no generation loaded, older data accepted), the watermark is
-    lowered to that install's `<ts>`, as Firefox's floor is the local data's timestamp. The alternative, keeping the
-    high-water mark, would refuse newer-than-held data until the server passed the old watermark.
-  - **S14 (lead, under S13):** a seed installed with no generation loaded also sets the watermark to its `<ts>`, as
-    Firefox does after a dump import.
+  - **S13:** after a recovery install (no generation loaded, older data accepted), the watermark is lowered to that
+    install's `<ts>`, as Firefox's floor is the local data's timestamp. The #273 review noted the alternative: keeping
+    the high-water mark would refuse newer-than-held data until the server passed the old watermark.
+- 2026-11-19 (lead, #224):
+  - **S14, under S13:** a seed installed with no generation loaded also sets the watermark to its `<ts>`, as Firefox
+    does after a dump import.
+  - **"No stored generation loads" (from the #273 review):** it means the stored generation is absent or malformed,
+    never that a read threw. A read that throws writes nothing (#209), so a transient fault never lowers the floor.
+    Spec §6.5 and §7.1, row S4.
