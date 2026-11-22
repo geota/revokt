@@ -30,7 +30,7 @@ import okio.ByteString
 import okio.ByteString.Companion.decodeHex
 import okio.ByteString.Companion.toByteString
 
-/** Why an x5u chain was rejected; every one is `SyncOutcome.FAILED` (spec §7.1 "x5u chain"). */
+/** Why an x5u chain was rejected; every one is `SyncFailure.X5U_CHAIN` (spec §7.1 "x5u chain"). */
 internal enum class X5uChainFailure {
     /**
      * A certificate up to the terminal does not parse ([CertificateParser]), or a link below it is not DER as
@@ -142,7 +142,7 @@ internal sealed class X5uChainResult {
 internal sealed class X5uValidity {
     data object Valid : X5uValidity()
 
-    /** A link outside its window: `SyncOutcome.CLOCK_SKEW`, stage `X5U` (spec §7.1). */
+    /** A link outside its window: `SyncFailure.CLOCK_SKEW` (spec §7.1). */
     class ClockSkew(
         val certIndex: Int,
         val detail: String,

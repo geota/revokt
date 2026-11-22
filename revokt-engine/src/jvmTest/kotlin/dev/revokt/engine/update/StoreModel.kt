@@ -8,6 +8,7 @@ package dev.revokt.engine.update
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.RevoktStorage
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
 import dev.revokt.engine.fetch.client
 import dev.revokt.engine.generation.DatasetGeneration
@@ -362,10 +363,10 @@ internal class StoreModel : CrliteSyncFixture() {
             if (stopped) restart()
             last =
                 fault?.let { " ($it)" }.orEmpty() +
-                run.result.stage
-                    ?.let { stage ->
-                        " at $stage: " + run.result.warnings.joinToString { it.message }
-                    }.orEmpty()
+                run.result.failure
+                    ?.let { failure -> " $failure: ${run.result.cause}" }
+                    .orEmpty()
+            lastFailure = run.result.failure
             return run.result.outcome.takeUnless { stopped }
         }
 
@@ -416,8 +417,8 @@ internal class StoreModel : CrliteSyncFixture() {
             stopped: Boolean,
             pointerWritten: Boolean,
         ) {
-            if (clean && result.outcome == SyncOutcome.STORE_FAILED && !held(target)) {
-                fail("I4: a clean sync of the unheld $target is STORE_FAILED: ${result.warnings.map { it.message }}")
+            if (clean && result.failure == SyncFailure.STORE_FAILED && !held(target)) {
+                fail("I4: a clean sync of the unheld $target is STORE_FAILED: ${result.cause}")
             }
             if (stopped || liveAtStart == null) return
             // A sync whose write of `current` landed keeps it as the pointer's live or previous, whatever its outcome; one
@@ -545,6 +546,9 @@ internal class StoreModel : CrliteSyncFixture() {
         /** The last sync's stage and warnings, for the trail. */
         private var last = ""
 
+        /** The failure of the last sync, or null. */
+        private var lastFailure: SyncFailure? = null
+
         /** Damage to one key of the store, recorded so I1, I2 and I3 exempt what it hit. */
         private fun damage(only: List<String>? = null) {
             val keys = (only ?: storage.names()).sorted()
@@ -653,7 +657,9 @@ internal class StoreModel : CrliteSyncFixture() {
                 val o = sync()
                 trail += "  same ${last.ts} ${outcome(o)}"
                 check()
-                settled = o == SyncOutcome.INSTALLED || o == SyncOutcome.UNCHANGED || o == SyncOutcome.ROLLBACK_REFUSED
+                settled =
+                    o == SyncOutcome.INSTALLED || o == SyncOutcome.UNCHANGED ||
+                    (o == SyncOutcome.SKIPPED && lastFailure == SyncFailure.ROLLBACK_REFUSED)
             }
             val wedged = heldAndDamaged(last)
 

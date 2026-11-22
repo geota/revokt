@@ -5,8 +5,7 @@ package dev.revokt.engine.update
 
 import dev.revokt.ClubcardCorpus
 import dev.revokt.CrliteChannel
-import dev.revokt.DiagnosticCode
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.update.UpdateFixtures.deltaRecord
@@ -18,6 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /** `buildIndex(records, channel)` (#130, spec §3.2, §6.5 seed archive and file names). */
 class BuildIndexTest {
@@ -79,14 +79,8 @@ class BuildIndexTest {
         val placed =
             assertIs<Placement.Placed>(placeFilters(listOf(deltaRecord, fullRecord), CrliteChannel.COMPAT)).filters
         assertEquals(listOf(fullRecord.id, deltaRecord.id), placed.map { it.record.id })
-        assertEquals(
-            IndexRefusal.FULL_COUNT,
-            refused(placeFilters(listOf(deltaRecord), CrliteChannel.COMPAT) as IndexBuild).reason,
-        )
-        assertEquals(
-            IndexRefusal.FULL_COUNT,
-            refused(placeFilters(listOf(fullRecord, deltaRecord), CrliteChannel.DEFAULT) as IndexBuild).reason,
-        )
+        refused(placeFilters(listOf(deltaRecord), CrliteChannel.COMPAT) as IndexBuild).assertFullCount()
+        refused(placeFilters(listOf(fullRecord, deltaRecord), CrliteChannel.DEFAULT) as IndexBuild).assertFullCount()
     }
 
     @Test
@@ -140,14 +134,15 @@ class BuildIndexTest {
         val second = FilterRecord("f2", "compat", false, 2, "second.filter")
         for (records in listOf(listOf(deltaRecord), listOf(fullRecord, second, deltaRecord), emptyList())) {
             val r = refused(buildIndex(records, CrliteChannel.COMPAT) { error("read ${it.id}") })
-            assertEquals(IndexRefusal.FULL_COUNT, r.reason, "$records")
-            assertEquals(SyncStage.INDEX, r.stage)
-            assertEquals(DiagnosticCode.INDEX_INCONSISTENT, r.code)
+            r.assertFullCount()
         }
-        assertEquals(
-            IndexRefusal.FULL_COUNT,
-            refused(UpdateFixtures.build(listOf(fullRecord), channel = CrliteChannel.DEFAULT)).reason,
-        )
+        refused(UpdateFixtures.build(listOf(fullRecord), channel = CrliteChannel.DEFAULT)).assertFullCount()
+    }
+
+    /** `INDEX_INCONSISTENT` for the full-filter count: not exactly one full filter in the channel. */
+    private fun IndexBuild.Refused.assertFullCount() {
+        assertEquals(SyncFailure.INDEX_INCONSISTENT, failure, detail)
+        assertTrue("full filters, not 1" in detail, detail)
     }
 
     @Test
@@ -181,9 +176,8 @@ class BuildIndexTest {
             )
         for (records in cases) {
             val r = refused(buildIndex(records, CrliteChannel.COMPAT) { error("read ${it.id}") })
-            assertEquals(IndexRefusal.NAME_COLLISION, r.reason, "$records")
-            assertEquals(SyncStage.INDEX, r.stage)
-            assertEquals(DiagnosticCode.INDEX_INCONSISTENT, r.code)
+            assertEquals(SyncFailure.INDEX_INCONSISTENT, r.failure, "$records")
+            assertTrue(" map to " in r.detail || " is named " in r.detail, r.detail)
         }
     }
 
@@ -206,19 +200,15 @@ class BuildIndexTest {
         C2spIndex.read(built.index)
         val (over, overBodies) = records(17_474)
         val r = refused(UpdateFixtures.build(over, overBodies))
-        assertEquals(IndexRefusal.OVER_CAP, r.reason)
-        assertEquals(SyncStage.INDEX, r.stage)
-        assertEquals(DiagnosticCode.INDEX_INCONSISTENT, r.code)
+        assertEquals(SyncFailure.INDEX_INCONSISTENT, r.failure)
         assertEquals("index.bin would be 1048636 bytes, over 1048576", r.detail)
     }
 
     @Test
-    fun `a filter that does not decode is refused at PREPARE, with the decoder's error`() {
+    fun `a filter that does not decode is FILTER_UNREADABLE, with the decoder's error`() {
         val bodies = UpdateFixtures.bodies + (deltaRecord.filename to byteArrayOf(4, 0, 0))
         val r = refused(UpdateFixtures.build(listOf(fullRecord, deltaRecord), bodies))
-        assertEquals(IndexRefusal.FILTER_UNREADABLE, r.reason)
-        assertEquals(SyncStage.PREPARE, r.stage)
-        assertEquals(null, r.code)
+        assertEquals(SyncFailure.FILTER_UNREADABLE, r.failure)
         assertNotNull(r.cause)
     }
 

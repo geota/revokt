@@ -5,7 +5,7 @@ package dev.revokt.engine.fetch
 
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.RevoktLimits
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -32,7 +32,7 @@ class AttachmentBaseTest {
         body: String,
         source: MozillaRemoteSettings = MozillaRemoteSettings.DEFAULT,
     ) {
-        val failed = read(body, source).first.assertFailed(SyncStage.ATTACHMENT, ClientFailure.ATTACHMENT_BASE)
+        val failed = read(body, source).first.assertFailed(SyncFailure.ATTACHMENT_BASE)
         assertEquals(200, failed.httpStatus, body)
     }
 
@@ -57,7 +57,7 @@ class AttachmentBaseTest {
     }
 
     @Test
-    fun `a base_url that fails the URL rules or the domain rule is FAILED at ATTACHMENT, with no fallback`() {
+    fun `a base_url that fails the URL rules or the domain rule is ATTACHMENT_BASE, with no fallback`() {
         for (bad in listOf(
             "http://firefox-settings-attachments.cdn.mozilla.net/",
             "HTTPS://firefox-settings-attachments.cdn.mozilla.net/",
@@ -81,7 +81,7 @@ class AttachmentBaseTest {
     }
 
     @Test
-    fun `a server root that is not the capabilities shape is FAILED at ATTACHMENT`() {
+    fun `a server root that is not the capabilities shape is ATTACHMENT_BASE`() {
         for (body in listOf(
             "not json",
             "[]",
@@ -94,10 +94,10 @@ class AttachmentBaseTest {
         )) {
             refused(body)
         }
-        // A failed fetch keeps the client's own failure, at stage ATTACHMENT.
+        // A failed fetch of the root is ATTACHMENT_BASE too, with the response's status and backoff.
         client(ScriptedFetcher { response(503, headers = arrayOf("Retry-After" to "7")) })
             .attachmentBase()
-            .assertFailed(SyncStage.ATTACHMENT, ClientFailure.HTTP_STATUS)
+            .assertFailed(SyncFailure.ATTACHMENT_BASE, "status ")
             .also { assertEquals(503 to 7_000L, it.httpStatus to it.backoffMillis) }
     }
 

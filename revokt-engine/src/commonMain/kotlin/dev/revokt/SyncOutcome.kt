@@ -3,16 +3,20 @@
 
 package dev.revokt
 
-/** How one sync ended (spec §4, §5.1). Growable. Persist `name`, never `ordinal`. */
+/**
+ * How one sync ended (spec §4, §5.1). Growable. Persist `name`, never `ordinal`. A [SKIPPED] or [FAILED] sync carries
+ * its [SyncFailure] on [SyncResult.failure].
+ */
 public enum class SyncOutcome {
+    /** The sync installed a generation. */
     INSTALLED,
-    UNCHANGED,
-    FAILED,
 
-    /** An x5u link outside its validity window at the local clock, at stage [SyncStage.X5U] (§7.1). */
-    CLOCK_SKEW,
-    ROLLBACK_REFUSED,
-    BACKOFF,
-    STORE_FAILED,
-    STORE_LOCKED,
+    /** The collection is at the live generation: a 304, or a verified `<ts>` equal to the live one. */
+    UNCHANGED,
+
+    /** The sync stopped short of an install, and not as a feed failure: [SyncFailure.BACKOFF], `ROLLBACK_REFUSED`. */
+    SKIPPED,
+
+    /** A feed failure: `consecutiveFailures` advances and the failure backoff applies (§7.1). */
+    FAILED,
 }

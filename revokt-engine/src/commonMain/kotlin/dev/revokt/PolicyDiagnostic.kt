@@ -4,9 +4,9 @@
 package dev.revokt
 
 /**
- * One finding about a configuration or a sync (spec §4): returned by `validate(enforcement)`, carried on the state's
- * warnings and on [SyncResult.warnings]. Tests and consumers match on [code], never on [message]. An output type: a
- * value with a private constructor and a `@RevoktTestingApi` builder.
+ * One finding about a configuration (spec §4), returned by `validate(enforcement)`; a runtime condition is a
+ * [RevoktWarning]. Tests and consumers match on [code], never on [message]. An output type: a value with a private
+ * constructor and a `@RevoktTestingApi` builder.
  */
 @OptIn(RevoktTestingApi::class)
 public class PolicyDiagnostic private constructor(

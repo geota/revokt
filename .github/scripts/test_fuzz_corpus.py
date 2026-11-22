@@ -131,6 +131,21 @@ class Stage(Case):
         self.assertEqual(self.stage(), 0)
         self.assertFalse((self.out / "Foo-bar").exists())
 
+    def test_prune_with_only_oversized_units_is_an_error_and_stages_the_rest(self):
+        put(self.corpus / "Foo-bar", b"123456789")
+        kept = put(self.corpus / "Baz-qux", b"c")
+        self.assertEqual(fc.stage(self.corpus, self.out, TARGETS, prune=True), (1, 1))
+        self.assertFalse((self.out / "Foo-bar").exists())
+        self.assertEqual(self.staged("Baz-qux"), [kept])
+        self.assertIn("::error::Foo-bar", self.stdout.getvalue())
+
+    def test_prune_drops_oversized_units_beside_one_within_max_len(self):
+        put(self.corpus / "Foo-bar", b"123456789")
+        kept = put(self.corpus / "Foo-bar", b"1234")
+        self.assertEqual(fc.stage(self.corpus, self.out, TARGETS, prune=True), (1, 0))
+        self.assertEqual(self.staged("Foo-bar"), [kept])
+        self.assertNotIn("::error::", self.stdout.getvalue())
+
     def test_malformed_rejects_everything(self):
         cases = {
             "symlink unit": lambda d: os.symlink("/etc/passwd", d / ("0" * 40)),
@@ -274,11 +289,18 @@ class Lists(Case):
         self.rejected(lambda: fc.check(self.out, TARGETS, None, self.lists))
 
     def test_malformed_lists_rejected(self):
+        def link_to_a_correct_copy():
+            # A link to a correct list of Foo-bar's units, outside lists/: only the regular-file rule rejects it.
+            (self.root / "copy").write_text(f"{self.a}\n{self.b}\n")
+            (self.lists / "Foo-bar").unlink()
+            os.symlink(self.root / "copy", self.lists / "Foo-bar")
+
         cases = {
             "empty": lambda: (self.lists / "Foo-bar").write_text(""),
             "bad line": lambda: (self.lists / "Foo-bar").write_text(f"{self.a}\n../x\n"),
             "unknown target": lambda: (self.lists / "Gone-target").write_text(f"{self.a}\n"),
             "link": lambda: (self.lists / "Foo-bar").unlink() or os.symlink(self.lists / "Baz-qux", self.lists / "Foo-bar"),
+            "link to a correct copy": link_to_a_correct_copy,
         }
         for label, make in cases.items():
             with self.subTest(label):
@@ -313,6 +335,13 @@ class Main(Case):
         put(self.corpus / "Foo-bar", b"b")
         with mock.patch.object(fc, "PRUNE", fc.Caps(1, 1 << 20, 1 << 20)):
             self.assertEqual(self.run_main("stage", "--prune", str(self.corpus), str(self.out)), fc.OVER_CAPS)
+
+    def test_prune_with_only_oversized_units_is_exit_3(self):
+        put(self.corpus / "Foo-bar", b"123456789")
+        # The seed leaves such a target out quietly; only the prune reports it.
+        self.assertEqual(self.run_main("stage", str(self.corpus), str(self.root / "seed")), 0)
+        self.assertNotIn("::error::", self.stdout.getvalue())
+        self.assertEqual(self.run_main("stage", "--prune", str(self.corpus), str(self.out)), fc.OVER_CAPS)
 
     def test_check_with_lists(self):
         name = put(self.out / "Foo-bar", b"a")

@@ -8,8 +8,7 @@
 package dev.revokt.engine.update
 
 import dev.revokt.CrliteChannel
-import dev.revokt.DiagnosticCode
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.api.ClubcardFormatException
@@ -51,21 +50,6 @@ internal class PlacedFilter(
     override fun toString(): String = "PlacedFilter(${record.id} as $name)"
 }
 
-/** Why [buildIndex] refused a record set. */
-internal enum class IndexRefusal {
-    /** Two placed attachments map to one name, or one maps to a name the generation directory reserves (spec §6.5). */
-    NAME_COLLISION,
-
-    /** The channel's records hold no full filter, or more than one. */
-    FULL_COUNT,
-
-    /** The index would be over [C2spIndex.MAX_BYTES] (spec §3.2, revision 53). */
-    OVER_CAP,
-
-    /** A placed filter does not decode under §6.3, so its coverage cannot be read. */
-    FILTER_UNREADABLE,
-}
-
 /** What [placeFilters] decided: the records a generation places, or why it places none. */
 internal sealed interface Placement {
     /** [filters] are the placed records in `index.bin` filename order, each with its name in the generation. */
@@ -83,30 +67,19 @@ internal sealed interface IndexBuild {
     ) : IndexBuild
 
     /**
-     * The record set builds no generation. A sync maps it to `SyncOutcome.FAILED` with [code] at [stage]; a seed loader
-     * to `SEED_UNREADABLE` (spec §6.5).
+     * The record set builds no generation: [failure] is `INDEX_INCONSISTENT` (not exactly one full filter, two placed
+     * attachments that map to one name or one that maps to a name the directory reserves, or an index over
+     * [C2spIndex.MAX_BYTES], spec §3.2 and §6.5), or `FILTER_UNREADABLE` (a placed filter does not decode under §6.3,
+     * so its coverage cannot be read). A sync fails with [failure]; a seed loader maps it to `SEED_UNREADABLE` (spec
+     * §6.5).
      */
     class Refused(
-        val reason: IndexRefusal,
+        val failure: SyncFailure,
         val detail: String,
         val cause: Throwable? = null,
     ) : IndexBuild,
         Placement {
-        /** [SyncStage.INDEX], except for an undecodable filter: a corrupt generation, the `prepare` stage's failure. */
-        val stage: SyncStage get() =
-            if (reason ==
-                IndexRefusal.FILTER_UNREADABLE
-            ) {
-                SyncStage.PREPARE
-            } else {
-                SyncStage.INDEX
-            }
-
-        /** [DiagnosticCode.INDEX_INCONSISTENT], except for an undecodable filter, which has no code of its own. */
-        val code: DiagnosticCode?
-            get() = if (reason == IndexRefusal.FILTER_UNREADABLE) null else DiagnosticCode.INDEX_INCONSISTENT
-
-        override fun toString(): String = "Refused($reason: $detail)"
+        override fun toString(): String = "Refused($failure: $detail)"
     }
 }
 
@@ -129,8 +102,8 @@ internal fun placeFilters(
             .sortedWith(compareBy<FilterRecord>({ it.incremental }, { it.effectiveTimestamp }, { it.id }))
             .map { PlacedFilter(it, GenerationNames.derive(it.filename)) }
     val fulls = placed.count { it.full }
-    if (fulls != 1) return IndexBuild.Refused(IndexRefusal.FULL_COUNT, "$wire has $fulls full filters, not 1")
-    collision(placed)?.let { return IndexBuild.Refused(IndexRefusal.NAME_COLLISION, it) }
+    if (fulls != 1) return IndexBuild.Refused(SyncFailure.INDEX_INCONSISTENT, "$wire has $fulls full filters, not 1")
+    collision(placed)?.let { return IndexBuild.Refused(SyncFailure.INDEX_INCONSISTENT, it) }
     return Placement.Placed(placed)
 }
 
@@ -161,7 +134,7 @@ internal fun buildIndex(
             try {
                 ClubcardFilters.decode(body(p.record))
             } catch (e: ClubcardFormatException) {
-                return IndexBuild.Refused(IndexRefusal.FILTER_UNREADABLE, "${p.record.id}: ${e.message}", e)
+                return IndexBuild.Refused(SyncFailure.FILTER_UNREADABLE, "${p.record.id}: ${e.message}", e)
             }
         coverage +=
             p.name to
@@ -171,7 +144,10 @@ internal fun buildIndex(
     val index = C2spIndex.index(coverage)
     val size = C2spIndex.byteSize(index)
     if (size > C2spIndex.MAX_BYTES) {
-        return IndexBuild.Refused(IndexRefusal.OVER_CAP, "index.bin would be $size bytes, over ${C2spIndex.MAX_BYTES}")
+        return IndexBuild.Refused(
+            SyncFailure.INDEX_INCONSISTENT,
+            "index.bin would be $size bytes, over ${C2spIndex.MAX_BYTES}",
+        )
     }
     return IndexBuild.Built(C2spIndex.write(index), placed)
 }

@@ -5,8 +5,7 @@
 
 package dev.revokt.engine.update
 
-import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreRead
 import kotlin.test.Test
@@ -61,7 +60,7 @@ internal class InstallMalformedPointerTest : InstallFixture() {
                 .write(other),
         )
         val f = failed(install(pending(), engine, store, SnapshotRef(empty), publication, null, logger))
-        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage)
+        assertEquals(SyncFailure.STORE_FAILED, f.failure)
         assertTrue("holds another generation" in f.cause?.message.orEmpty())
         assertEquals(other, store.meta(dir))
         assertNotNull(store.file(dir, dev.revokt.engine.store.StoreLayout.INDEX))
@@ -87,7 +86,7 @@ internal class InstallMalformedPointerTest : InstallFixture() {
         storage.inner.write("crlite/compat/$dir/meta.json", "{\"metaVersion\":2}".encodeToByteArray())
         val before = keysOf(dir).associateWith { checkNotNull(storage.inner.read(it)).toList() }
         val f = failed(install(pending(), engine, store, SnapshotRef(empty), publication, null, logger))
-        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage)
+        assertEquals(SyncFailure.STORE_FAILED, f.failure)
         assertEquals(before, keysOf(dir).associateWith { checkNotNull(storage.inner.read(it)).toList() })
         val r =
             install(

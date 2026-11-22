@@ -8,7 +8,6 @@ package dev.revokt.engine.update
 import dev.revokt.CrliteChannel
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.FilterFormat
@@ -18,9 +17,10 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktStorage
 import dev.revokt.SignatureVerifier
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
 import dev.revokt.VerifyResult
+import dev.revokt.WarningCode
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.fetch.FetchLimits
 import dev.revokt.engine.fetch.ScriptedFetcher
@@ -195,7 +195,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                             it.body
                     },
             )
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.INDEX, *failed(DiagnosticCode.INDEX_INCONSISTENT))
+        sync(server).assert(SyncFailure.INDEX_INCONSISTENT)
         assertEquals(emptyList(), server.attachmentRequests())
         assertNothingAdvanced()
     }
@@ -212,7 +212,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
             sync(
                 server,
                 now = ts + hour + i * 7 * hour,
-            ).assert(SyncOutcome.FAILED, SyncStage.INDEX, *failed(DiagnosticCode.INDEX_INCONSISTENT))
+            ).assert(SyncFailure.INDEX_INCONSISTENT)
             assertEquals(emptyList(), server.attachmentRequests())
         }
     }
@@ -242,7 +242,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `data-path (g) - an intermediates-shaped changeset is SYNC_SCHEMA_REJECTED and advances nothing`() {
+    fun `data-path (g) - an intermediates-shaped changeset is SCHEMA_REJECTED and advances nothing`() {
         val intermediate =
             """{"schema":1792767600380,"derHash":"EmW5f+rzuC5XDD8JtLTqlMNK2m253Wa2Iq8f2wg96Ck=",
                 "attachment":{"hash":"96ef47e108b2bf0b6156f5b22ec6ab5e6a7fc7eaed9a51acee44cd1ec2622df4","size":2247,
@@ -250,7 +250,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                   "location":"security-state-staging/intermediates/x.pem","mimetype":"application/x-pem-file"},
                 "id":"53279a21-f633-432a-b73b-0b7f38f730c1","last_modified":1792771022925}"""
         val server = Server(records = listOf(intermediate))
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.SCHEMA, *failed(DiagnosticCode.SYNC_SCHEMA_REJECTED))
+        sync(server).assert(SyncFailure.SCHEMA_REJECTED)
         assertEquals(emptyList(), server.attachmentRequests())
         assertNothingAdvanced()
     }
@@ -269,7 +269,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                 parent = full.id,
             )
         val server = Server(records = listOf(full.json(), big.json()))
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed(DiagnosticCode.CAP_NEAR_LIMIT))
+        sync(server).assert(SyncFailure.ATTACHMENT_OVER_CAP)
         assertEquals(emptyList(), server.attachmentRequests())
         assertNothingAdvanced()
     }
@@ -287,9 +287,9 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                 parent = full.id,
             )
         val server = Server(records = listOf(full.json(), atCap.json()))
-        // Fetched under its signed size, and FAILED because the scripted body is shorter. Not over the cap, but above
-        // half of it: the CAP_NEAR_LIMIT warning beside SYNC_FAILED (§4, #141).
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed(DiagnosticCode.CAP_NEAR_LIMIT))
+        // Fetched under its signed size, and ATTACHMENT_MISMATCH because the scripted body is shorter. Not over the
+        // cap, but above half of it: the CAP_NEAR_LIMIT warning (§4, #141).
+        sync(server).assert(SyncFailure.ATTACHMENT_MISMATCH, WarningCode.CAP_NEAR_LIMIT)
         assertEquals(listOf(attachments + full.location, attachments + delta.location), server.attachmentRequests())
     }
 
@@ -317,26 +317,26 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         val server = Server()
         server.overrides[server.changesetUrl] =
             { response(302, ByteArray(0), "Location" to "https://elsewhere.example/") }
-        val run = sync(server).assert(SyncOutcome.FAILED, SyncStage.CHANGESET, *failed())
+        val run = sync(server).assert(SyncFailure.CHANGESET_FETCH)
         assertEquals(302, run.result.httpStatus)
         assertEquals(listOf(monitor, server.changesetUrl), server.fetcher.requests.map { it.url })
         assertNothingAdvanced()
     }
 
     @Test
-    fun `a signature that does not verify is FAILED at SIGNATURE and advances nothing`() {
+    fun `a signature that does not verify is SIGNATURE_INVALID and advances nothing`() {
         val server = Server()
         server.signature = Server(records = listOf(full.json())).sign()
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.SIGNATURE, *failed())
+        sync(server).assert(SyncFailure.SIGNATURE_INVALID)
         assertEquals(emptyList(), server.attachmentRequests())
         assertNothingAdvanced()
     }
 
     @Test
-    fun `an x5u link outside its window at now is CLOCK_SKEW at X5U`() {
+    fun `an x5u link outside its window at now is CLOCK_SKEW`() {
         val server = Server()
         val late = millis("2051-01-01T00:00:00Z")
-        sync(server, now = late).assert(SyncOutcome.CLOCK_SKEW, SyncStage.X5U, *failed())
+        sync(server, now = late).assert(SyncFailure.CLOCK_SKEW)
         assertNothingAdvanced(late)
     }
 
@@ -363,7 +363,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         val installedAt = ts + hour
         assertEquals(installedAt + 600_000, sourceRecord().backoffUntilMillis)
         server.fetcher.requests.clear()
-        val run = sync(server, now = installedAt + 1_000).assert(SyncOutcome.BACKOFF)
+        val run = sync(server, now = installedAt + 1_000).assert(SyncFailure.BACKOFF)
         assertNull(run.result.httpStatus)
         assertEquals(emptyList(), server.fetcher.requests)
         assertEquals(installedAt + 1_000, sourceRecord(installedAt + 1_000).lastAttemptAtMillis)
@@ -387,7 +387,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         for (records in listOf(listOf(full.json()), listOf(full.json(), delta.json()))) {
             server.ts = ts - 1
             server.records = records
-            sync(server, now = ts + 2 * hour).assert(SyncOutcome.ROLLBACK_REFUSED)
+            sync(server, now = ts + 2 * hour).assert(SyncFailure.ROLLBACK_REFUSED)
             assertEquals("$ts/${delta.id}", live().generationId)
         }
     }
@@ -404,11 +404,11 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `a body that differs from its signed hash is FAILED at ATTACHMENT`() {
+    fun `a body that differs from its signed hash is ATTACHMENT_MISMATCH`() {
         val server = Server()
         server.bodies =
             server.bodies + (delta.location to delta.body.copyOf().also { it[it.size - 1] = (it.last() + 1).toByte() })
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed())
+        sync(server).assert(SyncFailure.ATTACHMENT_MISMATCH)
         assertNothingAdvanced()
     }
 
@@ -439,7 +439,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         server.bodies = server.bodies + (d.location to v4)
         val now = ts + 2 * hour
         sync(server, now = now, engine = engine)
-            .assert(SyncOutcome.FAILED, SyncStage.PREPARE, *failed(DiagnosticCode.FORMAT_UNSUPPORTED))
+            .assert(SyncFailure.FORMAT_UNSUPPORTED)
         assertEquals(listOf(previous), engine.prepared)
         assertEquals(previous, live().generationId)
         assertEquals(GenerationNames.directory(ts, previous), liveDirectory())
@@ -448,12 +448,12 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `an engine that does not read the format is FAILED with FORMAT_UNSUPPORTED at PREPARE`() {
+    fun `an engine that does not read the format is FORMAT_UNSUPPORTED`() {
         val engine = TestEngine(formats = setOf(FilterFormat.V4))
         sync(
             Server(),
             engine = engine,
-        ).assert(SyncOutcome.FAILED, SyncStage.PREPARE, *failed(DiagnosticCode.FORMAT_UNSUPPORTED))
+        ).assert(SyncFailure.FORMAT_UNSUPPORTED)
         assertEquals(emptyList(), engine.prepared)
         assertNothingAdvanced()
     }
@@ -485,7 +485,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         // Older than the live generation, so the rollback guard would refuse it after the placement.
         val server = Server(ts = ts - 1, records = listOf(f.json(), d.json()))
         sync(server, now = ts + 2 * hour)
-            .assert(SyncOutcome.FAILED, SyncStage.INDEX, *failed(DiagnosticCode.INDEX_INCONSISTENT))
+            .assert(SyncFailure.INDEX_INCONSISTENT)
     }
 
     @Test
@@ -503,16 +503,16 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         val server = Server()
         server.signature = Server(records = listOf(full.json())).sign()
         server.records = listOf(full.json(), delta.json(), """{"last_modified":$ts,"deleted":true}""")
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.SIGNATURE, *failed())
+        sync(server).assert(SyncFailure.SIGNATURE_INVALID)
         assertEquals(listOf(monitor, server.changesetUrl, x5u), server.fetcher.requests.map { it.url })
         assertNothingAdvanced()
     }
 
     @Test
-    fun `an activate that throws is FAILED at ACTIVATE and counts a store failure`() {
+    fun `an activate that throws is ENGINE_FAILED and counts a store failure`() {
         val engine = TestEngine().apply { onActivate = { error("activate") } }
         val run = sync(Server(), engine = engine)
-        run.assert(SyncOutcome.FAILED, SyncStage.ACTIVATE, *failed())
+        run.assert(SyncFailure.ENGINE_FAILED)
         assertEquals(1, run.storeFailures)
         assertNothingAdvanced()
     }
@@ -530,7 +530,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         val server = Server()
         server.headers = arrayOf("Retry-After" to "60")
         server.overrides[x5u] = { response(500, ByteArray(0), "Retry-After" to "60") }
-        sync(server).assert(SyncOutcome.FAILED, SyncStage.X5U, *failed()).also {
+        sync(server).assert(SyncFailure.X5U_FETCH).also {
             assertEquals(500, it.result.httpStatus)
         }
         assertEquals(ts + hour + 60_000, sourceRecord().backoffUntilMillis)
