@@ -8,6 +8,7 @@ import dev.revokt.Finding
 import dev.revokt.NoIssuerReason
 import dev.revokt.ParseReason
 import dev.revokt.PathBuilderFallback
+import dev.revokt.PathReason
 import dev.revokt.PathStatus
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
@@ -239,7 +240,7 @@ class DecideFallbackTest {
             // The control: the same builder with only CA intermediates is used, keyed by C.
             val control = WalkerHarness.decide(attack, FakeFallback.finds(leaf, c, root))
             assertEquals(PathStatus.FOUND, control.path.status)
-            assertEquals(true, control.path.usedFallback)
+            assertEquals(true, control.detail.usedFallback)
             assertEquals(listOf(c.keyHash), control.issuerKeys)
             // A path of the leaf and its anchor alone has no intermediate to check.
             val short = WalkerHarness.decide(attack, FakeFallback.finds(leaf, root))
@@ -424,6 +425,7 @@ class DecideFallbackTest {
                             .walkerReason(NoIssuerReason.UNANCHORED)
                             .endReason(WalkEnd.COMPLETE)
                     }
+                    assertEquals(PathReason.FALLBACK_LIMIT, d.path.reason, at)
                     assertEquals(listOf(notUsed(reason)), d.findings, at)
                 }
             }
@@ -519,7 +521,8 @@ class DecideFallbackTest {
                 .reported(*h.path.toTypedArray())
                 .keys(h.intermediate)
         }
-        assertEquals(RevoktLimits.MAX_EXPLORED, d.path.walkStats.candidatesExplored)
+        assertEquals(PathReason.EXPLORATION_BUDGET, d.path.reason)
+        assertEquals(RevoktLimits.MAX_EXPLORED, d.detail.walkStats.candidatesExplored)
         assertEquals(emptyList(), d.findings)
         assertEquals(1, fallback.calls)
         listOf(null to FallbackReason.DISABLED, FakeFallback.fails() to FallbackReason.FAILED).forEach { (fb, reason) ->
@@ -541,7 +544,7 @@ class DecideFallbackTest {
         // at step 3.
         for (f in WalkerFixturesS1ToAj.ac() + WalkerFixturesS1ToAj.ad()) {
             val d = WalkerHarness.decide(f, null)
-            assertEquals(ParseReason.PRODUCER_UNKEYABLE, d.path.parseReason, f.toString())
+            assertEquals(PathReason.PRODUCER_UNKEYABLE, d.path.reason, f.toString())
         }
     }
 
@@ -629,8 +632,22 @@ class DecideFallbackTest {
                     .pathsFound(0)
                 if (fallback != null) reported(leaf, sub, root).keys(sub)
             }
-            assertEquals(RevoktLimits.MAX_RELATED_PER_LEVEL, d.path.walkStats.relatedExploredAtLeaf, case)
+            assertEquals(RevoktLimits.MAX_RELATED_PER_LEVEL, d.detail.walkStats.relatedExploredAtLeaf, case)
         }
+    }
+
+    @Test
+    fun `walker (ah) a walk out of verifications is PATH_BUDGET_EXCEEDED with reason VERIFICATION_BUDGET`() {
+        for (f in WalkerFixturesS1ToAj.ah()) {
+            val walk = WalkerHarness.walk(f)
+            if (walk !is Walk.Budget || walk.end != WalkEnd.VERIFICATION_BUDGET) continue
+            val d = WalkerHarness.decide(f, null)
+            assertEquals(PathStatus.PATH_BUDGET_EXCEEDED, d.path.status, "$f")
+            assertEquals(PathReason.VERIFICATION_BUDGET, d.path.reason, "$f")
+            assertEquals(WalkEnd.VERIFICATION_BUDGET, d.detail.endReason, "$f")
+            return
+        }
+        error("no (ah) row ends on VERIFICATION_BUDGET")
     }
 
     @Test
@@ -643,13 +660,14 @@ class DecideFallbackTest {
             assertPath(d, "$reason") {
                 status(PathStatus.PATH_BUDGET_EXCEEDED).endReason(WalkEnd.RELATED_BUDGET).endDepth(1)
             }
+            assertEquals(PathReason.RELATED_BUDGET, d.path.reason, "$reason")
             assertEquals(listOf(notUsed(reason)), d.findings)
             assertEquals(0, fallback?.calls ?: 0)
         }
         // On every trust-manager path the same chain is cut at step 3.
         val (cut, calls) = cutDecision(f, FakeFallback.fails())
-        assertEquals(WalkEnd.EXPLORATION_BUDGET, cut.path.endReason)
-        assertEquals(0, cut.path.endDepth)
+        assertEquals(WalkEnd.EXPLORATION_BUDGET, cut.detail.endReason)
+        assertEquals(0, cut.detail.endDepth)
         assertEquals(0, calls)
         assertEquals(emptyList(), cut.findings)
     }

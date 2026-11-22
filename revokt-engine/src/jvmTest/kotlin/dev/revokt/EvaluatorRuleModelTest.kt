@@ -84,12 +84,11 @@ class EvaluatorRuleModelTest {
                 )
             }
         val engine = StubEngine.always(CrliteQueryResult.REVOKED)
-        val v =
-            EvaluatorRig(honest, engine = engine)
-                .presented(listOf(leaf6.der, h.intermediate.der))
+        val rig = EvaluatorRig(honest, engine = engine)
+        val v = rig.presented(listOf(leaf6.der, h.intermediate.der))
         assertEquals(PathStatus.PARSE_FAILED, v.path.status)
-        assertEquals(ParseReason.PRODUCER_UNKEYABLE, v.path.parseReason)
-        assertEquals(KeyabilityClause.TIME, v.path.keyabilityClause)
+        assertEquals(PathReason.PRODUCER_UNKEYABLE, v.path.reason)
+        assertEquals(KeyabilityClause.TIME, rig.detail(v).keyabilityClause)
         assertNull(v.crlite)
         assertEquals(emptyList(), engine.queries, "never queried")
         assertEquals(setOf(Rule.PARSE_FAILED), v.rules)

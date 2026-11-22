@@ -185,7 +185,7 @@ tests; **live checks** are informational.
   platform `CertificateFactory` (a 0.3 gate; pinned system-image revisions, Conscrypt APEX version logged); **live checks**; **benchmarks** on a physical ARM device including
   verifications per honest handshake.
 - **Walker fixtures**, schema `id | presented (ordered) | snapshot | preload | verifier.unsupported |
-  expected Walk (asserted only in the walker-only harness, revokt-engine's test set; every other path asserts the Finding.Path columns, and revokt-testing's recorded fixtures carry the Walk column as a string) | expected PathStatus / NoIssuerReason / WalkEnd | expected Path fields | verdict
+  expected Walk (asserted only in the walker-only harness, revokt-engine's test set; every other path asserts the Finding.Path columns, and revokt-testing's recorded fixtures carry the Walk column as a string) | expected PathStatus / PathReason / WalkEnd | expected Path fields | verdict. The Path fields a row names beyond `status`, `reason`, `issuerSpkiSha256s` and `anchorSha256` (`walkerReason`, `keyabilityClause`, `endReason`, `endDepth`, `anchorSnapshotId`, `usedFallback`, `pathsFound`, the reported path, `candidatesDropped` and the walk counters such as `candidatesExplored`) are the decision's detail on the evaluation's `DEBUG` line (§4), which the tests assert on the decision; a `NO_ISSUER(X)` or `PARSE_FAILED(X)` row reads `X` as `Finding.Path.reason`, and a `PATH_BUDGET_EXCEEDED` row whose walk completed reads `reason = FALLBACK_LIMIT`
   relation to the honest chain`, on every platform path (JVM walker, JVM walker with the fallback
   disabled in the walker-only harness, Android CT-gap path, Android plain delegate, `Revokt.evaluate`; a row whose
   outcome depends on the fallback states its fallback-disabled expectation, decision step 6, revision 49; every row
@@ -330,8 +330,8 @@ tests; **live checks** are informational.
   with an empty `presented` or an empty `verifiedPath`, a `verifiedPath` of more than `MAX_DEPTH + 1` certificates, or a
   `verifiedPath` whose first certificate is not byte-equal to `presented[0]` → `IllegalArgumentException` (revision
   57); a one-certificate `verifiedPath` whose leaf is a snapshot anchor outside the keyability profile → `FOUND` under
-  its own key, `anchorSnapshotId` the entry snapshot's; the same leaf when it is not an anchor →
-  `PARSE_FAILED(PRODUCER_UNKEYABLE)`, never queried; a longer `verifiedPath` → `anchorSnapshotId = 0`, an anchor at its
+  its own key, the `DEBUG` line's `anchorSnapshotId` the entry snapshot's; the same leaf when it is not an anchor →
+  `PARSE_FAILED(PRODUCER_UNKEYABLE)`, never queried; a longer `verifiedPath` → `anchorSnapshotId = 0` on the `DEBUG` line, an anchor at its
   head gated like any leaf; `STRICT.newBuilder().build().newBuilder()` keeps `STRICT`'s preset; `signedSourceFailingAfterMillis(-1)` and
   `signedSourceFailingAfter(Duration.ofSeconds(Long.MAX_VALUE))` → `IllegalArgumentException`; a policy that is an `ERROR` under
   `validate(ENFORCE)` has only `WARNING`s under `validate(OFF)`; a `PresentedChain` whose second certificate does not
@@ -355,7 +355,7 @@ tests; **live checks** are informational.
 - **`Rule` model tests** (tagged by milestone: **0.1** the enum, preset tables, golden fixture, the `revokt-engine` jvmMain `Rule → BasicReason` map and precedence; **0.2** everything that needs `evaluate` alone; **0.3** exceptions, caches, counters, the shadow policy, listeners and the Java compile; revision 49 moved the parts of [0.2] items that need 0.3 machinery to [0.3]): [0.1] both preset tables are total over `Rule.entries`, the two status-map ranges are subsets of it, the `Rule → BasicReason` map is total, and the `RevoktStatus` and `RevoktEvent` rule-keyed maps are zero-filled over `Rule.entries`; `entries == entries.sortedBy { ruleClass }`; the golden growability fixture diff is
   additive; the `PathStatus → Rule` and `CrliteQueryResult → Rule` tables; `parseFailed` zero-filled over `ParseReason.entries`; [0.2] `Verdict.rule` is the
   first fired non-exempted `REJECT` rule; a leaf failing K6 →
-  `PARSE_FAILED(PRODUCER_UNKEYABLE)` with `keyabilityClause = TIME` and `crlite == null`, and an issuer candidate
+  `PARSE_FAILED(PRODUCER_UNKEYABLE)` with `keyabilityClause = TIME` in the decision's detail and `crlite == null`, and an issuer candidate
   outside the profile not dropped; per-dataset
   `NO_DATA` and `STALE` with a fresh CRLite and a 30-day-old OneCRL generation (M2) fire nothing;
   `DEFAULT.newBuilder().rule(STALE, REJECT)` with 4-day-old data → `Accepted`, `DataState.stale`,

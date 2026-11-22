@@ -415,10 +415,11 @@ enum class Layer { PATH, CRLITE }                        // growable; M2: ONECRL
 enum class Dataset { CRLITE /* M2: INTERMEDIATES, ONECRL, CRLSET, DENYLIST; M3: CT_LOGS; M4: DISTRUST */ }   // growable; the freshness rule per dataset and source is §7.2 prose
 enum class Freshness { RECORD_LAST_MODIFIED, LAST_VERIFIED_POLL, SEED_SIGNED_TIME, SEQUENCE_TIME, ARTIFACT_DATE }   // growable; what a generation's sourceTimestamp means
 enum class PathStatus { FOUND, NO_ISSUER, PATH_BUDGET_EXCEEDED, PARSE_FAILED, NOT_WALKED }   // growable; M5: NOT_APPLICABLE
-enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable; parseReason != null ⇔ path.status == PARSE_FAILED (§5.1 step 3, §9.2 D8)
-enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; keyabilityClause != null ⇔ parseReason == PRODUCER_UNKEYABLE
+enum class PathReason(val status: PathStatus) { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, UNSUPPORTED_ALGORITHM, PLATFORM_ONLY /* NO_ISSUER */, STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE /* PARSE_FAILED */, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET /* the walk's budgets */, FALLBACK_LIMIT /* a completed NotFound over FALLBACK_MAX_PRESENTED, §5.1 step 6 */ /* PATH_BUDGET_EXCEEDED */ }   // growable; the union of NoIssuerReason, ParseReason and the WalkEnd budgets; Finding.Path.reason
+enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable; why the leaf is PARSE_FAILED, reported as the PathReason of its name (§5.1 step 3, §9.2 D8)
+enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; on the DEBUG line ⇔ reason == PRODUCER_UNKEYABLE
 enum class TerminalKind { ANCHOR /* M2: PRELOAD */ }   // growable; the reported path's terminal (§5.1 invariant)
-enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, UNSUPPORTED_ALGORITHM, PLATFORM_ONLY }   // growable; noIssuerReason != null ⇔ path.status == NO_ISSUER
+enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, UNSUPPORTED_ALGORITHM, PLATFORM_ONLY }   // growable; the walker's reason (walkerReason on the DEBUG line); a NO_ISSUER path reports the PathReason of its name
 enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and found no path: build returned null or threw; a thrown result is neither path- nor verdict-cached */ }   // growable; why decision step 6 evaluated no fallback path (§5.1)
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
 enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
@@ -456,21 +457,23 @@ sealed interface Verdict {
     class Rejected private constructor(…) : Verdict { override val rule: Rule; class Builder { … } }   // non-null narrowing; Java getRule() is @NotNull on Rejected
 }
 sealed class Finding {
-    class Path : Finding() { val status: PathStatus; val source: ChainSource; val noIssuerReason: NoIssuerReason?; val walkerReason: NoIssuerReason?   // the walker's own reason before any PLATFORM_ONLY promotion; set on every walk NotFound, whatever the reported status (so a fallback Found after UNANCHORED still carries it), null otherwise
-        val parseReason: ParseReason?                    // non-null ⇔ status == PARSE_FAILED
-        val keyabilityClause: KeyabilityClause?          // non-null ⇔ parseReason == PRODUCER_UNKEYABLE (§9.2 K1–K8)
-        val terminalKind: TerminalKind?                  // null when the reported path is empty; else ANCHOR in M1; M2: PRELOAD for a preload-only path (a terminal of last resort), where anchorSha256 is null
-        val rewalkEnd: WalkEnd?                          // null unless a re-walk ran; M2: the re-walk's WalkEnd (COMPLETE or its exhaustion), which never demotes the first walk's Found
-        val endReason: WalkEnd?                          // COMPLETE on Found/NotFound (the step-6 fallback-skipped exit included), the Budget's end on Budget, EXPLORATION_BUDGET with endDepth = 0 for the step-3 no-walk cut, null only when no walk ran (NOT_WALKED, PLATFORM, the step-2 anchor leaf)
-        val endDepth: Int?                               // path size at which the walk ended (1 = leaf level); null on a completed walk (Found, NotFound) and when no walk ran; set only on Budget, and 0 on the step-3 no-walk cut
-        val cacheHit: Boolean; val anchorSnapshotId: Long /* id of the snapshot read once at flow step 2 (Evaluator.evaluate: at its entry) and consumed at decision step 1; 0 when none was consulted (Evaluator.evaluate with a verifiedPath of two or more certificates, presented also set or not; a one-certificate verifiedPath consults the snapshot read at entry for step 2's anchor test and reports its id); the walker harness assigns ids to its fixture snapshots */; val usedFallback: Boolean   // true whenever a fallback path was evaluated, Found or Budget
-        val pathsFound: Int                              // on Found: the paths found (M2: first walk plus completed re-walk paths); on Budget: the partial paths
-        val reportedPathSha256s: List<ByteArray>         // DER hashes leaf → terminal of the reported path: the first found path, else the first partial path, else empty; on a Budget walk with a fallback path and no partial path, the fallback path, with terminalKind and anchorSha256 following it, so issuerSpkiSha256s[0] stays the reported path's key
+    class Path : Finding() { val status: PathStatus; val source: ChainSource
+        val reason: PathReason?                          // non-null ⇔ status ∈ {NO_ISSUER, PARSE_FAILED, PATH_BUDGET_EXCEEDED}, and reason.status == status; the reported reason, after decide's UNSUPPORTED_ALGORITHM label or PLATFORM_ONLY promotion
         val issuerSpkiSha256s: List<ByteArray>           // every distinct leaf-issuer key evaluated: walker keys in candidate order, then the fallback key if new; first is the reported path's
-        val candidatesDropped: Int                       // presented or platform-built certificates the parser rejected and the walker never saw (§9.2 issuer corpus); also RevoktStatus.candidatesDropped
-        val anchorSha256: ByteArray?                     // SHA-256 of the reported path's anchor DER; null when the reported path is empty or (M2) terminalKind == PRELOAD
-        @RevoktInternalApi val walkStats: WalkStats      // @RevoktInternalApi class WalkStats(val verifications: Int, val candidatesExplored: Int, val relatedExploredAtLeaf: Int, val unrelatedExploredAtLeaf: Int), annotated at class level so it stays out of the dump; walker internals, opt-in
-        val credentialType: CredentialType               // growable enum, X509 in M1; M5 adds MTC (reserved now so M5 lands additively) }
+        val anchorSha256: ByteArray? }                   // SHA-256 of the reported path's anchor DER; null when the reported path is empty or (M2) terminalKind == PRELOAD
+    // The rest of how the walk reached the path is not public: each evaluation writes one DEBUG line (RevoktLogger) naming these fields, and the tests read them from the decision:
+    //   walkerReason: NoIssuerReason? — the walker's own reason before any UNSUPPORTED_ALGORITHM label or PLATFORM_ONLY promotion; set on every walk NotFound, whatever the reported status (so a fallback Found after UNANCHORED still carries it), null otherwise
+    //   keyabilityClause: KeyabilityClause? — non-null ⇔ reason == PRODUCER_UNKEYABLE (§9.2 K1–K8)
+    //   terminalKind: TerminalKind? — null when the reported path is empty; else ANCHOR in M1; M2: PRELOAD for a preload-only path (a terminal of last resort), where anchorSha256 is null
+    //   rewalkEnd: WalkEnd? (M2) — the re-walk's WalkEnd (COMPLETE or its exhaustion), which never demotes the first walk's Found
+    //   endReason: WalkEnd? — COMPLETE on Found/NotFound (the step-6 fallback-skipped exit included), the Budget's end on Budget, EXPLORATION_BUDGET with endDepth = 0 for the step-3 no-walk cut, null only when no walk ran (NOT_WALKED, PLATFORM, the step-2 anchor leaf)
+    //   endDepth: Int? — path size at which the walk ended (1 = leaf level); null on a completed walk (Found, NotFound) and when no walk ran; set only on Budget, and 0 on the step-3 no-walk cut
+    //   cacheHit (0.3); anchorSnapshotId: Long — id of the snapshot read once at flow step 2 (Evaluator.evaluate: at its entry) and consumed at decision step 1; 0 when none was consulted (Evaluator.evaluate with a verifiedPath of two or more certificates, presented also set or not; a one-certificate verifiedPath consults the snapshot read at entry for step 2's anchor test and reports its id; an evaluation that reached no decision logs the id it would have consulted); the walker harness assigns ids to its fixture snapshots
+    //   usedFallback: Boolean — true whenever a fallback path was evaluated, Found or Budget
+    //   pathsFound: Int — on Found: the paths found (M2: first walk plus completed re-walk paths); on Budget: the partial paths
+    //   reportedPathSha256s — DER hashes leaf → terminal of the reported path: the first found path, else the first partial path, else empty; on a Budget walk with a fallback path and no partial path, the fallback path, with terminalKind and anchorSha256 following it, so issuerSpkiSha256s[0] stays the reported path's key
+    //   candidatesDropped: Int — presented or platform-built certificates the parser rejected and the walker never saw (§9.2 issuer corpus); also RevoktStatus.candidatesDropped
+    //   walkStats — verifications, candidatesExplored, relatedExploredAtLeaf, unrelatedExploredAtLeaf: the walker's counters
     class Crlite : Finding() { val result: CrliteQueryResult; val issuerSpkiSha256: ByteArray?; val coverageEndMillis: Long? }
     class DataState : Finding() { val dataset: Dataset; val generationId: String?   // "<changeset timestamp>/<last applied record id>", the last filter in buildIndex placement order (the full, then deltas by (effectiveTimestamp, id)); seed: seed id; null ⇔ no generation
         val freshness: Freshness?; val fromSeed: Boolean; val sourceTimestampMillis: Long?; val ageMillis: Long?   // now − sourceTimestampMillis, clamped at 0 when the signed timestamp is ahead of the local clock (§7.1: no rule reads the local clock against signed data)
@@ -492,7 +495,7 @@ fun interface Exemption { fun isExempt(context: ExemptionContext): Boolean   // 
         @JvmStatic fun anchorIn(sha256s: Collection<ByteArray>): Exemption   // copied into a Set<okio.ByteString> at construction; matches context.path.anchorSha256 by content, the anchor of the reported path (reportedPathSha256s; M1: the first path found in §5.1's candidate order, as Firefox applies its anchor-dependent rules to the one chain it built)
         @JvmStatic fun hostIn(hosts: Collection<String>): Exemption          // each entry normalised as host' (§5.1 flow step 2); matches context.host, which on an HTTP/2-coalesced connection is the host OkHttp handshook for (§5.1); an entry that is not ASCII (pass the A-label), is empty after normalisation, starts with '.' or holds a '*' throws IllegalArgumentException when the exemption is made; an empty or null context.host never matches
         @JvmStatic fun hostSuffixIn(suffixes: Collection<String>): Exemption // host' equals a suffix or ends with "." + suffix; private CAs serve many subdomains; entries normalised and checked as for hostIn
-        @JvmStatic fun platformOnly(): Exemption } }                         // context.path.noIssuerReason == PLATFORM_ONLY; a null host or anchorSha256 never matches hostIn/anchorIn
+        @JvmStatic fun platformOnly(): Exemption } }                         // context.path.reason == PLATFORM_ONLY; a null host or anchorSha256 never matches hostIn/anchorIn
 // Exemptions.kt, @file:JvmName("Exemptions"): infix fun Exemption.and(other: Exemption): Exemption; infix fun Exemption.or(other: Exemption): Exemption   // Java: Exemptions.and(a, b). CEL's && and ||: short-circuiting but commutative; the side that decides the result wins whatever the other side did (true or broken = broken or true = exempt; false and broken = broken and false = not exempt), and its partner's throw is absorbed and not recorded; with no deciding side the first throw propagates and is recorded as not exempt plus the EXEMPTION engine error (when both throw, the left operand's); a fatal error (§5.5's catch rule) propagates at once; the outcome and findings never depend on operand order
 class ExemptionContext private constructor(…) { val rule: Rule; val chain: PresentedChain? /* null for a non-X.509 credential (M5) */; val credentialType: CredentialType; val path: Finding.Path; val host: String? /* normalised */; val nowMillis: Long; val dataStates: Map<Dataset, Finding.DataState> }   // growable: new evidence (M3 SCTs, M4 distrust record) lands as new nullable properties; builder @RevoktTestingApi on the type
 class AnchorSnapshot private constructor(…) { val id: Long /* process-local counter, like generationEpoch; not stable across processes */; val sha256: ByteArray /* of the sorted anchor DERs only (the bytes read, §5.3); stable */; val anchors: List<ByteArray> /* each anchor's bytes read (§5.3); the snapshot also keeps the platform's anchor objects, whose getEncoded() the PKIX fallback is given */; val createdMillis: Long; val preloadGenerationId: String? /* null in M1; M2: the INTERMEDIATES generation the index holds; an INTERMEDIATES install rebuilds every live index and advances id, so both caches miss */ }
@@ -557,7 +560,7 @@ re-walk** runs only after a `Found` (a `PLATFORM` path included: a hit on it run
 as the re-walk and the verdict's `source` is `MIXED`; on `Evaluator.evaluate` with a `verifiedPath` there is no re-walk and the rule is evaluated over that path alone) and only when a hit lies on a found path; it
 reuses the first walk's memo under its own fresh budgets; a `Budget` on the re-walk **never demotes**
 the first walk's `Found`: the rule is evaluated over the paths found so far (the hit path plus any
-clean path the re-walk completed), the re-walk's `WalkEnd` is recorded on `Finding.Path.rewalkEnd`,
+clean path the re-walk completed), the re-walk's `WalkEnd` is recorded as `rewalkEnd` on the evaluation's `DEBUG` line,
 and `PATH_BUDGET_EXCEEDED` fires only from the first walk; the §9.1 properties cover the re-walk from 0.4. **Data
 rules (`NO_DATA`, `STALE`)** are map lookups over the generation snapshot taken at
 flow step 2, computed **before** the catch boundary and merged into every verdict,
@@ -733,13 +736,13 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    its verdict, in the verdict cache (flow step 3a), so a transient error is not remembered; a null return is:
    - walk `NotFound` and the fallback finds a path → `Found([fallback], usedFallback = true)`.
    - walk `NotFound`, the fallback was **skipped** (chain too long) and the platform accepted in
-     step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
+     step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)` with `endReason = COMPLETE` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
      no honest Web PKI chain is longer than 8 certificates and unreproducible by the walker, and the
      server controls chain length.
    - walk `NotFound` and the fallback failed (`FallbackNotUsed(FAILED)`): on a trust-manager binding (and `Revokt.evaluate`, which always runs step 1), **any** such walk
      `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`, whatever the walk recorded: the platform trusts a chain neither revokt's
      walker nor its PKIX builder can reproduce (divergent canonicalisation, constraints, verifier or anchors). The
-     walker's own reason is kept in `Finding.Path.walkerReason`, and every recorded OID in an `UnsupportedAlgorithm`
+     walker's own reason is kept as `walkerReason` on the evaluation's `DEBUG` line, and every recorded OID in an `UnsupportedAlgorithm`
      finding. In the walker-only harness and `Evaluator.evaluate` it is `NO_ISSUER(UNSUPPORTED_ALGORITHM)` when the walk recorded an
      own signature OID (`tbsSigOid`) in `unsupportedOids()`, in mozilla::pkix's order (`CheckIssuerIndependentProperties`
      runs before `VerifySignedData`):
@@ -760,7 +763,7 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      exists, with `FallbackNotUsed(DISABLED)` wherever the fallback did not run because it is configured off
      (`SKIPPED` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
      as with the fallback enabled, with only the walk's partial leaf keys evaluated and `usedFallback = false`; walk
-     `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED` with `endReason = COMPLETE`,
+     `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)` with `endReason = COMPLETE`,
      whether or not step 1 ran; any other walk `NotFound` → `NO_ISSUER`, its reason under the
      fallback-failed branch's rule. On a trust-manager binding any such walk `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`,
      whatever the reason: the platform trusts a chain the walker cannot reproduce, and no PKIX builder ran;
@@ -891,7 +894,7 @@ returns such an instance. Clients that outlive `close()` therefore keep working 
 `VERIFIED` by the injected verifier under the next certificate's key and whose terminal is in the
 anchor snapshot by exact bytes. **M2**: a candidate found in Mozilla's signed preload by Mozilla's
 bytes is a *candidate*, not a terminal: the walk continues from it toward an anchor; a preload-only
-path with no anchor reachable is reported with `Finding.Path.terminalKind = PRELOAD` and
+path with no anchor reachable is reported with `terminalKind = PRELOAD` on the `DEBUG` line and
 `anchorSha256 = null`, counts as `Found` for L3 CRLite, and is `DISTRUST`-unevaluable at M4 (a
 `Finding`, never an allow of a listed anchor). The leaf's
 issuer keys are taken only from such paths. Platform-verified chains are trusted without re-verification.
@@ -1009,7 +1012,7 @@ The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walk
   the `Walk`; its `oid` is the child's TBS signature OID, `""` when the TBS AlgorithmIdentifier does
   not decode.
   `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` is emitted once per OID in `Walk.unsupportedOids`
-  on **every** outcome, with `outcomeDepended = (noIssuerReason == UNSUPPORTED_ALGORITHM)`; fixture (n) asserts the
+  on **every** outcome, with `outcomeDepended = (reason == UNSUPPORTED_ALGORITHM)`; fixture (n) asserts the
   `false` case on a `Found`.
 - **PKIX fallback contract** (`PathBuilderFallback`; the fallback re-parses the snapshot's anchors' `getEncoded()` with `CertificateFactory` once per `AnchorSnapshot.id`, memoised, and its `CollectionCertStore` holds every presented certificate): result lists the leaf first and **appends the
   trust anchor's certificate**; the leaf must be in the `CollectionCertStore`; one base
@@ -1559,7 +1562,7 @@ reference's handling of the same condition, Firefox at `cac25a6fa321b0051932359b
   `rejects` only under `ENFORCE`, so the two columns compare cleanly after a flip.
 - **`ENGINE_ERROR` allows in `DEFAULT`** and rejects in `STRICT`.
 - **Exemptions** register per exemptable rule and run after policy mapping for fired `REJECT` rules only. **Enterprise-CA recipe under `STRICT`**: exempt `NO_SCTS`, `NOT_ENROLLED` **and the data rules** (`NO_DATA`, `STALE`) with the same `anchorIn(privateCa)` (`RevoktPolicy.Builder.exemptAnchors(sha256s)` does exactly that, §4), and `NO_ISSUER` with `hostSuffixIn(corpDomains) and platformOnly()` (it fires only on an empty reported path, where `anchorIn` never matches; `platformOnly()` alone would exempt every chain the §5.2 intermediate-omission residual produces on Android, for every host, turning `STRICT` into `DEFAULT` for a revoked public leaf presented without its intermediate), so a feed outage never takes down traffic CRLite cannot evaluate anyway ( on the JVM the supported private-CA delegate is a `TrustManagerFactory` over a merged `KeyStore`, never a hand-written `X509ExtendedTrustManager` composite, which passes `requiresExtendedDelegate()` but drops SunJSSE's constraints; call `refreshAnchors()` on rotation).
-- **`outcomeDepended`** (M1): `outcomeDepended = (noIssuerReason == UNSUPPORTED_ALGORITHM)` (§5.1 "Findings"): the
+- **`outcomeDepended`** (M1): `outcomeDepended = (reason == UNSUPPORTED_ALGORITHM)` (§5.1 "Findings"): the
   walk recorded an own signature OID and the result is `NO_ISSUER(UNSUPPORTED_ALGORITHM)`; false on `Found`, `Budget` and, on the
   bindings, `NO_ISSUER(PLATFORM_ONLY)`.
 - **Established connections**: a rejection applies to new handshakes; pooled connections already established are not torn down (the README says so); an HTTP/2 connection coalesced onto another host inherits that host's verdict (§5.1).

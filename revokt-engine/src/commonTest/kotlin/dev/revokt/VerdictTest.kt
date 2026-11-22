@@ -19,7 +19,7 @@ class VerdictTest {
             .Builder()
             .status(status)
             .source(ChainSource.RECONSTRUCTED)
-            .apply { if (status == PathStatus.NO_ISSUER) noIssuerReason(NoIssuerReason.NO_CANDIDATE) }
+            .apply { if (status == PathStatus.NO_ISSUER) reason(PathReason.NO_CANDIDATE) }
             .build()
 
     private val crlite =

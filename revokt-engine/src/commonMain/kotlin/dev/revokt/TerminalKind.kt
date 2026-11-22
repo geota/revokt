@@ -3,7 +3,7 @@
 
 package dev.revokt
 
-/** What the reported path ends in (spec §4, §5.1 invariant). Growable; M2 adds `PRELOAD`. */
+/** What the reported path ends in (spec §4, §5.1 invariant), on the evaluation's `DEBUG` line. Growable; M2 adds `PRELOAD`. */
 public enum class TerminalKind {
     ANCHOR,
 }
