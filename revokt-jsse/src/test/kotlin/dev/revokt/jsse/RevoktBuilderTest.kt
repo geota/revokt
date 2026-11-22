@@ -70,6 +70,9 @@ class RevoktBuilderTest {
         assertEquals(RevoktLimits.MAX_X5U_BYTES, config.maxX5uBytes)
         assertEquals(RevoktLimits.MAX_CHANGESET_RECORDS, config.maxChangesetRecords)
         assertTrue(config.pkixFallback)
+        assertIs<JvmPlatformTrust>(config.platformTrust)
+        assertSame(config.platformTrust.defaultDelegate(), config.defaultDelegate)
+        assertSame(config.platformTrust.pathBuilder(), config.pathBuilder)
         assertTrue(config.inMemoryStore)
         assertNull(config.storage.identity())
     }
@@ -192,6 +195,7 @@ class RevoktBuilderTest {
             assertEquals(4_096, config.maxChangesetRecords)
             assertSame(fetcher, config.http)
             assertFalse(config.pkixFallback)
+            assertNull(config.pathBuilder, "no PKIX builder with the fallback disabled")
         }
         assertNotSame(dsl.engine, java.engine, "each build without an injected engine creates its own")
     }

@@ -12,6 +12,8 @@ import dev.revokt.FilterFormat
 import dev.revokt.KotlinRevocationEngine
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.Outcome
+import dev.revokt.PathBuilderFallback
+import dev.revokt.PlatformTrust
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
@@ -21,6 +23,7 @@ import dev.revokt.SeedSource
 import java.lang.ref.WeakReference
 import java.net.URI
 import java.net.URISyntaxException
+import javax.net.ssl.X509TrustManager
 
 /**
  * A built `Revokt`'s configuration: the builder's values with every default resolved, after the spec §4 R checks.
@@ -65,6 +68,16 @@ internal class RevoktConfig(
     val maxX5uBytes = builder.maxX5uBytes
     val maxChangesetRecords = builder.maxChangesetRecords
     val pkixFallback = builder.pkixFallback
+
+    /**
+     * The platform trust (spec §3, §5.3): `JvmPlatformTrust()`, with no builder member in 0.2 (the §4 `platformTrust`
+     * member is [0.3]). Its default delegate is captured here, at `build()` (§4), before the engine is registered.
+     */
+    val platformTrust: PlatformTrust = JvmPlatformTrust()
+    val defaultDelegate: X509TrustManager = platformTrust.defaultDelegate()
+
+    /** Decision step 6's PKIX builder: `platformTrust.pathBuilder()`, or null with `pkixFallback(false)`, never called. */
+    val pathBuilder: PathBuilderFallback? = if (pkixFallback) platformTrust.pathBuilder() else null
 
     val engine: RevocationEngine = builder.revocationEngine ?: KotlinRevocationEngine()
 
