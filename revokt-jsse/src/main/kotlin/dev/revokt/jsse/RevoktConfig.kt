@@ -125,7 +125,10 @@ internal fun requireSourceUrl(
     val uri =
         try {
             URI(url)
-        } catch (e: URISyntaxException) {
+        } catch (
+            // Not chained on purpose: the parser's message holds the URL, credentials included.
+            @Suppress("SwallowedException") e: URISyntaxException,
+        ) {
             throw IllegalArgumentException("$what is not a URL (spec §4): ${e.reason} at index ${e.index}")
         }
     require(
