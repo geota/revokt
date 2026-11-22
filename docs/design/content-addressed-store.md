@@ -426,7 +426,7 @@ content addressing: what "complete" means, how the scan re-verifies a candidate,
   - **upki** has no pointer and loads whatever `index.bin` is there.
   - **Firefox** falls back to the packaged dump when local data does not verify, then syncs again (RSC:1292-1300;
     ATT's `fallbackToDump`). Neither scans.
-- **What A buys over B:**
+- **What A buys over B:** keeping the scan avoids the rollback window the review found in B (r289's Q2-B risk):
   - The floor: with a lost or malformed pointer, B installs the seed with nothing loaded. S13 and S14 then lower the
     watermark to the seed's `<ts>` while a newer verified generation is still on disk, and a network attacker can
     replay any Mozilla-signed changeset between the two. For a bundled seed that gap can be weeks. Firefox has the
@@ -445,8 +445,10 @@ content addressing: what "complete" means, how the scan re-verifies a candidate,
   - **upki** takes no lock, so two fetchers on one directory race.
 - **Why B:** TLS keeps working with seed data, and the instance never touches the store, so there is no
   cross-process race. `STORE_NEWER_LAYOUT` under `IN_MEMORY` already behaves this way ("never retried", §6.5).
-- **Residuals:** section 10 lists them: the seed's floor on every start, a full fetch per process, a permanent
-  `STORE_UNREADABLE` that only warns, and direct boot.
+- **Accepted costs** (r289's Q3-B risks, accepted with the answer): every in-memory process floors at its seed's
+  watermark, so the first-install rollback window opens on every start, and every in-memory process fetches in
+  full. Section 10 lists these with the other residuals: a permanent `STORE_UNREADABLE` that only warns, and
+  direct boot.
 
 ## 14. The fault-injection test (#214) over the rewrite
 
