@@ -8,7 +8,8 @@ package dev.revokt.engine.seed
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.SeedSource
-import dev.revokt.SyncOutcome
+import dev.revokt.SyncFailure
+import dev.revokt.WarningCode
 import dev.revokt.engine.fetch.json
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
@@ -150,7 +151,7 @@ internal open class SeedFixture : CrliteSyncFixture() {
     ): SeedLoad.Unreadable {
         val unreadable = assertIs<SeedLoad.Unreadable>(load, "$load")
         assertTrue(detail in unreadable.detail, "'${unreadable.detail}' does not say '$detail'")
-        assertTrue(unreadable.warnings.single().code == dev.revokt.DiagnosticCode.SEED_UNREADABLE)
+        assertTrue(unreadable.warnings.single().code == dev.revokt.WarningCode.SEED_UNREADABLE)
         assertNothingInstalled()
         return unreadable
     }
@@ -169,7 +170,7 @@ internal open class SeedFixture : CrliteSyncFixture() {
         activated: Boolean = false,
     ): SeedLoad.Failed {
         val failed = assertIs<SeedLoad.Failed>(load, "$load")
-        assertEquals(SyncOutcome.STORE_FAILED, failed.outcome)
+        assertEquals(SyncFailure.STORE_FAILED, failed.failure)
         assertEquals(activated, failed.activated)
         assertTrue(detail in failed.detail, "'${failed.detail}' does not say '$detail'")
         return failed

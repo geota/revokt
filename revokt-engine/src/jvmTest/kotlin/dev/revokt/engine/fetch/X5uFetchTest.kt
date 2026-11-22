@@ -5,7 +5,7 @@ package dev.revokt.engine.fetch
 
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.RevoktLimits
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -27,7 +27,7 @@ class X5uFetchTest {
         source: MozillaRemoteSettings = MozillaRemoteSettings.DEFAULT,
     ) {
         val fetcher = ScriptedFetcher { ok(pem) }
-        val failed = client(fetcher, source).fetchX5u(url).assertFailed(SyncStage.X5U, ClientFailure.X5U_URL)
+        val failed = client(fetcher, source).fetchX5u(url).assertFailed(SyncFailure.X5U_URL)
         assertTrue(failed.detail.startsWith("$failure:"), "$url: ${failed.detail}")
         assertEquals(0, fetcher.requests.size, "$url: nothing is fetched")
     }
@@ -191,16 +191,16 @@ class X5uFetchTest {
         val over = ByteArray((RevoktLimits.MAX_X5U_BYTES + 1).toInt())
         client(
             ScriptedFetcher { response(200, over) },
-        ).fetchX5u(x5u).assertFailed(SyncStage.X5U, ClientFailure.BODY_TOO_LARGE)
+        ).fetchX5u(x5u).assertFailed(SyncFailure.X5U_FETCH, "bytes, cap")
         val atCap = ByteArray(RevoktLimits.MAX_X5U_BYTES.toInt())
         assertEquals(atCap.size, client(ScriptedFetcher { response(200, atCap) }).fetchX5u(x5u).assertOk().size)
     }
 
     @Test
     fun `the x5u fetch carries stage X5U on every failure`() {
-        client(ScriptedFetcher { response(302) }).fetchX5u(x5u).assertFailed(SyncStage.X5U, ClientFailure.HTTP_STATUS)
-        client(ScriptedFetcher { response(407) }).fetchX5u(x5u).assertFailed(SyncStage.X5U, ClientFailure.HTTP_STATUS)
-        client(ScriptedFetcher { response(304) }).fetchX5u(x5u).assertFailed(SyncStage.X5U, ClientFailure.HTTP_STATUS)
-        client(ScriptedFetcher { error("down") }).fetchX5u(x5u).assertFailed(SyncStage.X5U, ClientFailure.FETCHER_THREW)
+        client(ScriptedFetcher { response(302) }).fetchX5u(x5u).assertFailed(SyncFailure.X5U_FETCH, "status ")
+        client(ScriptedFetcher { response(407) }).fetchX5u(x5u).assertFailed(SyncFailure.X5U_FETCH, "status ")
+        client(ScriptedFetcher { response(304) }).fetchX5u(x5u).assertFailed(SyncFailure.X5U_FETCH, "status ")
+        client(ScriptedFetcher { error("down") }).fetchX5u(x5u).assertFailed(SyncFailure.X5U_FETCH, "the fetcher")
     }
 }

@@ -6,12 +6,12 @@
 package dev.revokt.engine.seed
 
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
 import dev.revokt.RevoktLimits
 import dev.revokt.SeedSource
-import dev.revokt.Severity
+import dev.revokt.SyncOutcome
+import dev.revokt.WarningCode
 import dev.revokt.engine.evaluate.dataStates
 import dev.revokt.engine.policy.PolicyForm
 import dev.revokt.engine.policy.Preset
@@ -237,7 +237,7 @@ internal class SeedLoaderTest : SeedFixture() {
         val deltaAsDerived =
             Rec(delta.id, true, delta.effectiveTimestamp, GenerationNames.derive(long), delta.body, parent = full.id)
         val seed = Seed(records = listOf(fullLong, deltaAsDerived)).apply { index = Seed().index() }
-        assertUnreadable(load(seed), "NAME_COLLISION")
+        assertUnreadable(load(seed), "INDEX_INCONSISTENT")
     }
 
     @Test
@@ -306,13 +306,7 @@ internal class SeedLoaderTest : SeedFixture() {
         val counted = Counted { bytes }
         val mismatch = assertIs<SeedLoad.ChannelMismatch>(loader(counted.source).load(ts))
         assertEquals("DEFAULT", mismatch.seedChannel)
-        assertEquals(
-            DiagnosticCode.SEED_CHANNEL_MISMATCH to Severity.ERROR,
-            mismatch.warnings.single().let {
-                it.code to
-                    it.severity
-            },
-        )
+        assertEquals(WarningCode.SEED_CHANNEL_MISMATCH, mismatch.warnings.single().code)
         assertEquals(2, counted.opens, "the central directory and seed.json only")
         assertIs<SeedLoad.ChannelMismatch>(loader(counted.source).checkHeader())
         assertNothingInstalled()
@@ -479,7 +473,7 @@ internal class SeedLoaderTest : SeedFixture() {
         val prepare = assertUnreadable(load(Seed(), engine = throwing), "the install failed")
         assertEquals(1, prepare.storeFailures)
         val activate = TestEngine().apply { onActivate = { error("activate") } }
-        assertEquals(1, assertUnreadable(load(Seed(), engine = activate), "ACTIVATE").storeFailures)
+        assertEquals(1, assertUnreadable(load(Seed(), engine = activate), "ENGINE_FAILED").storeFailures)
     }
 
     @Test

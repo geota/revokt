@@ -4,10 +4,9 @@
 package dev.revokt.engine.update
 
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.RevoktLimits
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
 import dev.revokt.engine.fetch.json
 import dev.revokt.engine.fetch.ok
 import dev.revokt.engine.fetch.response
@@ -87,7 +86,7 @@ internal class CrliteDeltaBaseTest : CrliteDeltaFixture() {
             }
         val before = files()
         repeat(2) { i ->
-            sync(server, now = ts + (2 + 7 * i) * hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+            sync(server, now = ts + (2 + 7 * i) * hour).assert(SyncFailure.STORE_FAILED)
             assertEquals(before, files(), "sync $i left the directory byte-identical")
         }
         assertEquals(emptyList(), server.attachmentRequests())
@@ -162,7 +161,7 @@ internal class CrliteDeltaBaseTest : CrliteDeltaFixture() {
                     "/$directory1/" in it
                 }.associateWith { checkNotNull(storage.inner.read(it)).toList() }
         repeat(2) { i ->
-            sync(server, now = ts + (2 + 7 * i) * hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+            sync(server, now = ts + (2 + 7 * i) * hour).assert(SyncFailure.STORE_FAILED)
             val after =
                 storage.inner
                     .names()

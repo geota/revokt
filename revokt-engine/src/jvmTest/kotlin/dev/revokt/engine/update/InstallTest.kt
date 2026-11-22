@@ -7,11 +7,9 @@ package dev.revokt.engine.update
 
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
-import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.Window
 import dev.revokt.engine.generation.DatasetGeneration
@@ -129,32 +127,30 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
-    fun `a prepare or activate that throws fails at its stage and leaves everything as it was`() {
+    fun `a prepare or activate that throws is ENGINE_FAILED and leaves everything as it was`() {
         assertIs<InstallResult.Installed>(install(pending("g1")))
         val published = snapshot.snapshot
         val pointer = store.pointer()
         val cases =
             listOf(
-                SyncStage.PREPARE to IllegalArgumentException("corrupt"),
-                SyncStage.PREPARE to OutOfMemoryError("prepare"),
-                SyncStage.ACTIVATE to IllegalStateException("closed"),
-                SyncStage.ACTIVATE to OutOfMemoryError("activate"),
+                true to IllegalArgumentException("corrupt"),
+                true to OutOfMemoryError("prepare"),
+                false to IllegalStateException("closed"),
+                false to OutOfMemoryError("activate"),
             )
-        for ((stage, thrown) in cases) {
+        for ((inPrepare, thrown) in cases) {
             val e = TestEngine(inner = engine.inner)
             val fail = { throw thrown }
-            if (stage == SyncStage.PREPARE) e.onPrepare = { fail() } else e.onActivate = fail
+            if (inPrepare) e.onPrepare = { fail() } else e.onActivate = fail
             val p = pending("g2", timestamp = 1_792_587_631_205)
             val f = failed(install(p, e))
-            assertEquals(SyncOutcome.FAILED, f.outcome, "$thrown")
-            assertEquals(stage, f.stage, "$thrown")
-            assertEquals(null, f.code)
+            assertEquals(SyncFailure.ENGINE_FAILED, f.failure, "$thrown")
             assertEquals(thrown::class, assertNotNull(f.cause)::class)
             assertEquals(1, f.storeFailures)
             assertEquals(false, f.activated)
             assertUntouched(p.meta.directory, live = "g1", published = published)
             assertEquals(pointer, store.pointer())
-            if (stage == SyncStage.ACTIVATE) assertEquals(listOf("g2"), e.closed)
+            if (!inPrepare) assertEquals(listOf("g2"), e.closed)
         }
     }
 
@@ -162,14 +158,14 @@ internal class InstallTest : InstallFixture() {
     fun `an InterruptedException from prepare or activate fails the install and keeps the interrupt`() {
         assertIs<InstallResult.Installed>(install(pending("g1")))
         val published = snapshot.snapshot
-        for (stage in listOf(SyncStage.PREPARE, SyncStage.ACTIVATE)) {
+        for (stage in listOf("prepare", "activate")) {
             val e = TestEngine(inner = engine.inner)
-            val interrupt = { throw InterruptedException(stage.name) }
-            if (stage == SyncStage.PREPARE) e.onPrepare = { interrupt() } else e.onActivate = interrupt
+            val interrupt = { throw InterruptedException(stage) }
+            if (stage == "prepare") e.onPrepare = { interrupt() } else e.onActivate = interrupt
             val p = pending("g2", timestamp = 1_792_587_631_205)
             try {
                 val f = failed(install(p, e))
-                assertEquals(SyncOutcome.FAILED to stage, f.outcome to f.stage)
+                assertEquals(SyncFailure.ENGINE_FAILED, f.failure, stage)
                 assertIs<InterruptedException>(f.cause)
                 assertTrue(Thread.currentThread().isInterrupted, "the interrupt flag is restored at $stage")
             } finally {
@@ -180,14 +176,12 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
-    fun `a format the engine does not list is FORMAT_UNSUPPORTED at PREPARE and never offered to prepare`() {
+    fun `a format the engine does not list is FORMAT_UNSUPPORTED and never offered to prepare`() {
         val v4only = TestEngine(formats = setOf(FilterFormat.V4))
         val p = pending()
         storage.writes.clear()
         val f = failed(install(p, v4only))
-        assertEquals(SyncOutcome.FAILED, f.outcome)
-        assertEquals(SyncStage.PREPARE, f.stage)
-        assertEquals(DiagnosticCode.FORMAT_UNSUPPORTED, f.code)
+        assertEquals(SyncFailure.FORMAT_UNSUPPORTED, f.failure)
         assertEquals(0, f.storeFailures)
         assertEquals(emptyList(), v4only.prepared)
         assertEquals(emptyList(), storage.writes)
@@ -201,9 +195,7 @@ internal class InstallTest : InstallFixture() {
             PendingGeneration(p.meta, p.index + ByteArray(C2spIndex.MAX_BYTES + 1 - p.index.size), p.deltas, p.records)
         storage.writes.clear()
         val f = failed(install(over))
-        assertEquals(SyncOutcome.FAILED, f.outcome)
-        assertEquals(SyncStage.INDEX, f.stage)
-        assertEquals(DiagnosticCode.INDEX_INCONSISTENT, f.code)
+        assertEquals(SyncFailure.INDEX_INCONSISTENT, f.failure)
         assertEquals(0, f.storeFailures)
         assertEquals(emptyList(), storage.writes)
         assertEquals(emptyList(), engine.prepared)
@@ -225,15 +217,13 @@ internal class InstallTest : InstallFixture() {
         val p = pending()
         storage.fail = { if (it.endsWith("/records.json")) IllegalStateException("disk full") else null }
         val f = failed(install(p))
-        assertEquals(SyncOutcome.STORE_FAILED, f.outcome)
-        assertEquals(SyncStage.STORE, f.stage)
+        assertEquals(SyncFailure.STORE_FAILED, f.failure)
         assertEquals(1, f.storeFailures)
         assertEquals(emptyList(), engine.prepared)
         assertUntouched(p.meta.directory)
         storage.fail = { if (it.endsWith("/meta.json")) OutOfMemoryError("store") else null }
         val oom = failed(install(pending()))
-        assertEquals(SyncOutcome.FAILED, oom.outcome)
-        assertEquals(SyncStage.STORE, oom.stage)
+        assertEquals(SyncFailure.INTERNAL_ERROR, oom.failure)
         assertEquals(1, oom.storeFailures)
         assertUntouched(p.meta.directory)
     }
@@ -243,8 +233,7 @@ internal class InstallTest : InstallFixture() {
         val p = pending()
         storage.fail = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
         val f = failed(install(p))
-        assertEquals(SyncOutcome.STORE_FAILED, f.outcome)
-        assertEquals(SyncStage.STORE, f.stage)
+        assertEquals(SyncFailure.STORE_FAILED, f.failure)
         assertEquals(true, f.activated)
         assertEquals(1, f.storeFailures)
         assertEquals("g1", engine.live)
@@ -280,7 +269,7 @@ internal class InstallTest : InstallFixture() {
         engine.onActivate = { error("activate") }
         // The orphan holds this generation, so it is prepared as it stands, and as the directory the install was given
         // it is deleted on the failure (§6.5).
-        assertEquals(SyncStage.ACTIVATE, failed(install(pending())).stage)
+        assertEquals(SyncFailure.ENGINE_FAILED, failed(install(pending())).failure)
         assertEquals(emptyList(), keysOf(orphan.meta.directory))
         // Pointed to, but not live in this snapshot: a failure leaves it for recovery.
         engine.onActivate = {}
@@ -288,7 +277,7 @@ internal class InstallTest : InstallFixture() {
         engine.onActivate = { error("activate") }
         val fresh = SnapshotRef(empty)
         val f = install(pending(), engine, store, fresh, publication, null, logger)
-        assertEquals(SyncStage.ACTIVATE, failed(f).stage)
+        assertEquals(SyncFailure.ENGINE_FAILED, failed(f).failure)
         assertNotNull(store.readGeneration(dir))
         assertSame(empty, fresh.snapshot)
     }
@@ -302,7 +291,7 @@ internal class InstallTest : InstallFixture() {
         assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
         engine.onActivate = { error("activate") }
         val f = failed(install(pending("g1"), engine, store, SnapshotRef(empty), publication, null, logger))
-        assertEquals(SyncStage.ACTIVATE, f.stage)
+        assertEquals(SyncFailure.ENGINE_FAILED, f.failure)
         assertNotNull(store.readGeneration(g1))
         assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
     }
@@ -328,7 +317,7 @@ internal class InstallTest : InstallFixture() {
         // Pointed to: another meta json fails and stays.
         storage.inner.write("crlite/compat/${p.meta.directory}/meta.json", MetaJson.write(other))
         val f = failed(install(pending(), engine, store, SnapshotRef(empty), publication, null, logger))
-        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage)
+        assertEquals(SyncFailure.STORE_FAILED, f.failure)
         assertTrue("holds another generation" in f.cause?.message.orEmpty())
         assertEquals(other, store.meta(p.meta.directory))
     }
@@ -384,7 +373,7 @@ internal class InstallTest : InstallFixture() {
             )
         for ((what, other) in others) {
             val f = failed(install(other))
-            assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage, what)
+            assertEquals(SyncFailure.STORE_FAILED, f.failure, what)
             assertTrue("holds another generation" in f.cause?.message.orEmpty(), what)
             assertEquals(p.meta, store.meta(p.meta.directory), what)
         }
@@ -416,7 +405,7 @@ internal class InstallTest : InstallFixture() {
         storage.fail = { null }
         engine.onPrepare = { throw IllegalArgumentException("corrupt") }
         val f = failed(install(pending()))
-        assertEquals(SyncStage.PREPARE, f.stage)
+        assertEquals(SyncFailure.ENGINE_FAILED, f.failure)
         assertNotNull(store.readGeneration(p.meta.directory))
         assertEquals("g1", engine.live)
     }
@@ -452,7 +441,7 @@ internal class InstallTest : InstallFixture() {
         val delta = p.deltas.keys.single()
         store.writeGeneration(p.meta, p.index, mapOf(delta to byteArrayOf(4, 0)), p.records)
         val orphan = failed(install(pending()))
-        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, orphan.outcome to orphan.stage)
+        assertEquals(SyncFailure.STORE_FAILED, orphan.failure)
         assertEquals(emptyList(), keysOf(dir))
         assertEquals(emptyList(), engine.prepared)
         val fresh = TestEngine()
@@ -467,7 +456,7 @@ internal class InstallTest : InstallFixture() {
         storage.fail = { null }
         storage.inner.write("crlite/compat/$dir/$delta", bytesOf(p).getValue(delta).copyOf().also { it[0] = 9 })
         val held = failed(install(pending()))
-        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, held.outcome to held.stage)
+        assertEquals(SyncFailure.STORE_FAILED, held.failure)
         assertTrue("holds another generation" in held.cause?.message.orEmpty())
         assertNotNull(store.meta(dir))
         assertEquals(StoreRead.Absent, store.pointer())
@@ -480,12 +469,12 @@ internal class InstallTest : InstallFixture() {
         val delta = p.deltas.keys.single()
         storage.inner.write("crlite/compat/$dir/$delta", byteArrayOf(1))
         val f = failed(install(p))
-        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage)
+        assertEquals(SyncFailure.STORE_FAILED, f.failure)
         assertEquals(1, f.storeFailures)
         assertUntouched(dir)
         // Missing: nothing staged at all.
         val g = failed(install(p))
-        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, g.outcome to g.stage)
+        assertEquals(SyncFailure.STORE_FAILED, g.failure)
         assertUntouched(dir)
     }
 
@@ -496,7 +485,7 @@ internal class InstallTest : InstallFixture() {
         val key = "crlite/compat/${p.meta.directory}/meta.json"
         storage.inner.write(key, "{\"metaVersion\":2}".encodeToByteArray())
         val f = install(pending(), TestEngine(), store, SnapshotRef(empty), publication, null, logger)
-        assertEquals(SyncOutcome.STORE_FAILED, failed(f).outcome)
+        assertEquals(SyncFailure.STORE_FAILED, failed(f).failure)
         assertEquals("{\"metaVersion\":2}", storage.inner.read(key)?.decodeToString())
         assertNotNull(storage.inner.read("crlite/compat/${p.meta.directory}/index.bin"))
     }
@@ -509,7 +498,7 @@ internal class InstallTest : InstallFixture() {
         val key = "crlite/compat/${p.meta.directory}/meta.json"
         storage.inner.write(key, "{".encodeToByteArray())
         val f = failed(install(pending()))
-        assertEquals(SyncOutcome.STORE_FAILED, f.outcome)
+        assertEquals(SyncFailure.STORE_FAILED, f.failure)
         assertEquals("{", storage.inner.read(key)?.decodeToString())
         assertSame(published, snapshot.snapshot)
         assertEquals("g1", engine.live)
@@ -553,16 +542,14 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
-    fun `a filter that does not decode fails in the engine's prepare, at PREPARE, and nothing installs`() {
+    fun `a filter that does not decode fails in the engine's prepare, ENGINE_FAILED, and nothing installs`() {
         // The engine's prepare is the install's one decode: the loader no longer decodes the filters itself.
         val p = pending()
         val garbage = byteArrayOf(4, 0, 0)
         for (name in p.deltas.keys) store.stageFile(p.meta.directory, name, garbage)
         val hashes = p.deltas.mapValues { garbage.toByteString().sha256() }
         val f = failed(install(PendingGeneration(p.meta, p.index, hashes, p.records)))
-        assertEquals(SyncOutcome.FAILED, f.outcome)
-        assertEquals(SyncStage.PREPARE, f.stage)
-        assertEquals(null, f.code)
+        assertEquals(SyncFailure.ENGINE_FAILED, f.failure)
         assertIs<IllegalArgumentException>(f.cause)
         assertEquals(1, f.storeFailures)
         assertEquals(listOf("g1"), engine.prepared)

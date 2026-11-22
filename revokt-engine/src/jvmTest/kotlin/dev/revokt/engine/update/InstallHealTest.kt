@@ -5,8 +5,7 @@
 
 package dev.revokt.engine.update
 
-import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -32,7 +31,7 @@ internal class InstallHealTest : InstallFixture() {
                 .filter { "/$live/" in it }
                 .associateWith { storage.inner.read(it)?.toList() }
         val f = assertIs<InstallResult.Failed>(install(generation, engine, store, snapshot, heal, null, logger))
-        assertEquals(SyncOutcome.STORE_FAILED to SyncStage.STORE, f.outcome to f.stage)
+        assertEquals(SyncFailure.STORE_FAILED, f.failure)
         assertTrue("meta.json is not readable" in f.cause?.message.orEmpty(), "${f.cause}")
         val after =
             storage.inner

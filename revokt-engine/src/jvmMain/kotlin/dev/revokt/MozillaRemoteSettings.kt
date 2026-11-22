@@ -44,8 +44,8 @@ public class MozillaRemoteSettings private constructor(
      * The base every relative `attachment.location` is resolved against, when set: pinned, for a private mirror. Null,
      * the default, reads the server root's `capabilities.attachments.base_url` (`GET <baseUrl>/`) once per sync, before
      * the first attachment it fetches, as Firefox does; that value must be an `https` URL whose host [allowedDomains]
-     * allows, or the sync is `FAILED` at stage `ATTACHMENT` (spec §7.1). The client joins the base to the location with
-     * exactly one `/`, as for [baseUrl].
+     * allows, or the sync is `FAILED` with `ATTACHMENT_BASE` (spec §7.1). The client joins the base to the location
+     * with exactly one `/`, as for [baseUrl].
      */
     public val attachmentBaseUrl: String? = builder.attachmentBaseUrl
 

@@ -3,7 +3,7 @@
 
 package dev.revokt.engine.update
 
-import dev.revokt.SyncOutcome
+import dev.revokt.SyncFailure
 import dev.revokt.engine.store.SourceRecord
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
@@ -84,7 +84,7 @@ class SyncRulesTest {
         // No rule reads local time: a ts a year ahead installs and raises the watermark.
         val ahead = now + 365 * day
         assertEquals(SyncDecision.INSTALL, decide(ahead))
-        val record = UpdaterTransitions.after(updater(), RS, SyncOutcome.INSTALLED, now, signedTimestampMillis = ahead)
+        val record = UpdaterTransitions.after(updater(), RS, null, now, signedTimestampMillis = ahead)
         assertEquals(ahead, record.watermarkMillis)
         assertEquals(ahead, record.sources.getValue(RS).lastVerifiedLastModified)
         // Kinto's timestamps are monotonic per collection, so the next changeset is newer and installs.
@@ -97,7 +97,7 @@ class SyncRulesTest {
     fun `an install beside a live generation raises the watermark, and one with none loaded sets it to its ts`() {
         val before = updater(watermark = live + day, cursor = live + day)
         // Beside a live generation the watermark is a high-water mark.
-        val kept = UpdaterTransitions.after(before, RS, SyncOutcome.INSTALLED, now, signedTimestampMillis = live)
+        val kept = UpdaterTransitions.after(before, RS, null, now, signedTimestampMillis = live)
         assertEquals(live + day, kept.watermarkMillis)
         // With no generation loaded an older changeset installs, and the watermark and the cursor move back with it:
         // 100, then 80, then 90 installs.
@@ -105,7 +105,7 @@ class SyncRulesTest {
             UpdaterTransitions.after(
                 before,
                 RS,
-                SyncOutcome.INSTALLED,
+                null,
                 now,
                 signedTimestampMillis = live,
                 noneLoaded = true,
@@ -119,7 +119,7 @@ class SyncRulesTest {
             UpdaterTransitions.after(
                 before,
                 RS,
-                SyncOutcome.INSTALLED,
+                null,
                 now,
                 signedTimestampMillis = live + 2 * day,
                 noneLoaded = true,
@@ -127,14 +127,26 @@ class SyncRulesTest {
         assertEquals(live + 2 * day, newer.watermarkMillis)
         // noneLoaded is an install's.
         assertFailsWith<IllegalArgumentException> {
-            UpdaterTransitions.after(before, RS, SyncOutcome.FAILED, now, noneLoaded = true)
+            UpdaterTransitions.after(
+                before,
+                RS,
+                SyncFailure.CHANGESET_FETCH,
+                now,
+                noneLoaded = true,
+            )
         }
     }
 
     @Test
     fun `ROLLBACK_REFUSED is not a feed failure, and saturatingAdd checks its addend`() {
         val before = updater(watermark = live + day)
-        val after = UpdaterTransitions.after(before, RS, SyncOutcome.ROLLBACK_REFUSED, now)
+        val after =
+            UpdaterTransitions.after(
+                before,
+                RS,
+                SyncFailure.ROLLBACK_REFUSED,
+                now,
+            )
         assertEquals(before.watermarkMillis, after.watermarkMillis)
         assertEquals(0, after.sources.getValue(RS).consecutiveFailures)
         assertEquals(before.sources.getValue(RS).lastVerifiedAtMillis, after.sources.getValue(RS).lastVerifiedAtMillis)

@@ -12,15 +12,15 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * The diagnostics, the sync result types and the logger as spec §3 and §4 declare them (#105): the enums pinned to the
- * spec text, value semantics and round trips, and the logger callers' swallowing.
+ * The diagnostics, the runtime warnings, the sync result types and the logger as spec §3 and §4 declare them (#105):
+ * the enums pinned to the spec text, value semantics and round trips, and the logger callers' swallowing.
  */
 @OptIn(RevoktTestingApi::class)
 class DiagnosticsTest {
     private fun diagnostic() =
         PolicyDiagnostic
             .Builder()
-            .code(DiagnosticCode.NO_DATA_REJECTS_WITHOUT_LOCAL_DATA)
+            .code(DiagnosticCode.STALE_REJECTS_WITHOUT_THRESHOLD)
             .severity(Severity.ERROR)
             .rule(Rule.NO_DATA)
             .dataset(Dataset.CRLITE)
@@ -34,10 +34,18 @@ class DiagnosticsTest {
             .atMillis(1_700_000_000_000)
             .installed(mapOf(Dataset.CRLITE to "1700000000000/abc"))
             .sourceId("remoteSettings")
-            .stage(SyncStage.SIGNATURE)
+            .failure(SyncFailure.SIGNATURE_INVALID)
             .httpStatus(200)
             .cause(IllegalStateException("bad signature"))
-            .warnings(listOf(diagnostic().newBuilder().code(DiagnosticCode.SYNC_FAILED).build()))
+            .warnings(listOf(warning()))
+            .build()
+
+    private fun warning() =
+        RevoktWarning
+            .Builder()
+            .code(WarningCode.CAP_NEAR_LIMIT)
+            .dataset(Dataset.CRLITE)
+            .message("the changeset is 3000000 bytes, above half of 4194304")
             .build()
 
     private fun assertValueSemantics(
@@ -57,53 +65,91 @@ class DiagnosticsTest {
     }
 
     @Test
-    fun `DiagnosticCode entries are the spec 4 list`() {
-        // Spec §4 (revision 62), `enum class DiagnosticCode`, in its order, 0.3's codes included. Growable: a new code is
-        // appended here and there together.
-        val spec =
-            "NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, " +
-                "STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, " +
-                "IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, " +
-                "EXEMPTION_ON_EVIDENCE_RULE, NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, STALE_REJECTS_WITHOUT_THRESHOLD, " +
-                "SEED_PAST_REJECT_THRESHOLD, EXEMPT_ON_ALLOW, UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP, " +
-                "STRICT_ON_ANDROID_WITHOUT_NO_ISSUER_EXEMPTION, BUDGET_ALLOWS, EVIDENCE_LOWERED_BELOW_PRESET, " +
-                "STALENESS_CLEARED_FOR_REQUIRED_DATASET, SEED_UNREADABLE, " +
-                "SEED_CHANNEL_MISMATCH, STORE_UNREADABLE, STORE_LOCKED, CHANNEL_UNSET, PLATFORM_TRUST_MISMATCH, " +
-                "CAP_NEAR_LIMIT, SYNC_FAILED, SYNC_SCHEMA_REJECTED, IO_DISPATCHER_UNCONFINED"
-        assertEquals(spec.split(", "), DiagnosticCode.entries.map { it.name })
+    fun `DiagnosticCode and WarningCode entries are the spec 4 lists`() {
+        // Spec §4, `enum class DiagnosticCode` and `enum class WarningCode`, in their order: each lists only the codes
+        // the engine produces. Growable: a new code is appended here and there together.
+        val diagnostics =
+            "EXEMPTION_ON_EVIDENCE_RULE, STALE_REJECTS_WITHOUT_THRESHOLD, EXEMPT_ON_ALLOW, BUDGET_ALLOWS, " +
+                "EVIDENCE_LOWERED_BELOW_PRESET, STALENESS_CLEARED_FOR_REQUIRED_DATASET"
+        assertEquals(diagnostics.split(", "), DiagnosticCode.entries.map { it.name })
+        val warnings = "CAP_NEAR_LIMIT, SEED_UNREADABLE, SEED_CHANNEL_MISMATCH"
+        assertEquals(warnings.split(", "), WarningCode.entries.map { it.name })
         // Spec §4: NOT_STARTED is the unevaluated counter, never a diagnostic.
         assertTrue(DiagnosticCode.entries.none { it.name == "NOT_STARTED" })
     }
 
     @Test
     fun `the sync enums are the spec's, in its order`() {
+        assertEquals(listOf("INSTALLED", "UNCHANGED", "SKIPPED", "FAILED"), SyncOutcome.entries.map { it.name })
+        val failures =
+            "BACKOFF, ROLLBACK_REFUSED, CHANGESET_FETCH, CHANGESET_MALFORMED, TOO_MANY_RECORDS, NO_SIGNATURE, " +
+                "X5U_URL, X5U_FETCH, X5U_CHAIN, CLOCK_SKEW, SIGNATURE_INVALID, SCHEMA_REJECTED, INDEX_INCONSISTENT, " +
+                "ATTACHMENT_BASE, ATTACHMENT_OVER_CAP, ATTACHMENT_FETCH, ATTACHMENT_MISMATCH, FILTER_UNREADABLE, " +
+                "FORMAT_UNSUPPORTED, ENGINE_FAILED, STORE_FAILED, INTERNAL_ERROR"
+        assertEquals(failures.split(", "), SyncFailure.entries.map { it.name })
+        // Spec §4: BACKOFF and ROLLBACK_REFUSED are SKIPPED, not feed failures; every other code is FAILED.
+        val skipped = setOf(SyncFailure.BACKOFF, SyncFailure.ROLLBACK_REFUSED)
+        for (f in SyncFailure.entries) {
+            assertEquals(if (f in skipped) SyncOutcome.SKIPPED else SyncOutcome.FAILED, f.outcome, "$f")
+        }
+    }
+
+    @Test
+    fun `a failure is set exactly for SKIPPED and FAILED, and is a code of that outcome`() {
+        fun result(
+            outcome: SyncOutcome,
+            failure: SyncFailure?,
+        ) = SyncResult
+            .Builder()
+            .outcome(outcome)
+            .atMillis(5)
+            .failure(failure)
+            .build()
+        for (outcome in listOf(SyncOutcome.INSTALLED, SyncOutcome.UNCHANGED)) {
+            assertNull(result(outcome, null).failure)
+            assertFailsWith<IllegalArgumentException> { result(outcome, SyncFailure.CHANGESET_FETCH) }
+        }
+        for (f in SyncFailure.entries) {
+            assertEquals(f, result(f.outcome, f).failure)
+            assertFailsWith<IllegalArgumentException> { result(f.outcome, null) }
+            val other = if (f.outcome == SyncOutcome.FAILED) SyncOutcome.SKIPPED else SyncOutcome.FAILED
+            assertFailsWith<IllegalArgumentException>("$f") { result(other, f) }
+        }
+    }
+
+    @Test
+    fun `a runtime warning built from equal inputs is equal, newBuilder round-trips, and every field counts`() {
+        assertValueSemantics(warning(), warning())
+        assertValueSemantics(warning(), warning().newBuilder().build())
         assertEquals(
-            listOf(
-                "INSTALLED",
-                "UNCHANGED",
-                "FAILED",
-                "CLOCK_SKEW",
-                "ROLLBACK_REFUSED",
-                "BACKOFF",
-                "STORE_FAILED",
-                "STORE_LOCKED",
-            ),
-            SyncOutcome.entries.map { it.name },
+            "RevoktWarning(code=CAP_NEAR_LIMIT, dataset=CRLITE, " +
+                "message=the changeset is 3000000 bytes, above half of 4194304)",
+            warning().toString(),
         )
-        assertEquals(
-            listOf(
-                "CHANGESET",
-                "X5U",
-                "ATTACHMENT",
-                "SIGNATURE",
-                "SCHEMA",
-                "INDEX",
-                "PREPARE",
-                "ACTIVATE",
-                "STORE",
-            ),
-            SyncStage.entries.map { it.name },
-        )
+        assertNotEquals<Any>(warning(), "warning")
+        val changed =
+            mapOf<String, RevoktWarning.Builder.() -> RevoktWarning.Builder>(
+                "code" to { code(WarningCode.SEED_UNREADABLE) },
+                "dataset" to { dataset(null) },
+                "message" to { message("another message") },
+            )
+        for ((field, change) in changed) {
+            assertNotEquals(warning(), warning().newBuilder().change().build(), field)
+        }
+        val bare =
+            RevoktWarning
+                .Builder()
+                .code(WarningCode.SEED_UNREADABLE)
+                .message("m")
+                .build()
+        assertNull(bare.dataset)
+        for ((field, set) in mapOf<String, RevoktWarning.Builder.() -> RevoktWarning.Builder>(
+            "code" to { message("m") },
+            "message" to { code(WarningCode.SEED_UNREADABLE) },
+        )) {
+            val e = assertFailsWith<IllegalArgumentException> { RevoktWarning.Builder().set().build() }
+            assertEquals("$field is not set", e.message)
+        }
     }
 
     @Test
@@ -111,7 +157,7 @@ class DiagnosticsTest {
         assertValueSemantics(diagnostic(), diagnostic())
         assertValueSemantics(diagnostic(), diagnostic().newBuilder().build())
         assertEquals(
-            "PolicyDiagnostic(code=NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, severity=ERROR, rule=NO_DATA, dataset=CRLITE, " +
+            "PolicyDiagnostic(code=STALE_REJECTS_WITHOUT_THRESHOLD, severity=ERROR, rule=NO_DATA, dataset=CRLITE, " +
                 "message=no local data source for CRLITE)",
             diagnostic().toString(),
         )
@@ -123,7 +169,7 @@ class DiagnosticsTest {
         val base = diagnostic()
         val changed =
             mapOf<String, PolicyDiagnostic.Builder.() -> PolicyDiagnostic.Builder>(
-                "code" to { code(DiagnosticCode.STORE_LOCKED) },
+                "code" to { code(DiagnosticCode.EXEMPT_ON_ALLOW) },
                 "severity" to { severity(Severity.WARNING) },
                 "rule" to { rule(null) },
                 "dataset" to { dataset(null) },
@@ -181,11 +227,11 @@ class DiagnosticsTest {
         val base = failed()
         val changed =
             mapOf<String, SyncResult.Builder.() -> SyncResult.Builder>(
-                "outcome" to { outcome(SyncOutcome.STORE_FAILED) },
+                "outcome" to { outcome(SyncOutcome.SKIPPED).failure(SyncFailure.BACKOFF) },
                 "atMillis" to { atMillis(1) },
                 "installed" to { installed(emptyMap()) },
                 "sourceId" to { sourceId(null) },
-                "stage" to { stage(SyncStage.X5U) },
+                "failure" to { failure(SyncFailure.X5U_FETCH) },
                 "httpStatus" to { httpStatus(503) },
                 "warnings" to { warnings(emptyList()) },
             )
@@ -203,7 +249,7 @@ class DiagnosticsTest {
                 "atMillis",
                 "installed",
                 "sourceId",
-                "stage",
+                "failure",
                 "httpStatus",
                 "warnings",
             )
@@ -221,18 +267,18 @@ class DiagnosticsTest {
                 .build()
         assertEquals(emptyMap(), r.installed)
         assertEquals(emptyList(), r.warnings)
-        for (field in listOf(r.sourceId, r.stage, r.httpStatus, r.cause)) assertNull(field)
+        for (field in listOf(r.sourceId, r.failure, r.httpStatus, r.cause)) assertNull(field)
         val noOutcome = assertFailsWith<IllegalArgumentException> { SyncResult.Builder().atMillis(5).build() }
         assertEquals("outcome is not set", noOutcome.message)
         val noTime =
-            assertFailsWith<IllegalArgumentException> { SyncResult.Builder().outcome(SyncOutcome.FAILED).build() }
+            assertFailsWith<IllegalArgumentException> { SyncResult.Builder().outcome(SyncOutcome.UNCHANGED).build() }
         assertEquals("atMillis is not set", noTime.message)
     }
 
     @Test
     fun `installed and warnings are copied from the builder`() {
         val installed = mutableMapOf(Dataset.CRLITE to "g1")
-        val warnings = mutableListOf(diagnostic())
+        val warnings = mutableListOf(warning())
         val r =
             SyncResult
                 .Builder()
@@ -244,7 +290,7 @@ class DiagnosticsTest {
         installed.clear()
         warnings.clear()
         assertEquals(mapOf(Dataset.CRLITE to "g1"), r.installed)
-        assertEquals(listOf(diagnostic()), r.warnings)
+        assertEquals(listOf(warning()), r.warnings)
     }
 
     @Test
@@ -257,14 +303,14 @@ class DiagnosticsTest {
                 .outcome(SyncOutcome.INSTALLED)
                 .atMillis(5)
                 .installed(mapOf(Dataset.CRLITE to "g1"))
-                .warnings(listOf(diagnostic(), diagnostic().newBuilder().code(DiagnosticCode.CAP_NEAR_LIMIT).build()))
+                .warnings(listOf(warning(), warning().newBuilder().code(WarningCode.SEED_UNREADABLE).build()))
                 .build()
 
         @Suppress("UNCHECKED_CAST")
         val installed = r.installed as MutableMap<Dataset, String>
         assertFailsWith<UnsupportedOperationException> { installed.clear() }
         @Suppress("UNCHECKED_CAST")
-        val warnings = r.warnings as MutableList<PolicyDiagnostic>
+        val warnings = r.warnings as MutableList<RevoktWarning>
         assertFailsWith<UnsupportedOperationException> { warnings.clear() }
     }
 

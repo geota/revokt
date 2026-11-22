@@ -4,8 +4,8 @@
 package dev.revokt.engine.update
 
 import dev.revokt.Dataset
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.store.GenerationNames
@@ -39,7 +39,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
     fun `beside a live generation an older changeset is ROLLBACK_REFUSED before any body, and not a failure`() {
         val server = older(installedFirst())
         val now = ts + 2 * hour
-        sync(server, now = now).assert(SyncOutcome.ROLLBACK_REFUSED)
+        sync(server, now = now).assert(SyncFailure.ROLLBACK_REFUSED)
         assertEquals(emptyList(), server.attachmentRequests())
         val s = sourceRecord(now)
         assertEquals(
@@ -58,7 +58,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         store.writeUpdater(updater().copy(watermarkMillis = watermark), ts + hour)
         server.ts = watermark - 1
         server.fetcher.requests.clear()
-        sync(server, now = ts + 2 * hour).assert(SyncOutcome.ROLLBACK_REFUSED)
+        sync(server, now = ts + 2 * hour).assert(SyncFailure.ROLLBACK_REFUSED)
         server.ts = watermark
         sync(server, now = ts + 3 * hour).assert(SyncOutcome.INSTALLED)
         assertEquals(watermark, updater(ts + 3 * hour).watermarkMillis)
@@ -78,7 +78,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         val server = older(installedFirst())
         damage()
         assertNull(updater().watermarkMillis)
-        sync(server, now = ts + 2 * hour).assert(SyncOutcome.ROLLBACK_REFUSED)
+        sync(server, now = ts + 2 * hour).assert(SyncFailure.ROLLBACK_REFUSED)
         assertEquals(emptyList(), server.attachmentRequests())
         assertEquals(directory1, liveDirectory())
         assertEquals("$ts/${delta.id}", live().generationId)
@@ -89,7 +89,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         val server = older(installedFirst())
         val before = checkNotNull(storage.inner.read(updaterKey))
         storage.failRead = { if (it == updaterKey) IllegalStateException("read") else null }
-        sync(server, now = ts + 2 * hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        sync(server, now = ts + 2 * hour).assert(SyncFailure.STORE_FAILED)
         storage.failRead = { null }
         assertContentEquals(before, storage.inner.read(updaterKey))
         assertEquals(emptyList(), server.attachmentRequests())
@@ -140,7 +140,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         assertEquals(olderDirectory, liveDirectory())
         assertEquals(older, sourceRecord(now).lastVerifiedLastModified)
         assertEquals(older, updater(now).watermarkMillis)
-        sync(Server(ts = older - 1), now = now + hour).assert(SyncOutcome.ROLLBACK_REFUSED)
+        sync(Server(ts = older - 1), now = now + hour).assert(SyncFailure.ROLLBACK_REFUSED)
         sync(Server(ts = ts - 1), now = now + 2 * hour).assert(SyncOutcome.INSTALLED)
         assertEquals(ts - 1, updater(now + 2 * hour).watermarkMillis)
     }
@@ -179,7 +179,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         val again = older(installedFirstAgain())
         freshLoader()
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
-        sync(again, now = ts + 3 * hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        sync(again, now = ts + 3 * hour).assert(SyncFailure.STORE_FAILED)
         storage.failWrite = { null }
         assertEquals(ts, updater(ts + 3 * hour).watermarkMillis)
     }
@@ -208,7 +208,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         val server = older(installedFirst())
         damage()
         val before = storage.inner.read(currentKey)?.toList()
-        sync(server, now = ts + 2 * hour).assert(SyncOutcome.ROLLBACK_REFUSED)
+        sync(server, now = ts + 2 * hour).assert(SyncFailure.ROLLBACK_REFUSED)
         assertEquals(emptyList(), server.attachmentRequests())
         assertEquals(before, storage.inner.read(currentKey)?.toList())
         assertEquals("$ts/${delta.id}", live().generationId)
@@ -221,7 +221,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         freshLoader()
         val before = checkNotNull(storage.inner.read(updaterKey))
         storage.failRead = { if (it == updaterKey) IllegalStateException("read") else null }
-        sync(server, now = ts + 2 * hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        sync(server, now = ts + 2 * hour).assert(SyncFailure.STORE_FAILED)
         storage.failRead = { null }
         assertContentEquals(before, storage.inner.read(updaterKey))
         assertEquals(emptyList(), server.attachmentRequests())
