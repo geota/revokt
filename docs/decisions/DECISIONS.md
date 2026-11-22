@@ -267,8 +267,9 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     counters go to one DEBUG line. webpki reports one error per failed build, with no counters.
   - **Two PRs:** split by area, both from `main`. #284 has the sync vocabulary and the `DiagnosticCode` split; the
     `Finding.Path` change follows in its own PR.
-- 2026-11-21 (lead, then maintainer, #222 §4): the 21 §4 diagnostic bullets main does not produce yet (`NO_FETCHING_SOURCE`,
-  `CHANNEL_UNSET`, `STORE_MIGRATED`, `RULE_FLIPPED_THIS_MINOR` and the rest) stay as specified behaviour. The enum
-  lines list only produced codes, and a code joins its enum when its producer is built. Configuration codes join
-  `DiagnosticCode`; store and seed state codes join `WarningCode`. The maintainer decided not to cut those bullets
-  from the spec yet. Neither upki nor Firefox has a configuration-lint vocabulary, so the references give no guidance.
+- 2026-11-21 (lead, then maintainer, #222 §4): the 21 §4 diagnostic bullets main does not produce yet
+  (`NO_FETCHING_SOURCE`, `CHANNEL_UNSET`, `STORE_MIGRATED`, `RULE_FLIPPED_THIS_MINOR` and the rest) stay as specified
+  behaviour. The enum lines list only produced codes, and a code joins its enum when its producer is built.
+  Configuration codes join `DiagnosticCode`; store and seed state codes join `WarningCode`. The maintainer decided not
+  to cut those bullets from the spec yet. Neither upki nor Firefox has a configuration-lint vocabulary, so the
+  references give no guidance.
