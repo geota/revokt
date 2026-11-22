@@ -503,7 +503,7 @@ class RevoktEvent private constructor(…) { val sequence: Long; val atMillis: L
 interface RevoktListener { fun onVerdict(event: RevoktEvent); fun onStateChanged(state: RevoktState) {} }   // second method has a default body; Java alternative to the state flow
 class RevoktStatus private constructor(…) {            // snapshot; counters monotonic since build() for unevaluated, since start() for every other; maps zero-filled over Rule.entries
     val evaluations: Long; val rejects: Map<Rule, Long> /* ENFORCE only */; val wouldRejects: Map<Rule, Long> /* OBSERVE only */; val shadowWouldRejects: Map<Rule, Long> /* the shadow policy's Rejected verdicts by rule, under ENFORCE and OBSERVE */; val fired: Map<Rule, Long>; val exempted: Map<Rule, Long>
-    val noData: Map<Dataset, Long>; val stale: Map<Dataset, Long> /* loud flag seen */; val unsignedData: Map<Dataset, Long>; val noIssuer: Map<NoIssuerReason, Long> /* keyed by the reported (promoted) reason */; val parseFailed: Map<ParseReason, Long> /* fired[PARSE_FAILED] split by reason, zero-filled */; val walkEnds: Map<WalkEnd, Long>; val chainSources: Map<ChainSource, Long>; val fallbackUsed: Long
+    val noData: Map<Dataset, Long>; val stale: Map<Dataset, Long> /* loud flag seen */; val unsignedData: Map<Dataset, Long>; val noIssuer: Map<NoIssuerReason, Long> /* keyed by the reported (promoted) reason */; val parseFailed: Map<ParseReason, Long> /* fired[PARSE_FAILED] split by reason, zero-filled */; val chainSources: Map<ChainSource, Long>; val fallbackUsed: Long
     val verifierErrors: Long /* Finding.VerifierError only; FallbackNotUsed is not counted */; val candidatesDropped: Long; val verdictCacheHits: Long; val storeFailures: Long; val trustManagerCount: Int; val droppedEvents: Long; val droppedRejectedEvents: Long; val listenerFailures: Long
     val unevaluated: Map<UnevaluatedReason, Long>        // handshakes that returned after flow step 1 without reaching step 2, on every trust manager; the one counter group that still advances in CREATED, after close() and under OFF, so an operator can tell "no traffic" from "not checking"
     val readinessWaits: Long; val readinessTimeouts: Long; val readinessWaitNanosTotal: Long   // flow step 0
@@ -1569,7 +1569,8 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
   candidate is excluded for a shared property; deferral is by the candidate's own relation, which the
   server cannot forge for a real certificate; the walk stops at its first sound path, as webpki and mozilla::pkix do,
   and that path's leaf-issuer key is evaluated; a second terminating key for the same leaf needs an unconstrained CA
-  key holder under a real anchor (residual 15); any exhaustion anywhere rejects.
+  key holder under a real anchor, or an honest issuer with a second SPKI encoding of its key (residual 15); any
+  exhaustion anywhere rejects.
 - **Residual risks recorded from the sixth and seventh review rounds:**
   1. On a custom delegate whose name equality differs from `X500Principal`'s, an honest issuer may
      be classified unrelated, and an unrelated certificate is never a candidate (§5.1 deferral rule), so the walk
@@ -1679,9 +1680,17 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
   15. **Constrained sub-CA.** The holder of an unconstrained CA key under a real anchor, which is any public CA, can
      certify a recovered key, and the walker then reports only that benign key whenever its path comes first in
      candidate order, the store's anchors and then the presented order, which the server controls: with the honest
-     intermediate presented after it too (fixtures (o) and (ar), "no limit, an unconstrained CA"). Both references
-     evaluate that one path as well, and such a key holder can mint a fresh leaf for the name anyway. A limited sub-CA cannot: `pathLenConstraint`,
-     keyUsage `keyCertSign`, extKeyUsage and name constraints are enforced on every issuer (fixtures (ar), (as)).
+     intermediate presented after it too (fixtures (o) and (ar), "no limit, an unconstrained CA"). mozilla::pkix
+     evaluates that one path as well: it checks revocation only for the issuer of the path it built, and a failing check
+     ends the search. webpki goes on past a revoked path to the next candidate, so it accepts the attacker's path in
+     either order. Such a key holder can mint a fresh leaf for the name anyway. M2's candidate order, presented
+     certificates before the preload as in Firefox's `FindIssuer`, does not close this: a preloaded honest intermediate
+     comes after the attacker's presented one. The same order also picks between two SPKI encodings of one honest
+     issuer key (an RSA key with NULL or with absent parameters): both verify the leaf and terminate without any
+     attacker CA, CRLite keys by the hash of the SPKI's bytes, and only the first path's encoding is queried, as in
+     Firefox; such issuers are rare in the Web PKI. A limited sub-CA cannot do the first: `pathLenConstraint`,
+     keyUsage `keyCertSign`, extKeyUsage and name constraints are enforced on every issuer (fixtures (ar), (as), and the
+     (o)-shaped evaluate case where such a sub-CA certifies the recovered-key CA presented first).
      Name constraints follow Firefox's mozilla::pkix (§5.1 "Why this is sound", pinned to `pkixnames.cpp` at
      `cac25a6`): directoryName and rfc822Name subtrees are evaluated, the subject's emailAddress attributes stand in
      for a missing subjectAltName, and a serverAuth leaf's CN-ID is checked when its subjectAltName has no dNSName or

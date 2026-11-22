@@ -20,11 +20,14 @@ import dev.revokt.RevoktPolicy
 import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
 import dev.revokt.Verdict
+import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk
 import dev.revokt.engine.walker.FixtureCert
 import dev.revokt.engine.walker.Honest
 import dev.revokt.engine.walker.K6_VALIDITY
 import dev.revokt.engine.walker.WalkerFixture
+import dev.revokt.engine.walker.WalkerFixturesAr
+import dev.revokt.engine.walker.WalkerFixturesAs
 import dev.revokt.engine.walker.garbage
 import dev.revokt.engine.walker.subCa
 import dev.revokt.testing.SymOids
@@ -401,6 +404,76 @@ class EvaluateTest {
                 assertIs<Verdict.Accepted>(v, "$f: the attacker CA's path hides the honest key")
             } else {
                 assertEquals(Rule.REVOKED, assertIs<Verdict.Rejected>(v, "$f").rule)
+            }
+        }
+    }
+
+    /**
+     * (o)'s shape with the recovered-key CA C certified by a limited sub-CA S under the real root, C presented first: S
+     * may not issue C (`pathLenConstraint` 0, or name constraints the leaf falls outside), so C's path is a dead end, the
+     * walk goes on to the honest intermediate, and its key, revoked, is the one queried (§10 residual 15's limit).
+     */
+    @Test
+    fun `walker (o) a limited sub-CA's recovered-key CA presented first leaves the honest key REVOKED`() {
+        val ca = TestDer.basicConstraints(ca = true)
+        val limits =
+            listOf(
+                "pathLenConstraint 0" to listOf(WalkerFixturesAr.caWithPathLen(0)),
+                "permitted attacker.example" to
+                    listOf(
+                        ca,
+                        WalkerFixturesAs.nameConstraints(permitted = listOf(WalkerFixturesAs.dns("attacker.example"))),
+                    ),
+                "no limit (the control)" to listOf(ca),
+            )
+        for ((limit, extensions) in limits) {
+            val honest = Honest(leafExtensions = listOf(WalkerFixturesAs.san(WalkerFixturesAs.dns("leaf.example"))))
+            val w = honest.w
+            // An Ed25519 key gets no default basicConstraints from the fixture world, so S carries exactly its own.
+            val s =
+                w.cert(
+                    "S",
+                    w.name("Limited sub-CA"),
+                    honest.root.subject,
+                    w.leafKey(),
+                    signer = honest.root.key,
+                    extensions = extensions,
+                )
+            val c =
+                w
+                    .cert(
+                        "C",
+                        honest.intermediate.subject,
+                        s.subject,
+                        signer = s.key,
+                    ).also { w.verifies(honest.leaf, it.key) }
+            val f =
+                honest.fixture(
+                    "o",
+                    limit,
+                    presented = listOf(honest.leaf, c, s, honest.intermediate),
+                    walk = ExpectedWalk(ExpectedWalk.Kind.FOUND),
+                )
+            val honestKey = honest.intermediate.keyHash
+            val engine =
+                StubEngine {
+                    if (it ==
+                        honestKey
+                    ) {
+                        CrliteQueryResult.REVOKED
+                    } else {
+                        CrliteQueryResult.NOT_REVOKED
+                    }
+                }
+            val v = Run.of(f, engine = engine).evaluate().verdict
+            val queried = engine.queries.map { it.issuerSpkiHash.toByteString() }
+            if (extensions.size == 1 && extensions[0] === ca) {
+                // Unconstrained, S may issue C, whose path is found first: residual 15 itself.
+                assertEquals(listOf(c.keyHash), queried, limit)
+                assertIs<Verdict.Accepted>(v, limit)
+            } else {
+                assertEquals(listOf(honestKey), queried, limit)
+                assertEquals(Rule.REVOKED, assertIs<Verdict.Rejected>(v, limit).rule, limit)
             }
         }
     }
