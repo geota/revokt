@@ -20,14 +20,18 @@ import dev.revokt.RevoktPolicy
 import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
 import dev.revokt.Verdict
+import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk
 import dev.revokt.engine.walker.FixtureCert
 import dev.revokt.engine.walker.Honest
 import dev.revokt.engine.walker.K6_VALIDITY
 import dev.revokt.engine.walker.WalkerFixture
+import dev.revokt.engine.walker.WalkerFixturesAr
+import dev.revokt.engine.walker.WalkerFixturesAs
 import dev.revokt.engine.walker.garbage
 import dev.revokt.engine.walker.subCa
 import dev.revokt.testing.SymOids
+import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -103,7 +107,11 @@ class EvaluateTest {
         val engine = StubEngine.always(CrliteQueryResult.REVOKED)
         val run =
             Run.of(
-                h.fixture("k6", presented = listOf(leaf6, h.intermediate), walk = ExpectedWalk.found()),
+                h.fixture(
+                    "k6",
+                    presented = listOf(leaf6, h.intermediate),
+                    walk = ExpectedWalk(ExpectedWalk.Kind.FOUND),
+                ),
                 engine = engine,
             )
         val evaluated = run.evaluate()
@@ -196,7 +204,7 @@ class EvaluateTest {
                 listOf(garbage(64), h.intermediate.der),
                 honest.snapshot,
                 honest.ok,
-                ExpectedWalk.found(),
+                ExpectedWalk(ExpectedWalk.Kind.FOUND),
             )
         val v = verdictOf(f, generation = noGeneration())
         assertEquals(setOf(Rule.PARSE_FAILED, Rule.NO_DATA), v.rules)
@@ -371,14 +379,103 @@ class EvaluateTest {
     }
 
     @Test
-    fun `walker (o) a second certified key is queried too, and its REVOKED fires`() {
+    fun `walker (o) only the first path's key is queried, so the presented order decides (residual 15)`() {
         val sub = h.subCa()
-        val f = h.fixture("o", presented = listOf(h.leaf, h.intermediate, sub), walk = ExpectedWalk.found())
-        val engine = StubEngine { if (it == sub.keyHash) CrliteQueryResult.REVOKED else CrliteQueryResult.NOT_REVOKED }
-        val v = Run.of(f, engine = engine).evaluate().verdict
-        assertEquals(2, engine.queries.size)
-        assertEquals(Rule.REVOKED, assertIs<Verdict.Rejected>(v).rule)
-        assertContentEquals(sub.keyHash.toByteArray(), v.crlite?.issuerSpkiSha256)
+        val honestKey = h.intermediate.keyHash
+        for ((presented, first) in listOf(
+            listOf(h.leaf, h.intermediate, sub) to h.intermediate,
+            listOf(h.leaf, sub, h.intermediate) to sub,
+        )) {
+            val f = h.fixture("o", presented = presented, walk = ExpectedWalk(ExpectedWalk.Kind.FOUND))
+            val engine =
+                StubEngine {
+                    if (it ==
+                        honestKey
+                    ) {
+                        CrliteQueryResult.REVOKED
+                    } else {
+                        CrliteQueryResult.NOT_REVOKED
+                    }
+                }
+            val v = Run.of(f, engine = engine).evaluate().verdict
+            assertEquals(listOf(first.keyHash), engine.queries.map { it.issuerSpkiHash.toByteString() }, "$f")
+            assertContentEquals(first.keyHash.toByteArray(), v.crlite?.issuerSpkiSha256, "$f")
+            if (first === sub) {
+                assertIs<Verdict.Accepted>(v, "$f: the attacker CA's path hides the honest key")
+            } else {
+                assertEquals(Rule.REVOKED, assertIs<Verdict.Rejected>(v, "$f").rule)
+            }
+        }
+    }
+
+    /**
+     * (o)'s shape with the recovered-key CA C certified by a limited sub-CA S under the real root, C presented first: S
+     * may not issue C (`pathLenConstraint` 0, or name constraints the leaf falls outside), so C's path is a dead end, the
+     * walk goes on to the honest intermediate, and its key, revoked, is the one queried (§10 residual 15's limit).
+     */
+    @Test
+    fun `walker (o) a limited sub-CA's recovered-key CA presented first leaves the honest key REVOKED`() {
+        val ca = TestDer.basicConstraints(ca = true)
+        val limits =
+            listOf(
+                "pathLenConstraint 0" to listOf(WalkerFixturesAr.caWithPathLen(0)),
+                "permitted attacker.example" to
+                    listOf(
+                        ca,
+                        WalkerFixturesAs.nameConstraints(permitted = listOf(WalkerFixturesAs.dns("attacker.example"))),
+                    ),
+                "no limit (the control)" to listOf(ca),
+            )
+        for ((limit, extensions) in limits) {
+            val honest = Honest(leafExtensions = listOf(WalkerFixturesAs.san(WalkerFixturesAs.dns("leaf.example"))))
+            val w = honest.w
+            // An Ed25519 key gets no default basicConstraints from the fixture world, so S carries exactly its own.
+            val s =
+                w.cert(
+                    "S",
+                    w.name("Limited sub-CA"),
+                    honest.root.subject,
+                    w.leafKey(),
+                    signer = honest.root.key,
+                    extensions = extensions,
+                )
+            val c =
+                w
+                    .cert(
+                        "C",
+                        honest.intermediate.subject,
+                        s.subject,
+                        signer = s.key,
+                    ).also { w.verifies(honest.leaf, it.key) }
+            val f =
+                honest.fixture(
+                    "o",
+                    limit,
+                    presented = listOf(honest.leaf, c, s, honest.intermediate),
+                    walk = ExpectedWalk(ExpectedWalk.Kind.FOUND),
+                )
+            val honestKey = honest.intermediate.keyHash
+            val engine =
+                StubEngine {
+                    if (it ==
+                        honestKey
+                    ) {
+                        CrliteQueryResult.REVOKED
+                    } else {
+                        CrliteQueryResult.NOT_REVOKED
+                    }
+                }
+            val v = Run.of(f, engine = engine).evaluate().verdict
+            val queried = engine.queries.map { it.issuerSpkiHash.toByteString() }
+            if (extensions.size == 1 && extensions[0] === ca) {
+                // Unconstrained, S may issue C, whose path is found first: residual 15 itself.
+                assertEquals(listOf(c.keyHash), queried, limit)
+                assertIs<Verdict.Accepted>(v, limit)
+            } else {
+                assertEquals(listOf(honestKey), queried, limit)
+                assertEquals(Rule.REVOKED, assertIs<Verdict.Rejected>(v, limit).rule, limit)
+            }
+        }
     }
 
     // No keys.
@@ -411,7 +508,7 @@ class EvaluateTest {
         fun f(
             id: String,
             presented: List<ByteArray>,
-        ) = WalkerFixture(id, "", presented, honest.snapshot, h.w.ok, ExpectedWalk.found())
+        ) = WalkerFixture(id, "", presented, honest.snapshot, h.w.ok, ExpectedWalk(ExpectedWalk.Kind.FOUND))
         val cases =
             listOf(
                 Triple("PARSE_FAILED(STRUCTURE)", f("pf", listOf(garbage(64), h.intermediate.der)), Rule.PARSE_FAILED),

@@ -13,7 +13,6 @@ import dev.revokt.RevoktTestingApi
 import dev.revokt.SignatureVerifier
 import dev.revokt.TerminalKind
 import dev.revokt.VerifyResult
-import dev.revokt.WalkEnd
 import dev.revokt.WalkStats
 import dev.revokt.testing.CertId
 import dev.revokt.testing.KeyId
@@ -40,7 +39,6 @@ internal class WalkerFixture(
     val ok: Set<Pair<CertId, KeyId>>,
     val walk: ExpectedWalk,
     val unsupported: Set<String> = SymOids.UNSUPPORTED,
-    val customCanonicaliser: Boolean = false,
     val label: (ByteString) -> String = { it.hex().take(8) },
 ) {
     val preload: List<ByteArray> get() = emptyList()
@@ -49,40 +47,29 @@ internal class WalkerFixture(
 }
 
 /**
- * The expected Walk column. [kind] is the variant; [paths] are `Found`'s paths or `Budget`'s partial paths, each as
- * the certificates' bytes hashes, and the leaf keys are their second certificates' SPKI hashes unless [leafKeys] is
- * given. [unsupportedOids] and [findings] are always compared; a null count is not.
+ * The expected Walk column. [kind] is the variant; [path] is `Found`'s one path, as the certificates' bytes hashes,
+ * and the leaf key is its second certificate's SPKI hash unless [leafKey] is given. [unsupportedOids] and [findings]
+ * are always compared; a null count is not.
  */
 internal data class ExpectedWalk(
     val kind: Kind,
-    val paths: List<List<ByteString>>? = null,
-    val leafKeys: Set<ByteString>? = null,
+    val path: List<ByteString>? = null,
+    val leafKey: ByteString? = null,
     val reason: NoIssuerReason? = null,
-    val end: WalkEnd? = null,
-    val endDepth: Int? = null,
     val unsupportedOids: Set<String> = emptySet(),
     val findings: List<Finding> = emptyList(),
     val verifications: Int? = null,
     val maxVerifications: Int? = null,
     val candidatesExplored: Int? = null,
-    val relatedExploredAtLeaf: Int? = null,
-    val unrelatedExploredAtLeaf: Int? = null,
 ) {
     enum class Kind { FOUND, NOT_FOUND, BUDGET }
 
     companion object {
-        fun found(vararg paths: List<FixtureCert>): ExpectedWalk = ExpectedWalk(Kind.FOUND, hashes(paths.toList()))
+        fun found(path: List<FixtureCert>): ExpectedWalk = ExpectedWalk(Kind.FOUND, path.map { it.bytesHash })
 
         fun notFound(reason: NoIssuerReason): ExpectedWalk = ExpectedWalk(Kind.NOT_FOUND, reason = reason)
 
-        fun budget(
-            end: WalkEnd,
-            endDepth: Int?,
-            vararg partialPaths: List<FixtureCert>,
-        ): ExpectedWalk = ExpectedWalk(Kind.BUDGET, hashes(partialPaths.toList()), end = end, endDepth = endDepth)
-
-        private fun hashes(paths: List<List<FixtureCert>>): List<List<ByteString>> =
-            paths.map { p -> p.map { it.bytesHash } }
+        fun budget(): ExpectedWalk = ExpectedWalk(Kind.BUDGET)
     }
 }
 
@@ -94,7 +81,7 @@ internal object WalkerHarness {
         crossCallMemo: LruMap<Pair<ByteString, ByteString>, VerifyResult> =
             lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
     ): Walk {
-        val index = CandidateIndex(f.snapshot, customCanonicaliser = f.customCanonicaliser)
+        val index = CandidateIndex(f.snapshot)
         val presented = f.presented.map { index.cert(WalkerCerts.parse(it)) }
         val verifier = SymVerifier(f.ok, f.unsupported)
         return reconstruct(presented, index, verifier, verifier.unsupportedOids(), crossCallMemo)
@@ -114,7 +101,7 @@ internal object WalkerHarness {
         requiredEku: RequiredEku = RequiredEku.SERVER_AUTH,
         verifier: (SignatureVerifier) -> SignatureVerifier = { it },
     ): PathDecision {
-        val index = CandidateIndex(f.snapshot, customCanonicaliser = f.customCanonicaliser)
+        val index = CandidateIndex(f.snapshot)
         val sym = SymVerifier(f.ok, f.unsupported)
         val context =
             DecideContext(
@@ -162,47 +149,41 @@ internal object WalkerHarness {
         at: String,
     ) {
         val shown = describe(walk, label)
-        val (paths, keys) = variant(expected, walk, "$at: ", "; $shown")
-        expected.paths?.let { want ->
-            assertEquals(
-                want.map { p -> p.map(label) },
-                paths.map { p -> p.certs.map { label(it.bytesHash) } },
-                "$at: paths; $shown",
-            )
+        val found = variant(expected, walk, "$at: ", "; $shown")
+        if (found != null) {
+            expected.path?.let { want ->
+                assertEquals(want.map(label), found.path.certs.map { label(it.bytesHash) }, "$at: path; $shown")
+            }
+            expected.leafKey?.let { assertEquals(it, found.leafKey, "$at: leaf key; $shown") }
+            assertEquals(found.path.certs[1].spkiHash, found.leafKey, "$at: the leaf key is the path's second; $shown")
+            assertTrue(found.path.terminal == TerminalKind.ANCHOR, "$at: terminal; $shown")
         }
-        val wantKeys = expected.leafKeys ?: expected.paths?.let { keysOf(paths) }
-        wantKeys?.let { assertEquals(it, keys, "$at: leaf keys; $shown") }
-        assertEquals(keysOf(paths), keys, "$at: leaf keys are the paths' second certificates; $shown")
-        paths.forEach { assertTrue(it.terminal == TerminalKind.ANCHOR, "$at: terminal; $shown") }
         assertEquals(expected.unsupportedOids, walk.unsupportedOids, "$at: unsupportedOids; $shown")
         assertEquals(expected.findings, walk.findings, "$at: findings; $shown")
         stats(expected, walk.stats, "$at: ", "; $shown")
     }
 
-    /** Asserts the variant and its own fields; returns its paths (partial for `Budget`) and leaf keys. */
+    /** Asserts the variant and its own fields; returns the walk when it is `Found`. */
     private fun variant(
         expected: ExpectedWalk,
         walk: Walk,
         at: String,
         shown: String,
-    ): Pair<List<WalkPath>, Set<ByteString>> =
+    ): Walk.Found? =
         when (expected.kind) {
             ExpectedWalk.Kind.FOUND -> {
-                if (walk !is Walk.Found) fail("${at}expected Found$shown")
-                walk.paths to walk.leafKeys
+                walk as? Walk.Found ?: fail("${at}expected Found$shown")
             }
 
             ExpectedWalk.Kind.NOT_FOUND -> {
                 if (walk !is Walk.NotFound) fail("${at}expected NotFound$shown")
                 assertEquals(expected.reason, walk.reason, "${at}reason$shown")
-                emptyList<WalkPath>() to emptySet()
+                null
             }
 
             ExpectedWalk.Kind.BUDGET -> {
                 if (walk !is Walk.Budget) fail("${at}expected Budget$shown")
-                assertEquals(expected.end, walk.end, "${at}end$shown")
-                expected.endDepth?.let { assertEquals(it, walk.endDepth, "${at}endDepth$shown") }
-                walk.partialPaths to walk.partialLeafKeys
+                null
             }
         }
 
@@ -215,29 +196,19 @@ internal object WalkerHarness {
         expected.verifications?.let { assertEquals(it, s.verifications, "${at}verifications$shown") }
         expected.maxVerifications?.let { assertTrue(s.verifications <= it, "${at}verifications ≤ $it$shown") }
         expected.candidatesExplored?.let { assertEquals(it, s.candidatesExplored, "${at}candidatesExplored$shown") }
-        expected.relatedExploredAtLeaf?.let {
-            assertEquals(it, s.relatedExploredAtLeaf, "${at}relatedExploredAtLeaf$shown")
-        }
-        expected.unrelatedExploredAtLeaf?.let {
-            assertEquals(it, s.unrelatedExploredAtLeaf, "${at}unrelatedExploredAtLeaf$shown")
-        }
-        assertTrue(s.verifications <= RevoktLimits.MAX_VERIFICATIONS, "${at}MAX_VERIFICATIONS$shown")
+        assertTrue(s.verifications <= s.candidatesExplored, "${at}one verification per exploration at most$shown")
         assertTrue(s.candidatesExplored <= RevoktLimits.MAX_EXPLORED, "${at}MAX_EXPLORED$shown")
     }
-
-    private fun keysOf(paths: List<WalkPath>): Set<ByteString> = paths.mapTo(LinkedHashSet()) { it.certs[1].spkiHash }
 
     fun describe(
         walk: Walk,
         label: (ByteString) -> String,
     ): String {
-        fun paths(p: List<WalkPath>) =
-            p.joinToString(", ", "[", "]") { w -> w.certs.joinToString("→") { label(it.bytesHash) } }
         val head =
             when (walk) {
-                is Walk.Found -> "Found(${paths(walk.paths)}"
+                is Walk.Found -> "Found(${walk.path.certs.joinToString("→") { label(it.bytesHash) }}"
                 is Walk.NotFound -> "NotFound(${walk.reason}"
-                is Walk.Budget -> "Budget(${walk.end}, endDepth=${walk.endDepth}, ${paths(walk.partialPaths)}"
+                is Walk.Budget -> "Budget("
             }
         return "$head, ${walk.stats}, unsupported=${walk.unsupportedOids}, findings=${walk.findings})"
     }

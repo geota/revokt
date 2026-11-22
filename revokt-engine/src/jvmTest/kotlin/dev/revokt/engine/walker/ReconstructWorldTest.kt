@@ -30,11 +30,12 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * `reconstruct` against the §9.1 reference walker (spec §5.1, §9.1): on generated worlds (honest worlds with world and
- * attacker mutations) and on random mesh worlds (few names in several encodings, shared keys, random links, anchors
- * and cross-signatures), every `Found` has exactly the reference's leaf keys, every `NotFound` a reference with none,
- * and every `Budget` a subset of them; every returned path is sound. Both walkers use the platform canonicaliser. The
- * seed is in every message. The walker fuzzer (#144) is the full gate; this is its fixed-seed smoke.
+ * `reconstruct` against the §9.1 reference walker (spec §5.1, §9.1, P2): on generated worlds (honest worlds with world
+ * and attacker mutations) and on random mesh worlds (few names in several encodings, shared keys, random links,
+ * anchors and cross-signatures), every `Found` has one leaf key, one of the reference's, every `NotFound` a reference
+ * with no key over name-related links, and every `Budget` its budget spent; every returned path is sound. Both walkers
+ * use the platform canonicaliser. The seed is in every message. The walker fuzzer (#144) is the full gate; this is its
+ * fixed-seed smoke.
  */
 @OptIn(RevoktInternalApi::class)
 class ReconstructWorldTest {
@@ -44,8 +45,10 @@ class ReconstructWorldTest {
         var notFound = 0
         var budget = 0
         var multiKey = 0
+        var skiOnly = 0
 
-        override fun toString(): String = "found $found, notFound $notFound, budget $budget, multi-key $multiKey"
+        override fun toString(): String =
+            "found $found, notFound $notFound, budget $budget, multi-key $multiKey, SKI-only $skiOnly"
     }
 
     private fun differential(
@@ -57,7 +60,11 @@ class ReconstructWorldTest {
         tally: Tally,
     ): Walk {
         val verifier = SymVerifier(ok, unsupported)
-        val expected = ReferenceWalker(anchors, verifier).walk(presented)
+        val reference = ReferenceWalker(anchors, verifier)
+        val expected = reference.walk(presented)
+        val byName = reference.walkByName(presented)
+        if (expected.size > 1) tally.multiKey++
+        if (byName != expected) tally.skiOnly++
         val index = CandidateIndex(anchors)
         val certs =
             presented.mapNotNull { der ->
@@ -69,24 +76,22 @@ class ReconstructWorldTest {
         when (walk) {
             is Walk.Found -> {
                 tally.found++
-                if (walk.leafKeys.size > 1) tally.multiKey++
-                assertEquals(expected, WalkerHarness.hex(walk.leafKeys), "$at: Found leaf keys; $shown")
-                walk.paths.forEach { assertSound(it, certs[0], index, verifier, "$at; $shown") }
+                assertTrue(walk.leafKey.hex() in expected, "$at: Found leaf key not in $expected; $shown")
+                assertEquals(walk.path.certs[1].spkiHash, walk.leafKey, "$at: the leaf key is the path's; $shown")
+                assertSound(walk.path, certs[0], index, verifier, "$at; $shown")
             }
 
             is Walk.NotFound -> {
                 tally.notFound++
-                assertEquals(emptySet(), expected, "$at: NotFound but the reference found keys; $shown")
+                assertEquals(emptySet(), byName, "$at: NotFound but the reference found keys by name; $shown")
             }
 
             is Walk.Budget -> {
                 tally.budget++
-                val partial = WalkerHarness.hex(walk.partialLeafKeys)
-                assertTrue(expected.containsAll(partial), "$at: Budget partial keys $partial ⊄ $expected; $shown")
-                walk.partialPaths.forEach { assertSound(it, certs[0], index, verifier, "$at; $shown") }
+                assertEquals(RevoktLimits.MAX_EXPLORED, walk.stats.candidatesExplored, "$at: Budget unspent; $shown")
             }
         }
-        assertTrue(walk.stats.verifications <= RevoktLimits.MAX_VERIFICATIONS, "$at: $shown")
+        assertTrue(walk.stats.verifications <= walk.stats.candidatesExplored, "$at: $shown")
         assertTrue(walk.stats.candidatesExplored <= RevoktLimits.MAX_EXPLORED, "$at: $shown")
         return walk
     }
@@ -114,27 +119,17 @@ class ReconstructWorldTest {
     }
 
     @Test
-    fun `walker smoke 200 honest generated worlds are Found with the reference keys in depth + 1 verifications`() {
+    fun `walker smoke 200 honest generated worlds are Found with the honest key in depth + 1 verifications`() {
         val tally = Tally()
-        var crossSigned = 0
         for (seed in 1L..200L) {
             val world = ChainGenerator.generate(seed)
             val walk = differential(world.presented, world.anchors, world.ok, world.unsupported, "seed $seed", tally)
             if (walk !is Walk.Found) fail("seed $seed: honest world not Found: $walk")
-            assertEquals(setOf(world.honestKey), WalkerHarness.hex(walk.leafKeys), "seed $seed")
-            // §5.1 "Cost": at most depth + 1, depth counted on the longest path found. That is the generator's depth
-            // except for a root-issued leaf with a cross-certificate of its root presented: at the leaf the store
-            // root is explored first (L/R), the presented cross-certificate is then a memo hit for L/X, and X/R' is
-            // verified.
-            val depth = walk.paths.maxOf { it.certs.size } - 2
+            assertEquals(world.honestKey, walk.leafKey.hex(), "seed $seed")
+            // §5.1 "Cost", P6: at most depth + 1; the walk stops at the first path, a root-issued leaf's included.
             val v = walk.stats.verifications
-            assertTrue(v <= depth + 1, "seed $seed: $v verifications at depth $depth")
-            if (v > world.depth + 1) {
-                crossSigned++
-                assertEquals(listOf(2, 3), walk.paths.map { it.certs.size }, "seed $seed: $walk")
-            }
+            assertTrue(v <= world.depth + 1, "seed $seed: $v verifications at depth ${world.depth}")
         }
-        assertEquals(6, crossSigned, "root-issued leaves with a presented cross-certificate")
     }
 
     @Test
@@ -157,11 +152,11 @@ class ReconstructWorldTest {
     }
 
     @Test
-    fun `walker reconstruct matches the reference walker around the related cap with decoys and cross-certs`() {
+    fun `walker reconstruct matches the reference walker around the work budget with decoys and cross-certs`() {
         val tally = Tally()
         for (seed in 1L..120L) {
             val rng = SplitMix64(seed * 7_919)
-            val n = RevoktLimits.MAX_RELATED_PER_LEVEL - 2 + rng.nextInt(4) // 62 … 65
+            val n = RevoktLimits.MAX_EXPLORED - 4 + rng.nextInt(8) // 252 … 259
             val mutations =
                 rng.shuffled(
                     listOf(
@@ -247,6 +242,6 @@ class ReconstructWorldTest {
             val mesh = Mesh(seed)
             differential(mesh.presented, mesh.anchors, mesh.ok, SymOids.UNSUPPORTED, "mesh seed $seed", tally)
         }
-        assertTrue(tally.found > 300 && tally.notFound > 300 && tally.multiKey > 20, "$tally")
+        assertTrue(tally.found > 300 && tally.notFound > 300 && tally.multiKey > 20 && tally.skiOnly > 0, "$tally")
     }
 }

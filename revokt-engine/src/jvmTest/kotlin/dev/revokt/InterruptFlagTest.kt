@@ -74,7 +74,7 @@ class InterruptFlagTest {
     @Test
     fun `a canonicaliser's InterruptedException is no canonical match and keeps the interrupt`() {
         val rig = EvaluatorRig(honest)
-        val index = CandidateIndex(honest.snapshot, customCanonicaliser = true) { interrupts() }
+        val index = CandidateIndex(honest.snapshot) { interrupts() }
         // The anchors' canonical subjects are computed now, so the build already sets the flag.
         assertTrue(Thread.interrupted(), "the index build kept the interrupt")
         rig.indexed = IndexedSnapshot(WalkerHarness.snapshot(honest.snapshot), index)

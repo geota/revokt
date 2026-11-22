@@ -64,7 +64,6 @@ class PolicyVocabularyTest {
                 "KeyabilityClause" to
                     listOf("HEADER", "TBS_SHAPE", "INTEGER", "OID", "NAME", "TIME", "KEY", "EXTENSION"),
                 "TerminalKind" to listOf("ANCHOR"),
-                "WalkEnd" to listOf("COMPLETE", "RELATED_BUDGET", "VERIFICATION_BUDGET", "EXPLORATION_BUDGET"),
                 "Freshness" to
                     listOf(
                         "RECORD_LAST_MODIFIED",
@@ -97,7 +96,6 @@ class PolicyVocabularyTest {
                 "ParseReason" to names(ParseReason.entries),
                 "KeyabilityClause" to names(KeyabilityClause.entries),
                 "TerminalKind" to names(TerminalKind.entries),
-                "WalkEnd" to names(WalkEnd.entries),
                 "Freshness" to names(Freshness.entries),
                 "EngineErrorProducer" to names(EngineErrorProducer.entries),
                 "CrliteQueryResult" to names(CrliteQueryResult.entries),

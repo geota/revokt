@@ -6,7 +6,6 @@ package dev.revokt.engine.walker
 import dev.revokt.KeyabilityClause
 import dev.revokt.NoIssuerReason
 import dev.revokt.TerminalKind
-import dev.revokt.WalkEnd
 import dev.revokt.WalkStats
 import okio.ByteString
 
@@ -17,25 +16,22 @@ import okio.ByteString
  *
  * - [walkerReason]: the walker's own `NoIssuerReason`, before the `UNSUPPORTED_ALGORITHM` label or `PLATFORM_ONLY`
  *   promotion; [keyabilityClause]: the first failing §9.2 clause of a `PRODUCER_UNKEYABLE` leaf.
- * - [reportedPathSha256s]: the reported path's DER hashes, leaf to terminal (the first found path, else the first
- *   partial path, else the fallback path), and [terminalKind], null when it is empty.
- * - [endReason] and [endDepth]: how and at what path size the walk ended, null when no walk ran.
+ * - [reportedPathSha256s]: the reported path's DER hashes, leaf to terminal (the walker's path, else the fallback
+ *   path), and [terminalKind], null when it is empty.
  * - [anchorSnapshotId]: the `AnchorSnapshot` the decision read, 0 when none was consulted.
- * - [usedFallback], [pathsFound] (found, or partial on a budget), [candidatesDropped] (presented certificates the parser
- *   rejected) and [walkStats].
+ * - [usedFallback], [pathsFound] (1 when the decision found a path: step 2, the walk, or the fallback after a walk
+ *   `NotFound`; else 0), [candidatesDropped] (presented certificates the parser rejected) and [walkStats].
  */
 @Suppress("LongParameterList") // One parameter per field of the DEBUG line, each defaulted.
 internal class PathDetail(
     val walkerReason: NoIssuerReason? = null,
     val keyabilityClause: KeyabilityClause? = null,
-    val endReason: WalkEnd? = null,
-    val endDepth: Int? = null,
     val anchorSnapshotId: Long = 0,
     val usedFallback: Boolean = false,
     val pathsFound: Int = 0,
     val reportedPathSha256s: List<ByteString> = emptyList(),
     val candidatesDropped: Int = 0,
-    val walkStats: WalkStats = WalkStats(0, 0, 0, 0),
+    val walkStats: WalkStats = WalkStats(0, 0),
 ) {
     /** The reported path's terminal: every M1 terminal is an anchor; M2's preload-only terminal will need its own. */
     val terminalKind: TerminalKind? get() = if (reportedPathSha256s.isEmpty()) null else TerminalKind.ANCHOR
@@ -46,8 +42,6 @@ internal class PathDetail(
             "walkerReason" to walkerReason,
             "keyabilityClause" to keyabilityClause,
             "terminalKind" to terminalKind,
-            "endReason" to endReason,
-            "endDepth" to endDepth,
             "anchorSnapshotId" to anchorSnapshotId,
             "usedFallback" to usedFallback,
             "pathsFound" to pathsFound,

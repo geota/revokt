@@ -5,7 +5,6 @@ package dev.revokt.engine.walker
 
 import dev.revokt.NoIssuerReason
 import dev.revokt.RevoktLimits
-import dev.revokt.WalkEnd
 import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.found
@@ -38,19 +37,14 @@ internal object WalkerFixturesAToR {
                     presented = listOf(leaf, fake, intermediate),
                     // L/F invalid, L/I, I/R.
                     walk =
-                        found(path).copy(
-                            verifications = 3,
-                            candidatesExplored = 3,
-                            relatedExploredAtLeaf = 2,
-                            unrelatedExploredAtLeaf = 0,
-                        ),
+                        found(path).copy(verifications = 3, candidatesExplored = 3),
                 ),
             )
         }
 
     /**
      * (b) An ECDSA-recovered second key: F verifies the leaf but nothing certifies it, so its subtree is a dead end
-     * (its only candidate, I, is unrelated to it and `INVALID`).
+     * (it has no candidate: I is not related to it).
      */
     fun b(): List<WalkerFixture> =
         with(Honest()) {
@@ -60,8 +54,8 @@ internal object WalkerFixturesAToR {
                 fixture(
                     "b",
                     presented = listOf(leaf, recovered, intermediate),
-                    // L/F, F/I invalid, L/I, I/R.
-                    walk = found(path).copy(verifications = 4, candidatesExplored = 4),
+                    // L/F, L/I, I/R.
+                    walk = found(path).copy(verifications = 3, candidatesExplored = 3),
                 ),
             )
         }
@@ -78,8 +72,8 @@ internal object WalkerFixturesAToR {
                 fixture(
                     "c",
                     presented = listOf(leaf, duplicate, intermediate),
-                    // L/D, D/R invalid, D/I invalid (unrelated), L/I, I/R.
-                    walk = found(path).copy(verifications = 5, candidatesExplored = 5),
+                    // L/D, D/R invalid, L/I, I/R.
+                    walk = found(path).copy(verifications = 4, candidatesExplored = 4),
                 ),
             )
         }
@@ -103,18 +97,18 @@ internal object WalkerFixturesAToR {
                 fixture(
                     "d",
                     presented = listOf(leaf, fake, intermediate),
-                    // L/F, F/R unsupported, F/I unsupported (unrelated, not counted), L/I, I/R.
+                    // L/F, F/R unsupported, L/I, I/R.
                     walk =
                         found(path).copy(
                             unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE),
-                            verifications = 5,
-                            candidatesExplored = 5,
+                            verifications = 4,
+                            candidatesExplored = 4,
                         ),
                 ),
             )
         }
 
-    /** (e) 8, 16 and 63 distinct-key related junk ahead of the real intermediate: 63 + 1 is exactly the cap. */
+    /** (e) 8, 16 and 63 distinct-key related junk ahead of the real intermediate: one exploration each. */
     fun e(): List<WalkerFixture> =
         listOf(8, 16, 63).map { n ->
             with(Honest()) {
@@ -123,11 +117,7 @@ internal object WalkerFixturesAToR {
                     "$n junk",
                     presented = listOf(leaf) + junk(n) + intermediate,
                     walk =
-                        found(path).copy(
-                            verifications = n + 2,
-                            candidatesExplored = n + 2,
-                            relatedExploredAtLeaf = n + 1,
-                        ),
+                        found(path).copy(verifications = n + 2, candidatesExplored = n + 2),
                 )
             }
         }
@@ -168,13 +158,8 @@ internal object WalkerFixturesAToR {
                     "g",
                     "root presented",
                     presented = listOf(leaf, root),
-                    // The root is unrelated to the leaf: the unrelated loop tries it.
-                    walk =
-                        notFound(NoIssuerReason.NO_CANDIDATE).copy(
-                            verifications = 1,
-                            candidatesExplored = 1,
-                            unrelatedExploredAtLeaf = 1,
-                        ),
+                    // The root is not related to the leaf, so it is no candidate.
+                    walk = notFound(NoIssuerReason.NO_CANDIDATE).copy(verifications = 0, candidatesExplored = 0),
                 ),
             )
         }
@@ -196,32 +181,37 @@ internal object WalkerFixturesAToR {
                 fixture(
                     "h",
                     presented = listOf(leaf, self, a, b, intermediate),
-                    // S: L/S, S/A, S/I, S/B; A: L/A, A/B, B/S, B/I, A/S, A/I; I: L/I, I/R.
-                    walk = found(path).copy(verifications = 12, candidatesExplored = 12, relatedExploredAtLeaf = 3),
-                ),
-            )
-        }
-
-    /** (i) 65 related junk at the leaf: the 65th is not explored. */
-    fun i(): List<WalkerFixture> =
-        with(Honest()) {
-            listOf(
-                fixture(
-                    "i",
-                    presented = listOf(leaf) + junk(RevoktLimits.MAX_RELATED_PER_LEVEL + 1) + intermediate,
-                    walk =
-                        budget(WalkEnd.RELATED_BUDGET, 1).copy(
-                            verifications = 64,
-                            candidatesExplored = 64,
-                            relatedExploredAtLeaf = 64,
-                        ),
+                    // S: L/S, S/A, S/I; A: L/A, A/B, B/S, B/I; I: L/I, I/R. B is related to A only.
+                    walk = found(path).copy(verifications = 9, candidatesExplored = 9),
                 ),
             )
         }
 
     /**
-     * (k) A same-key decoy with a garbage signature first, its issuer name the root's: the store anchor and the real
-     * intermediate are tried under the decoy's signature before the leaf loop reaches I by a memo hit.
+     * (i) The work budget's edge, related junk at the leaf ahead of the honest intermediate: with `MAX_EXPLORED - 2`
+     * junk, L/I and I/R are the last two explorations and the walk is `Found`; one more junk certificate and I/R would
+     * be the 257th, so the walk is `Budget`, with no path.
+     */
+    fun i(): List<WalkerFixture> =
+        listOf(RevoktLimits.MAX_EXPLORED - 2, RevoktLimits.MAX_EXPLORED - 1).map { n ->
+            with(Honest()) {
+                fixture(
+                    "i",
+                    "$n junk",
+                    presented = listOf(leaf) + junk(n) + intermediate,
+                    walk =
+                        if (n == RevoktLimits.MAX_EXPLORED - 2) {
+                            found(path).copy(verifications = n + 2, candidatesExplored = n + 2)
+                        } else {
+                            budget().copy(verifications = n + 1, candidatesExplored = RevoktLimits.MAX_EXPLORED)
+                        },
+                )
+            }
+        }
+
+    /**
+     * (k) A same-key decoy with a garbage signature first, its issuer name the root's: the store anchor is tried under
+     * the decoy's signature, then the leaf reaches I by a memo hit (the decoy has I's key).
      */
     fun k(): List<WalkerFixture> =
         with(Honest()) {
@@ -230,7 +220,8 @@ internal object WalkerFixturesAToR {
                 fixture(
                     "k",
                     presented = listOf(leaf, decoy, intermediate),
-                    walk = found(path).copy(verifications = 4, candidatesExplored = 5),
+                    // L/D, D/R invalid, L/I memo hit, I/R.
+                    walk = found(path).copy(verifications = 3, candidatesExplored = 4),
                 ),
             )
         }
@@ -269,7 +260,8 @@ internal object WalkerFixturesAToR {
 
     /**
      * (l) A public cross-certificate X of I (I's subject and key) to a retired root T outside the snapshot, presented
-     * first with T last: X verifies the leaf, T verifies X, and T's subtree is a dead end; I is then a memo hit.
+     * first with T last: X verifies the leaf, T verifies X, and T, self-issued, has no candidate but itself; I is then a
+     * memo hit.
      */
     fun l(): List<WalkerFixture> =
         with(Honest()) {
@@ -279,25 +271,20 @@ internal object WalkerFixturesAToR {
                 fixture(
                     "l",
                     presented = listOf(leaf, cross, intermediate, retired),
-                    // L/X, X/T, T/I invalid, X/I invalid, L/I memo hit, I/R.
-                    walk = found(path).copy(verifications = 5, candidatesExplored = 6),
+                    // L/X, X/T, L/I memo hit, I/R.
+                    walk = found(path).copy(verifications = 3, candidatesExplored = 4),
                 ),
             )
         }
 
-    /** (m) A sound path, then 62 related junk: the leaf still explores every related candidate (63 in total). */
+    /** (m) A sound path, then 62 related junk: the walk stops at the first path, so no junk is explored. */
     fun m(): List<WalkerFixture> =
         with(Honest()) {
             listOf(
                 fixture(
                     "m",
                     presented = listOf(leaf, intermediate) + junk(62),
-                    walk =
-                        found(path).copy(
-                            verifications = 64,
-                            candidatesExplored = 64,
-                            relatedExploredAtLeaf = 63,
-                        ),
+                    walk = found(path).copy(verifications = 2, candidatesExplored = 2),
                 ),
             )
         }
@@ -316,26 +303,36 @@ internal object WalkerFixturesAToR {
                 fixture(
                     "n",
                     presented = listOf(leaf, branch, e, intermediate),
-                    // L/B, B/E unsupported (related), B/I unsupported (unrelated), L/I, I/R.
+                    // L/B, B/E unsupported, L/I, I/R.
                     walk =
                         found(path).copy(
                             unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE),
-                            verifications = 5,
-                            candidatesExplored = 5,
+                            verifications = 4,
+                            candidatesExplored = 4,
                         ),
                 ),
             )
         }
 
-    /** (o) A second certified key that verifies the leaf: both keys are leaf keys. */
+    /**
+     * (o) A second certified key that verifies the leaf, under an unconstrained attacker CA S below the real root (§10
+     * residual 15): the first sound path decides, so the presented order picks the one leaf key, as in Firefox.
+     */
     fun o(): List<WalkerFixture> =
         with(Honest()) {
             val sub = subCa()
             listOf(
                 fixture(
                     "o",
+                    "attacker CA first",
                     presented = listOf(leaf, sub, intermediate),
-                    walk = found(listOf(leaf, sub, root), path).copy(verifications = 4, candidatesExplored = 4),
+                    walk = found(listOf(leaf, sub, root)).copy(verifications = 2, candidatesExplored = 2),
+                ),
+                fixture(
+                    "o",
+                    "honest intermediate first",
+                    presented = listOf(leaf, intermediate, sub),
+                    walk = found(path).copy(verifications = 2, candidatesExplored = 2),
                 ),
             )
         }

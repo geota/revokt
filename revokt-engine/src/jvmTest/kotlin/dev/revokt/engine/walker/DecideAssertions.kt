@@ -18,7 +18,6 @@ import dev.revokt.RevoktTestingApi
 import dev.revokt.SignatureVerifier
 import dev.revokt.TerminalKind
 import dev.revokt.VerifyResult
-import dev.revokt.WalkEnd
 import dev.revokt.WalkStats
 import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.TestDer
@@ -36,8 +35,8 @@ import kotlin.test.assertTrue
 
 /**
  * The `Finding.Path` and `PathDetail` a decision should give, set as the old one-type builder was: [noIssuerReason] and
- * [parseReason] set the path's reason by name, and a `PATH_BUDGET_EXCEEDED` with no reason set takes the one its
- * [endReason] names (`COMPLETE`: the walk completed on a chain over `FALLBACK_MAX_PRESENTED`, `FALLBACK_LIMIT`).
+ * [parseReason] set the path's reason by name. A `NO_ISSUER`, `PARSE_FAILED` or `PATH_BUDGET_EXCEEDED` needs its
+ * reason set.
  */
 @OptIn(RevoktTestingApi::class)
 internal class PathWant {
@@ -48,8 +47,6 @@ internal class PathWant {
     private var keyabilityClause: KeyabilityClause? = null
     internal var terminalKind: TerminalKind? = null
         private set
-    private var endReason: WalkEnd? = null
-    private var endDepth: Int? = null
     private var anchorSnapshotId = WalkerHarness.SNAPSHOT_ID
     private var usedFallback = false
     private var pathsFound = 0
@@ -57,7 +54,7 @@ internal class PathWant {
     private var keys: List<ByteArray> = emptyList()
     private var candidatesDropped = 0
     private var anchor: ByteArray? = null
-    internal var walkStats = WalkStats(0, 0, 0, 0)
+    internal var walkStats = WalkStats(0, 0)
 
     fun status(status: PathStatus) = apply { this.status = status }
 
@@ -75,10 +72,6 @@ internal class PathWant {
 
     fun terminalKind(kind: TerminalKind?) = apply { terminalKind = kind }
 
-    fun endReason(end: WalkEnd?) = apply { endReason = end }
-
-    fun endDepth(depth: Int?) = apply { endDepth = depth }
-
     fun anchorSnapshotId(id: Long) = apply { anchorSnapshotId = id }
 
     fun usedFallback(used: Boolean) = apply { usedFallback = used }
@@ -95,16 +88,11 @@ internal class PathWant {
 
     fun path(): Finding.Path {
         val s = checkNotNull(status) { "status is not set" }
-        val budget =
-            when (endReason) {
-                WalkEnd.COMPLETE, null -> PathReason.FALLBACK_LIMIT
-                else -> PathReason.valueOf(endReason!!.name)
-            }
         return Finding.Path
             .Builder()
             .status(s)
             .source(source)
-            .reason(reason ?: budget.takeIf { s == PathStatus.PATH_BUDGET_EXCEEDED })
+            .reason(reason)
             .issuerSpkiSha256s(keys)
             .anchorSha256(anchor)
             .build()
@@ -114,8 +102,6 @@ internal class PathWant {
         PathDetail(
             walkerReason,
             keyabilityClause,
-            endReason,
-            endDepth,
             anchorSnapshotId,
             usedFallback,
             pathsFound,

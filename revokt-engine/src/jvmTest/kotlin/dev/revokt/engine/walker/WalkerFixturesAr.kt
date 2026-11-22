@@ -72,12 +72,8 @@ internal object WalkerFixturesAr {
                     if (len == 1) {
                         found(listOf(leaf, i1, i2, root)).copy(verifications = 3, candidatesExplored = 3)
                     } else {
-                        // I2 is a dead end below I1. At the leaf's unrelated loop, pathLen 0 admits it (no CA under
-                        // it there), so its link to the leaf is tried and fails; 128 is not a CA anywhere.
-                        notFound(NoIssuerReason.UNANCHORED).copy(
-                            verifications = if (len == 0) 2 else 1,
-                            candidatesExplored = 3,
-                        )
+                        // L/I1, then I2 refused below I1 (128 is not a CA at all); I2 is no candidate of the leaf.
+                        notFound(NoIssuerReason.UNANCHORED).copy(verifications = 1, candidatesExplored = 2)
                     },
                 )
             }
@@ -151,8 +147,7 @@ internal object WalkerFixturesAr {
     /**
      * #234's review scenario: S is an organisation's constrained sub-CA under the real root, and signs C, a CA
      * certificate named like the leaf's issuer for a key recovered from the leaf's signature. With S limited by
-     * `pathLenConstraint` 0, or to emailProtection, `[L, C, S]` is `UNANCHORED`: S is a dead end below C, and again
-     * at the leaf's unrelated loop. Without either limit S is an unconstrained CA and `[L, C, S]` is `Found` through
+     * `pathLenConstraint` 0, or to emailProtection, `[L, C, S]` is `UNANCHORED`: S is a dead end below C. Without either limit S is an unconstrained CA and `[L, C, S]` is `Found` through
      * C: a CA key holder under a real anchor can certify any key, the §10 residual that remains.
      */
     private fun constrainedSubCa(): List<WalkerFixture> =
@@ -186,13 +181,8 @@ internal object WalkerFixturesAr {
                     if (variant.startsWith("no limit")) {
                         found(listOf(honest.leaf, c, s, honest.root)).copy(verifications = 3, candidatesExplored = 3)
                     } else {
-                        // At the leaf's unrelated loop pathLen 0 admits S, so L/S is tried and fails.
-                        notFound(NoIssuerReason.UNANCHORED).copy(
-                            verifications = if (bc == null) 1 else 2,
-                            candidatesExplored = 3,
-                            relatedExploredAtLeaf = 1,
-                            unrelatedExploredAtLeaf = 1,
-                        )
+                        // L/C, then C/S refused before its link.
+                        notFound(NoIssuerReason.UNANCHORED).copy(verifications = 1, candidatesExplored = 2)
                     },
             )
         }

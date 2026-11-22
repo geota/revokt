@@ -21,13 +21,13 @@ import okio.ByteString.Companion.toByteString
  * issuer-and-serial form) or a candidate without an SKI is matched by name only. Nothing is excluded for a property it
  * shares with another candidate: only certificates in `seen` and exact byte duplicates are skipped.
  *
- * [customCanonicaliser] is §3's class check, decided by the caller: the walker's leaf rule reads it. [canonicaliser]
- * defaults to §3's [canonicalSubject]; a `PlatformTrust` override is passed here, and [cert] applies it to presented
- * certificates so both sides of the canonical test use the same function.
+ * Only related certificates are candidates; one that is not related is never one, at any depth (as webpki and
+ * mozilla::pkix offer only name-matched issuers). [canonicaliser] defaults to §3's [canonicalSubject]; a
+ * `PlatformTrust` override is passed here, and [cert] applies it to presented certificates so both sides of the
+ * canonical test use the same function.
  */
 internal class CandidateIndex(
     anchors: List<ByteArray>,
-    val customCanonicaliser: Boolean = false,
     private val canonicaliser: (ByteArray) -> String? = ::canonicalSubject,
 ) {
     /** The parsed anchors in snapshot order, each exact-byte duplicate after the first removed. */
@@ -64,7 +64,7 @@ internal class CandidateIndex(
      * others), so the reported path, the first found, does not depend on the order the server presents. Within the
      * store: raw-name matches, then canonical-name matches, then SKI matches; within each group the candidates whose
      * key family is compatible with `child.tbsSigOid` first, each part by bytesHash. Lazy: a walker that stops early (a
-     * found path below the leaf, `MAX_RELATED_PER_LEVEL`) never pays for the rest of a large group. The sequence reads
+     * found path, the spent budget) never pays for the rest of a large group. The sequence reads
      * [presented] and [seen] as it is iterated, so the caller must not mutate either while iterating it.
      */
     fun related(
@@ -75,16 +75,6 @@ internal class CandidateIndex(
         val fromPresented = presented.asSequence().filter { isRelated(it, child) }
         return distinct(storeRelated(child) + fromPresented, seen)
     }
-
-    /**
-     * The presented certificates not related to [child], by index, minus [seen], exact-byte duplicates once. Lazy, as
-     * [related]: the caller must not mutate [presented] or [seen] while iterating it.
-     */
-    fun unrelated(
-        presented: List<Cert>,
-        child: Cert,
-        seen: Set<ByteString>,
-    ): Sequence<Cert> = distinct(presented.asSequence().filterNot { isRelated(it, child) }, seen)
 
     fun isAnchorBytes(c: Cert): Boolean = c.bytesHash in anchorBytes
 

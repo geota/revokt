@@ -18,7 +18,7 @@ import okio.ByteString.Companion.toByteString
 
 /**
  * The decision for `EvaluationRequest.verifiedPath` (spec §4): the one path, leaf to anchor, is trusted without
- * re-verification, so no walk and no fallback run (`source = PLATFORM`, no `endReason` in the detail). The path is both the
+ * re-verification, so no walk and no fallback run (`source = PLATFORM`, zero walk counters in the detail). The path is both the
  * reported path and the chain the exemptions see.
  *
  * - **Step 2, one-certificate paths only:** the caller's path does not make its leaf an anchor. A leaf byte-equal to

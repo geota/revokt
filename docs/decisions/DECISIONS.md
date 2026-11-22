@@ -68,7 +68,7 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
 - **A8** parallel lanes: already decided on 2026-11-04. It's a per-session instruction, and CONTRIBUTING is not amended.
 
 ## #124 decide readings (maintainer, 2026-11-06)
-- `endDepth`: null on a completed walk; set only on Budget, and 0 on the step-3 cut. A `maxDepth` in WalkStats was considered and dropped: nothing reads it, and upki/webpki report no depth either.
+- `endDepth`: null on a completed walk; set only on Budget, and 0 on the step-3 cut. A `maxDepth` in WalkStats was considered and dropped: nothing reads it, and upki/webpki report no depth either. **Superseded by #226** (2026-11-22): `endDepth` and `WalkEnd` are removed; a walk has one budget and a `Budget` carries no path.
 - `walkerReason`: set on every walk NotFound, whatever the status (so a fallback Found after UNANCHORED also triggers refreshAnchors).
 - Budget with a fallback path and no partial path: the reported path is the fallback path; terminalKind/anchorSha256 follow it (keeps issuerSpkiSha256s[0] = reported path's key). Wording for #160.
 - `AlgorithmIdMismatch` before the walk: once per certificate decide parsed (the leaf only at the step-2/PRODUCER_UNKEYABLE/MAX_PRESENTED exits).

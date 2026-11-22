@@ -5,7 +5,6 @@ package dev.revokt.engine.walker
 
 import dev.revokt.NoIssuerReason
 import dev.revokt.RevoktLimits
-import dev.revokt.WalkEnd
 import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.found
@@ -23,26 +22,27 @@ import okio.ByteString.Companion.decodeHex
  * and (ag) end before decision step 5; (u) and (y3) are 0.3 and M2.
  */
 internal object WalkerFixturesS1ToAj {
-    /** (s1) (o) plus 62 related junk ahead of the honest key: 64 related, the cap, and both paths. */
+    /**
+     * (s1) (o) with 62 related junk ahead of the honest intermediate and the attacker CA S last: the junk, then L/I and
+     * I/R, so the first path, through I, is found before S is reached.
+     */
     fun s1(): List<WalkerFixture> =
         with(Honest()) {
             val sub = subCa()
             listOf(
                 fixture(
                     "s1",
-                    presented = listOf(leaf, sub) + junk(62) + intermediate,
-                    walk =
-                        found(listOf(leaf, sub, root), path).copy(
-                            verifications = 66,
-                            candidatesExplored = 66,
-                            relatedExploredAtLeaf = 64,
-                        ),
+                    presented = listOf(leaf) + junk(62) + intermediate + sub,
+                    walk = found(path).copy(verifications = 64, candidatesExplored = 64),
                 ),
             )
         }
 
-    /** (s2) and (t): (o) plus [junk] related junk: the honest intermediate is past the cap; S's path is partial. */
-    private fun overCap(
+    /**
+     * (s2) and (t): the same with [junk] related junk: L/I is at best the budget's last exploration, so I/R is past it
+     * and the walk is `Budget`, with no path.
+     */
+    private fun overBudget(
         id: String,
         junk: Int,
     ): List<WalkerFixture> =
@@ -51,20 +51,19 @@ internal object WalkerFixturesS1ToAj {
             listOf(
                 fixture(
                     id,
-                    presented = listOf(leaf, sub) + junk(junk) + intermediate,
+                    presented = listOf(leaf) + junk(junk) + intermediate + sub,
                     walk =
-                        budget(WalkEnd.RELATED_BUDGET, 1, listOf(leaf, sub, root)).copy(
-                            verifications = 65,
-                            candidatesExplored = 65,
-                            relatedExploredAtLeaf = 64,
+                        budget().copy(
+                            verifications = RevoktLimits.MAX_EXPLORED,
+                            candidatesExplored = RevoktLimits.MAX_EXPLORED,
                         ),
                 ),
             )
         }
 
-    fun s2(): List<WalkerFixture> = overCap("s2", 63)
+    fun s2(): List<WalkerFixture> = overBudget("s2", RevoktLimits.MAX_EXPLORED - 1)
 
-    fun t(): List<WalkerFixture> = overCap("t", 80)
+    fun t(): List<WalkerFixture> = overBudget("t", 300)
 
     /** (v) An honest generated chain (depth 2) against a 200-anchor snapshot, over ten seeds: depth + 1 ≤ 4. */
     fun v(): List<WalkerFixture> =
@@ -104,7 +103,7 @@ internal object WalkerFixturesS1ToAj {
             presented = world.presented,
             snapshot = world.anchors,
             ok = world.ok,
-            walk = walk.copy(leafKeys = setOf(world.honestKey.decodeHex())),
+            walk = walk.copy(leafKey = world.honestKey.decodeHex()),
         )
 
     /**
@@ -148,18 +147,21 @@ internal object WalkerFixturesS1ToAj {
         }
 
     /**
-     * (y) 65 certificates named like I2 whose keys do not verify I1, ahead of I2: the cap trips at I1, below the leaf,
-     * and aborts the whole walk at `endDepth = 2`. The second case, 63 of them, is the cap's other side.
+     * (y) Certificates named like I2 whose keys do not verify I1, ahead of I2: the budget is one for the whole walk, so
+     * junk below the leaf spends it as junk at the leaf does. With `MAX_EXPLORED - 3` of them, L/I1, the junk, I1/I2
+     * and I2/R are exactly the budget: `Found`. One more and I2/R is past it: `Budget`, the whole walk aborted.
      */
-    fun y(): List<WalkerFixture> =
-        listOf(
-            twoLevel("y", "65 junk", 65, junkIsRoot = false) {
-                budget(WalkEnd.RELATED_BUDGET, 2).copy(verifications = 65, candidatesExplored = 65)
+    fun y(): List<WalkerFixture> {
+        val fits = RevoktLimits.MAX_EXPLORED - 3
+        return listOf(
+            twoLevel("y", "$fits junk", fits, junkIsRoot = false) {
+                found(it.path).copy(verifications = fits + 3, candidatesExplored = fits + 3)
             },
-            twoLevel("y", "63 junk, 64 related at I1", 63, junkIsRoot = false) {
-                found(it.path).copy(verifications = 66, candidatesExplored = 66)
+            twoLevel("y", "${fits + 1} junk", fits + 1, junkIsRoot = false) {
+                budget().copy(verifications = fits + 3, candidatesExplored = RevoktLimits.MAX_EXPLORED)
             },
         )
+    }
 
     /** (y2) The junk carries the root's name instead: at I2 the store root sorts first, so no junk is explored. */
     fun y2(): List<WalkerFixture> =
@@ -171,7 +173,7 @@ internal object WalkerFixturesS1ToAj {
 
     /**
      * (z) `NotFound` where only an unrelated presented certificate has an unsupported key OID, and a related candidate
-     * verifies but is unanchored: `UNANCHORED`, and no OID recorded.
+     * verifies but is unanchored: `UNANCHORED`, and no OID recorded. The unrelated certificate is no candidate.
      */
     fun z(): List<WalkerFixture> =
         with(Honest()) {
@@ -183,14 +185,8 @@ internal object WalkerFixturesS1ToAj {
                 fixture(
                     "z",
                     presented = listOf(leaf, fake, u),
-                    // L/F, F/U unsupported (unrelated), L/U unsupported (unrelated).
-                    walk =
-                        notFound(NoIssuerReason.UNANCHORED).copy(
-                            verifications = 3,
-                            candidatesExplored = 3,
-                            relatedExploredAtLeaf = 1,
-                            unrelatedExploredAtLeaf = 1,
-                        ),
+                    // L/F only.
+                    walk = notFound(NoIssuerReason.UNANCHORED).copy(verifications = 1, candidatesExplored = 1),
                 ),
             )
         }
@@ -206,7 +202,7 @@ internal object WalkerFixturesS1ToAj {
                 "",
                 listOf(leaf, root),
                 listOf(root),
-                found(listOf(leaf, root)).copy(verifications = 1, candidatesExplored = 1, relatedExploredAtLeaf = 1),
+                found(listOf(leaf, root)).copy(verifications = 1, candidatesExplored = 1),
             ),
         )
     }
@@ -214,7 +210,8 @@ internal object WalkerFixturesS1ToAj {
     /**
      * The leaf's issuer as a TeletexString: the platform canonicaliser hex-encodes it, so the honest UTF8String-named
      * intermediate is unrelated to the leaf by encoding, and the leaf's AKI (issuer-and-serial form) makes the test
-     * name-only. A custom delegate would chain them; revokt's walker reaches I only through the unrelated loop.
+     * name-only. A custom delegate would chain them; revokt's walker never offers an unrelated certificate, so only
+     * the PKIX fallback (decide) reaches I.
      */
     private fun teletex(w: FixtureWorld): Honest {
         val leafIssuer = w.name("Intermediate", TELETEX_STRING)
@@ -222,9 +219,8 @@ internal object WalkerFixturesS1ToAj {
     }
 
     /**
-     * (ac) Custom canonicaliser: the honest issuer unrelated by encoding, four unrelated junk ahead: `Found` through the
-     * unrelated loop. The second case adds a related, anchored attacker sub-CA ahead: under a custom canonicaliser the
-     * leaf still runs the unrelated loop, so both keys are leaf keys.
+     * (ac) The honest issuer unrelated by encoding, four unrelated junk ahead: no candidate, `NO_CANDIDATE`. The second
+     * case adds a related, anchored attacker CA ahead: `Found` through it alone (§10 residuals 1 and 15).
      */
     fun ac(): List<WalkerFixture> =
         listOf(false, true).map { decoy ->
@@ -240,27 +236,23 @@ internal object WalkerFixturesS1ToAj {
                 } else {
                     null
                 }
-            val presented = listOfNotNull(leaf, sub) + junk + h.intermediate
-            val paths = listOfNotNull(sub?.let { listOf(leaf, it, h.root) }, listOf(leaf, h.intermediate, h.root))
             w.fixture(
                 "ac",
                 if (decoy) "related anchored decoy ahead" else "",
-                presented,
+                listOfNotNull(leaf, sub) + junk + h.intermediate,
                 listOf(h.root),
-                found(*paths.toTypedArray()).copy(
-                    verifications = if (decoy) 8 else 6,
-                    candidatesExplored = if (decoy) 8 else 6,
-                    relatedExploredAtLeaf = if (decoy) 1 else 0,
-                    unrelatedExploredAtLeaf = 5,
-                ),
-                customCanonicaliser = true,
+                if (sub != null) {
+                    found(listOf(leaf, sub, h.root)).copy(verifications = 2, candidatesExplored = 2)
+                } else {
+                    notFound(NoIssuerReason.NO_CANDIDATE).copy(verifications = 0, candidatesExplored = 0)
+                },
             )
         }
 
     /**
      * (ad) The honest issuer unrelated by encoding, and six same-name, mutually cross-signing junk certificates ahead
-     * that each verify the leaf: their simple paths exceed `MAX_EXPLORED` long before `MAX_VERIFICATIONS` (the memo
-     * holds at most 42 pairs), so the walk ends `EXPLORATION_BUDGET` with exactly 1,024 explorations.
+     * that each verify the leaf: none is a loop of another (their keys differ), and their simple paths take 1,956
+     * explorations, so the walk ends `Budget` after exactly `MAX_EXPLORED`, the memo holding at most 42 pairs.
      */
     fun ad(): List<WalkerFixture> {
         val w = FixtureWorld()
@@ -279,13 +271,7 @@ internal object WalkerFixturesS1ToAj {
                 "",
                 listOf(leaf) + junk + h.intermediate,
                 listOf(h.root),
-                budget(WalkEnd.EXPLORATION_BUDGET, endDepth = 7).copy(
-                    candidatesExplored = RevoktLimits.MAX_EXPLORED,
-                    // J0's subtree takes 652 explorations; J1's trips the budget at a path through all six junk.
-                    relatedExploredAtLeaf = 2,
-                    maxVerifications = 42,
-                ),
-                customCanonicaliser = true,
+                budget().copy(candidatesExplored = RevoktLimits.MAX_EXPLORED, maxVerifications = 42),
             ),
         )
     }
@@ -306,8 +292,8 @@ internal object WalkerFixturesS1ToAj {
 
     /**
      * (af) walker part: 9 presented certificates and an honest link the walker cannot reproduce (I's signature does not
-     * verify under the root's key here, as with a custom delegate's verifier): `UNANCHORED`. Seven unrelated fillers
-     * are tried at I and, with no related path, at the leaf.
+     * verify under the root's key here, as with a custom delegate's verifier): `UNANCHORED`. The seven unrelated
+     * fillers are no candidates.
      */
     fun af(): List<WalkerFixture> {
         val w = FixtureWorld()
@@ -321,21 +307,15 @@ internal object WalkerFixturesS1ToAj {
                 "",
                 listOf(leaf, i) + fillers,
                 listOf(root),
-                notFound(NoIssuerReason.UNANCHORED).copy(
-                    verifications = 16,
-                    candidatesExplored = 16,
-                    relatedExploredAtLeaf = 1,
-                    unrelatedExploredAtLeaf = 7,
-                ),
+                notFound(NoIssuerReason.UNANCHORED).copy(verifications = 2, candidatesExplored = 2),
             ),
         )
     }
 
     /**
      * (ah) 12 distinct duplicate-signature keys D1…D12 that each verify the leaf, each recursing into a 32-certificate
-     * subtree whose keys do not verify it (32 related, then 12 unrelated, explorations per D). 5 × 45 verifications,
-     * then D6's leaf link and 30 of its subtree: 256; the 257th attempt trips the guard at endDepth 2 and is counted
-     * as explored but not as a verification.
+     * subtree whose keys do not verify it (33 explorations per D, each one verification): 7 × 33, then D8's leaf link
+     * and 24 of its subtree, 256; the next one is not charged and the walk is `Budget`.
      */
     fun ah(): List<WalkerFixture> =
         with(Honest()) {
@@ -347,11 +327,9 @@ internal object WalkerFixturesS1ToAj {
                     "ah",
                     presented = listOf(leaf) + ds + ss + intermediate,
                     walk =
-                        budget(WalkEnd.VERIFICATION_BUDGET, 2).copy(
-                            verifications = RevoktLimits.MAX_VERIFICATIONS,
-                            candidatesExplored = RevoktLimits.MAX_VERIFICATIONS + 1,
-                            // D1 … D5 complete; D6's subtree trips the guard.
-                            relatedExploredAtLeaf = 6,
+                        budget().copy(
+                            verifications = RevoktLimits.MAX_EXPLORED,
+                            candidatesExplored = RevoktLimits.MAX_EXPLORED,
                         ),
                 ),
             )
@@ -359,9 +337,8 @@ internal object WalkerFixturesS1ToAj {
 
     /**
      * (ai) A 17-certificate honest path (16 non-terminal plus the anchor), the longest `MAX_DEPTH` admits: `Found`. An
-     * 18-certificate one is a dead end: I16 is never expanded, so the walk is `UNANCHORED`. With no path anywhere every
-     * node also runs its unrelated loop: the 16 links L/I1 … I15/I16, then 15 − k candidates at each I_k (105) and 15
-     * at the leaf, 136 verifications.
+     * 18-certificate one is a dead end: I16 is never expanded, so the walk is `UNANCHORED` after the 16 links L/I1 …
+     * I15/I16.
      */
     fun ai(): List<WalkerFixture> =
         listOf(15, 16).map { depth ->
@@ -374,11 +351,7 @@ internal object WalkerFixturesS1ToAj {
                     if (depth == 15) {
                         found(path).copy(verifications = 16, candidatesExplored = 16)
                     } else {
-                        notFound(NoIssuerReason.UNANCHORED).copy(
-                            verifications = 136,
-                            candidatesExplored = 136,
-                            unrelatedExploredAtLeaf = 15,
-                        )
+                        notFound(NoIssuerReason.UNANCHORED).copy(verifications = 16, candidatesExplored = 16)
                     },
                 )
             }
@@ -387,8 +360,8 @@ internal object WalkerFixturesS1ToAj {
     /**
      * (aj) No related path at the leaf (its issuer neither presented nor in the snapshot): two unrelated presented
      * certificates U1 and U2 whose keys both verify the leaf, each certified by a snapshot anchor, in both orders, with
-     * and without a related candidate ahead that verifies the leaf but is unanchored. Every case collects both keys
-     * and explores both unrelated certificates at the leaf.
+     * and without a related candidate ahead that verifies the leaf but is unanchored. Neither is a candidate, so the
+     * walk is `NO_CANDIDATE`, or `UNANCHORED` with the decoy; the PKIX fallback (decide) is what reaches them.
      */
     fun aj(): List<WalkerFixture> =
         listOf(false, true).flatMap { decoy ->
@@ -416,7 +389,6 @@ internal object WalkerFixturesS1ToAj {
                         ).also { w.verifies(leaf, it.key) }
                 val d = if (decoy) w.cert("D", missing, w.name("Attacker")).also { w.verifies(leaf, it.key) } else null
                 val us = if (swapped) listOf(u2, u1) else listOf(u1, u2)
-                val paths = us.map { listOf(leaf, it, if (it === u1) r1 else r2) }
                 w.fixture(
                     "aj",
                     listOfNotNull(
@@ -425,13 +397,12 @@ internal object WalkerFixturesS1ToAj {
                     ).joinToString(", "),
                     listOfNotNull(leaf, d) + us,
                     listOf(r1, r2),
-                    found(*paths.toTypedArray()).copy(
-                        leafKeys = WalkerHarness.keys(u1, u2),
-                        // L/U1, U1/R1, L/U2, U2/R2, and with the decoy L/D, D/U1, D/U2.
-                        verifications = if (decoy) 7 else 4,
-                        relatedExploredAtLeaf = if (decoy) 1 else 0,
-                        unrelatedExploredAtLeaf = 2,
-                    ),
+                    if (decoy) {
+                        // L/D only.
+                        notFound(NoIssuerReason.UNANCHORED).copy(verifications = 1, candidatesExplored = 1)
+                    } else {
+                        notFound(NoIssuerReason.NO_CANDIDATE).copy(verifications = 0, candidatesExplored = 0)
+                    },
                 )
             }
         }

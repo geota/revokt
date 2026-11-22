@@ -59,7 +59,7 @@ class WalkerFixtureTest {
     }
 
     @Test
-    fun `walker (i) 65 related junk at the leaf is RELATED_BUDGET after 64 explorations`() {
+    fun `walker (i) related junk at the leaf is Found within MAX_EXPLORED and Budget one past it`() {
         run(WalkerFixturesAToR.i())
     }
 
@@ -79,7 +79,7 @@ class WalkerFixtureTest {
     }
 
     @Test
-    fun `walker (m) sound path then 62 related junk`() {
+    fun `walker (m) sound path then 62 related junk stops at the first path`() {
         run(WalkerFixturesAToR.m())
     }
 
@@ -89,7 +89,7 @@ class WalkerFixtureTest {
     }
 
     @Test
-    fun `walker (o) second certified key verifying the leaf gives both keys`() {
+    fun `walker (o) second certified key verifying the leaf, the presented order picks the one key`() {
         run(WalkerFixturesAToR.o())
     }
 
@@ -115,17 +115,17 @@ class WalkerFixtureTest {
     }
 
     @Test
-    fun `walker (s1) second key plus 62 related junk is Found with both paths`() {
+    fun `walker (s1) 62 related junk ahead of the honest intermediate, the attacker CA last, is Found through I`() {
         run(WalkerFixturesS1ToAj.s1())
     }
 
     @Test
-    fun `walker (s2) second key plus 63 related junk is RELATED_BUDGET with the first key partial`() {
+    fun `walker (s2) 255 related junk ahead of the honest intermediate is Budget with no path`() {
         run(WalkerFixturesS1ToAj.s2())
     }
 
     @Test
-    fun `walker (t) second key plus 80 related junk is RELATED_BUDGET`() {
+    fun `walker (t) 300 related junk ahead of the honest intermediate is Budget`() {
         run(WalkerFixturesS1ToAj.t())
     }
 
@@ -145,7 +145,7 @@ class WalkerFixtureTest {
     }
 
     @Test
-    fun `walker (y) related cap below the leaf aborts the walk at endDepth 2`() {
+    fun `walker (y) junk below the leaf spends the one work budget and aborts the walk`() {
         run(WalkerFixturesS1ToAj.y())
     }
 
@@ -165,12 +165,12 @@ class WalkerFixtureTest {
     }
 
     @Test
-    fun `walker (ac) custom canonicaliser reaches the honest issuer through the unrelated loop`() {
+    fun `walker (ac) an honest issuer unrelated by encoding is no candidate`() {
         run(WalkerFixturesS1ToAj.ac())
     }
 
     @Test
-    fun `walker (ad) mutually cross-signing same-name junk exhausts MAX_EXPLORED`() {
+    fun `walker (ad) mutually cross-signing same-name junk spends MAX_EXPLORED`() {
         run(WalkerFixturesS1ToAj.ad())
     }
 
@@ -185,7 +185,7 @@ class WalkerFixtureTest {
     }
 
     @Test
-    fun `walker (ah) duplicate-signature subtrees exhaust MAX_VERIFICATIONS`() {
+    fun `walker (ah) duplicate-signature subtrees spend MAX_EXPLORED`() {
         run(WalkerFixturesS1ToAj.ah())
     }
 
@@ -195,7 +195,7 @@ class WalkerFixtureTest {
     }
 
     @Test
-    fun `walker (aj) two unrelated anchored leaf issuers are both collected in every order`() {
+    fun `walker (aj) two unrelated anchored leaf issuers are no candidates in any order`() {
         assertEquals(4, run(WalkerFixturesS1ToAj.aj()).size)
     }
 

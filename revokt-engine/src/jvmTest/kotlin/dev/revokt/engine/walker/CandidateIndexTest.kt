@@ -38,11 +38,15 @@ class CandidateIndexTest {
         seen: Set<ByteString> = setOf(child.bytesHash),
     ) = related(presented, child, seen).toList()
 
-    private fun CandidateIndex.unrelatedList(
+    /** The presented certificates [related] does not yield for [child]: never candidates (spec §5.1). */
+    private fun CandidateIndex.notRelated(
         presented: List<Cert>,
         child: Cert,
         seen: Set<ByteString> = setOf(child.bytesHash),
-    ) = unrelated(presented, child, seen).toList()
+    ): List<Cert> {
+        val related = relatedList(presented, child, seen).map { it.bytesHash }.toSet()
+        return presented.filter { it.bytesHash !in seen && it.bytesHash !in related }.distinctBy { it.bytesHash }
+    }
 
     private fun hashes(certs: List<Cert>) = certs.map { it.bytesHash }
 
@@ -143,7 +147,7 @@ class CandidateIndexTest {
         val related = index.relatedList(presented, leaf)
         assertEquals(1, related.size)
         assertSame(first, related[0])
-        val unrelated = index.unrelatedList(presented, leaf)
+        val unrelated = index.notRelated(presented, leaf)
         assertEquals(1, unrelated.size)
         assertSame(junk, unrelated[0])
     }
@@ -158,7 +162,7 @@ class CandidateIndexTest {
         val presented = listOf(leaf, related, unrelated)
         val seen = setOf(leaf.bytesHash, related.bytesHash, index.store[0].bytesHash, unrelated.bytesHash)
         assertEquals(emptyList(), index.relatedList(presented, leaf, seen))
-        assertEquals(emptyList(), index.unrelatedList(presented, leaf, seen))
+        assertEquals(emptyList(), index.notRelated(presented, leaf, seen))
         // The child itself is excluded through seen, as the walker passes it.
         assertEquals(
             listOf(related.bytesHash),
@@ -184,14 +188,14 @@ class CandidateIndexTest {
     }
 
     @Test
-    fun `candidate index unrelated is the presented certificates not related, by index, never the store`() {
+    fun `candidate index never yields a presented certificate that is not related, nor an unrelated anchor`() {
         val index = index(der(root, root), der(other, other))
         val leaf = index.cert(WalkerCerts.parse(der(leafName, root)))
         val related = index.cert(WalkerCerts.parse(der(root, other)))
         val u1 = index.cert(WalkerCerts.parse(der(SymName("U1"), other)))
         val u2 = index.cert(WalkerCerts.parse(der(SymName("U2"), other)))
         val presented = listOf(leaf, u2, related, u1)
-        assertEquals(hashes(listOf(u2, u1)), hashes(index.unrelatedList(presented, leaf)))
+        assertEquals(hashes(listOf(u2, u1)), hashes(index.notRelated(presented, leaf)))
         assertEquals(
             hashes(listOf(index.store.single { it.subjectRaw.contentEquals(root.der()) }, related)),
             hashes(index.relatedList(presented, leaf)),
@@ -213,7 +217,7 @@ class CandidateIndexTest {
         val presentedOtherName = index.cert(WalkerCerts.parse(der(other, other, ski = keyId)))
         assertEquals(
             listOf(presentedOtherName.bytesHash),
-            hashes(index.unrelatedList(listOf(child, presentedOtherName), child)),
+            hashes(index.notRelated(listOf(child, presentedOtherName), child)),
         )
     }
 
@@ -240,7 +244,7 @@ class CandidateIndexTest {
         val matching = index.cert(WalkerCerts.parse(der(SymName("Matching SKI"), other, ski = keyId)))
         val presented = listOf(child, noSki, otherSki, matching)
         assertEquals(listOf(matching.bytesHash), hashes(index.relatedList(presented, child)))
-        assertEquals(hashes(listOf(noSki, otherSki)), hashes(index.unrelatedList(presented, child)))
+        assertEquals(hashes(listOf(noSki, otherSki)), hashes(index.notRelated(presented, child)))
     }
 
     @Test
@@ -304,8 +308,6 @@ class CandidateIndexTest {
         assertEquals(s.toList().map { it.bytesHash }, s.toList().map { it.bytesHash })
         assertEquals(4, s.count())
         assertEquals(listOf(index.store.minOf { it.bytesHash }), s.take(1).map { it.bytesHash }.toList())
-        val u = index.unrelated(listOf(leaf, p), leaf, emptySet())
-        assertEquals(u.toList(), u.toList())
     }
 
     @Test
@@ -324,7 +326,7 @@ class CandidateIndexTest {
             hashes(listOf(platform.store[0], presented)),
             hashes(platform.relatedList(listOf(leaf, presented), leaf)),
         )
-        assertEquals(emptyList(), platform.unrelatedList(listOf(leaf, presented), leaf))
+        assertEquals(emptyList(), platform.notRelated(listOf(leaf, presented), leaf))
 
         for ((name, canonicaliser) in listOf<Pair<String, (ByteArray) -> String?>>(
             "null" to { null },
@@ -336,7 +338,7 @@ class CandidateIndexTest {
             assertEquals(emptyList(), raw.relatedList(listOf(rawLeaf, rawPresented), rawLeaf), name)
             assertEquals(
                 listOf(rawPresented.bytesHash),
-                hashes(raw.unrelatedList(listOf(rawLeaf, rawPresented), rawLeaf)),
+                hashes(raw.notRelated(listOf(rawLeaf, rawPresented), rawLeaf)),
                 name,
             )
         }
@@ -379,21 +381,16 @@ class CandidateIndexTest {
     }
 
     @Test
-    fun `candidate index carries the custom canonicaliser flag and canonicalises presented certificates`() {
-        assertFalse(CandidateIndex(emptyList()).customCanonicaliser)
+    fun `candidate index canonicalises presented certificates with its canonicaliser`() {
         val calls = mutableListOf<String>()
         val index =
-            CandidateIndex(listOf(der(root, root)), customCanonicaliser = true) { name ->
+            CandidateIndex(listOf(der(root, root))) { name ->
                 canonicalSubject(name)?.also { calls += it }
             }
-        assertTrue(index.customCanonicaliser)
         assertEquals(1, calls.size, "an anchor's issuer equals its subject: one call")
         val leaf = index.cert(WalkerCerts.parse(der(leafName, root)))
         val presented = listOf(leaf, index.cert(WalkerCerts.parse(der(root, other))))
-        repeat(3) {
-            index.relatedList(presented, leaf)
-            index.unrelatedList(presented, leaf)
-        }
+        repeat(3) { index.relatedList(presented, leaf) }
         // The leaf's subject and issuer, the presented certificate's subject; its issuer is never needed here.
         assertEquals(listOf("cn=root", "cn=leaf.example", "cn=root", "cn=root"), calls)
     }
