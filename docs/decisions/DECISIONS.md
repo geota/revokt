@@ -274,9 +274,9 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   to cut those bullets from the spec yet. Neither upki nor Firefox has a configuration-lint vocabulary, so the
   references give no guidance.
 - 2026-11-22 (lead, #280 C): when every stored unit of a fuzz target is over its `-max_len`, the weekly prune fails
-  closed. `stage --prune` prints `::error::` and exits 3 once the rest is pushed, and CONTRIBUTING §6 has the
-  hand-trim step. There is no new delete path. When a target has any unit within `-max_len`, its over-length units
-  are dropped, with no cut-down copies kept. ClusterFuzz's `corpus_pruning_task` replaces the corpus with the
+  closed. `stage --prune` leaves the target out with `::error::` and exit 3, the prune job fails the run once the
+  other targets are pushed, and CONTRIBUTING §6 has the hand-trim step. There is no new delete path. When a target
+  has any unit within `-max_len`, its over-length units are dropped, with no cut-down copies kept. ClusterFuzz's `corpus_pruning_task` replaces the corpus with the
   `-max_len` merge output, which adds cut-down prefixes, and raises `CorpusPruningError` on an empty merge without
   syncing. ClusterFuzzLite's prune passes no `-max_len` and keeps such units. revokt's prune can only delete, so it
   takes ClusterFuzz's drop and its fail-on-empty.
@@ -289,8 +289,8 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     lost pointer would otherwise open.
   - **Q3 (maintainer):** on a lock collision, an unreadable store or a newer layout, the instance runs in memory for
     the process, with the warning and no retry. The accepted costs are the seed's rollback floor and a full fetch in
-    every such process. Rejected: throwing, as Firefox's profile lock does, and read-only instances, which the audit
-    deferred. upki takes no lock.
+    every such process. Rejected: throwing, as Firefox's profile lock does (from memory, not checked in source), and
+    read-only instances, which the audit deferred. upki takes no lock.
 - 2026-11-22 (lead, #226 under the maintainer's B-F7/A-9 acceptance; security review agreed, #291):
   - **One budget:** one count of candidate explorations at 256, charged for each candidate that passes the loop
     check. Each charged exploration makes at most one verifier call. Name-constraint comparisons keep an internal
@@ -317,6 +317,6 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     skipped the SAN check.
   - **Authentication:** a per-connection authenticator answers proxies only, so a 401 is never answered. upki
     (reqwest) takes proxy credentials only from the proxy URL.
-  - **Connections and bodies:** `useCaches` is false and `Connection: close` is sent. Only gzip and identity bodies
-    are accepted, and the cap applies while inflating.
+  - **Connections and bodies:** `useCaches` is false and `Connection: close` is sent. Only gzip, x-gzip and identity
+    bodies are accepted, and the cap applies while inflating.
   - **Residuals:** JDK transparent Negotiate/NTLM, and the process `CookieHandler`.
