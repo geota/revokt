@@ -9,9 +9,11 @@ weekly prune's read and merge (--prune), so a target that outgrew the seed caps 
 - `stage [--prune] <corpus dir> <out dir>`: the seed job's read of a clone's corpus/. For each known target whose
   directory exists, every entry must be a regular file (no link, no subdirectory) named by the SHA-1 of its content;
   anything else rejects the whole corpus and nothing is staged. A unit over its target's -max_len is left out and
-  counted (the next prune drops it). A target over the caps (its units, its bytes, or the staged total) is left out:
-  with a warning for the seed, and with an error and exit status 3 under --prune, where the other targets are still
-  staged and the workflow fails the run once they are pruned. Entries of corpus/ that are not a known target's
+  counted; the next prune drops it, as ClusterFuzz's does, without keeping a cut-down copy (a prune never adds one).
+  A target over the caps (its units, its bytes, or the staged total) is left out: with a warning for the seed, and with
+  an error and exit status 3 under --prune, where the other targets are still staged and the workflow fails the run
+  once they are pruned. Under --prune, a target whose units are all over its -max_len (a -max_len lowered) is an error
+  with exit status 3 in the same way: nothing is left to merge, and the prune deletes only what a merge decided. Entries of corpus/ that are not a known target's
   directory are ignored (a renamed or removed target) and counted. The accepted units are copied to
   <out dir>/<Class>-<method>/; a target with none gets no directory.
 - `check [--prune] <dir> [--within <ref dir>] [--lists <lists dir>]`: the check of a downloaded artifact (the staged
@@ -122,7 +124,7 @@ def verify(dir_: Path, kept: list[tuple[str, int]], label: str) -> None:
 
 
 def stage(corpus: Path, out: Path, targets: dict[str, int], prune: bool = False) -> tuple[int, int]:
-    """Copies the accepted units of [corpus] to [out]; returns the number staged and the targets over the caps."""
+    """Copies the accepted units of [corpus] to [out]; returns the units staged and the targets the prune leaves out."""
     caps = PRUNE if prune else SEED
     if os.path.lexists(out):
         raise Rejected("the staging directory already exists")
@@ -148,6 +150,11 @@ def stage(corpus: Path, out: Path, targets: dict[str, int], prune: bool = False)
             else:
                 print(f"::warning::{d}: {len(kept)} units, {size} bytes, over the seed's caps ({caps}); it starts "
                       "from its committed inputs until the weekly prune shrinks it")
+            continue
+        if prune and over and not kept:
+            over_caps += 1
+            print(f"::error::{d}: all {over} units are over its -max_len; it is not pruned, and needs trimming by hand "
+                  "(CONTRIBUTING §6)")
             continue
         verify(corpus / d, kept, d)
         total += size

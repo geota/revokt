@@ -120,7 +120,8 @@ jobs:
   # artifact fuzz-seed, <Class>-<method>/<unit>. Without the secret it stages nothing, with a notice, and the run goes on
   # from the committed inputs; in a prune run, a missing secret or a failed upload fails the job instead, as the prune
   # then has nothing to merge. units is the number uploaded (0 when nothing was), commit the repository's commit read,
-  # and over_caps is true when the prune had to leave a target out. The token-holding jobs block egress beyond GitHub's hosts.
+  # and over_caps is true when the prune had to leave a target out (over its caps, or every unit over its -max_len). The
+  # token-holding jobs block egress beyond GitHub's hosts.
   seed:
     name: seed (read the private corpus repository)
     needs: targets
@@ -188,7 +189,8 @@ jobs:
           set -euo pipefail
           staged=$RUNNER_TEMP/seed
           # The prune reads under its own, higher caps, so a target that outgrew the seed's is still merged. A target
-          # over even those (exit 3) is left out with an error, and the prune job fails the run once the rest is pruned.
+          # over even those, or with every unit over its -max_len (exit 3), is left out with an error, and the prune job
+          # fails the run once the rest is pruned.
           flags=()
           if [ "$MODE" = prune ]; then flags=(--prune); fi
           status=0
@@ -780,7 +782,8 @@ jobs:
   # each merged target's directory with its merged corpus, and pushes one commit. A target without a merged corpus is
   # left as it is. A merge job that failed leaves its target unchanged, and the others are still pruned. A download
   # that fails fails the job, and one that does not match the merge jobs' unit lists exactly is rejected, so neither
-  # changes anything. A target the seed job left out over the prune's caps fails the run once the rest is pushed.
+  # changes anything. A target the seed job left out (over the prune's caps, or every unit over its -max_len) fails the
+  # run once the rest is pushed.
   prune:
     name: prune (write the merged corpus to the private corpus repository)
     needs: [targets, seed, merge]
@@ -884,8 +887,8 @@ jobs:
           GIT_LFS_SKIP_PUSH=1 git -C "$repo" -c core.hooksPath=/dev/null -c credential.https://github.com.helper="$helper" \
             push --quiet origin HEAD:main
           echo "pruned $removed units of $targets targets"
-      - name: targets over the prune's caps
+      - name: targets the prune left out
         if: ${{ !cancelled() && needs.seed.outputs.over_caps == 'true' }}
         run: |
-          echo "::error::a target's corpus is over the prune's caps (the seed job's log names it); trim it by hand (CONTRIBUTING §6)"
+          echo "::error::a target's corpus is over the prune's caps, or every unit is over its -max_len (the seed job's log names it); trim it by hand (CONTRIBUTING §6)"
           exit 1

@@ -507,13 +507,16 @@ each, rewrite it while the news holds, close it once the pins are current, and s
     `fuzzMerge`), checks that the result is a subset of what was read, and uploads it with the list of its unit names.
     The prune job, on a fresh runner with `CFL_CORPUS_TOKEN`, takes only a download that matches those lists exactly,
     checks each result again and, only if the repository is still at the commit the seed job read, replaces each merged
-    target's directory with its result in one commit: a prune can remove units, never add one. A merge that fails,
+    target's directory with its result in one commit: a prune can remove units, never add one. A unit over its
+    target's current `-max_len` (after the cap is lowered) is not seeded, and the next prune drops it, as ClusterFuzz's
+    pruning does; unlike libFuzzer's own merge output, no cut-down copy is kept. A merge that fails,
     needs more than one attempt (a unit crashed or timed out; the next nightly, seeded with that unit, files it as a
     finding) or keeps no unit fails its job and leaves its target unchanged. A prune run with no seed to merge (no
     `CFL_CORPUS_READ_TOKEN`, or a failed `fuzz-seed` upload) fails the seed job and changes nothing.
-    - A target over even the prune's caps is left out with an error, and the prune job fails the run once the others
-      are pushed. To recover, trim that target's directory in `geota/revokt-fuzz-corpus` by hand (delete it, or all
-      but a sample of its units; the nightly regrows what still adds coverage), then dispatch `fuzz` with `prune`.
+    - A target over even the prune's caps, or one whose units are all over its `-max_len` (nothing is left to merge),
+      is left out with an error, and the prune job fails the run once the others are pushed. To recover, trim that
+      target's directory in `geota/revokt-fuzz-corpus` by hand (delete it, or all but a sample of its units within
+      `-max_len`; the nightly regrows what still adds coverage), then dispatch `fuzz` with `prune`.
     - Residual risk, accepted: the merge jobs run the fuzzed code on corpus input, and any job of the run can upload a
       `fuzz-merged-<target>` artifact for any target. A misbehaving merge job can therefore make the prune delete
       units of any target, though never add one; the corpus repository's history restores them.
