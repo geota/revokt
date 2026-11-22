@@ -172,8 +172,12 @@ public class RevoktPolicy private constructor(
     }
 }
 
-/** The policy's V diagnostics (spec §4) that are functions of the policy alone; see the commonMain form's. */
-internal fun validatePolicy(
+/**
+ * The policy's V diagnostics (spec §4) that are functions of the policy alone; see the commonMain form's.
+ * `Revokt.validate(enforcement)` in revokt-jsse adds the configuration-dependent ones.
+ */
+@RevoktInternalApi
+public fun validatePolicy(
     policy: RevoktPolicy,
     enforcement: Enforcement,
 ): List<PolicyDiagnostic> = validatePolicy(policy.form, enforcement)

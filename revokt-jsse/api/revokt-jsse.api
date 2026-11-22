@@ -3,3 +3,76 @@ public final class dev/revokt/jsse/JdkHttpFetcher : dev/revokt/HttpFetcher {
 	public fun fetch (Ldev/revokt/FetchRequest;)Ldev/revokt/FetchResponse;
 }
 
+public final class dev/revokt/jsse/Revokt {
+	public static final field Companion Ldev/revokt/jsse/Revokt$Companion;
+	public synthetic fun <init> (Ldev/revokt/jsse/RevoktConfig;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public static final fun builder ()Ldev/revokt/jsse/Revokt$Builder;
+	public fun toString ()Ljava/lang/String;
+	public final fun validate (Ldev/revokt/Enforcement;)Ljava/util/List;
+	public final fun validateOrThrow (Ldev/revokt/Enforcement;)V
+}
+
+public final class dev/revokt/jsse/Revokt$Builder {
+	public final fun awaitData (Ljava/time/Duration;)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun awaitDataMillis (J)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun build ()Ldev/revokt/jsse/Revokt;
+	public final fun channel (Ldev/revokt/CrliteChannel;)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun clock (Ljava/time/Clock;)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun enforcement (Ldev/revokt/Enforcement;)Ldev/revokt/jsse/Revokt$Builder;
+	public final synthetic fun getChannel ()Ldev/revokt/CrliteChannel;
+	public final synthetic fun getClock ()Lkotlin/time/Clock;
+	public final synthetic fun getEnforcement ()Ldev/revokt/Enforcement;
+	public final synthetic fun getHttp ()Ldev/revokt/HttpFetcher;
+	public final synthetic fun getIoDispatcher ()Lkotlinx/coroutines/CoroutineDispatcher;
+	public final synthetic fun getLogger ()Ldev/revokt/RevoktLogger;
+	public final synthetic fun getPolicy ()Ldev/revokt/RevoktPolicy;
+	public final synthetic fun getSignatureVerifier ()Ldev/revokt/SignatureVerifier;
+	public final fun http (Ldev/revokt/HttpFetcher;)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun ioExecutor (Ljava/util/concurrent/Executor;)Ldev/revokt/jsse/Revokt$Builder;
+	public final synthetic fun limits (Lkotlin/jvm/functions/Function1;)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun logger (Ldev/revokt/RevoktLogger;)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun maxChangesetRecords (I)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun maxFilterBytes (J)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun maxJsonBytes (J)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun maxX5uBytes (J)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun pkixFallback (Z)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun policy (Ldev/revokt/RevoktPolicy;)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun remoteSettings (Ldev/revokt/MozillaRemoteSettings;)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun seed (Ldev/revokt/SeedSource;)Ldev/revokt/jsse/Revokt$Builder;
+	public final synthetic fun setChannel (Ldev/revokt/CrliteChannel;)V
+	public final synthetic fun setClock (Lkotlin/time/Clock;)V
+	public final synthetic fun setEnforcement (Ldev/revokt/Enforcement;)V
+	public final synthetic fun setHttp (Ldev/revokt/HttpFetcher;)V
+	public final synthetic fun setIoDispatcher (Lkotlinx/coroutines/CoroutineDispatcher;)V
+	public final synthetic fun setLogger (Ldev/revokt/RevoktLogger;)V
+	public final synthetic fun setPolicy (Ldev/revokt/RevoktPolicy;)V
+	public final synthetic fun setSignatureVerifier (Ldev/revokt/SignatureVerifier;)V
+	public final fun signatureVerifier (Ldev/revokt/SignatureVerifier;)Ldev/revokt/jsse/Revokt$Builder;
+	public final synthetic fun sources (Lkotlin/jvm/functions/Function1;)Ldev/revokt/jsse/Revokt$Builder;
+}
+
+public final class dev/revokt/jsse/Revokt$Companion {
+	public final fun builder ()Ldev/revokt/jsse/Revokt$Builder;
+}
+
+public final class dev/revokt/jsse/Revokt$Limits {
+	public final synthetic fun getMaxChangesetRecords ()I
+	public final synthetic fun getMaxFilterBytes ()J
+	public final synthetic fun getMaxJsonBytes ()J
+	public final synthetic fun getMaxX5uBytes ()J
+	public final synthetic fun setMaxChangesetRecords (I)V
+	public final synthetic fun setMaxFilterBytes (J)V
+	public final synthetic fun setMaxJsonBytes (J)V
+	public final synthetic fun setMaxX5uBytes (J)V
+}
+
+public final class dev/revokt/jsse/Revokt$Sources {
+	public final synthetic fun remoteSettings (Ldev/revokt/MozillaRemoteSettings;)V
+	public final synthetic fun seed (Ldev/revokt/SeedSource;)V
+}
+
+public final class dev/revokt/jsse/RevoktDslKt {
+	public static final synthetic fun Revokt (Lkotlin/jvm/functions/Function1;)Ldev/revokt/jsse/Revokt;
+	public static final synthetic fun awaitData-HG0u8IE (Ldev/revokt/jsse/Revokt$Builder;J)Ldev/revokt/jsse/Revokt$Builder;
+}
+
