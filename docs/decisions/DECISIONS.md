@@ -241,3 +241,34 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   - **"No stored generation loads" (from the #273 review):** it means the stored generation is absent or malformed,
     never that a read threw. A read that throws writes nothing (#209), so a transient fault never lowers the floor.
     Spec §6.5 and §7.1, row S4.
+- 2026-11-21 (lead, #266): `fetch/` and `store/` move to jvmMain with their public types (`MozillaRemoteSettings`,
+  `RevoktStorage`), unedited, so their FQNs and the JVM API dump are unchanged. Phase 1 (#267) moved
+  `KotlinRevocationEngine` the same way. The walker and `verify/` stay in commonMain (W1), so the linuxX64 compile
+  keeps checking the purity of the walker and the content-signature and x5u logic. `LruMap` becomes an internal
+  interface made by `expect fun lruMap`, so no expect class remains. The pairs left (`lruMap`,
+  `isFatal`/`restoreInterrupt`, `canonicalSubject`) are there for that compile. Rejected:
+  - keeping both public types common, which leaves `ReadWriteGuard` behind and splits `StrictUrl` for no target;
+  - W2, moving the walker and `verify/` too, which removes two pairs and loses that coverage.
+
+  Source-set layout has no observable behaviour, so no reference comparison applies.
+- 2026-11-21 (lead, #222 under the maintainer's B-F9 acceptance):
+  - **`SyncFailure`:** one public code per step a sync stops at (22), so the code names the stage and `SyncStage`
+    goes. `SyncOutcome` is `INSTALLED`, `UNCHANGED`, `SKIPPED` and `FAILED`. `ClientFailure`, `SignatureFailure` and
+    `IndexRefusal` are removed. The leaf verifier and parser enums stay internal, and their value is in the detail
+    text and the log. upki has one coarse `FetchError` of about 11 variants with the cause attached. Firefox reports a
+    flat UptakeTelemetry status of about 15. A throw outside the store is `INTERNAL_ERROR`, with its cause kept.
+  - **`STORE_LOCKED` dropped:** nothing produces it, and neither reference has an equivalent. The enum is growable.
+  - **Failures leave `warnings`:** `SyncResult.failure` and its cause replace `SYNC_FAILED`, `SYNC_SCHEMA_REJECTED`,
+    `INDEX_INCONSISTENT`, sync-time `FORMAT_UNSUPPORTED` and an over-cap `CAP_NEAR_LIMIT`. `DiagnosticCode` keeps the 6
+    configuration codes main produces. Runtime conditions are a new `WarningCode` (`CAP_NEAR_LIMIT`,
+    `SEED_UNREADABLE`, `SEED_CHANNEL_MISMATCH`) on `RevoktWarning` (code, dataset, message).
+  - **`Finding.Path`:** keeps `status`, one `reason` (`PathReason`: the no-issuer, parse and budget reasons, set only
+    for `NO_ISSUER`, `PARSE_FAILED` and `PATH_BUDGET_EXCEEDED`), the issuer keys, the anchor and the source. The walk
+    counters go to one DEBUG line. webpki reports one error per failed build, with no counters.
+  - **Two PRs:** split by area, both from `main`. #284 has the sync vocabulary and the `DiagnosticCode` split; the
+    `Finding.Path` change follows in its own PR.
+- 2026-11-21 (lead, then maintainer, #222 §4): the 21 §4 diagnostics main does not produce yet (`NO_FETCHING_SOURCE`,
+  `CHANNEL_UNSET`, `STORE_MIGRATED`, `RULE_FLIPPED_THIS_MINOR` and the rest) stay as specified behaviour. The enum
+  lines list only produced codes, and a code joins its enum when its producer is built. Configuration codes join
+  `DiagnosticCode`; store and seed state codes join `WarningCode`. The maintainer decided not to cut those bullets
+  from the spec yet. Neither upki nor Firefox has a configuration-lint vocabulary, so the references give no guidance.
