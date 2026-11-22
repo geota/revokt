@@ -185,7 +185,7 @@ tests; **live checks** are informational.
   platform `CertificateFactory` (a 0.3 gate; pinned system-image revisions, Conscrypt APEX version logged); **live checks**; **benchmarks** on a physical ARM device including
   verifications per honest handshake.
 - **Walker fixtures**, schema `id | presented (ordered) | snapshot | preload | verifier.unsupported |
-  expected Walk (asserted only in the walker-only harness, revokt-engine's test set; every other path asserts the Finding.Path columns, and revokt-testing's recorded fixtures carry the Walk column as a string) | expected PathStatus / PathReason / WalkEnd | expected Path fields | verdict. The Path fields a row names beyond `status`, `reason`, `issuerSpkiSha256s` and `anchorSha256` (`walkerReason`, `keyabilityClause`, `endReason`, `endDepth`, `anchorSnapshotId`, `usedFallback`, `pathsFound`, the reported path, `candidatesDropped` and the walk counters such as `candidatesExplored`) are the decision's detail on the evaluation's `DEBUG` line (§4), which the tests assert on the decision; a `NO_ISSUER(X)` or `PARSE_FAILED(X)` row reads `X` as `Finding.Path.reason`, and a `PATH_BUDGET_EXCEEDED` row whose walk completed reads `reason = FALLBACK_LIMIT`
+  expected Walk (asserted only in the walker-only harness, revokt-engine's test set; every other path asserts the Finding.Path columns, and revokt-testing's recorded fixtures carry the Walk column as a string) | expected PathStatus / PathReason | expected Path fields | verdict. The Path fields a row names beyond `status`, `reason`, `issuerSpkiSha256s` and `anchorSha256` (`walkerReason`, `keyabilityClause`, `anchorSnapshotId`, `usedFallback`, `pathsFound`, the reported path, `candidatesDropped` and the walk counters, `verifications` and `candidatesExplored`) are the decision's detail on the evaluation's `DEBUG` line (§4), which the tests assert on the decision; a `NO_ISSUER(X)` or `PARSE_FAILED(X)` row reads `X` as `Finding.Path.reason`, and a `PATH_BUDGET_EXCEEDED` row whose walk completed reads `reason = FALLBACK_LIMIT`
   relation to the honest chain`, on every platform path (JVM walker, JVM walker with the fallback
   disabled in the walker-only harness, Android CT-gap path, Android plain delegate, `Revokt.evaluate`; a row whose
   outcome depends on the fallback states its fallback-disabled expectation, decision step 6, revision 49; every row
@@ -197,64 +197,73 @@ tests; **live checks** are informational.
   the rows over `MAX_PRESENTED` on every trust-manager path and `Revokt.evaluate`, as the step-3 note below says):
   (a) random-key fake issuer; (b) ECDSA-recovered second key; (c) RSA duplicate-signature key;
   (d) recovered-key fake with an unsupported own signature, terminating at a real anchor; (e) 8, 16
-  and 63 distinct-key related junk ahead of the real one → `Found`, verdict equals honest; (f)
+  and 63 distinct-key related junk ahead of the real one → `Found`, one exploration each, verdict equals honest; (f)
   cross-signed chain with both roots in the snapshot → first path in M1, both on exhaustive re-walk;
   (g) chain omitting the intermediate → walker-harness `NO_ISSUER(NO_CANDIDATE)`; on trust-manager bindings `PLATFORM_ONLY` with `walkerReason = NO_CANDIDATE`; on Android with a warm intermediate index and a host, `Found(PLATFORM)` via step 4; (h) self-signed non-anchor and an
-  A↔B loop; (i) 65 related junk at the leaf → `Budget(RELATED_BUDGET)`, `candidatesExplored = 64`,
-  fallback skipped (chain too long), `PATH_BUDGET_EXCEEDED`; (j) ML-DSA anchor on a JDK without ML-DSA →
+  A↔B loop; (i) the work budget at the leaf: 254 related junk ahead of the real intermediate → `Found` with
+  `candidatesExplored = 256`, and 255 → `Budget`, `candidatesExplored = 256`, no path, fallback skipped (chain too
+  long), `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)`; (j) ML-DSA anchor on a JDK without ML-DSA →
   `NO_ISSUER(UNSUPPORTED_ALGORITHM)` in the walker-only harness and `Evaluator.evaluate`; on a trust-manager binding a chain the
   platform accepted is `NO_ISSUER(PLATFORM_ONLY)` with the same `UnsupportedAlgorithm` finding (revision 57); (j2) brainpool anchor on SunEC (walker harness) → `NO_ISSUER(ALL_CANDIDATES_INVALID)`, no `UnsupportedAlgorithm` (the curve OID is the candidate's); (k) same-key decoy with a garbage
-  signature first, decoy issuer name equal to the root's → `Found`, `verifications = 4`,
-  `candidatesExplored = 5` (the store anchor and the real intermediate are both tried under the
-  decoy's garbage signature before the leaf loop reaches the real intermediate by memo hit; re-derived
-  under the `keyFamily` ordering of `related()`: unchanged, every candidate shares the family);
+  signature first, decoy issuer name equal to the root's → `Found`, `verifications = 3`,
+  `candidatesExplored = 4` (the store anchor is tried under the decoy's garbage signature, then the leaf reaches the
+  real intermediate by memo hit; every candidate shares the `keyFamily`);
   (k2) the same with the decoy carrying an EC key under an RSA-signed leaf → the RSA store candidates
   are tried first, `verifications = 3`;
   (l) public cross-certificate to a retired non-anchor root first → `Found`; (m) sound path then 62
-  related junk → `Found`; (n) unsupported candidate on a dead branch with a supported path found →
-  `outcomeDepended = false`; (o) a second certified key verifying the leaf via an attacker-owned
-  constrained sub-CA → both keys in `issuerSpkiSha256s`, `REVOKED`; (p) PrintableString/UTF8String
+  related junk → `Found`, `candidatesExplored = 2` (the walk stops at its first path); (n) unsupported candidate on a
+  dead branch with a supported path found → `outcomeDepended = false`; (o) a second certified key verifying the leaf
+  via an attacker CA under the real root, unconstrained (§10 residual 15), in both orders: the attacker CA first →
+  `Found` through it, its key alone in `issuerSpkiSha256s`, not `REVOKED` when only the honest key is; the honest
+  intermediate first → its key alone, `REVOKED`; (p) PrintableString/UTF8String
   issuer-name mismatch → `Found` via canonical ordering; (q) depth-9 bridge → `Found`; (r) TBS/outer
   signature OID mismatch → `Found` with the finding, and a NULL-vs-absent pair → `Found` with no finding;
-  **(s1)** (o) plus 62 related junk ahead of the honest key (64 related in total) → `Found`, `pathsFound = 2`,
-  `REVOKED`; **(s2)** (o) plus 63 junk (65 related) → `Budget(RELATED_BUDGET)`, `Rejected` with `rule ∈ {REVOKED,
-  PATH_BUDGET_EXCEEDED}`, and `REVOKED ⇔ honestKey ∈ issuerSpkiSha256s`; **(t)** (o) plus 80 junk → same expectation as (s2); **(i), (e) with 63 junk, (s1), (s2), (t), (y) and (y2) present more than `MAX_PRESENTED` certificates (65 to 68, revision 56 adding (e), (s1) and (y2), which test the walker's 64-related-candidate edge) and are walker-harness only; on every trust-manager path and `Revokt.evaluate` they are cut at step 3: `Budget(EXPLORATION_BUDGET)`, `endDepth = 0`, `PATH_BUDGET_EXCEEDED`, no CRLite query and no `FallbackNotUsed`, as (ag) asserts**;
+  **(s1)** (o) with 62 related junk ahead of the honest intermediate and the attacker CA last → `Found` through the
+  honest intermediate, `candidatesExplored = 64`, `REVOKED`; **(s2)** the same with 255 junk → `Budget`, no path,
+  `Rejected` with `rule ∈ {REVOKED, PATH_BUDGET_EXCEEDED}`, and `REVOKED ⇔ honestKey ∈ issuerSpkiSha256s` (only a
+  fallback path's key is evaluated); **(t)** the same with 300 junk → same expectation as (s2); **(i), (e) with 63
+  junk, (s1), (s2), (t), (y) and (y2) present more than `MAX_PRESENTED` certificates and are walker-harness only; on
+  every trust-manager path and `Revokt.evaluate` they are cut at step 3: `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)`
+  without a walk, no CRLite query and no `FallbackNotUsed`, as (ag) asserts**;
   (u) `getAcceptedIssuers()` throws during `refreshAnchors()` → the current snapshot is kept, `anchorSnapshotId` unchanged, the walk proceeds under it (the wiring and `start()` throw cases are lifecycle fixtures, (h));
   (v) honest chain against a 200-anchor snapshot → `verifications ≤ 4`, `COMPLETE`; (v2) the same
   with a retired-root cross-certificate presented → `≤ 4`; (w) dense cross-certified mesh (6 roots,
   12 cross-certs) → `Found`, reported path `leaf → I → anchor`; (x) self-signed anchor as server
   certificate → `Found([leaf])`, key = the leaf's own; **(y)** honest chain leaf → I1 → I2 → root with the root in the snapshot and 65 presented
-  certificates whose subject equals I2's name and whose keys do **not** verify I1 (one `INVALID` exploration each), placed before I2 →
-  `Budget(RELATED_BUDGET)` at `endDepth = 2` (sub-leaf cap propagates), fallback skipped,
-  `PATH_BUDGET_EXCEEDED`; **(y3)** (M2) leaf whose issuer I has one certificate under OneCRL-listed anchor A and another under a retired root present only in the preload → paths `leaf → I_A → A` (ANCHOR, hit) and `leaf → I_B` (PRELOAD); `ONECRL` fires (the PRELOAD path is not a clean alternative); **(y2)** the same chain with the junk carrying the root's name and the
+  certificates whose subject equals I2's name and whose keys do **not** verify I1 (one `INVALID` exploration each), placed before I2:
+  the budget is the walk's, so 253 of them → `Found` at `candidatesExplored = 256`, and 254 → `Budget`, the whole
+  walk aborted below the leaf, fallback skipped, `PATH_BUDGET_EXCEEDED`; **(y3)** (M2) leaf whose issuer I has one certificate under OneCRL-listed anchor A and another under a retired root present only in the preload → paths `leaf → I_A → A` (ANCHOR, hit) and `leaf → I_B` (PRELOAD); `ONECRL` fires (the PRELOAD path is not a clean alternative); **(y2)** the same chain with 65 junk carrying the root's name and the
   root in the snapshot → `Found`, `verifications = 3` (leaf/I1, I1/I2, I2/root; the junk is never explored because the store root sorts first at I2, which pins store-first ordering); **(z)** `NotFound` where only
-  an unrelated presented certificate has an unsupported key OID → `NO_ISSUER(UNANCHORED)`, no
+  an unrelated presented certificate has an unsupported key OID, never a candidate → `NO_ISSUER(UNANCHORED)`, no
   `UnsupportedAlgorithm`; (aa) root-issued leaf with the root also presented → `pathsFound = 1`;
   (ab) `PARSE_FAILED` leaf with no CRLite generation → `rules = {PARSE_FAILED, NO_DATA}`, `rule = NO_DATA`;
-  (ac) **walker-harness only, custom canonicaliser** (on both default delegates every honest issuer
+  (ac) a custom delegate's misclassification (on both default delegates every honest issuer
   is related, since `X500Principal`'s canonical form hex-encodes TeletexString and both platforms
   chain by it): issuer unrelated by encoding, the TeletexString difference on the issuer certificate's subject, not
   on the leaf's issuer field (K5), the leaf carrying a keyIdentifier AKI that matches no candidate, not the
-  issuer-and-serial form (K8; revision 56, the maintainer's decision), and four unrelated junk ahead → `Found`
-  through the unrelated loop, `REVOKED`; (ad) **walker-harness only**: leaf,
+  issuer-and-serial form (K8; revision 56, the maintainer's decision), and four unrelated junk ahead → walker-harness
+  `NotFound(NO_CANDIDATE)`: an unrelated certificate is no candidate, so only the PKIX fallback can reach the honest
+  issuer (§10 residual 1); with a related, anchored attacker CA ahead → `Found` through it alone (§10 residuals 1 and
+  15); (ad) leaf,
   honest issuer unrelated by encoding, six same-name mutually cross-signing junk certificates ahead →
-  `Budget(EXPLORATION_BUDGET)`, `candidatesExplored = 1024`, `usedFallback = true`,
-  `PATH_BUDGET_EXCEEDED`, `rule = REVOKED`, honest key last in `issuerSpkiSha256s`; with the fallback disabled the
-  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `FallbackNotUsed(DISABLED)`, the honest key (which only the fallback reaches) not in
-  `issuerSpkiSha256s`, so `rule = PATH_BUDGET_EXCEEDED`; (ae) platform
+  `Budget`, `candidatesExplored = 256`, `usedFallback = true`,
+  `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)`, `rule = REVOKED`, the fallback's honest key alone in
+  `issuerSpkiSha256s`; with the fallback disabled the
+  same walk → `PATH_BUDGET_EXCEEDED`, `usedFallback = false`, `FallbackNotUsed(DISABLED)`, no key evaluated, so
+  `rule = PATH_BUDGET_EXCEEDED`; (ae) platform
   accepts, walker `UNANCHORED` and fallback fails → `NO_ISSUER(PLATFORM_ONLY)`,
   `walkerReason = UNANCHORED`, `FallbackNotUsed(FAILED)`; (af) 9 presented certificates with a link the walker cannot reproduce
   (custom delegate) → fallback skipped, `PATH_BUDGET_EXCEEDED`; with the fallback disabled → `PATH_BUDGET_EXCEEDED`
   as well, `usedFallback = false`, `FallbackNotUsed(DISABLED)`; (ag) 70 presented certificates →
-  `Budget(EXPLORATION_BUDGET)` without a walk, no `FallbackNotUsed`; (ah) `VERIFICATION_BUDGET`: 12 presented certificates
+  `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)` without a walk, no `FallbackNotUsed`; (ah) 12 presented certificates
   of distinct RSA duplicate-signature keys each verifying the leaf and recursing into a
-  32-certificate dead-end subtree → `Budget(VERIFICATION_BUDGET)`, `verifications = 256`; (ai) a
-  17-certificate honest path (16 non-terminal plus the anchor) → `Found`; an 18-certificate one →
-  dead end; (aj) **walker-harness only, platform canonicaliser** (revision 48, #98): no related path at the leaf (the
+  32-certificate dead-end subtree → `Budget`, `verifications = 256`, `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)`; (ai)
+  a 17-certificate honest path (16 non-terminal plus the anchor) → `Found`; an 18-certificate one →
+  dead end; (aj) platform canonicaliser: no related path at the leaf (the
   leaf's issuer neither presented nor in the snapshot); two unrelated presented certificates U1 and U2 whose keys both
   verify the leaf, each certified by a snapshot anchor, in both orders, with and without a related candidate ahead that
-  verifies the leaf but is unanchored → `Found`, `leafKeys = {U1, U2}` and `unrelatedExploredAtLeaf = 2` in every
-  case; with the CRLite stub revoking U2 only, `rule = REVOKED` in both orders. **Revision 57** (#196 and #197, the
+  verifies the leaf but is unanchored → neither is a candidate: the walk `NotFound(NO_CANDIDATE)`, or
+  `NotFound(UNANCHORED)` with the related candidate, `candidatesExplored ≤ 1`, and the outcome the fallback's. **Revision 57** (#196 and #197, the
   maintainer's decisions; in the first four rows the fallback finds no path, and the label is the same with it failed,
   `FallbackNotUsed(FAILED)`, or disabled, `FallbackNotUsed(DISABLED)`): (ak) the relabel: `[L]` →
   `NO_ISSUER(NO_CANDIDATE)`; `[L, D]`, where D is named like the leaf's issuer, verifies the leaf under a recovered key and signs itself with a probe-listed OID under an issuer no
@@ -268,12 +277,12 @@ tests; **live checks** are informational.
   ALL_CANDIDATES_INVALID`; on the bindings both `NO_ISSUER(PLATFORM_ONLY)`; (am) a related store anchor that signs
   itself with a probe-listed OID and does not verify the leaf → `NO_ISSUER(ALL_CANDIDATES_INVALID)`, its OID not
   recorded; (an) a presented certificate unrelated to the leaf that verifies it and signs itself with a probe-listed
-  OID → its OID recorded, `Walk.NotFound(NO_CANDIDATE)` from the walk and `NO_ISSUER(UNSUPPORTED_ALGORITHM)` from `decide`; (ao) the
+  OID → never a candidate, so its OID is not recorded: `NO_ISSUER(NO_CANDIDATE)`; (ao) the
   candidate order: an issuer that is itself a self-signed snapshot anchor P, presented beside its cross-certificate
   under another anchor in both orders → reported path `[L, P]` and `anchorIn([P])` exempts in both; two cross-signed
   intermediates under two different anchors → the reported path follows the presented order, as Firefox's does;
-  (ap) 64 snapshot anchors named like the leaf's issuer ahead of the presented issuer → `Budget(RELATED_BUDGET)` at
-  `endDepth = 1` with no partial path, `PATH_BUDGET_EXCEEDED`, `usedFallback = true` and only the fallback's key
+  (ap) 256 snapshot anchors named like the leaf's issuer ahead of the presented issuer → `Budget`, no path,
+  `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)`, `usedFallback = true` and only the fallback's key
   evaluated; with the fallback disabled, `usedFallback = false`, `FallbackNotUsed(DISABLED)` and no key evaluated;
   (aq) a non-anchor issuer must be a CA: leaf → I → R with I having no basicConstraints, `cA` omitted, `cA` explicitly
   FALSE, a `cA` of `01`, or two basicConstraints → `NotFound(ALL_CANDIDATES_INVALID)`, `verifications = 0`,
@@ -282,10 +291,10 @@ tests; **live checks** are informational.
   `candidatesExplored = 3`; `[L, E]` → `ALL_CANDIDATES_INVALID`; E signs itself with a probe-listed OID → the OID is
   still recorded. The attack the check closes: `[L, C, F]`, where F is an end-entity certificate under the real root
   and C, named like I, is a CA certificate for a recovered key that F's key signed → `NotFound(UNANCHORED)`,
-  `verifications = 1`, `candidatesExplored = 3` (without the check it is `Found([L, C, F, R])`, with C's key the only
-  leaf-issuer key); `[L, C2, F]`, the same with C2's issuer name not matching F's subject, so that only the unrelated
-  loop reaches F → `NotFound(UNANCHORED)`, `verifications = 1`, `unrelatedExploredAtLeaf = 1`; leaf → I1 → I2 → R
-  with I2 not a CA → `UNANCHORED`, `verifications = 1`, `candidatesExplored = 3`; a v3 anchor without
+  `verifications = 1`, `candidatesExplored = 2` (without the check it is `Found([L, C, F, R])`, with C's key the only
+  leaf-issuer key); `[L, C2, F]`, the same with C2's issuer name not matching F's subject, so that F is no candidate
+  → `NotFound(UNANCHORED)`, `verifications = 1`, `candidatesExplored = 1`; leaf → I1 → I2 → R
+  with I2 not a CA → `UNANCHORED`, `verifications = 1`, `candidatesExplored = 2`; a v3 anchor without
   basicConstraints still terminates → `Found`.
   (ar) (#237) a non-anchor issuer within its `pathLenConstraint`, with `keyCertSign` and the request's purpose:
   `pathLenConstraint` on I2 in leaf → I1 → I2 → R, 0 → `UNANCHORED`, 1 → `Found`, 128 → not a CA; 0 on the leaf's
@@ -310,8 +319,13 @@ tests; **live checks** are informational.
   (`PkixNamesTest`), and a fallback path is checked with the same forms; a sub-CA name-constrained to `attacker.example`
   certifying a recovered key → `UNANCHORED`; an anchor's nameConstraints refusing the leaf → `UNANCHORED`; a wildcard
   `*.leaf.example` → `Found` under permitted `leaf.example`, refused under `a.leaf.example`; a leaf subjectAltName that
-  does not read → `ALL_CANDIDATES_INVALID`; 500 names against 501 subtrees → `Budget(EXPLORATION_BUDGET)`; 300 names
-  against two candidates of 501 subtrees each, neither past 250,000 alone → `Budget(EXPLORATION_BUDGET)`. Fixtures run
+  does not read → `ALL_CANDIDATES_INVALID`; 500 names against 501 subtrees → `Budget`; 300 names
+  against two candidates of 501 subtrees each, neither past 250,000 alone → `Budget`, each
+  `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)`. A loop, a candidate repeating the raw subject and raw SPKI of a
+  certificate on the path (the leaf's included), is skipped uncharged: a cross-signed pair A ↔ B with A's subject and
+  key reissued under the root as A2 → leaf → A2 → R, not leaf → A → B → A2 → R, `candidatesExplored = 4`; A2's
+  subject re-encoded (canonically equal, raw bytes different) is no loop → leaf → A → B → A2 → R; a copy of a
+  self-issued leaf's subject and key is no candidate → `NO_CANDIDATE`. Fixtures run
   with the cross-call memo cleared; (aa) presents the root's exact bytes; (z) has a related candidate that verifies but
   is unanchored; stuffing fixtures present their junk.
 - **Trust-manager invariants**: never accept what the platform rejected (the 3-arg overload's null-host retry only after a socket or engine overload accepted the chain and host); under `DEFAULT` never
@@ -406,25 +420,31 @@ honest certificates, `DropIntermediate`) and **attacker mutations** (`Recover(ch
 in `ok`, optionally `CertifiedBy(anchor)`; `SameKeyDecoy`; `CrossCertToNonAnchor`; `Stuff(n ≤ 300,
 related)`; `SelfSignedNonAnchor`; `Loop`; `Permute`; `Duplicate`; `EndEntityIssuer(child, certifiedBy, unrelated)`, a recovered key
 in an end-entity certificate issued by a snapshot anchor, named like the child's issuer or, with `unrelated`, a fresh
-name only the unrelated loop reaches, which leaves the result unchanged and is the one generated certificate that
+name no walker offers as a candidate, which leaves the result unchanged and is the one generated certificate that
 verifies a child without being related to it; `DepthPad`, junk certificates off the honest path that never lengthen it, so P3 is not tripped by a dead end). **Oracle**: a
 **relation-aware, uncapped reference walker** (a non-anchor candidate must be a CA as the JDK reads it; #237's other
 issuer rules are not modelled, since the generator writes none of those extensions and `pathLenConstraint` and
-nameConstraints depend on the path below a certificate, so fixtures (ar) and (as) carry them; at every node: related candidates, plus unrelated
-presented certificates only when no related path exists, at the leaf collecting every unrelated issuer's key as §5.1 does; depth ≤ `MAX_DEPTH`; no other limits; the fuzzer runs both walkers with the platform canonicaliser, so the leaf-level custom-canonicaliser clause is inert for P2/P6 and is covered by the walker-harness fixtures instead) →
-`refKeys`; a CRLite stub mapping the honest key to `REVOKED` in half the runs and every other key to `NOT_ENROLLED` (so `rules` is predictable under `Recover(CertifiedBy)`); a fake
+nameConstraints depend on the path below a certificate, so fixtures (ar) and (as) carry them; at every node the
+related candidates only, a certificate repeating the leaf's raw subject and raw SPKI never one; every key with a path,
+so the result does not depend on the presented order; depth ≤ `MAX_DEPTH`; no other limits; the fuzzer runs both
+walkers with the platform canonicaliser) → `refKeys`, and `refKeysByName` over name-related links only (the
+walker's loop skip can cut a path whose repeated certificate was related to its child by SKI alone, a path neither
+reference builds; over name-related links a repeat can always be cut out, so `refKeysByName` is exact); a CRLite stub mapping the honest key to `REVOKED` in half the runs and every other key to `NOT_ENROLLED` (so `rules` is predictable under `Recover(CertifiedBy)`); a fake
 `PathBuilderFallback` equal to the reference. Properties:
 - **P1 soundness**: every returned path's links are in `ok` and not unsupported; terminal bytes in the snapshot.
-- **P2 completeness**: `Found ⇒ leafKeys == refKeys`; `NotFound ⇒ refKeys == ∅`; `Budget ⇒ partialLeafKeys ⊆ refKeys`.
+- **P2 completeness**: `Found ⇒ |leafKeys| = 1 ∧ leafKeys ⊆ refKeys`; `NotFound ⇒ refKeysByName == ∅`; `Budget ⇒`
+  no leaf key (the walk stops at its first path).
 - **P3 never-improve** (attacker mutations only, under `DEFAULT`, with the CRLite stub always
   holding data): honest `Rejected ⇒` mutated `Rejected` with `rule ∈ {REVOKED, PATH_BUDGET_EXCEEDED}`;
-  if no limit was hit, `(mutated is Rejected, mutated.rule) == (honest is Rejected, honest.rule)`.
-- **P4 order-independence**: `PathStatus` and `leafKeys` invariant under `Permute` when neither
-  order produced `Budget`; `Budget` in one order ⇒ `Budget` or `Found` with `leafKeys == refKeys` in the other.
-- **P5 budgets**: counters ≤ limits; `Budget ⇒` a limit at its value at `endDepth` (for
-  `RELATED_BUDGET`, `endDepth == 1 ⇒ relatedExploredAtLeaf == 64`; revision 57: not the converse, since a leaf can
-  explore exactly 64 related candidates and the cut come at a deeper node) and the fallback invoked at most
-  once; `verifications` never exceeds `MAX_VERIFICATIONS`.
+  if no limit was hit, `(mutated is Rejected, mutated.rule) == (honest is Rejected, honest.rule)`. Not under
+  `Recover(leaf, CertifiedBy(anchor))`: an anchor-certified CA for a recovered key can win the first path and hide the
+  honest key, §10 residual 15 (such a key holder can mint a fresh leaf anyway); `Recover` of a deeper child leaves the
+  honest leaf key.
+- **P4 order-independence**: `PathStatus` invariant under `Permute` when neither order produced `Budget`, and
+  `leafKeys` too except under `Recover(leaf, CertifiedBy)`, where two keys verify the leaf and terminate and the
+  presented order picks one, as in Firefox; `Budget` in one order ⇒ `Budget` or `Found` in the other.
+- **P5 budgets**: `verifications ≤ candidatesExplored ≤ MAX_EXPLORED`; `Budget ⇒ candidatesExplored == MAX_EXPLORED`
+  or the name-constraint comparison bound spent; the fallback invoked at most once.
 - **P6 honest cost**: unmutated world, whose generator never emits two anchors with the same
   subject name, ⇒ `verifications ≤ depth + 1`.
 - **P7 no throw**: no attacker mutation produces `ENGINE_ERROR`, run with the real `X500Principal`

@@ -4,7 +4,6 @@
 package dev.revokt.engine.walker
 
 import dev.revokt.NoIssuerReason
-import dev.revokt.WalkEnd
 import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.found
@@ -14,7 +13,7 @@ import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
  * Row (as), proposed in #237: an issuer's nameConstraints, an anchor's included, bind every certificate below it, as
  * mozilla::pkix applies them ([NameConstraints]; the directoryName, rfc822Name and CN-ID cases are in
  * [WalkerFixturesAsPkix]). A violation is a dead end before the link is verified; spending the comparison budget ends
- * the walk `Budget(EXPLORATION_BUDGET)`. The leaf presents the dNSName `leaf.example` unless a case says otherwise.
+ * the walk `Budget`. The leaf presents the dNSName `leaf.example` unless a case says otherwise.
  */
 internal object WalkerFixturesAs {
     fun san(vararg names: ByteArray): ByteArray = TestDer.extension("2.5.29.17", TestDer.seq(*names))
@@ -101,12 +100,7 @@ internal object WalkerFixturesAs {
             "name-constrained sub-CA certifying a recovered key",
             presented = listOf(h.leaf, c, s),
             walk =
-                notFound(NoIssuerReason.UNANCHORED).copy(
-                    verifications = 1,
-                    candidatesExplored = 3,
-                    relatedExploredAtLeaf = 1,
-                    unrelatedExploredAtLeaf = 1,
-                ),
+                notFound(NoIssuerReason.UNANCHORED).copy(verifications = 1, candidatesExplored = 2),
         )
     }
 
@@ -192,7 +186,7 @@ internal object WalkerFixturesAs {
     /**
      * The budget is the walk's, not a candidate's: 300 leaf names against two related candidates of 501 permitted
      * subtrees each, 150,300 comparisons apiece. J, a junk certificate whose key verifies nothing, conforms and is
-     * tried; the honest I's check then passes 250,000 in total, so the walk is `Budget(EXPLORATION_BUDGET)`.
+     * tried; the honest I's check then passes 250,000 in total, so the walk is `Budget`.
      */
     private fun sharedBudget(): WalkerFixture {
         val names = List(300) { dns("n$it.leaf.example") }
@@ -203,13 +197,13 @@ internal object WalkerFixturesAs {
             "as",
             "the comparison budget shared by two candidates",
             presented = listOf(h.leaf, j, h.intermediate),
-            walk = budget(WalkEnd.EXPLORATION_BUDGET, 1).copy(verifications = 1, candidatesExplored = 2),
+            walk = budget().copy(verifications = 1, candidatesExplored = 2),
         )
     }
 
     /**
      * 500 leaf names against 501 permitted subtrees, each name inside the last: 250,500 comparisons, past [NameConstraints.MAX_COMPARISONS], so
-     * the walk ends `Budget(EXPLORATION_BUDGET)` at the leaf's level with no path.
+     * the walk ends `Budget`, with no path.
      */
     private fun exhausted(): WalkerFixture {
         val names = List(500) { dns("n$it.leaf.example") }
@@ -225,7 +219,7 @@ internal object WalkerFixturesAs {
             "as",
             "the comparison budget",
             presented = listOf(h.leaf, h.intermediate),
-            walk = budget(WalkEnd.EXPLORATION_BUDGET, 1).copy(verifications = 0, candidatesExplored = 1),
+            walk = budget().copy(verifications = 0, candidatesExplored = 1),
         )
     }
 }

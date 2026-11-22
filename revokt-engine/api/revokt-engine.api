@@ -460,11 +460,9 @@ public final class dev/revokt/PathReason : java/lang/Enum {
 	public static final field OVERSIZE Ldev/revokt/PathReason;
 	public static final field PLATFORM_ONLY Ldev/revokt/PathReason;
 	public static final field PRODUCER_UNKEYABLE Ldev/revokt/PathReason;
-	public static final field RELATED_BUDGET Ldev/revokt/PathReason;
 	public static final field STRUCTURE Ldev/revokt/PathReason;
 	public static final field UNANCHORED Ldev/revokt/PathReason;
 	public static final field UNSUPPORTED_ALGORITHM Ldev/revokt/PathReason;
-	public static final field VERIFICATION_BUDGET Ldev/revokt/PathReason;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public final fun getStatus ()Ldev/revokt/PathStatus;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/PathReason;
@@ -540,9 +538,7 @@ public final class dev/revokt/RevoktLimits {
 	public static final field MAX_JSON_BYTES J
 	public static final field MAX_PRESENTED I
 	public static final field MAX_PRESENTED_BYTES J
-	public static final field MAX_RELATED_PER_LEVEL I
 	public static final field MAX_TRUST_MANAGERS I
-	public static final field MAX_VERIFICATIONS I
 	public static final field MAX_X5U_BYTES J
 	public static final field MiB J
 	public static final field PATH_CACHE_ENTRIES I
@@ -834,16 +830,6 @@ public final class dev/revokt/VerifyResult : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/VerifyResult;
 	public static fun values ()[Ldev/revokt/VerifyResult;
-}
-
-public final class dev/revokt/WalkEnd : java/lang/Enum {
-	public static final field COMPLETE Ldev/revokt/WalkEnd;
-	public static final field EXPLORATION_BUDGET Ldev/revokt/WalkEnd;
-	public static final field RELATED_BUDGET Ldev/revokt/WalkEnd;
-	public static final field VERIFICATION_BUDGET Ldev/revokt/WalkEnd;
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/WalkEnd;
-	public static fun values ()[Ldev/revokt/WalkEnd;
 }
 
 public final class dev/revokt/WarningCode : java/lang/Enum {

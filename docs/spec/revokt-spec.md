@@ -122,7 +122,7 @@ interface PlatformTrust {
     fun verifiedChain(delegate: X509TrustManager, chain: Array<X509Certificate>, host: String?): List<X509Certificate>?   // null = unavailable on this binding; a throw = decision step 4 failure
     fun pathBuilder(): PathBuilderFallback
     fun anchors(delegate: X509TrustManager): List<X509Certificate>    // getAcceptedIssuers()
-    fun canonicalSubject(nameDer: ByteArray): String? = dev.revokt.canonicalSubject(nameDer) }   // the internal expect, qualified. JvmPlatformTrust and AndroidPlatformTrust are final; CandidateIndex.customCanonicaliser = (platformTrust is neither of the two shipped final classes) || (delegate !== platformTrust.defaultDelegate()), a class check, never reflection on an override (§5.1 deferral rule)
+    fun canonicalSubject(nameDer: ByteArray): String? = dev.revokt.canonicalSubject(nameDer) }   // the internal expect, qualified. JvmPlatformTrust and AndroidPlatformTrust are final; an override changes which certificates are related, and an issuer it misclassifies is left to the PKIX fallback (§5.1 deferral rule, §10 residual 1)
 ```
 
 **Verifier contract.** The engine never hands the verifier a non-X.509 encoding and always passes
@@ -416,7 +416,7 @@ enum class Layer { PATH, CRLITE }                        // growable; M2: ONECRL
 enum class Dataset { CRLITE /* M2: INTERMEDIATES, ONECRL, CRLSET, DENYLIST; M3: CT_LOGS; M4: DISTRUST */ }   // growable; the freshness rule per dataset and source is §7.2 prose
 enum class Freshness { RECORD_LAST_MODIFIED, LAST_VERIFIED_POLL, SEED_SIGNED_TIME, SEQUENCE_TIME, ARTIFACT_DATE }   // growable; what a generation's sourceTimestamp means
 enum class PathStatus { FOUND, NO_ISSUER, PATH_BUDGET_EXCEEDED, PARSE_FAILED, NOT_WALKED }   // growable; M5: NOT_APPLICABLE
-enum class PathReason(val status: PathStatus) { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, UNSUPPORTED_ALGORITHM, PLATFORM_ONLY /* NO_ISSUER */, STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE /* PARSE_FAILED */, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET /* the walk's budgets */, FALLBACK_LIMIT /* a completed NotFound over FALLBACK_MAX_PRESENTED, §5.1 step 6 */ /* PATH_BUDGET_EXCEEDED */ }   // growable; the union of NoIssuerReason, ParseReason and the WalkEnd budgets; Finding.Path.reason
+enum class PathReason(val status: PathStatus) { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, UNSUPPORTED_ALGORITHM, PLATFORM_ONLY /* NO_ISSUER */, STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE /* PARSE_FAILED */, EXPLORATION_BUDGET /* the walk's work budget spent, or the step-3 presented cut */, FALLBACK_LIMIT /* a completed NotFound over FALLBACK_MAX_PRESENTED, §5.1 step 6 */ /* PATH_BUDGET_EXCEEDED */ }   // growable; the union of NoIssuerReason, ParseReason and the walk's budget; Finding.Path.reason
 enum class ParseReason { STRUCTURE, OVERSIZE, PRODUCER_UNKEYABLE }   // growable; why the leaf is PARSE_FAILED, reported as the PathReason of its name (§5.1 step 3, §9.2 D8)
 enum class KeyabilityClause { HEADER, TBS_SHAPE, INTEGER, OID, NAME, TIME, KEY, EXTENSION }   // growable; the first failing §9.2 keyability clause, K1 to K8 in order; on the DEBUG line ⇔ reason == PRODUCER_UNKEYABLE
 enum class TerminalKind { ANCHOR /* M2: PRELOAD */ }   // growable; the reported path's terminal (§5.1 invariant)
@@ -424,7 +424,6 @@ enum class NoIssuerReason { NO_CANDIDATE, ALL_CANDIDATES_INVALID, UNANCHORED, UN
 enum class FallbackReason { SKIPPED /* presented chain over FALLBACK_MAX_PRESENTED, fallback enabled */, DISABLED /* pkixFallback(false), or the walker-only harness's disabled path */, FAILED /* ran and found no path: build returned null or threw; a thrown result is neither path- nor verdict-cached */ }   // growable; why decision step 6 evaluated no fallback path (§5.1)
 enum class CredentialType { X509 /* M5: MTC */ }   // growable
 enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
-enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
 enum class ChainSource { PLATFORM, RECONSTRUCTED, PRESENTED /* reserved; produced by no M1 path */ }   // growable; PLATFORM: a platform-verified chain, §5.1 decision step 4 or EvaluationRequest.verifiedPath; M2: MIXED (paths from both a PLATFORM chain and the re-walk)
 enum class SyncOutcome { INSTALLED, UNCHANGED, SKIPPED /* stopped short of an install, and not a feed failure */, FAILED /* a feed failure (§7.1) */ }   // growable; a SKIPPED or FAILED sync carries its SyncFailure
 enum class SyncFailure(val outcome: SyncOutcome) { BACKOFF, ROLLBACK_REFUSED /* the two SKIPPED codes */, CHANGESET_FETCH, CHANGESET_MALFORMED, TOO_MANY_RECORDS, NO_SIGNATURE, X5U_URL, X5U_FETCH, X5U_CHAIN, CLOCK_SKEW, SIGNATURE_INVALID, SCHEMA_REJECTED, INDEX_INCONSISTENT, ATTACHMENT_BASE, ATTACHMENT_OVER_CAP, ATTACHMENT_FETCH, ATTACHMENT_MISMATCH, FILTER_UNREADABLE, FORMAT_UNSUPPORTED, ENGINE_FAILED, STORE_FAILED, INTERNAL_ERROR /* FAILED */ }   // growable; why a SKIPPED or FAILED sync stopped, one code per step a sync can stop at, so the code says where; BACKOFF = under a persisted backoffUntilMillis, nothing fetched; ROLLBACK_REFUSED = the verified <ts> below the floor (§7.1); *_FETCH = that fetch failed: the fetcher threw or returned null, a timeout, a status other than 200 (or a 304 to an unconditional request), a body over its cap, or a header or query value that cannot be sent (CHANGESET_FETCH covers monitor/changes and the changeset, X5U_FETCH the x5u, ATTACHMENT_FETCH a body, a mirror file's included, §7.3); CHANGESET_MALFORMED = monitor/changes or the changeset is not the JSON envelope, or monitor/changes does not list the collection once; TOO_MANY_RECORDS = over MAX_CHANGESET_RECORDS; NO_SIGNATURE = metadata.signatures[] gives nothing to verify (none, none tried, a null entry reached); X5U_URL = the x5u URL breaks a §7.1 rule, nothing fetched; X5U_CHAIN = any x5u PEM or chain failure other than validity; CLOCK_SKEW = an x5u link outside its validity window at the local clock (§7.1); SIGNATURE_INVALID = the content signature, or a payload with no canonical form; SCHEMA_REJECTED = a verified changeset whose records fail the collection schema; INDEX_INCONSISTENT = not exactly one full filter, two names that collide, or a built index over 1 MiB (§3.2, §6.5); ATTACHMENT_BASE = the server root's attachment base, its fetch included; ATTACHMENT_OVER_CAP = a signed record over MAX_FILTER_BYTES, before any body; ATTACHMENT_MISMATCH = a body whose size or SHA-256 differs from the signed record's or the manifest's (§7.3); FILTER_UNREADABLE = a placed filter that does not decode (§6.3); FORMAT_UNSUPPORTED = a placed filter in an encoding the engine does not list (§3.2); ENGINE_FAILED = the engine's prepare or activate threw; STORE_FAILED = a store read, write or pointer flip failed (§6.5); INTERNAL_ERROR = any other throwable the loader caught; each producing bullet names its code, and a bullet's code joins the enum when its producer is built (STORE_LOCKED, SKIPPED: a read-only instance's sync, §5.1)
@@ -461,21 +460,19 @@ sealed interface Verdict {
 sealed class Finding {
     class Path : Finding() { val status: PathStatus; val source: ChainSource
         val reason: PathReason?                          // non-null ⇔ status ∈ {NO_ISSUER, PARSE_FAILED, PATH_BUDGET_EXCEEDED}, and reason.status == status; the reported reason, after decide's UNSUPPORTED_ALGORITHM label or PLATFORM_ONLY promotion
-        val issuerSpkiSha256s: List<ByteArray>           // every distinct leaf-issuer key evaluated: walker keys in candidate order, then the fallback key if new; first is the reported path's
+        val issuerSpkiSha256s: List<ByteArray>           // the leaf-issuer keys evaluated, first the reported path's: in M1 at most one, the key of the walk's first path, of step 2's anchor leaf or a PLATFORM chain, else of the fallback path; M2's re-walk adds the keys of the paths it completes
         val anchorSha256: ByteArray? }                   // SHA-256 of the reported path's anchor DER; null when the reported path is empty or (M2) terminalKind == PRELOAD
     // The rest of how the walk reached the path is not public: each evaluation writes one DEBUG line (RevoktLogger) naming these fields, and the tests read them from the decision:
     //   walkerReason: NoIssuerReason? — the walker's own reason before any UNSUPPORTED_ALGORITHM label or PLATFORM_ONLY promotion; set on every walk NotFound, whatever the reported status (so a fallback Found after UNANCHORED still carries it), null otherwise
     //   keyabilityClause: KeyabilityClause? — non-null ⇔ reason == PRODUCER_UNKEYABLE (§9.2 K1–K8)
     //   terminalKind: TerminalKind? — null when the reported path is empty; else ANCHOR in M1; M2: PRELOAD for a preload-only path (a terminal of last resort), where anchorSha256 is null
-    //   rewalkEnd: WalkEnd? (M2) — the re-walk's WalkEnd (COMPLETE or its exhaustion), which never demotes the first walk's Found
-    //   endReason: WalkEnd? — COMPLETE on Found/NotFound (the step-6 fallback-skipped exit included), the Budget's end on Budget, EXPLORATION_BUDGET with endDepth = 0 for the step-3 no-walk cut, null only when no walk ran (NOT_WALKED, PLATFORM, the step-2 anchor leaf)
-    //   endDepth: Int? — path size at which the walk ended (1 = leaf level); null on a completed walk (Found, NotFound) and when no walk ran; set only on Budget, and 0 on the step-3 no-walk cut
+    //   rewalkEnd (M2) — whether the re-walk completed or spent its budget, which never demotes the first walk's Found
     //   cacheHit (0.3); anchorSnapshotId: Long — id of the snapshot read once at flow step 2 (Evaluator.evaluate: at its entry) and consumed at decision step 1; 0 when none was consulted (Evaluator.evaluate with a verifiedPath of two or more certificates, presented also set or not; a one-certificate verifiedPath consults the snapshot read at entry for step 2's anchor test and reports its id; an evaluation that reached no decision logs the id it would have consulted); the walker harness assigns ids to its fixture snapshots
     //   usedFallback: Boolean — true whenever a fallback path was evaluated, Found or Budget
-    //   pathsFound: Int — on Found: the paths found (M2: first walk plus completed re-walk paths); on Budget: the partial paths
-    //   reportedPathSha256s — DER hashes leaf → terminal of the reported path: the first found path, else the first partial path, else empty; on a Budget walk with a fallback path and no partial path, the fallback path, with terminalKind and anchorSha256 following it, so issuerSpkiSha256s[0] stays the reported path's key
+    //   pathsFound: Int — 1 when the decision found a path (step 2, the walk, or the fallback after a walk NotFound), else 0; M2: first walk plus completed re-walk paths
+    //   reportedPathSha256s — DER hashes leaf → terminal of the reported path: the walk's path, else the fallback path (on a walk Budget too, with terminalKind and anchorSha256 following it, so issuerSpkiSha256s[0] stays the reported path's key), else empty
     //   candidatesDropped: Int — presented or platform-built certificates the parser rejected and the walker never saw (§9.2 issuer corpus); also RevoktStatus.candidatesDropped
-    //   walkStats — verifications, candidatesExplored, relatedExploredAtLeaf, unrelatedExploredAtLeaf: the walker's counters
+    //   walkStats — verifications (verifier calls) and candidatesExplored (the work budget's count): the walker's counters
     class Crlite : Finding() { val result: CrliteQueryResult; val issuerSpkiSha256: ByteArray?; val coverageEndMillis: Long? }
     class DataState : Finding() { val dataset: Dataset; val generationId: String?   // "<changeset timestamp>/<last applied record id>", the last filter in buildIndex placement order (the full, then deltas by (effectiveTimestamp, id)); seed: seed id; null ⇔ no generation
         val freshness: Freshness?; val fromSeed: Boolean; val sourceTimestampMillis: Long?; val ageMillis: Long?   // now − sourceTimestampMillis, clamped at 0 when the signed timestamp is ahead of the local clock (§7.1: no rule reads the local clock against signed data)
@@ -506,7 +503,7 @@ class RevoktEvent private constructor(…) { val sequence: Long; val atMillis: L
 interface RevoktListener { fun onVerdict(event: RevoktEvent); fun onStateChanged(state: RevoktState) {} }   // second method has a default body; Java alternative to the state flow
 class RevoktStatus private constructor(…) {            // snapshot; counters monotonic since build() for unevaluated, since start() for every other; maps zero-filled over Rule.entries
     val evaluations: Long; val rejects: Map<Rule, Long> /* ENFORCE only */; val wouldRejects: Map<Rule, Long> /* OBSERVE only */; val shadowWouldRejects: Map<Rule, Long> /* the shadow policy's Rejected verdicts by rule, under ENFORCE and OBSERVE */; val fired: Map<Rule, Long>; val exempted: Map<Rule, Long>
-    val noData: Map<Dataset, Long>; val stale: Map<Dataset, Long> /* loud flag seen */; val unsignedData: Map<Dataset, Long>; val noIssuer: Map<NoIssuerReason, Long> /* keyed by the reported (promoted) reason */; val parseFailed: Map<ParseReason, Long> /* fired[PARSE_FAILED] split by reason, zero-filled */; val walkEnds: Map<WalkEnd, Long>; val chainSources: Map<ChainSource, Long>; val fallbackUsed: Long
+    val noData: Map<Dataset, Long>; val stale: Map<Dataset, Long> /* loud flag seen */; val unsignedData: Map<Dataset, Long>; val noIssuer: Map<NoIssuerReason, Long> /* keyed by the reported (promoted) reason */; val parseFailed: Map<ParseReason, Long> /* fired[PARSE_FAILED] split by reason, zero-filled */; val chainSources: Map<ChainSource, Long>; val fallbackUsed: Long
     val verifierErrors: Long /* Finding.VerifierError only; FallbackNotUsed is not counted */; val candidatesDropped: Long; val verdictCacheHits: Long; val storeFailures: Long; val trustManagerCount: Int; val droppedEvents: Long; val droppedRejectedEvents: Long; val listenerFailures: Long
     val unevaluated: Map<UnevaluatedReason, Long>        // handshakes that returned after flow step 1 without reaching step 2, on every trust manager; the one counter group that still advances in CREATED, after close() and under OFF, so an operator can tell "no traffic" from "not checking"
     val readinessWaits: Long; val readinessTimeouts: Long; val readinessWaitNanosTotal: Long   // flow step 0
@@ -562,7 +559,7 @@ re-walk** runs only after a `Found` (a `PLATFORM` path included: a hit on it run
 as the re-walk and the verdict's `source` is `MIXED`; on `Evaluator.evaluate` with a `verifiedPath` there is no re-walk and the rule is evaluated over that path alone) and only when a hit lies on a found path; it
 reuses the first walk's memo under its own fresh budgets; a `Budget` on the re-walk **never demotes**
 the first walk's `Found`: the rule is evaluated over the paths found so far (the hit path plus any
-clean path the re-walk completed), the re-walk's `WalkEnd` is recorded as `rewalkEnd` on the evaluation's `DEBUG` line,
+clean path the re-walk completed), whether the re-walk completed is recorded as `rewalkEnd` on the evaluation's `DEBUG` line,
 and `PATH_BUDGET_EXCEEDED` fires only from the first walk; the §9.1 properties cover the re-walk from 0.4. **Data
 rules (`NO_DATA`, `STALE`)** are map lookups over the generation snapshot taken at
 flow step 2, computed **before** the catch boundary and merged into every verdict,
@@ -650,9 +647,7 @@ remaining a subsequence.
 |---|---|---|
 | `MAX_DEPTH` | 16 | a path holds at most `MAX_DEPTH + 1` certificates including the terminal; deeper is a dead end, not exhaustion (same convention in the reference walker) |
 | `MAX_PRESENTED` / `MAX_PRESENTED_BYTES` | 64 / 1 MiB | presented certificates and their summed DER; beyond either the chain is `Budget(EXPLORATION_BUDGET)` without a walk (honest chains are under 20 KB; bounds per-handshake memory independently of `MAX_CERT_BYTES`) |
-| `MAX_RELATED_PER_LEVEL` | 64 | related candidates explored at one node; the 65th triggers `RELATED_BUDGET` without being explored |
-| `MAX_VERIFICATIONS` | 256 | verifier calls per walk (memo hits excluded; the guard-tripping attempt not counted) |
-| `MAX_EXPLORED` | 1,024 | candidates explored per walk, a candidate refused by the issuer rules and memo hits included |
+| `MAX_EXPLORED` | 256 | the walk's one work budget, as webpki's `Budget` and mozilla::pkix's `buildForwardCallBudget`: candidates explored per walk, at every depth, an anchor, a memo hit and a candidate the issuer rules refuse included, a loop not (it is skipped uncharged); the 257th is not explored and ends the walk `Budget(EXPLORATION_BUDGET)`. Each exploration makes at most one verifier call, so it bounds the verifications too |
 | `FALLBACK_MAX_PRESENTED` | 8 | the PKIX fallback is skipped for longer presented chains; a `NotFound` on such a chain is `PATH_BUDGET_EXCEEDED`, never `NO_ISSUER`, whether the platform accepted it in step 1 or step 1 did not run (the walker-only harness, `Evaluator.evaluate`), and with the fallback enabled or disabled (decision step 6) |
 | `PATH_CACHE_ENTRIES` / `PATH_CACHE_TTL` | 256 / 10 min | per trust manager; TTLs are absolute from insertion on the monotonic `TimeSource`, not sliding; entries hold the leaf's DER, `serial` and `scts` only, never the presented chain |
 | `CROSS_CALL_MEMO_ENTRIES` | 1,024 | per `Revokt`; `VERIFIED` only; synchronized, shared by concurrent handshake threads across trust managers |
@@ -673,7 +668,8 @@ remaining a subsequence.
 
 The name-constraint comparisons of one walk, and of one fallback path, are bounded at 250,000, webpki's
 `name_constraint_comparisons` (fixture (as), "the comparison budget shared by two candidates";
-`DecideFallbackTest`). The bound is internal: it is not a `RevoktLimits` constant.
+`DecideFallbackTest`). The bound is internal, not a `RevoktLimits` constant, and a separate unit in the walk's one
+budget, as webpki counts it: spending it ends the walk as `MAX_EXPLORED` does.
 
 **Flow**
 
@@ -738,7 +734,7 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
    its verdict, in the verdict cache (flow step 3a), so a transient error is not remembered; a null return is:
    - walk `NotFound` and the fallback finds a path → `Found([fallback], usedFallback = true)`.
    - walk `NotFound`, the fallback was **skipped** (chain too long) and the platform accepted in
-     step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)` with `endReason = COMPLETE` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
+     step 1 (or step 1 did not run: the walker-only harness and `Evaluator.evaluate`) → `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)` (the walk itself completed) and `FallbackNotUsed(SKIPPED)`:
      no honest Web PKI chain is longer than 8 certificates and unreproducible by the walker, and the
      server controls chain length.
    - walk `NotFound` and the fallback failed (`FallbackNotUsed(FAILED)`): on a trust-manager binding (and `Revokt.evaluate`, which always runs step 1), **any** such walk
@@ -748,24 +744,23 @@ canonical match" with raw-byte and SKI matching still applied, for any verifier)
      finding. In the walker-only harness and `Evaluator.evaluate` it is `NO_ISSUER(UNSUPPORTED_ALGORITHM)` when the walk recorded an
      own signature OID (`tbsSigOid`) in `unsupportedOids()`, in mozilla::pkix's order (`CheckIssuerIndependentProperties`
      runs before `VerifySignedData`):
-     - every related candidate that is not an anchor, when explored, whether or not it verifies its child;
-     - a node reached through the unrelated loop, when visited;
-     - the leaf only once a related candidate was found for it (pkix's end-entity deferral), so a leaf presented
+     - every candidate that is not an anchor, when explored, whether or not it verifies its child;
+     - the leaf only once a candidate was found for it (pkix's end-entity deferral), so a leaf presented
        alone is `NO_ISSUER(NO_CANDIDATE)`.
 
      A candidate's key or curve OID never counts. Otherwise it is `NO_ISSUER` with the walker's reason. A server can
      steer the reason there, which is why it is a reason of one rule and not a rule of its own; `walkerReason` keeps
      the walk's reason.
      Unlike pkix, there is no collapse to one error when candidates fail differently.
-   - walk `Budget`: the fallback path's issuer key (appended last) and the walk's partial leaf keys
-     are evaluated in step 7 **only so that `REVOKED` is reported when reachable**; the path status
-     is `PATH_BUDGET_EXCEEDED` regardless; `usedFallback = true` when a fallback path was evaluated.
+   - walk `Budget`: the walk carries no path (it stops at its first), so only the fallback path's issuer key is
+     evaluated in step 7, **only so that `REVOKED` is reported when reachable**; the path status
+     is `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)` regardless; `usedFallback = true` when a fallback path was evaluated.
    - **fallback disabled** (`pkixFallback(false)`, and the walker-only harness's disabled path):
      `pathBuilder.build` is never called, and step 6 gives what the branches above give when no fallback path
      exists, with `FallbackNotUsed(DISABLED)` wherever the fallback did not run because it is configured off
      (`SKIPPED` is the enabled, too-long case only). Walk `Budget` → `PATH_BUDGET_EXCEEDED`, the same
-     as with the fallback enabled, with only the walk's partial leaf keys evaluated and `usedFallback = false`; walk
-     `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)` with `endReason = COMPLETE`,
+     as with the fallback enabled, with no key evaluated and `usedFallback = false`; walk
+     `NotFound` with `presented.size > FALLBACK_MAX_PRESENTED` → `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)`,
      whether or not step 1 ran; any other walk `NotFound` → `NO_ISSUER`, its reason under the
      fallback-failed branch's rule. On a trust-manager binding any such walk `NotFound` is `NO_ISSUER(PLATFORM_ONLY)`,
      whatever the reason: the platform trusts a chain the walker cannot reproduce, and no PKIX builder ran;
@@ -903,7 +898,7 @@ issuer keys are taken only from such paths. Platform-verified chains are trusted
 
 *Deferral rule.* No candidate may be excluded because of a property it shares with another
 candidate (no deduplication by key, name or key identifier; only exact byte duplicates, across
-presented and store, and certificates already on the current path are skipped; **an exact-byte
+presented and store, certificates already on the current path, and loops are skipped; **an exact-byte
 duplicate is yielded once, at the earliest position in the node's order: the store position for a duplicate of
 an anchor, since anchors come first at every depth, and in M2 the presented position for a duplicate of a preload
 certificate, since presented certificates come before the preload**). A candidate may be deferred
@@ -911,26 +906,21 @@ or capped only by its own relation to the child. A candidate is **related** when
 the child's issuer (raw bytes, or under `canonicalSubject`, which on the JVM and Android is the
 platform's own `X500Principal` canonical form) or its SKI equals the child's AKI `keyIdentifier` (an
 AKI carrying only the issuer-and-serial form, or an issuer without an SKI, makes the test name-only).
-Every honest issuer is related under the platform's own canonicalisation, which is why the engine
-delegates canonicalisation to the platform; on both default delegates every honest issuer is
-therefore related, and the misclassification residue is confined to custom delegates whose name
-equality differs from `X500Principal`'s. **Unrelated candidates are the presented certificates not
-related to the child**, are explored only while no path exists through the node (checked before
-every candidate), and are not capped; **at the leaf, the unrelated loop runs regardless of `foundHere` when
-`CandidateIndex.customCanonicaliser` is set** (`platformTrust` is not one of the two shipped final classes, or the delegate is not `platformTrust.defaultDelegate()`; §3). Otherwise an honest issuer misclassified as
-unrelated could be hidden by a related decoy path (§10 residual 1). **It also runs regardless of `foundHere` when no
-related path exists at the leaf**: every unrelated certificate that verifies the leaf and terminates
-is then collected, so `leafKeys` does not depend on the presented order and every such key is evaluated. In both
-cases `unrelatedExploredAtLeaf ≤ presented − 1`, each subtree stays under `MAX_VERIFICATIONS` and `MAX_EXPLORED`, and
-P6 holds on the default delegates, where an honest issuer is always related. Store certificates are never unrelated candidates.
+**Only related certificates are candidates**, at every depth, as webpki and mozilla::pkix offer only
+name-matched issuers: a presented certificate that is not related to the child is never explored. Every honest
+issuer is related under the platform's own canonicalisation, which is why the engine delegates canonicalisation to
+the platform; on both default delegates every honest issuer is therefore related, and a delegate whose name equality
+differs from `X500Principal`'s leaves its misclassified issuers to the PKIX fallback (§10 residual 1). A **loop** is a
+candidate whose raw subject and raw SPKI equal those of a certificate already on the path, the leaf and the child
+included (RFC 4158 §5.2, as webpki and mozilla::pkix compare); it is skipped as a certificate on the path is: it is not
+explored, not charged to the budget, and does not count as a candidate for the leaf's `NoIssuerReason`.
 
-*Termination rule.* At the leaf, every related candidate is explored, so every related key that verifies the leaf
-and terminates is collected; every unrelated one is too when no related path exists there or under a custom
-canonicaliser; below the leaf, the first sound path through a node
-suffices in M1 (M2 re-walks exhaustively when a layer hits, under the re-walk rule of step 8: fresh
-budgets, shared memo, never demoting the first walk's `Found`). **Any limit exceeded at any node
-aborts the whole walk with `Budget`**; only `MAX_DEPTH` is a local dead end. `Found` is returned
-only when the walk completed without exhaustion; a `Budget` may carry partial paths.
+*Termination rule.* **The first sound path ends the walk**, at every depth, the leaf included, as both references
+stop: `Found` carries that one path and its leaf-issuer key (M2 re-walks exhaustively when a layer hits, under the
+re-walk rule of step 8: fresh budgets, shared memo, never demoting the first walk's `Found`). **The work budget is the
+walk's, not a node's**: spending `MAX_EXPLORED`, or the name-constraint comparison bound, at any node aborts the whole
+walk with `Budget`; only `MAX_DEPTH` is a local dead end. Since the walk stops at its first path, a `Budget` carries
+no path.
 
 *Why this is sound.* Every path member below the leaf that is not an anchor must be able to issue (fixtures (aq),
 (ar)): its one basicConstraints reads `cA = TRUE` with a `pathLenConstraint` of at most 127; it is
@@ -979,34 +969,30 @@ trusted. Nothing is excluded for a shared property, so a same-key decoy or a cro
 first cannot hide the real certificate, which is related and is explored. The honest issuer's key is the only key that
 verifies a real leaf's signature, other than a recovered key. A recovered key terminates only through CA certificates
 whose constraints admit the real leaf, so a `Found` carrying only benign keys needs the cooperation of an unconstrained
-CA key holder under a real anchor (§10 residual "constrained sub-CA"). Stuffing related junk past the cap, or verifying
-junk past the guards, yields `Budget`, which rejects; an exhaustion in any subtree also yields `Budget`, so a stuffed
-subtree cannot starve the honest key out of a `Found`. Every terminating leaf-issuer key is evaluated and `REVOKED`
-wins. The PKIX fallback covers one residue the walker does not: a `NotFound` on a chain of at most
-`FALLBACK_MAX_PRESENTED` certificates whose honest link the walker could not reproduce (a custom delegate's constraints
-or verifier divergence; canonicalisation alone never yields `NotFound`, §10 residual 1). Beyond the guards the walk is
-`Budget`, which rejects whatever the fallback does, and a `NotFound` too long for the fallback is
+CA key holder under a real anchor (§10 residual "constrained sub-CA"), who can mint a fresh leaf anyway. Stuffing junk
+ahead of the honest issuer past the budget yields `Budget`, which rejects; an exhaustion in any subtree aborts the whole
+walk, so a stuffed subtree cannot starve the honest key out of a `Found`. The key evaluated is the first sound path's,
+as in both references; a second key that verifies the leaf and terminates needs such a CA (§10 residual 15). The PKIX
+fallback covers the residue the walker does not: a `NotFound` on a chain of at most `FALLBACK_MAX_PRESENTED`
+certificates whose honest link the walker could not reproduce (a custom delegate's canonicalisation, constraints or
+verifier divergence, §10 residual 1). Beyond the budget the walk is `Budget`, which rejects whatever the fallback does, and a `NotFound` too long for the fallback is
 `PATH_BUDGET_EXCEEDED`. A policy may not disable the fallback while `NO_ISSUER` allows.
 
 The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walker-pseudocode.md](../design/walker-pseudocode.md). The code and the §9.1 properties are normative.
 
-- **Explored** means the walker requested the candidate's verification (memo hits included);
-  **verifications** counts calls into the injected verifier. `related` counts related candidates
-  for which exploration was requested at that node; exactly 64 completes, the 65th aborts.
-- **Cost.** An honest leaf → I → root chain: at the leaf, related = I (one verification, recurse);
-  at I, related store-first = the store anchor (one verification, terminal, stop). Two
-  verifications. A presented cross-certificate of the root sorts after the store anchor and is never
-  reached below the leaf once the anchor verifies, and even when reached it is a memo hit (same key); a root-issued
-  leaf is one verification, or two when a cross-certificate X of the root is presented and its issuer R′ is in the
-  snapshot: every related candidate is explored at the leaf, so the walk is L/R, then an L/X memo hit, then X/R′
-  (depth + 1 on the path found); a chain whose snapshot holds the other root of a cross-sign costs
-  depth + 1 (three). A verifying decoy costs one extra verification per presented certificate not on
-  the path, since the unrelated loop runs at every node without a path. Honest bound: **≤ depth + 1**;
-  fixture (v) asserts ≤ 4 against a 200-anchor snapshot. **Worst case is bounded by `MAX_VERIFICATIONS` and `MAX_EXPLORED`, not by the
-  per-level cap**: a nested subtree of verifying junk (RSA duplicate-signature keys make junk verify)
-  can reach the guard in two levels, about 250 ms of RSA-4096 verification on a mid-range ART device,
-  and ends in `Budget`, never an allow. Per-candidate sub-budgets treated as dead ends must not be
-  introduced: they would let a stuffed subtree starve the honest key out of a `Found`.
+- **Explored** means the walker charged the candidate to the work budget and requested its verification (memo hits
+  included); **verifications** counts calls into the injected verifier, at most one per exploration.
+- **Cost.** An honest leaf → I → root chain: at the leaf, I (one verification, recurse); at I, the store anchor first
+  (one verification, terminal, stop). Two verifications. A presented cross-certificate of the root sorts after the
+  store anchor and is never reached once the anchor verifies, and even when reached it is a memo hit (same key); a
+  root-issued leaf is one verification, its presented cross-certificates included, since the walk stops at the store
+  root; a chain whose snapshot holds the other root of a cross-sign costs depth + 1 (three). A related decoy ahead of
+  the honest issuer costs one exploration. Honest bound: **≤ depth + 1**; fixture (v) asserts ≤ 4 against a 200-anchor
+  snapshot. **Worst case is bounded by `MAX_EXPLORED`**: junk ahead of the honest issuer, or a nested subtree of
+  verifying junk (RSA duplicate-signature keys make junk verify), reaches it in one or two levels, about 250 ms of
+  RSA-4096 verification on a mid-range ART device, and ends in `Budget`, never an allow. Per-candidate sub-budgets
+  treated as dead ends must not be introduced: they would let a stuffed subtree starve the honest key out of a
+  `Found`.
 - **Findings.** `AlgorithmIdMismatch` comes once per presented certificate that `decide` parsed, which at the
   step-2, `PRODUCER_UNKEYABLE` and `MAX_PRESENTED` exits is the leaf only; the parser computes its flag
   after NULL/absent normalisation (none for a certificate read through the §9.2 platform canon whose TBS
@@ -1581,21 +1567,19 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
   with the two stated exceptions of `PATH_BUDGET_EXCEEDED` and `NO_DATA` (goal 3).
 - **Issuer identity is pinned by a path of `VERIFIED` links to a known anchor by bytes.** No
   candidate is excluded for a shared property; deferral is by the candidate's own relation, which the
-  server cannot forge for a real certificate; related candidates at the leaf are fully explored or
-  the result is not an allow; every terminating related leaf-issuer key, and every unrelated one when the leaf has no
-  related path or the delegate has a custom canonicaliser, is evaluated, and `REVOKED` wins;
-  any exhaustion anywhere rejects.
+  server cannot forge for a real certificate; the walk stops at its first sound path, as webpki and mozilla::pkix do,
+  and that path's leaf-issuer key is evaluated; a second terminating key for the same leaf needs an unconstrained CA
+  key holder under a real anchor, or an honest issuer with a second SPKI encoding of its key (residual 15); any
+  exhaustion anywhere rejects.
 - **Residual risks recorded from the sixth and seventh review rounds:**
   1. On a custom delegate whose name equality differs from `X500Principal`'s, an honest issuer may
-     be classified unrelated; at the leaf it is then explored regardless of a related path (§5.1
-     deferral rule, custom canonicaliser), below the leaf only while no related path exists at that
-     node (a related path there is itself sound: only the honest key verifies a real certificate and
-     a recovered key cannot reach an anchor), so misclassification alone never yields `NotFound`;
-     what remains is cost and order: the unrelated loop always runs at the leaf (bounded by
-     `presented − 1`) and junk ahead of the misclassified issuer can exhaust the budgets first
-     (`PATH_BUDGET_EXCEEDED`); the PKIX fallback covers the constraints and verifier residue for
-     chains of at most 8 certificates. Consumers with a custom delegate accept the ordering residue. The fallback may not be disabled while `NO_ISSUER` allows. On both
-     default delegates every honest issuer is related.
+     be classified unrelated, and an unrelated certificate is never a candidate (§5.1 deferral rule), so the walk
+     misses that link: `NotFound`, which the PKIX fallback covers for chains of at most 8 certificates, as it covers
+     the constraints and verifier residue (`FALLBACK_LIMIT` beyond them, `NO_ISSUER(PLATFORM_ONLY)` on a binding with
+     the fallback off). A related decoy path ahead of the misclassified issuer is found first and decides the key,
+     as in residual 15. Neither reference explores an unrelated certificate either: webpki and mozilla::pkix offer
+     only name-matched issuers. The fallback may not be disabled while `NO_ISSUER` allows. On both default delegates
+     every honest issuer is related.
   1b. **Behind a TLS-intercepting proxy revokt sees the proxy's chain**: no SCTs, an issuer CRLite does
      not enroll, so every verdict is a non-answer and `STRICT` reduces to exempting the proxy's anchor;
      CRLite cannot evaluate such traffic, deploy revokt on the egress proxy instead (§8 `OBSERVE`
@@ -1610,10 +1594,11 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      the default delegate reads the cacerts directories only when wired after a trust-store change,
      a Conscrypt `TrustManagerImpl` over `AndroidCAStore` on every wiring. A consumer that wants no
      main-thread disk read creates its trust managers before `start()`.
-  4. `MAX_RELATED_PER_LEVEL = 64` rejects honest nodes with more than 64 same-name certificates;
-     unknown in the Web PKI, possible in bridge PKIs, which are out of scope for TLS clients. Since store anchors come
-     first at every depth, 64 snapshot anchors named like a node's issuer push a presented issuer past
-     the cap at that node, the leaf or below it; the trust store controls that, not the server, as in Firefox, where roots come first.
+  4. `MAX_EXPLORED = 256` rejects an honest chain whose walk meets 256 failing candidates before its path: unknown in
+     the Web PKI, possible in bridge PKIs, which are out of scope for TLS clients. Since store anchors come first at
+     every depth, about 256 snapshot anchors named like a node's issuer push a presented issuer past the budget; the
+     trust store controls that, not the server, as in Firefox, where roots come first. A server can spend the budget
+     with junk ahead of its own issuer, which rejects its own chain.
   5. CRLite's (issuer key, serial) model: a certificate revoked under one issuer key and re-presented
      under a cross-issuing key with a different serial is a data-model limit, not a walker defect.
   6. The named M1 Android residual (§5.2), including any app whose NSC carries a `<domain-config>`, where `RootTrustManager` rejects a null host: the plain-delegate binding and any path where the
@@ -1658,7 +1643,7 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      outcome exemptable under `anchorIn`, and `NOT_ENROLLED` under an unenrolled issuer. The profile already accepts
      the private-PKI serial forms, so the remaining unkeyable leaves are encodings that mozilla::pkix and BoringSSL
      also reject. This reopens if a gap entry under a private anchor is reported.
-  9. Walker CPU per uncached connection is bounded by `MAX_VERIFICATIONS`, about 250 ms of RSA-4096
+  9. Walker CPU per uncached connection is bounded by `MAX_EXPLORED`, about 250 ms of RSA-4096
      on a mid-range ART device, and both caches are defeated by one varying junk byte per connection;
      `MAX_PRESENTED` bounds parsing (counted over the raw chain, before dropping). The PKIX fallback's build is outside
      these budgets: `CertPathBuilder` has no candidate budget and backtracks through every name-matching
@@ -1693,9 +1678,19 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
         example RSA with and without NULL parameters. A query under the encoding Mozilla did not key falls outside the
         universe.
   15. **Constrained sub-CA.** The holder of an unconstrained CA key under a real anchor, which is any public CA, can
-     certify a recovered key, and the walker then reports only that benign key as long as the honest intermediate is
-     not presented (fixture (ar), "no limit, an unconstrained CA"). A limited sub-CA cannot: `pathLenConstraint`,
-     keyUsage `keyCertSign`, extKeyUsage and name constraints are enforced on every issuer (fixtures (ar), (as)).
+     certify a recovered key, and the walker then reports only that benign key whenever its path comes first in
+     candidate order, the store's anchors and then the presented order, which the server controls: with the honest
+     intermediate presented after it too (fixtures (o) and (ar), "no limit, an unconstrained CA"). mozilla::pkix
+     evaluates that one path as well: it checks revocation only for the issuer of the path it built, and a failing check
+     ends the search. webpki goes on past a revoked path to the next candidate, so it accepts the attacker's path in
+     either order. Such a key holder can mint a fresh leaf for the name anyway. M2's candidate order, presented
+     certificates before the preload as in Firefox's `FindIssuer`, does not close this: a preloaded honest intermediate
+     comes after the attacker's presented one. The same order also picks between two SPKI encodings of one honest
+     issuer key (an RSA key with NULL or with absent parameters): both verify the leaf and terminate without any
+     attacker CA, CRLite keys by the hash of the SPKI's bytes, and only the first path's encoding is queried, as in
+     Firefox; such issuers are rare in the Web PKI. A limited sub-CA cannot do the first: `pathLenConstraint`,
+     keyUsage `keyCertSign`, extKeyUsage and name constraints are enforced on every issuer (fixtures (ar), (as), and the
+     (o)-shaped evaluate case where such a sub-CA certifies the recovered-key CA presented first).
      Name constraints follow Firefox's mozilla::pkix (§5.1 "Why this is sound", pinned to `pkixnames.cpp` at
      `cac25a6`): directoryName and rfc822Name subtrees are evaluated, the subject's emailAddress attributes stand in
      for a missing subjectAltName, and a serverAuth leaf's CN-ID is checked when its subjectAltName has no dNSName or

@@ -9,10 +9,10 @@ import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
 import dev.revokt.SignatureVerifier
 import dev.revokt.VerifyResult
-import dev.revokt.WalkEnd
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.found
 import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
+import dev.revokt.engine.walker.FixtureWorld.Companion.PRINTABLE_STRING
 import dev.revokt.engine.walker.Honest
 import dev.revokt.testing.SymOids
 import dev.revokt.testing.SymVerifier
@@ -25,8 +25,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 /**
- * Spec §5.1 `reconstruct` beyond the §9 rows: each budget at N and N + 1, the memos, the `UNSUPPORTED` rule, the leaf
- * rules for unrelated candidates, the `NoIssuerReason` flags and the never-throw rule for verifiers (§5.5).
+ * Spec §5.1 `reconstruct` beyond the §9 rows: the work budget at N and N + 1, the first-path stop, the loop skip, the
+ * memos, the `UNSUPPORTED` rule, unrelated certificates, the `NoIssuerReason` flags and the never-throw rule for
+ * verifiers (§5.5).
  */
 @OptIn(RevoktInternalApi::class)
 class ReconstructTest {
@@ -53,7 +54,7 @@ class ReconstructTest {
         probe: Set<String> = verifier.unsupportedOids(),
         memo: LruMap<Pair<ByteString, ByteString>, VerifyResult> = lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
     ): Walk {
-        val index = CandidateIndex(f.snapshot, customCanonicaliser = f.customCanonicaliser)
+        val index = CandidateIndex(f.snapshot)
         return reconstruct(f.presented.map { index.cert(WalkerCerts.parse(it)) }, index, verifier, probe, memo)
     }
 
@@ -78,12 +79,19 @@ class ReconstructTest {
     }
 
     @Test
-    fun `walker MAX_VERIFICATIONS completes at 256 verifier calls and aborts at the 257th`() {
-        // 251 junk: 256 verifications, Found.
+    fun `walker MAX_EXPLORED completes at 256 explorations and aborts at the 257th, at any depth`() {
+        // 251 junk: 256 explorations, each a verification, Found.
         val (d256, at256) = levels(listOf(63, 63, 63, 62))
-        val f256 = d256.w.fixture("budget", "256", at256, listOf(d256.root), found(d256.path).copy(verifications = 256))
+        val f256 =
+            d256.w.fixture(
+                "budget",
+                "256",
+                at256,
+                listOf(d256.root),
+                found(d256.path).copy(verifications = 256, candidatesExplored = 256),
+            )
         check(f256)
-        // 252 junk: the last link, I4/R, is the 257th; it is explored but not verified, at the path size of I4.
+        // 252 junk: the last link, I4/R, would be the 257th exploration; it is not charged, and the whole walk ends.
         val (d257, at257) = levels(listOf(63, 63, 63, 63))
         val f257 =
             d257.w.fixture(
@@ -91,69 +99,49 @@ class ReconstructTest {
                 "257",
                 at257,
                 listOf(d257.root),
-                budget(WalkEnd.VERIFICATION_BUDGET, 5).copy(verifications = 256, candidatesExplored = 257),
+                budget().copy(verifications = 256, candidatesExplored = 256),
             )
         check(f257)
     }
 
-    /**
-     * The leaf's issuer is absent, so every presented certificate is unrelated and explored (uncapped, revision 48):
-     * [junk] of them share one key (one verification, then memo hits) ahead of U, an unrelated issuer under the root.
-     */
-    private fun unrelatedAtLeaf(junk: Int): Pair<Honest, List<FixtureCert>> {
-        val h = Honest(leafIssuer = FixtureWorld().name("Missing issuer"))
+    /** [junk] certificates named like the intermediate that share one key ahead of it: one verification, then memo hits. */
+    private fun sharedKeyJunk(junk: Int): Pair<Honest, List<FixtureCert>> {
+        val h = Honest()
         val shared = h.w.key()
-        val js = List(junk) { h.w.cert("J$it", h.w.name("Junk $it"), h.w.name("Junk issuer"), shared) }
+        val js = List(junk) { h.w.cert("J$it", h.intermediate.subject, h.w.name("Junk issuer $it"), shared) }
         return h to listOf(h.leaf) + js + h.intermediate
     }
 
     @Test
-    fun `walker MAX_EXPLORED completes at 1024 explorations and aborts at the 1025th`() {
-        val (h1024, p1024) = unrelatedAtLeaf(RevoktLimits.MAX_EXPLORED - 2)
+    fun `walker a memo hit costs no verification but one exploration of the budget`() {
+        val (h256, p256) = sharedKeyJunk(RevoktLimits.MAX_EXPLORED - 2)
         check(
-            h1024.fixture(
+            h256.fixture(
                 "budget",
-                "1024",
-                p1024,
-                found(h1024.path).copy(verifications = 3, candidatesExplored = 1024, unrelatedExploredAtLeaf = 1023),
+                "memo hits, 256",
+                p256,
+                found(h256.path).copy(verifications = 3, candidatesExplored = RevoktLimits.MAX_EXPLORED),
             ),
         )
-        // One more junk: I/R would be the 1025th exploration, detected at I (path size 2).
-        val (h1025, p1025) = unrelatedAtLeaf(RevoktLimits.MAX_EXPLORED - 1)
+        // One more junk: I/R would be the 257th exploration.
+        val (h257, p257) = sharedKeyJunk(RevoktLimits.MAX_EXPLORED - 1)
         check(
-            h1025.fixture(
+            h257.fixture(
                 "budget",
-                "1025",
-                p1025,
-                budget(WalkEnd.EXPLORATION_BUDGET, 2).copy(verifications = 2, candidatesExplored = 1024),
+                "memo hits, 257",
+                p257,
+                budget().copy(verifications = 2, candidatesExplored = RevoktLimits.MAX_EXPLORED),
             ),
         )
     }
 
     @Test
-    fun `walker the related cap applies at the leaf after a path was found and keeps it as partial`() {
-        with(Honest()) {
-            check(
-                fixture(
-                    "cap",
-                    presented = listOf(leaf, intermediate) + junk(RevoktLimits.MAX_RELATED_PER_LEVEL),
-                    walk =
-                        budget(WalkEnd.RELATED_BUDGET, 1, path).copy(
-                            verifications = 65,
-                            relatedExploredAtLeaf = 64,
-                        ),
-                ),
-            )
-        }
-    }
-
-    @Test
-    fun `walker below the leaf a found path ends the related loop before the cap is reached`() {
+    fun `walker below the leaf the first path ends the walk`() {
         val d = Deep(2)
         val (i1, i2) = d.intermediates
         val before = List(63) { d.w.cert("J$it", i2.subject, d.w.name("Junk issuer $it")) }
         val after = List(5) { d.w.cert("K$it", i2.subject, d.w.name("Junk issuer K$it")) }
-        // 64 related at I1, the 64th is I2 with a path; the 65th is never asked for a verification.
+        // 64 related at I1, the 64th is I2 with a path; the five after it are never explored.
         check(
             d.w.fixture(
                 "cap",
@@ -195,7 +183,7 @@ class ReconstructTest {
     @Test
     fun `walker cross-call memo never stores UNSUPPORTED or a verifier throw`() {
         with(Honest()) {
-            // F verifies the leaf; F's own signature is unsupported against R (related) and against I (unrelated).
+            // F verifies the leaf; F's own signature is unsupported against R, its one candidate.
             val fake =
                 w.cert(
                     "F",
@@ -373,7 +361,7 @@ class ReconstructTest {
         with(Honest()) {
             val other = w.name("Other")
             // The leaf's own signature OID is unsupported. As pkix defers an end-entity error, it counts only once an
-            // issuer candidate was found: not alone, and not against an unrelated candidate.
+            // issuer candidate was found: not alone, and not beside an unrelated certificate, which is no candidate.
             val leaf2 =
                 w.cert(
                     "L2",
@@ -388,7 +376,7 @@ class ReconstructTest {
                     "unsupported",
                     "unrelated candidate",
                     listOf(leaf2, unrelated),
-                    notFound(NoIssuerReason.NO_CANDIDATE).copy(verifications = 1),
+                    notFound(NoIssuerReason.NO_CANDIDATE).copy(verifications = 0, candidatesExplored = 0),
                 ),
             )
             check(
@@ -446,7 +434,7 @@ class ReconstructTest {
     }
 
     private fun WalkerFixture.copyWith(walk: ExpectedWalk) =
-        WalkerFixture(id, variant, presented, snapshot, ok, walk, unsupported, customCanonicaliser, label)
+        WalkerFixture(id, variant, presented, snapshot, ok, walk, unsupported, label)
 
     @Test
     fun `walker NoIssuerReason comes from the leaf-level flags`() {
@@ -464,13 +452,13 @@ class ReconstructTest {
                     notFound(NoIssuerReason.NO_CANDIDATE),
                 ),
             )
-            // Related candidates all INVALID, an unrelated one verifies: the leaf verified, so UNANCHORED.
+            // Related candidates all INVALID, an unrelated one verifies: it is no candidate, so ALL_CANDIDATES_INVALID.
             check(
                 fixture(
                     "reason",
                     "related invalid, unrelated verifies",
                     listOf(leaf, unanchored, unrelatedVerifier),
-                    notFound(NoIssuerReason.UNANCHORED),
+                    notFound(NoIssuerReason.ALL_CANDIDATES_INVALID).copy(verifications = 1, candidatesExplored = 1),
                 ),
             )
             // Related candidates all INVALID and nothing else: ALL_CANDIDATES_INVALID.
@@ -497,43 +485,7 @@ class ReconstructTest {
     }
 
     @Test
-    fun `walker at the leaf a related path stops the unrelated loop unless the canonicaliser is custom`() {
-        // (ac)'s second case with the platform's own canonicaliser: the related decoy path hides the unrelated issuer.
-        val custom = WalkerFixturesS1ToAj.ac()[1]
-        val platform = custom.copyWithCanonicaliser(false)
-        val walk = walk(platform)
-        assertIs<Walk.Found>(walk)
-        assertEquals(1, walk.paths.size)
-        assertEquals(0, walk.stats.unrelatedExploredAtLeaf)
-        assertEquals(2, walk.stats.verifications)
-        val withCustom = walk(custom)
-        assertIs<Walk.Found>(withCustom)
-        assertEquals(2, withCustom.leafKeys.size)
-    }
-
-    private fun WalkerFixture.copyWithCanonicaliser(custom: Boolean) =
-        WalkerFixture(id, variant, presented, snapshot, ok, walk, unsupported, custom, label)
-
-    @Test
-    fun `walker below the leaf a custom canonicaliser does not run the unrelated loop after a path`() {
-        with(Honest()) {
-            // U is unrelated to L and to I, verifies both and is certified by R.
-            val u = w.cert("U", w.name("Unrelated"), root.subject, signer = root.key)
-            w.verifies(intermediate, u.key)
-            // At the leaf (custom): U is explored, L/U invalid. At I: R is found and U is never explored.
-            check(
-                fixture(
-                    "custom",
-                    presented = listOf(leaf, intermediate, u),
-                    customCanonicaliser = true,
-                    walk = found(path).copy(verifications = 3, candidatesExplored = 3, unrelatedExploredAtLeaf = 1),
-                ),
-            )
-        }
-    }
-
-    @Test
-    fun `walker below the leaf the unrelated loop stops once a path exists`() {
+    fun `walker an unrelated certificate is never a candidate, below the leaf either`() {
         val w = FixtureWorld()
         val absent = w.name("Absent issuer")
         val u1 = w.root("U1", "Unrelated 1")
@@ -542,32 +494,83 @@ class ReconstructTest {
         val i = w.cert("I", w.name("Intermediate"), absent).also { w.verifies(it, u1.key) }
         w.verifies(i, u2.key)
         val leaf = w.cert("L", w.name("leaf.example"), i.subject, signer = i.key)
-        // L/I, then I/U1 through I's unrelated loop; U2 is never explored, at I or (a related path exists) at the leaf.
+        // L/I only: I has no candidate, so the walk is UNANCHORED, whatever the PKIX fallback then finds.
         check(
             w.fixture(
                 "unrelated",
                 "",
                 listOf(leaf, i, u1, u2),
                 listOf(u1, u2),
-                found(listOf(leaf, i, u1)).copy(verifications = 2, candidatesExplored = 2, unrelatedExploredAtLeaf = 0),
+                notFound(NoIssuerReason.UNANCHORED).copy(verifications = 1, candidatesExplored = 1),
+            ),
+        )
+    }
+
+    /**
+     * A and B cross-sign (A's issuer is B's subject and the reverse), and A2 is A's subject and key under the root:
+     * leaf → A → B → A2 → R is a path of byte-distinct certificates, but A2 repeats A's raw subject and SPKI, so at B it
+     * is skipped (RFC 4158 §5.2, webpki and mozilla::pkix), uncharged. The walk backtracks to the leaf and finds
+     * leaf → A2 → R, L/A2 a memo hit of L/A.
+     */
+    private fun crossSigned(
+        a2Subject: (FixtureWorld, ByteArray) -> ByteArray,
+    ): Triple<FixtureWorld, List<FixtureCert>, List<FixtureCert>> {
+        val w = FixtureWorld()
+        val root = w.root("R", "Root")
+        val aName = w.name("A")
+        val bName = w.name("B")
+        val aKey = w.key()
+        val bKey = w.key()
+        val a = w.cert("A", aName, bName, aKey, signer = bKey)
+        val b = w.cert("B", bName, aName, bKey, signer = aKey)
+        val a2 = w.cert("A2", a2Subject(w, aName), root.subject, aKey, signer = root.key)
+        val leaf = w.cert("L", w.name("leaf.example"), aName, signer = aKey, key = w.leafKey())
+        return Triple(w, listOf(leaf, a, b, a2), listOf(root))
+    }
+
+    @Test
+    fun `walker a candidate repeating the raw subject and SPKI of a certificate on the path is skipped uncharged`() {
+        val (w, presented, snapshot) = crossSigned { _, name -> name }
+        val leaf = presented.first()
+        val a2 = presented.last()
+        // L/A, A/B, then B/A2 skipped; L/A2 (memo hit), A2/R.
+        check(
+            w.fixture(
+                "loop",
+                "same raw subject",
+                presented,
+                snapshot,
+                found(listOf(leaf, a2, snapshot[0])).copy(verifications = 3, candidatesExplored = 4),
+            ),
+        )
+        // Only raw bytes count, as in both references: A2's subject as a PrintableString is canonically A's but not a
+        // loop, so B/A2 is explored and the walk is leaf → A → B → A2 → R.
+        val (w2, presented2, snapshot2) = crossSigned { world, _ -> world.name("A", PRINTABLE_STRING) }
+        check(
+            w2.fixture(
+                "loop",
+                "re-encoded subject",
+                presented2,
+                snapshot2,
+                found(presented2 + snapshot2).copy(verifications = 4, candidatesExplored = 4),
             ),
         )
     }
 
     @Test
-    fun `walker an unrelated candidate at the leaf that trips MAX_EXPLORED is counted as explored at the leaf`() {
-        // 1,024 unrelated junk at the leaf use the budget; I, the 1,025th unrelated candidate, trips it at the leaf.
-        val (h, presented) = unrelatedAtLeaf(RevoktLimits.MAX_EXPLORED)
+    fun `walker a copy of the leaf's subject and key is no candidate, so the leaf stays NO_CANDIDATE`() {
+        val w = FixtureWorld()
+        val name = w.name("Self-issued leaf")
+        val key = w.leafKey()
+        val leaf = w.cert("L", name, name, key, signer = w.key())
+        val copy = w.cert("L2", name, name, key, signer = w.key())
         check(
-            h.fixture(
-                "budget",
-                "unrelated trip",
-                presented,
-                budget(WalkEnd.EXPLORATION_BUDGET, 1).copy(
-                    verifications = 1,
-                    candidatesExplored = RevoktLimits.MAX_EXPLORED,
-                    unrelatedExploredAtLeaf = RevoktLimits.MAX_EXPLORED + 1,
-                ),
+            w.fixture(
+                "loop",
+                "leaf copy",
+                listOf(leaf, copy),
+                emptyList(),
+                notFound(NoIssuerReason.NO_CANDIDATE).copy(verifications = 0, candidatesExplored = 0),
             ),
         )
     }
@@ -580,7 +583,7 @@ class ReconstructTest {
                     "duplicates",
                     presented = listOf(leaf, intermediate, intermediate, leaf, root, intermediate),
                     // L/I, I/R; the presented root is the store root's exact bytes, yielded once.
-                    walk = found(path).copy(verifications = 2, candidatesExplored = 2, relatedExploredAtLeaf = 1),
+                    walk = found(path).copy(verifications = 2, candidatesExplored = 2),
                 ),
             )
         }

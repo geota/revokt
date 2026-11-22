@@ -64,13 +64,7 @@ class HonestCorpusWalkTest {
             val ders = chain(host)
             val (presented, walk) = walk(host)
             assertIs<Walk.Found>(walk, host)
-            assertEquals(
-                ders.size,
-                walk.paths
-                    .first()
-                    .certs.size,
-                "$host: the whole chain",
-            )
+            assertEquals(ders.size, walk.path.certs.size, "$host: the whole chain")
             assertTrue(presented.drop(1).all { it.isCa }, "$host: every intermediate is a CA")
             assertTrue(!presented[0].isCa, "$host: the leaf is not")
             // For clientAuth the chain is Found exactly when every intermediate, read by the JDK, has no extKeyUsage

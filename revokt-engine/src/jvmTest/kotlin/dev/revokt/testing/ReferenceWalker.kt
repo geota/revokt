@@ -18,25 +18,29 @@ import javax.security.auth.x500.X500Principal
 
 /**
  * The §9.1 oracle: a relation-aware, uncapped reference walker. [walk] takes a presented chain (leaf first) and returns
- * the lowercase-hex SHA-256 of every leaf-issuer SPKI on a sound path, so the fuzzer's P2 compares by value.
+ * the lowercase-hex SHA-256 of every leaf-issuer SPKI on a sound path, so the fuzzer's P2 compares by value;
+ * [walkByName] the same over name-related links only. The walker stops at its first path, so P2 reads them as a
+ * bracket: its one key is in [walk]'s set, and when [walkByName]'s is not empty it finds a path.
  *
  * - A **sound path** is leaf → … → terminal where every link is [VerifyResult.VERIFIED] by [verifier] under the next
  *   certificate's key and the terminal is in [anchors] by exact bytes; an anchor ends the path (its own signature is
  *   never verified). It holds at most `MAX_DEPTH + 1` certificates including the terminal; a longer one is a dead end
  *   (spec §5.1 Limits, "same convention in the reference walker"). There is no other limit.
- * - **Candidates** of a node are the anchors related to it and every presented certificate other than the node; a
- *   presented certificate is related or unrelated, an anchor that is not related is never a candidate (§5.1 deferral
- *   rule). **Related** is spec §5.1's test: subject equal to the node's issuer as raw bytes or under
- *   [canonicalSubject] (null, or a throw, is no canonical match), or SKI equal to the node's AKI keyIdentifier.
- * - **At every node, related candidates, plus unrelated presented certificates only when no related path exists**: the
- *   keys returned are those of the related candidates with a sound path through them, or, when there is none, those
- *   of the unrelated ones. All of each group, so the result does not depend on the presented order.
- * - Below the leaf only whether a sound path exists matters, and there "related first, unrelated when none" admits a
- *   path exactly when some candidate does; certificates already on the path (the leaf above all) are never candidates.
- *   A shortest path never repeats a certificate, so an exhaustive depth-first walk over paths without repeats finds
- *   one within the depth bound exactly when the shortest one is within it. The walker therefore computes each
- *   reachable certificate's distance to an anchor in the graph without the leaf instead of enumerating paths: the
- *   same answer, in polynomial time on stuffed chains.
+ * - **Candidates** of a node are the anchors and presented certificates related to it, other than the node; a
+ *   certificate that is not related is never a candidate (§5.1). **Related** is spec §5.1's test: subject equal to the
+ *   node's issuer as raw bytes or under [canonicalSubject] (null, or a throw, is no canonical match), or SKI equal to
+ *   the node's AKI keyIdentifier; [walkByName] drops the SKI clause.
+ * - **Loops:** a certificate with the leaf's raw subject and raw SPKI is never a candidate, as the walker skips a
+ *   candidate repeating a certificate on its path and the leaf is on every path. A repeat higher up is not modelled:
+ *   on name-related links it can always be cut out (the repeated certificate is related and verifies where its first
+ *   copy did), so [walkByName] is exact for the walker; only a first copy related by SKI alone can make the walker
+ *   miss a path [walk] counts, which neither reference builds (both chain by name).
+ * - All keys with a path, so the result does not depend on the presented order. Below the leaf only whether a sound
+ *   path exists matters; certificates already on the path are never candidates. A shortest path never repeats a
+ *   certificate, so an exhaustive depth-first walk over paths without repeats finds one within the depth bound exactly
+ *   when the shortest one is within it. The walker therefore computes each reachable certificate's distance to an
+ *   anchor in the graph without the leaf instead of enumerating paths: the same answer, in polynomial time on stuffed
+ *   chains.
  * - A candidate that is not an anchor must be a CA: the JDK reads its basicConstraints with `cA = TRUE`
  *   (`X509Certificate.getBasicConstraints() >= 0`; a certificate the JDK cannot parse is not one). The JDK, not
  *   revokt's extension reader, so the oracle checks the walker's [dev.revokt.engine.walker.Cert.isCa] rather than
@@ -52,9 +56,8 @@ import javax.security.auth.x500.X500Principal
  * Key families (§5.1 `CandidateIndex.related()`) only order candidates, so they do not change the result and are not
  * modelled.
  *
- * [canonicalSubject] exists for relatedness tests only. §5.1's leaf rule for a custom canonicaliser (the unrelated
- * loop runs at the leaf regardless of a found path) is not modelled: the fuzzer runs both walkers with the platform
- * canonicaliser (§9.1), and that clause is covered by the walker-harness fixtures.
+ * [canonicalSubject] exists for relatedness tests only; the fuzzer runs both walkers with the platform canonicaliser
+ * (§9.1).
  */
 internal class ReferenceWalker(
     anchors: List<ByteArray>,
@@ -63,7 +66,14 @@ internal class ReferenceWalker(
 ) {
     private val anchors: Map<ByteString, Node> = anchors.mapNotNull { node(it) }.associateBy { it.bytesHash }
 
-    fun walk(presented: List<ByteArray>): Set<String> {
+    fun walk(presented: List<ByteArray>): Set<String> = walk(presented, byName = false)
+
+    fun walkByName(presented: List<ByteArray>): Set<String> = walk(presented, byName = true)
+
+    private fun walk(
+        presented: List<ByteArray>,
+        byName: Boolean,
+    ): Set<String> {
         if (presented.isEmpty()) return emptySet()
         val leaf = node(presented[0]) ?: return emptySet()
         if (leaf.bytesHash in anchors) return setOf(leaf.spkiHash.hex())
@@ -72,32 +82,35 @@ internal class ReferenceWalker(
             val n = node(der) ?: continue
             if (n.bytesHash != leaf.bytesHash) others.putIfAbsent(n.bytesHash, anchors[n.bytesHash] ?: n)
         }
-        val graph = Graph(others.values.toList())
+        val graph = Graph(others.values.toList(), leaf, byName)
         val maxDistance = RevoktLimits.MAX_DEPTH - 1 // [leaf, candidate, …, anchor] holds distance + 2 certificates
         val issuers = graph.candidates(leaf).filter { graph.verified(leaf, it) }
-        val (related, unrelated) = issuers.partition { it.isRelatedTo(leaf) }
         val distances = graph.distances(issuers)
-
-        fun keys(group: List<Node>) =
-            group.filter { (distances[it.bytesHash] ?: Int.MAX_VALUE) <= maxDistance }.map { it.spkiHash.hex() }.toSet()
-        return keys(related).ifEmpty { keys(unrelated) }
+        return issuers
+            .filter { (distances[it.bytesHash] ?: Int.MAX_VALUE) <= maxDistance }
+            .map { it.spkiHash.hex() }
+            .toSet()
     }
 
-    /** The certificates of one walk: [presented] (without the leaf) and the anchors, with verified edges memoised. */
+    /**
+     * The certificates of one walk: [presented] (without the leaf) and the anchors, minus those that repeat [leaf]'s
+     * raw subject and SPKI, with verified edges memoised; [byName] relates by name only.
+     */
     private inner class Graph(
         private val presented: List<Node>,
+        private val leaf: Node,
+        private val byName: Boolean,
     ) {
         private val memo = HashMap<Pair<ByteString, ByteString>, Boolean>()
         private val edges = HashMap<ByteString, List<Node>>()
 
         fun candidates(child: Node): List<Node> {
-            val store =
-                anchors.values.filter {
-                    it.isRelatedTo(child) &&
-                        presented.none { p -> p.bytesHash == it.bytesHash }
-                }
+            val store = anchors.values.filter { a -> presented.none { p -> p.bytesHash == a.bytesHash } }
             return (presented + store).filter {
-                it.bytesHash != child.bytesHash && (it.isCa || it.bytesHash in anchors)
+                it.bytesHash != child.bytesHash &&
+                    it.isRelatedTo(child, byName) &&
+                    !it.repeats(leaf) &&
+                    (it.isCa || it.bytesHash in anchors)
             }
         }
 
@@ -171,6 +184,7 @@ internal class ReferenceWalker(
         val bytesHash: ByteString = der.toByteString().sha256()
         val spkiHash: ByteString = spki.toByteString().sha256()
         val isCa: Boolean = jdkIsCa(der)
+        private val spkiRaw = spki.toByteString()
         private val subjectRaw = p.rawSubject().toByteString()
         private val issuerRaw = p.rawIssuer().toByteString()
         private val subjectCanonical = canonical(p.rawSubject())
@@ -184,10 +198,16 @@ internal class ReferenceWalker(
                 ?.bytes(p.tbsBytes)
                 ?.toByteString()
 
-        fun isRelatedTo(child: Node): Boolean =
+        fun isRelatedTo(
+            child: Node,
+            byName: Boolean,
+        ): Boolean =
             subjectRaw == child.issuerRaw ||
                 (subjectCanonical != null && subjectCanonical == child.issuerCanonical) ||
-                (ski != null && ski == child.akiKeyId)
+                (!byName && ski != null && ski == child.akiKeyId)
+
+        /** The same raw subject and raw SPKI as [other]: the walker's loop (RFC 4158 §5.2). */
+        fun repeats(other: Node): Boolean = subjectRaw == other.subjectRaw && spkiRaw == other.spkiRaw
     }
 
     companion object {

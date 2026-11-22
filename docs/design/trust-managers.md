@@ -41,7 +41,7 @@ loader never blocks on the factory lock); all contexts are dropped on `close()`.
 - **Caches**, per trust manager, LRU-bounded (a synchronized access-ordered `LinkedHashMap` or a
   striped LRU; touched from concurrent handshake threads): the path cache holds `Found`, `NotFound`,
   `Budget` and the fallback result alike. **A path-cache entry is exactly**: `status`, `source`,
-  `noIssuerReason`, `walkerReason`, `parseReason`, `keyabilityClause`, `terminalKind`, `endReason`, `endDepth`,
+  `noIssuerReason`, `walkerReason`, `parseReason`, `keyabilityClause`, `terminalKind`,
   `usedFallback`, the step-6 `FallbackReason` (null when no `FallbackNotUsed` was reported; revision 50), `pathsFound`, the reported path as (source, index) pairs for walker entries or, for
   `PLATFORM` entries, the leaf-issuer SPKI hash, the anchor hash and the path length (a
   Conscrypt-completed chain can contain certificates from neither source), `reportedPathSha256s`,

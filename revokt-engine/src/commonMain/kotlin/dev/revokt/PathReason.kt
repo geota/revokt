@@ -40,13 +40,11 @@ public enum class PathReason(
     /** `PARSE_FAILED`: parsed, but Mozilla's producer could not key it, so it is in no filter (spec §9.2 D8). */
     PRODUCER_UNKEYABLE(PathStatus.PARSE_FAILED),
 
-    /** `PATH_BUDGET_EXCEEDED`: `RevoktLimits.MAX_RELATED_PER_LEVEL` related candidates at one node. */
-    RELATED_BUDGET(PathStatus.PATH_BUDGET_EXCEEDED),
-
-    /** `PATH_BUDGET_EXCEEDED`: `RevoktLimits.MAX_VERIFICATIONS` verifier calls. */
-    VERIFICATION_BUDGET(PathStatus.PATH_BUDGET_EXCEEDED),
-
-    /** `PATH_BUDGET_EXCEEDED`: `RevoktLimits.MAX_EXPLORED` candidates explored, or a presented chain over its caps. */
+    /**
+     * `PATH_BUDGET_EXCEEDED`: the walk spent its work budget (`RevoktLimits.MAX_EXPLORED` candidates explored, or the
+     * name-constraint comparison bound) before it found a path, or the presented chain is over `MAX_PRESENTED` or
+     * `MAX_PRESENTED_BYTES` and was not walked.
+     */
     EXPLORATION_BUDGET(PathStatus.PATH_BUDGET_EXCEEDED),
 
     /**

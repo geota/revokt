@@ -133,7 +133,7 @@ class UnsupportedAlgorithmLabelTest {
     }
 
     @Test
-    fun `walker a node the unrelated loop reached counts its own unsupported OID`() {
+    fun `walker an unrelated certificate is no candidate, so its own unsupported OID is never recorded`() {
         // U is not related to the leaf but verifies it, and signs itself with an unsupported OID.
         val u =
             h.w
@@ -144,12 +144,12 @@ class UnsupportedAlgorithmLabelTest {
                 "relabel",
                 "[L, U]",
                 listOf(h.leaf, u),
-                ExpectedWalk
-                    .notFound(NoIssuerReason.NO_CANDIDATE)
-                    .copy(unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE), unrelatedExploredAtLeaf = 1),
+                ExpectedWalk.notFound(NoIssuerReason.NO_CANDIDATE).copy(verifications = 0, candidatesExplored = 0),
             )
         WalkerHarness.check(f)
-        assertUnsupportedLabel(WalkerHarness.decide(f, fallback = null).path)
+        val path = WalkerHarness.decide(f, fallback = null).path
+        assertEquals(PathStatus.NO_ISSUER, path.status)
+        assertEquals(PathReason.NO_CANDIDATE, path.reason)
     }
 
     @Test

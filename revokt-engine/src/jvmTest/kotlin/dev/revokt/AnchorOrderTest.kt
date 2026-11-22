@@ -74,7 +74,7 @@ class AnchorOrderTest {
                     order.joinToString(),
                     order,
                     listOf(rpub, p),
-                    ExpectedWalk.found(listOf(leaf, p), listOf(leaf, x, rpub)),
+                    ExpectedWalk.found(listOf(leaf, p)),
                 )
             WalkerHarness.check(f)
             val v = verdict(f, p)
@@ -98,7 +98,14 @@ class AnchorOrderTest {
                 listOf(leaf, underPrivate, underPublic) to p,
             )
         for ((order, first) in cases) {
-            val f = w.fixture("anchor order", order.joinToString(), order, listOf(rpub, p), ExpectedWalk.found())
+            val f =
+                w.fixture(
+                    "anchor order",
+                    order.joinToString(),
+                    order,
+                    listOf(rpub, p),
+                    ExpectedWalk(ExpectedWalk.Kind.FOUND),
+                )
             val v = verdict(f, p)
             assertEquals(hashes(order[0], order[1], first), reported(v), "$f")
             if (first === p) {

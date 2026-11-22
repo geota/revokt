@@ -54,19 +54,14 @@ internal object WalkerFixturesAq {
                 variant,
                 listOf(leaf, i),
                 listOf(root),
-                notFound(NoIssuerReason.ALL_CANDIDATES_INVALID).copy(
-                    verifications = 0,
-                    candidatesExplored = 1,
-                    relatedExploredAtLeaf = 1,
-                    unrelatedExploredAtLeaf = 0,
-                ),
+                notFound(NoIssuerReason.ALL_CANDIDATES_INVALID).copy(verifications = 0, candidatesExplored = 1),
             )
         }
 
     /**
      * The attack the CA check closes: the attacker signs C, a CA certificate for a recovered key, with the key of its
-     * own end-entity certificate F under the real root. C verifies the leaf; F is a dead end below it and at the leaf's
-     * unrelated loop. C2 is C with an issuer name F's subject does not match, so only the unrelated loop reaches F.
+     * own end-entity certificate F under the real root. C verifies the leaf; F is a dead end below it, and no candidate
+     * of the leaf. C2 is C with an issuer name F's subject does not match, so F is no candidate at all.
      */
     private fun signedByEndEntity(): List<WalkerFixture> {
         val honest = Honest()
@@ -80,18 +75,17 @@ internal object WalkerFixturesAq {
                 .also { w.verifies(honest.leaf, it.key) }
         return listOf(
             "recovered key in a CA certificate signed by an end entity under the real root" to c,
-            "the same with F reached only through the unrelated loop" to c2,
+            "the same with F not related to C2" to c2,
         ).map { (variant, ca) ->
             honest.fixture(
                 "aq",
                 variant,
                 presented = listOf(honest.leaf, ca, f),
+                // L/C, then C/F refused by the CA check; C2 has no candidate.
                 walk =
                     notFound(NoIssuerReason.UNANCHORED).copy(
                         verifications = 1,
-                        candidatesExplored = 3,
-                        relatedExploredAtLeaf = 1,
-                        unrelatedExploredAtLeaf = 1,
+                        candidatesExplored = if (ca === c) 2 else 1,
                     ),
             )
         }
@@ -114,23 +108,14 @@ internal object WalkerFixturesAq {
                 "end-entity certificate under the real root, honest intermediate after it",
                 presented = listOf(honest.leaf, e, honest.intermediate),
                 walk =
-                    found(honest.path).copy(
-                        verifications = 2,
-                        candidatesExplored = 3,
-                        relatedExploredAtLeaf = 2,
-                        unrelatedExploredAtLeaf = 0,
-                    ),
+                    found(honest.path).copy(verifications = 2, candidatesExplored = 3),
             ),
             honest.fixture(
                 "aq",
                 "end-entity certificate under the real root, intermediate omitted",
                 presented = listOf(honest.leaf, e),
                 walk =
-                    notFound(NoIssuerReason.ALL_CANDIDATES_INVALID).copy(
-                        verifications = 0,
-                        candidatesExplored = 1,
-                        relatedExploredAtLeaf = 1,
-                    ),
+                    notFound(NoIssuerReason.ALL_CANDIDATES_INVALID).copy(verifications = 0, candidatesExplored = 1),
             ),
             honest.fixture(
                 "aq",
@@ -156,8 +141,8 @@ internal object WalkerFixturesAq {
             .also { w.verifies(leaf, it.key) }
 
     /**
-     * leaf → I1 → I2 → R with I2 not a CA: I1 verifies the leaf, I2 is a dead end at I1 and again at the leaf's
-     * unrelated loop (no related path there), so the walk is `UNANCHORED` after one verification.
+     * leaf → I1 → I2 → R with I2 not a CA: I1 verifies the leaf and I2 is a dead end at I1, so the walk is
+     * `UNANCHORED` after one verification.
      */
     private fun belowLeaf(): List<WalkerFixture> {
         val w = FixtureWorld()
@@ -171,12 +156,7 @@ internal object WalkerFixturesAq {
                 "non-CA certificate below the leaf's issuer",
                 listOf(leaf, i1, i2),
                 listOf(root),
-                notFound(NoIssuerReason.UNANCHORED).copy(
-                    verifications = 1,
-                    candidatesExplored = 3,
-                    relatedExploredAtLeaf = 1,
-                    unrelatedExploredAtLeaf = 1,
-                ),
+                notFound(NoIssuerReason.UNANCHORED).copy(verifications = 1, candidatesExplored = 2),
             ),
         )
     }

@@ -59,10 +59,6 @@ class FindingTest {
             NoIssuerReason.entries.map { it.name },
         )
         assertEquals(listOf("SKIPPED", "DISABLED", "FAILED"), FallbackReason.entries.map { it.name })
-        assertEquals(
-            listOf("COMPLETE", "RELATED_BUDGET", "VERIFICATION_BUDGET", "EXPLORATION_BUDGET"),
-            WalkEnd.entries.map { it.name },
-        )
         assertEquals(listOf("PLATFORM", "RECONSTRUCTED", "PRESENTED"), ChainSource.entries.map { it.name })
         assertEquals(listOf("ANCHOR"), TerminalKind.entries.map { it.name })
         assertEquals(listOf("X509"), CredentialType.entries.map { it.name })
@@ -91,17 +87,14 @@ class FindingTest {
                 "STRUCTURE" to PathStatus.PARSE_FAILED,
                 "OVERSIZE" to PathStatus.PARSE_FAILED,
                 "PRODUCER_UNKEYABLE" to PathStatus.PARSE_FAILED,
-                "RELATED_BUDGET" to PathStatus.PATH_BUDGET_EXCEEDED,
-                "VERIFICATION_BUDGET" to PathStatus.PATH_BUDGET_EXCEEDED,
                 "EXPLORATION_BUDGET" to PathStatus.PATH_BUDGET_EXCEEDED,
                 "FALLBACK_LIMIT" to PathStatus.PATH_BUDGET_EXCEEDED,
             )
         assertEquals(spec, PathReason.entries.map { it.name to it.status })
-        // The union: every walker and parse reason, and every budget a walk ends on, is a reason of its own name.
+        // The union: every walker and parse reason is a reason of its own name.
         val names = PathReason.entries.map { it.name }
         assertTrue(names.containsAll(NoIssuerReason.entries.map { it.name }))
         assertTrue(names.containsAll(ParseReason.entries.map { it.name }))
-        assertTrue(names.containsAll(WalkEnd.entries.filter { it != WalkEnd.COMPLETE }.map { it.name }))
     }
 
     @Test
@@ -123,7 +116,7 @@ class FindingTest {
         val base = everyField()
         val changed =
             mapOf<String, Finding.Path.Builder.() -> Finding.Path.Builder>(
-                "status" to { status(PathStatus.PATH_BUDGET_EXCEEDED).reason(PathReason.RELATED_BUDGET) },
+                "status" to { status(PathStatus.PATH_BUDGET_EXCEEDED).reason(PathReason.EXPLORATION_BUDGET) },
                 "source" to { source(ChainSource.RECONSTRUCTED) },
                 "reason" to { reason(PathReason.UNANCHORED) },
                 "issuerSpkiSha256s" to { issuerSpkiSha256s(listOf(hash(5), hash(4))) },
@@ -222,16 +215,12 @@ class FindingTest {
 
     @Test
     fun `walk stats are a value type`() {
-        assertValueSemantics(WalkStats(1, 2, 3, 4), WalkStats(1, 2, 3, 4))
-        assertNotEquals(WalkStats(1, 2, 3, 4), WalkStats(0, 2, 3, 4))
-        assertNotEquals(WalkStats(1, 2, 3, 4), WalkStats(1, 0, 3, 4))
-        assertNotEquals(WalkStats(1, 2, 3, 4), WalkStats(1, 2, 0, 4))
-        assertNotEquals(WalkStats(1, 2, 3, 4), WalkStats(1, 2, 3, 0))
-        assertNotEquals<Any>(WalkStats(1, 2, 3, 4), "stats")
-        assertEquals(
-            "WalkStats(verifications=1, candidatesExplored=2, relatedExploredAtLeaf=3, unrelatedExploredAtLeaf=4)",
-            WalkStats(1, 2, 3, 4).toString(),
-        )
+        assertValueSemantics(WalkStats(1, 2), WalkStats(1, 2))
+        assertNotEquals(WalkStats(1, 2), WalkStats(0, 2))
+        assertNotEquals(WalkStats(1, 2), WalkStats(1, 0))
+        assertNotEquals(WalkStats(1, 2), WalkStats(2, 1))
+        assertNotEquals<Any>(WalkStats(1, 2), "stats")
+        assertEquals("WalkStats(verifications=1, candidatesExplored=2)", WalkStats(1, 2).toString())
     }
 
     @Test
