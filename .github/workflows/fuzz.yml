@@ -75,6 +75,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}   # saved from main, read elsewhere (#262)
+          cache-cleanup: never   # as in ci.yml's check (#275)
       # build-logic's FuzzTargets: each method with the -max_len (the cap + 1) and -timeout its source names.
       - name: list
         id: list
@@ -117,8 +118,9 @@ jobs:
   # from the environment. It clones the repository, stages each current target's units as data (fuzz_corpus.py stage:
   # regular files named by their SHA-1, within the target's -max_len and the seed caps) and uploads them as the 1-day
   # artifact fuzz-seed, <Class>-<method>/<unit>. Without the secret it stages nothing, with a notice, and the run goes on
-  # from the committed inputs. units is the number uploaded (0 when nothing was), commit the repository's commit read, and over_caps is true when the
-  # prune had to leave a target out. The token-holding jobs block egress beyond GitHub's hosts.
+  # from the committed inputs; in a prune run, a missing secret or a failed upload fails the job instead, as the prune
+  # then has nothing to merge. units is the number uploaded (0 when nothing was), commit the repository's commit read,
+  # and over_caps is true when the prune had to leave a target out. The token-holding jobs block egress beyond GitHub's hosts.
   seed:
     name: seed (read the private corpus repository)
     needs: targets
@@ -157,11 +159,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$CFL_CORPUS_READ_TOKEN" ]; then
+            # A prune run without the seed has nothing to merge: it fails, so a skipped prune is never green (#280).
             if [ "$MODE" = prune ]; then
-              echo "::warning::the fuzz-corpus environment has no CFL_CORPUS_READ_TOKEN (CONTRIBUTING §6); the corpus repository is not pruned"
-            else
-              echo "::notice::the fuzz-corpus environment has no CFL_CORPUS_READ_TOKEN (CONTRIBUTING §6); every target starts from its committed inputs"
+              echo "::error::the fuzz-corpus environment has no CFL_CORPUS_READ_TOKEN (CONTRIBUTING §6); the corpus repository is not pruned"
+              exit 1
             fi
+            echo "::notice::the fuzz-corpus environment has no CFL_CORPUS_READ_TOKEN (CONTRIBUTING §6); every target starts from its committed inputs"
             exit 0
           fi
           # The helper prints the token from the environment; the token itself is in no argument. It answers for
@@ -193,7 +196,8 @@ jobs:
             "$RUNNER_TEMP/corpus-repo/corpus" "$staged" || status=$?
           if [ "$status" -eq 3 ]; then echo "over_caps=true" >> "$GITHUB_OUTPUT"; elif [ "$status" -ne 0 ]; then exit "$status"; fi
           echo "units=$(find "$staged" -type f | wc -l)" >> "$GITHUB_OUTPUT"
-      # An upload the account's storage quota refuses does not fail the run: units is then 0, and nothing is seeded.
+      # An upload the account's storage quota refuses does not fail a nightly: units is then 0, and nothing is seeded. In a
+      # prune run it fails the job, as the prune then has nothing to merge (#280); the merge and prune jobs are skipped.
       - name: upload the seed
         id: upload
         if: steps.stage.outputs.units != '' && steps.stage.outputs.units != '0'
@@ -209,10 +213,15 @@ jobs:
         env:
           STAGED_UNITS: ${{ steps.stage.outputs.units }}
           UPLOAD: ${{ steps.upload.outcome }}
+          MODE: ${{ needs.targets.outputs.mode }}
         run: |
           set -euo pipefail
+          if [ "$UPLOAD" = failure ] && [ "$MODE" = prune ]; then
+            echo "::error::the fuzz-seed upload failed (the storage quota?); the corpus repository is not pruned"
+            exit 1
+          fi
           if [ "$UPLOAD" = success ]; then units=$STAGED_UNITS; else units=0; fi
-          if [ "$UPLOAD" = failure ]; then echo "::warning::the fuzz-seed upload failed (the storage quota?); nothing is seeded or pruned"; fi
+          if [ "$UPLOAD" = failure ]; then echo "::warning::the fuzz-seed upload failed (the storage quota?); nothing is seeded"; fi
           echo "units=$units" >> "$GITHUB_OUTPUT"
 
   fuzz:
@@ -245,6 +254,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}   # saved from main, read elsewhere (#262)
+          cache-cleanup: never   # as in ci.yml's check (#275)
       # Every finding is encrypted to the maintainer's age key (CONTRIBUTING §6), so the run checks the recipient before
       # it fuzzes: a run that could not record a finding does not start. age comes from the Ubuntu archive (signed by its
       # keys; 1.1.x on 24.04).

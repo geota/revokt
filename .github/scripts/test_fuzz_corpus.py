@@ -274,11 +274,18 @@ class Lists(Case):
         self.rejected(lambda: fc.check(self.out, TARGETS, None, self.lists))
 
     def test_malformed_lists_rejected(self):
+        def link_to_a_correct_copy():
+            # The link's target is a correct list of Foo-bar's units, outside lists/: only the regular-file rule rejects it.
+            (self.root / "copy").write_text(f"{self.a}\n{self.b}\n")
+            (self.lists / "Foo-bar").unlink()
+            os.symlink(self.root / "copy", self.lists / "Foo-bar")
+
         cases = {
             "empty": lambda: (self.lists / "Foo-bar").write_text(""),
             "bad line": lambda: (self.lists / "Foo-bar").write_text(f"{self.a}\n../x\n"),
             "unknown target": lambda: (self.lists / "Gone-target").write_text(f"{self.a}\n"),
             "link": lambda: (self.lists / "Foo-bar").unlink() or os.symlink(self.lists / "Baz-qux", self.lists / "Foo-bar"),
+            "link to a correct copy": link_to_a_correct_copy,
         }
         for label, make in cases.items():
             with self.subTest(label):

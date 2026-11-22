@@ -509,8 +509,8 @@ each, rewrite it while the news holds, close it once the pins are current, and s
     checks each result again and, only if the repository is still at the commit the seed job read, replaces each merged
     target's directory with its result in one commit: a prune can remove units, never add one. A merge that fails,
     needs more than one attempt (a unit crashed or timed out; the next nightly, seeded with that unit, files it as a
-    finding) or keeps no unit fails its job and leaves its target unchanged. A missing `CFL_CORPUS_READ_TOKEN` is a
-    warning in a prune run.
+    finding) or keeps no unit fails its job and leaves its target unchanged. A prune run with no seed to merge (no
+    `CFL_CORPUS_READ_TOKEN`, or a failed `fuzz-seed` upload) fails the seed job and changes nothing.
     - A target over even the prune's caps is left out with an error, and the prune job fails the run once the others
       are pushed. To recover, trim that target's directory in `geota/revokt-fuzz-corpus` by hand (delete it, or all
       but a sample of its units; the nightly regrows what still adds coverage), then dispatch `fuzz` with `prune`.
