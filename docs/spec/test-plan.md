@@ -115,7 +115,7 @@ tests; **live checks** are informational.
   other channel → no generation; a `current` with an unknown or a duplicate member → malformed, so the generation its
   damaged `previous` member named is held, and a fresh loader's heal flip beside it prunes nothing, while the next
   install over the healed pointer prunes; a pointed generation without `records.json` → no `previous`, counted; two instances on one directory in one process → the second throws;
-  a second JVM process on a held lock → read-only start within 1 s, `sync()` → `STORE_LOCKED`, the
+  a second JVM process on a held lock → read-only start within 1 s, `sync()` → `SKIPPED` with `STORE_LOCKED`, the
   directory listing is byte-identical before and after its start even with a newer seed configured
   (served in memory, `fromSeed = true`), it observes the first process's install within
   `READONLY_POLL_INTERVAL`, and after the owner closes it acquires the lock within one interval and

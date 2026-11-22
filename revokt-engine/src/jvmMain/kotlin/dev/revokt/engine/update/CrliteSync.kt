@@ -904,6 +904,6 @@ internal class CrliteSync(
         val detail: String,
         val cause: Throwable? = null,
     ) {
-        val outcome: SyncOutcome get() = failure?.outcome ?: SyncOutcome.UNCHANGED
+        val outcome: SyncOutcome get() = if (failure != null) failure.outcome else SyncOutcome.UNCHANGED
     }
 }

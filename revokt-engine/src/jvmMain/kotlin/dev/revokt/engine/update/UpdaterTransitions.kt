@@ -84,7 +84,11 @@ internal object UpdaterTransitions {
         require(!noneLoaded || signedTimestampMillis != null) { "noneLoaded is an install's" }
         require(serverBackoffMillis == null || serverBackoffMillis >= 0) { "a server backoff is negative" }
         val outcome =
-            failure?.outcome ?: if (signedTimestampMillis != null) SyncOutcome.INSTALLED else SyncOutcome.UNCHANGED
+            when {
+                failure != null -> failure.outcome
+                signedTimestampMillis != null -> SyncOutcome.INSTALLED
+                else -> SyncOutcome.UNCHANGED
+            }
         val attempted = (record.sources[sourceId] ?: SourceRecord()).copy(lastAttemptAtMillis = nowMillis)
         val source = source(attempted, outcome, failure, nowMillis, serverBackoffMillis)
         if (signedTimestampMillis == null) {
