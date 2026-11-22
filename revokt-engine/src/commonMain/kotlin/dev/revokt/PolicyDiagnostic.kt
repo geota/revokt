@@ -81,3 +81,25 @@ public class PolicyDiagnostic private constructor(
         public fun build(): PolicyDiagnostic = PolicyDiagnostic(this)
     }
 }
+
+/**
+ * A [PolicyDiagnostic] for revokt's own producers, such as `Revokt.validate()` in revokt-jsse, which cannot reach the
+ * private constructor; consumers and tests use the `@RevoktTestingApi` builder.
+ */
+@RevoktInternalApi
+@OptIn(RevoktTestingApi::class)
+public fun policyDiagnostic(
+    code: DiagnosticCode,
+    severity: Severity,
+    rule: Rule?,
+    dataset: Dataset?,
+    message: String,
+): PolicyDiagnostic =
+    PolicyDiagnostic
+        .Builder()
+        .code(code)
+        .severity(severity)
+        .rule(rule)
+        .dataset(dataset)
+        .message(message)
+        .build()

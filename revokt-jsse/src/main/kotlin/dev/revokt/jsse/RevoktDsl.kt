@@ -11,6 +11,14 @@ package dev.revokt.jsse
 @Suppress("FunctionName", "ktlint:standard:function-naming") // Named as the type it builds, the §4 DSL entry point.
 public fun Revokt(block: Revokt.Builder.() -> Unit): Revokt = Revokt.builder().apply(block).build()
 
-/** [Revokt.Builder.awaitData] over a `kotlin.time.Duration`, in whole milliseconds; a negative one throws. */
+/**
+ * [Revokt.Builder.awaitData] over a `kotlin.time.Duration`, under the same rule as the `java.time` form: whole
+ * milliseconds, truncated toward zero; any negative duration, a sub-millisecond one included, and an infinite one throw
+ * [IllegalArgumentException].
+ */
 @JvmSynthetic
-public fun Revokt.Builder.awaitData(d: kotlin.time.Duration): Revokt.Builder = awaitDataMillis(d.inWholeMilliseconds)
+public fun Revokt.Builder.awaitData(d: kotlin.time.Duration): Revokt.Builder {
+    require(!d.isNegative()) { "awaitData is non-negative, got $d" }
+    require(d.isFinite()) { "awaitData is a deadline, so it is finite, got $d" }
+    return awaitDataMillis(d.inWholeMilliseconds)
+}

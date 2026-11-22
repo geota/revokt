@@ -36,6 +36,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
 
 /** `Revokt.Builder.build()` (spec §4): the defaults, the seed resolution, the DSL, and each R check in its case. */
@@ -235,6 +236,33 @@ class RevoktBuilderTest {
         assertFailsWith<IllegalArgumentException> { bare().awaitData((-1).milliseconds) }
         assertFailsWith<IllegalArgumentException> { bare().awaitData(java.time.Duration.ofMillis(-1)) }
         assertFailsWith<IllegalArgumentException> { bare().awaitData(java.time.Duration.ofSeconds(Long.MAX_VALUE)) }
+        // One rule for both forms: a sub-millisecond negative throws rather than rounding to 0, and so does unbounded.
+        assertFailsWith<IllegalArgumentException> { bare().awaitData((-1).nanoseconds) }
+        assertFailsWith<IllegalArgumentException> { bare().awaitData(java.time.Duration.ofNanos(-1)) }
+        assertFailsWith<IllegalArgumentException> { bare().awaitData(kotlin.time.Duration.INFINITE) }
+        assertFailsWith<IllegalArgumentException> { bare().awaitData(-kotlin.time.Duration.INFINITE) }
+        // A positive sub-millisecond duration truncates toward zero in both.
+        assertEquals(
+            0L,
+            bare()
+                .awaitData(999_999.nanoseconds)
+                .build()
+                .config.awaitDataMillis,
+        )
+        assertEquals(
+            0L,
+            bare()
+                .awaitData(java.time.Duration.ofNanos(999_999))
+                .build()
+                .config.awaitDataMillis,
+        )
+        assertEquals(
+            1L,
+            bare()
+                .awaitData(1_999_999.nanoseconds)
+                .build()
+                .config.awaitDataMillis,
+        )
     }
 
     // R CHANNEL_UNSET (spec §4): a CRLite source, a seed counting, needs a channel.
@@ -347,6 +375,9 @@ class RevoktBuilderTest {
                 "http://user:secret@host/",
                 "https:user:secret@host/",
                 "https://host/v1?token=secret",
+                "https://h/?token=SECRET",
+                "https://h/secret?x=1",
+                "https://user:secret@remote_settings.example/v1",
                 "https://host/v1#secret",
                 "https://host:99999/secret",
                 "ftp://host/secret",
@@ -362,7 +393,7 @@ class RevoktBuilderTest {
                 val e = assertFailsWith<IllegalArgumentException> { builder.build() }
                 val message = e.message.orEmpty()
                 assertTrue(message.startsWith("remoteSettings."), message)
-                assertFalse("secret" in message || url in message, "$url: $message")
+                assertFalse("secret" in message.lowercase() || url in message, "$url: $message")
                 assertNull(e.cause, url)
             }
         }
@@ -373,7 +404,17 @@ class RevoktBuilderTest {
     @Test
     fun `a base URL with no host, or that is no URL at all, throws`() {
         assertRefused("no authority", bare().remoteSettings(remoteSettings(baseUrl = "https:///v1")))
-        assertRefused("no host", bare().remoteSettings(remoteSettings(baseUrl = "https://under_score/v1")))
+        for (url in listOf(
+            "https://under_score/v1",
+            "https://remote_settings.corp.example/v1",
+            "https://-leading.example/v1",
+            "https://mirror.example:abc/v1",
+        )) {
+            assertRefused("not a DNS name or IP literal", bare().remoteSettings(remoteSettings(baseUrl = url)))
+        }
+        // The neighbours that are DNS names build.
+        bare().remoteSettings(remoteSettings(baseUrl = "https://remote-settings.corp.example/v1")).build()
+        bare().remoteSettings(remoteSettings(baseUrl = "https://a-1.b2.example/v1")).build()
         assertRefused("no authority", bare().remoteSettings(remoteSettings(baseUrl = "https:mirror.example/v1")))
         val e =
             assertRefused(

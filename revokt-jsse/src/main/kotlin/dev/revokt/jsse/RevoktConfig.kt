@@ -137,7 +137,12 @@ internal fun requireSourceUrl(
     require(authority != null) { "$what has no authority, so no host: not an https://host URL (spec §4)" }
     require('@' !in authority) { "$what has userinfo, which a source URL never carries (spec §4)" }
     require("https".equals(uri.scheme, ignoreCase = true)) { "$what is not an https URL (spec §4)" }
-    require(uri.host != null) { "$what has no host (spec §4)" }
+    // A registry-based authority has no URI host. With a non-numeric port the fetch's URL parse fails; with an
+    // underscore or another character outside a DNS name it parses, but public CAs issue no certificate for such a
+    // name (CA/Browser Forum, since 2019), so the fetch would fail its host check on every sync.
+    require(uri.host != null) {
+        "$what has no server host: the authority is not a DNS name or IP literal with an optional numeric port (spec §4)"
+    }
     require(uri.port == -1 || uri.port in 1..MAX_PORT) {
         "$what has port ${uri.port}, outside 1 to $MAX_PORT (spec §4)"
     }

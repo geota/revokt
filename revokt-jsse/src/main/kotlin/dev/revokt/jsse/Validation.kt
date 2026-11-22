@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt.jsse
 
 import dev.revokt.Dataset
@@ -10,9 +12,9 @@ import dev.revokt.FilterFormat
 import dev.revokt.Outcome
 import dev.revokt.PolicyDiagnostic
 import dev.revokt.RevoktInternalApi
-import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
 import dev.revokt.Severity
+import dev.revokt.policyDiagnostic
 import dev.revokt.validatePolicy
 import kotlinx.coroutines.Dispatchers
 
@@ -22,7 +24,6 @@ import kotlinx.coroutines.Dispatchers
  * datasets in declaration order. Only `NO_DATA_REJECTS_WITHOUT_LOCAL_DATA`, `FORMAT_UNSUPPORTED` and
  * `EVIDENCE_LOWERED_BELOW_PRESET` can be an `ERROR`, and only under `ENFORCE`, so under `OFF` every one is a `WARNING`.
  */
-@OptIn(RevoktInternalApi::class)
 internal fun validateConfiguration(
     config: RevoktConfig,
     enforcement: Enforcement,
@@ -144,17 +145,9 @@ private fun ioDispatcherUnconfined(config: RevoktConfig): List<PolicyDiagnostic>
         emptyList()
     }
 
-@OptIn(RevoktTestingApi::class)
 private fun diagnostic(
     code: DiagnosticCode,
     severity: Severity,
     dataset: Dataset?,
     message: String,
-): PolicyDiagnostic =
-    PolicyDiagnostic
-        .Builder()
-        .code(code)
-        .severity(severity)
-        .dataset(dataset)
-        .message(message)
-        .build()
+): PolicyDiagnostic = policyDiagnostic(code, severity, rule = null, dataset = dataset, message = message)

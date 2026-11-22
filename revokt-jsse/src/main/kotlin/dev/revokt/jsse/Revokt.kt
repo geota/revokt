@@ -177,19 +177,26 @@ public class Revokt private constructor(
         public fun enforcement(enforcement: Enforcement): Builder = apply { this.enforcement = enforcement }
 
         /**
-         * How long `start()` waits for the first data (spec §4, §5.1); default 2 s on the JVM. A negative duration,
-         * or one beyond `Long` milliseconds, throws [IllegalArgumentException].
+         * How long `start()` waits for the first data (spec §4, §5.1), a deadline; default 2 s on the JVM. Kept in
+         * whole milliseconds, truncated toward zero. Throws [IllegalArgumentException] for any negative duration, a
+         * sub-millisecond one included, and for one beyond `Long` milliseconds; the Kotlin `kotlin.time.Duration` form
+         * takes the same rule, so `Duration.INFINITE` throws too.
          */
-        public fun awaitData(d: java.time.Duration): Builder =
-            awaitDataMillis(
+        public fun awaitData(d: java.time.Duration): Builder {
+            require(!d.isNegative) { "awaitData is non-negative, got $d" }
+            return awaitDataMillis(
                 try {
                     d.toMillis()
-                } catch (e: ArithmeticException) {
-                    throw IllegalArgumentException("awaitData does not fit in Long milliseconds: $d", e)
+                } catch (
+                    // The message says why; the ArithmeticException adds nothing.
+                    @Suppress("SwallowedException") e: ArithmeticException,
+                ) {
+                    throw IllegalArgumentException("awaitData does not fit in Long milliseconds: $d")
                 },
             )
+        }
 
-        /** [awaitData] in milliseconds. */
+        /** [awaitData] in milliseconds; a negative value throws [IllegalArgumentException]. */
         public fun awaitDataMillis(millis: Long): Builder =
             apply {
                 require(millis >= 0) { "awaitData is non-negative, got $millis ms" }
