@@ -39,8 +39,10 @@ import java.util.IdentityHashMap
  * - **AIA** (spec §10 item 13): it neither sets nor clears `com.sun.security.enableAIAcaIssuers`; with it set, the JDK's
  *   builder fetches issuers over the network, and decide applies its issuer rules to whatever comes back.
  *
- * Thread-safe; one instance serves every snapshot.
+ * Thread-safe; one instance serves every snapshot. `@RevoktInternalApi` in 0.2, like `PlatformTrust`, whose
+ * `pathBuilder()` returns it.
  */
+@RevoktInternalApi
 public class PkixPathBuilderFallback : PathBuilderFallback {
     /** One snapshot's anchors as the builder takes them: null [base] when none of them parses. */
     private class Anchors(

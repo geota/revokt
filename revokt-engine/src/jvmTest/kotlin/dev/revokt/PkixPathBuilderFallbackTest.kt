@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
  * and an anchor set the factory cannot read are null, never a throw; the anchors are parsed once per snapshot id; the
  * date is the caller's; and the AIA property is left alone (§10 item 13).
  */
-@OptIn(RevoktTestingApi::class)
+@OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
 class PkixPathBuilderFallbackTest {
     private val root = PkixPki.root("Fallback Root")
     private val intermediate = PkixPki.issue("Fallback Intermediate", root, ca = true)
@@ -189,10 +189,18 @@ class PkixPathBuilderFallbackTest {
         val cps = TestDer.tlv(0x16, TestDer.ascii("https://cps.example"))
         val policy =
             TestDer.seq(
-                TestDer.seq(TestDer.oid("2.23.140.1.2.1"), TestDer.seq(TestDer.seq(TestDer.oid("1.3.6.1.5.5.7.2.1"), cps))),
+                TestDer.seq(
+                    TestDer.oid("2.23.140.1.2.1"),
+                    TestDer.seq(TestDer.seq(TestDer.oid("1.3.6.1.5.5.7.2.1"), cps)),
+                ),
             )
         val qualified =
-            PkixPki.issue("Qualified Intermediate", root, ca = true, extensions = listOf(TestDer.extension("2.5.29.32", policy, critical = true)))
+            PkixPki.issue(
+                "Qualified Intermediate",
+                root,
+                ca = true,
+                extensions = listOf(TestDer.extension("2.5.29.32", policy, critical = true)),
+            )
         val under = PkixPki.issue("leaf.qualified.example", qualified, ca = false)
         val path = PkixPathBuilderFallback().build(listOf(under.der, qualified.der), snapshot(root), PkixPki.NOW)
         assertEquals(hex(listOf(under.der, qualified.der, root.der)), hex(path))

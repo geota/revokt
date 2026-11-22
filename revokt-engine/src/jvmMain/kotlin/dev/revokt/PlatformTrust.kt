@@ -9,8 +9,11 @@ import javax.net.ssl.X509TrustManager
 /**
  * What revokt needs from a platform's TLS stack (spec §3, §5.3): the default trust manager, its trust anchors, the PKIX
  * fallback and the name equality the walker relates certificates by. The JVM's is `JvmPlatformTrust` (revokt-jsse);
- * Android's is `AndroidPlatformTrust` (0.3). Both are final.
+ * Android's is `AndroidPlatformTrust` (0.3). Both are final. `@RevoktInternalApi` in 0.2 (spec §3.1 item 4): the
+ * binding wires `JvmPlatformTrust()` itself, and the type goes public with its first consumer outside revokt-engine and
+ * revokt-jsse, the 0.3 Android binding.
  */
+@RevoktInternalApi
 public interface PlatformTrust {
     /** The platform's default trust manager, the delegate a `Revokt` captures at `build()`. */
     public fun defaultDelegate(): X509TrustManager

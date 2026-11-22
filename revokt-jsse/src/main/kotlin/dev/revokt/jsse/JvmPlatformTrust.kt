@@ -6,6 +6,7 @@ package dev.revokt.jsse
 import dev.revokt.PathBuilderFallback
 import dev.revokt.PkixPathBuilderFallback
 import dev.revokt.PlatformTrust
+import dev.revokt.RevoktInternalApi
 import java.security.KeyStore
 import java.security.cert.X509Certificate
 import javax.net.ssl.TrustManagerFactory
@@ -25,7 +26,10 @@ import javax.net.ssl.X509TrustManager
  * - [pathBuilder] is one [PkixPathBuilderFallback], `CertPathBuilder("PKIX")` over the snapshot's anchors.
  * - [anchors] is the delegate's `getAcceptedIssuers()`; a null array is the empty set.
  * - `canonicalSubject` is the interface default, `X500Principal.getName(CANONICAL)`.
+ *
+ * `@RevoktInternalApi` in 0.2: `Revokt` wires it itself and has no public `platformTrust(…)` member yet.
  */
+@RevoktInternalApi
 public class JvmPlatformTrust : PlatformTrust {
     private val delegate: X509ExtendedTrustManager by lazy {
         val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
