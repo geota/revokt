@@ -274,12 +274,12 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   to cut those bullets from the spec yet. Neither upki nor Firefox has a configuration-lint vocabulary, so the
   references give no guidance.
 - 2026-11-22 (lead, #280 C): when every stored unit of a fuzz target is over its `-max_len`, the weekly prune fails
-  closed. `stage --prune` leaves the target out with `::error::` and exit 3, the prune job fails the run once the
-  other targets are pushed, and CONTRIBUTING §6 has the hand-trim step. There is no new delete path. When a target
-  has any unit within `-max_len`, its over-length units are dropped, with no cut-down copies kept. ClusterFuzz's `corpus_pruning_task` replaces the corpus with the
-  `-max_len` merge output, which adds cut-down prefixes, and raises `CorpusPruningError` on an empty merge without
-  syncing. ClusterFuzzLite's prune passes no `-max_len` and keeps such units. revokt's prune can only delete, so it
-  takes ClusterFuzz's drop and its fail-on-empty.
+  closed. `stage --prune` leaves the target out with `::error::` and exit 3, the prune job fails the run once the other
+  targets are pushed, and CONTRIBUTING §6 has the hand-trim step. There is no new delete path. When a target has any
+  unit within `-max_len`, its over-length units are dropped, with no cut-down copies kept. ClusterFuzz's
+  `corpus_pruning_task` replaces the corpus with the `-max_len` merge output, which adds cut-down prefixes, and raises
+  `CorpusPruningError` on an empty merge without syncing. ClusterFuzzLite's prune passes no `-max_len` and keeps such
+  units. revokt's prune can only delete, so it takes ClusterFuzz's drop and its fail-on-empty.
 - 2026-11-22 (#229, design note `docs/design/content-addressed-store.md`, #289):
   - **Q1 (lead):** the pointer keeps `{live, previous}`, as #249 decided. upki keeps the old manifest's files on
     disk; Firefox keeps nothing.
