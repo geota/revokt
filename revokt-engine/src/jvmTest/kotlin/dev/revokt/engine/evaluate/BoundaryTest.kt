@@ -197,7 +197,7 @@ class BoundaryTest {
         val run = Run.of(honest, exempting, engine = StubEngine { CrliteQueryResult.NOT_ENROLLED })
         val v =
             evaluate(
-                EvaluationInput(run.presented, null, run.snapshot, run.policy.form, WalkerHarness.SNAPSHOT_ID),
+                EvaluationInput(run.presented, null, run.snapshot, run.policy.form),
                 NamedEngine(run.engine),
                 run.clock,
                 run.decide,

@@ -281,24 +281,10 @@ public final class dev/revokt/Finding$Path : dev/revokt/Finding {
 	public synthetic fun <init> (Ldev/revokt/Finding$Path$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAnchorSha256 ()[B
-	public final fun getAnchorSnapshotId ()J
-	public final fun getCacheHit ()Z
-	public final fun getCandidatesDropped ()I
-	public final fun getCredentialType ()Ldev/revokt/CredentialType;
-	public final fun getEndDepth ()Ljava/lang/Integer;
-	public final fun getEndReason ()Ldev/revokt/WalkEnd;
 	public final fun getIssuerSpkiSha256s ()Ljava/util/List;
-	public final fun getKeyabilityClause ()Ldev/revokt/KeyabilityClause;
-	public final fun getNoIssuerReason ()Ldev/revokt/NoIssuerReason;
-	public final fun getParseReason ()Ldev/revokt/ParseReason;
-	public final fun getPathsFound ()I
-	public final fun getReportedPathSha256s ()Ljava/util/List;
-	public final fun getRewalkEnd ()Ldev/revokt/WalkEnd;
+	public final fun getReason ()Ldev/revokt/PathReason;
 	public final fun getSource ()Ldev/revokt/ChainSource;
 	public final fun getStatus ()Ldev/revokt/PathStatus;
-	public final fun getTerminalKind ()Ldev/revokt/TerminalKind;
-	public final fun getUsedFallback ()Z
-	public final fun getWalkerReason ()Ldev/revokt/NoIssuerReason;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -457,6 +443,25 @@ public final class dev/revokt/ParseReason : java/lang/Enum {
 
 public abstract interface class dev/revokt/PathBuilderFallback {
 	public abstract fun build (Ljava/util/List;Ldev/revokt/AnchorSnapshot;J)Ljava/util/List;
+}
+
+public final class dev/revokt/PathReason : java/lang/Enum {
+	public static final field ALL_CANDIDATES_INVALID Ldev/revokt/PathReason;
+	public static final field EXPLORATION_BUDGET Ldev/revokt/PathReason;
+	public static final field FALLBACK_LIMIT Ldev/revokt/PathReason;
+	public static final field NO_CANDIDATE Ldev/revokt/PathReason;
+	public static final field OVERSIZE Ldev/revokt/PathReason;
+	public static final field PLATFORM_ONLY Ldev/revokt/PathReason;
+	public static final field PRODUCER_UNKEYABLE Ldev/revokt/PathReason;
+	public static final field RELATED_BUDGET Ldev/revokt/PathReason;
+	public static final field STRUCTURE Ldev/revokt/PathReason;
+	public static final field UNANCHORED Ldev/revokt/PathReason;
+	public static final field UNSUPPORTED_ALGORITHM Ldev/revokt/PathReason;
+	public static final field VERIFICATION_BUDGET Ldev/revokt/PathReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getStatus ()Ldev/revokt/PathStatus;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/PathReason;
+	public static fun values ()[Ldev/revokt/PathReason;
 }
 
 public final class dev/revokt/PathStatus : java/lang/Enum {

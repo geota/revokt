@@ -91,13 +91,46 @@ class EvaluatorTest {
         assertIs<Verdict.Accepted>(v)
         assertEquals(PathStatus.FOUND, v.path.status)
         assertEquals(ChainSource.RECONSTRUCTED, v.path.source)
-        assertEquals(WalkerHarness.SNAPSHOT_ID, v.path.anchorSnapshotId)
-        assertEquals(WalkEnd.COMPLETE, v.path.endReason)
+        assertEquals(WalkerHarness.SNAPSHOT_ID, rig.detail(v).anchorSnapshotId)
+        assertEquals(WalkEnd.COMPLETE, rig.detail(v).endReason)
         assertEquals(listOf(h.intermediate.keyHash), keys(v))
-        assertEquals(h.path.map { it.bytesHash }, v.path.reportedPathSha256s.map { it.toByteString() })
+        assertEquals(h.path.map { it.bytesHash }, rig.detail(v).reportedPathSha256s)
         assertEquals(listOf(h.intermediate.keyHash), engine.queries.map { it.issuerSpkiHash.toByteString() })
         assertTrue(rig.verifications > 0, "the walk verified the links")
         assertEquals(EPOCH, v.generationEpoch)
+    }
+
+    @Test
+    fun `each evaluation logs one DEBUG line with the path's status, reason and detail`() {
+        val rig = EvaluatorRig(honest)
+        val found = rig.presented(chain)
+        val detail = rig.detail(found)
+        assertEquals(LogLevel.DEBUG to "evaluate: FOUND: $detail", rig.logged.single())
+        val text = detail.toString()
+        for (field in listOf(
+            "walkerReason",
+            "keyabilityClause",
+            "terminalKind",
+            "endReason",
+            "endDepth",
+            "anchorSnapshotId",
+            "usedFallback",
+            "pathsFound",
+            "reportedPathSha256s",
+            "candidatesDropped",
+            "walkStats",
+        )) {
+            assertTrue("$field=" in text, "$field missing from $text")
+        }
+        assertTrue("anchorSnapshotId=${WalkerHarness.SNAPSHOT_ID}" in text, text)
+        assertTrue(h.root.bytesHash.hex() in text, "the reported path's hashes in hex: $text")
+        rig.indexed = EvaluatorRig.indexed(emptyList(), WalkerHarness.SNAPSHOT_ID)
+        val noIssuer = rig.presented(chain)
+        assertEquals(
+            LogLevel.DEBUG to "evaluate: NO_ISSUER(${noIssuer.path.reason}): ${rig.detail(noIssuer)}",
+            rig.logged.last(),
+        )
+        assertEquals(2, rig.logged.size)
     }
 
     @Test
@@ -119,7 +152,7 @@ class EvaluatorTest {
                 .build()
         val second = rig.presented(chain)
         assertIs<Verdict.Accepted>(second, "the new policy allows REVOKED")
-        assertEquals(WalkerHarness.SNAPSHOT_ID + 1, second.path.anchorSnapshotId)
+        assertEquals(WalkerHarness.SNAPSHOT_ID + 1, rig.detail(second).anchorSnapshotId)
         assertEquals(EPOCH + 1, second.generationEpoch)
         assertEquals(2, rig.anchorReads)
         assertEquals(2, rig.generationReads)
@@ -128,7 +161,7 @@ class EvaluatorTest {
         rig.indexed = EvaluatorRig.indexed(emptyList(), WalkerHarness.SNAPSHOT_ID + 2)
         val third = rig.presented(chain)
         assertEquals(PathStatus.NO_ISSUER, third.path.status)
-        assertEquals(WalkerHarness.SNAPSHOT_ID + 2, third.path.anchorSnapshotId)
+        assertEquals(WalkerHarness.SNAPSHOT_ID + 2, rig.detail(third).anchorSnapshotId)
     }
 
     @Test
@@ -139,18 +172,18 @@ class EvaluatorTest {
         assertIs<Verdict.Accepted>(v)
         assertEquals(PathStatus.FOUND, v.path.status)
         assertEquals(ChainSource.PLATFORM, v.path.source)
-        assertEquals(0, v.path.anchorSnapshotId)
-        assertNull(v.path.endReason)
-        assertNull(v.path.endDepth)
-        assertNull(v.path.walkerReason)
-        assertFalse(v.path.usedFallback)
-        assertEquals(1, v.path.pathsFound)
+        assertEquals(0, rig.detail(v).anchorSnapshotId)
+        assertNull(rig.detail(v).endReason)
+        assertNull(rig.detail(v).endDepth)
+        assertNull(rig.detail(v).walkerReason)
+        assertFalse(rig.detail(v).usedFallback)
+        assertEquals(1, rig.detail(v).pathsFound)
         assertEquals(0, rig.verifications, "trusted without re-verification")
         assertEquals(listOf(h.intermediate.keyHash), keys(v), "the path's second certificate")
         assertEquals(keys(v), engine.queries.map { it.issuerSpkiHash.toByteString() })
         assertContentEquals(WalkerCerts.cert(h.leaf.der).serial, engine.queries.single().serial)
-        assertEquals(h.path.map { it.bytesHash }, v.path.reportedPathSha256s.map { it.toByteString() })
-        assertEquals(TerminalKind.ANCHOR, v.path.terminalKind)
+        assertEquals(h.path.map { it.bytesHash }, rig.detail(v).reportedPathSha256s)
+        assertEquals(TerminalKind.ANCHOR, rig.detail(v).terminalKind)
         assertEquals(h.root.bytesHash, v.path.anchorSha256?.toByteString())
         assertEquals(listOf<Finding>(), v.findings.filterIsInstance<Finding.FallbackNotUsed>())
     }
@@ -166,15 +199,15 @@ class EvaluatorTest {
         val anchor = rig.evaluate(request(verified = listOf(h.root)))
         assertEquals(PathStatus.FOUND, anchor.path.status)
         assertEquals(listOf(h.root.keyHash), keys(anchor))
-        assertEquals(listOf(h.root.bytesHash), anchor.path.reportedPathSha256s.map { it.toByteString() })
-        assertEquals(WalkerHarness.SNAPSHOT_ID, anchor.path.anchorSnapshotId, "the snapshot step 2 consulted")
+        assertEquals(listOf(h.root.bytesHash), rig.detail(anchor).reportedPathSha256s)
+        assertEquals(WalkerHarness.SNAPSHOT_ID, rig.detail(anchor).anchorSnapshotId, "the snapshot step 2 consulted")
         assertEquals(ChainSource.PLATFORM, anchor.path.source)
         // Not an anchor, outside the profile: gated like any leaf, never queried.
         val claimed = rig.evaluate(request(verified = listOf(h.intermediate)))
         assertEquals(PathStatus.PARSE_FAILED, claimed.path.status)
-        assertEquals(ParseReason.PRODUCER_UNKEYABLE, claimed.path.parseReason)
-        assertEquals(KeyabilityClause.KEY, claimed.path.keyabilityClause)
-        assertEquals(WalkerHarness.SNAPSHOT_ID, claimed.path.anchorSnapshotId)
+        assertEquals(PathReason.PRODUCER_UNKEYABLE, claimed.path.reason)
+        assertEquals(KeyabilityClause.KEY, rig.detail(claimed).keyabilityClause)
+        assertEquals(WalkerHarness.SNAPSHOT_ID, rig.detail(claimed).anchorSnapshotId)
         assertEquals(listOf(h.root.keyHash), engine.queries.map { it.issuerSpkiHash.toByteString() }, "one query")
         // Not an anchor, inside the profile: keyed by its own SPKI, as the issue's one-certificate rule says.
         val keyable = rig.evaluate(request(verified = listOf(h.leaf)))
@@ -183,16 +216,21 @@ class EvaluatorTest {
         // An anchor leaf on a longer path is gated: step 2 decides a leaf alone.
         val longer = rig.evaluate(request(verified = listOf(h.root, h.root)))
         assertEquals(PathStatus.PARSE_FAILED, longer.path.status)
-        assertEquals(0, longer.path.anchorSnapshotId, "a longer path consults no snapshot")
+        assertEquals(0, rig.detail(longer).anchorSnapshotId, "a longer path consults no snapshot")
         // The snapshot read at entry decides: once the root is gone from it, the same path is gated.
         rig.indexed = EvaluatorRig.indexed(emptyList(), WalkerHarness.SNAPSHOT_ID + 1)
         val gone = rig.evaluate(request(verified = listOf(h.root)))
         assertEquals(PathStatus.PARSE_FAILED, gone.path.status)
-        assertEquals(WalkerHarness.SNAPSHOT_ID + 1, gone.path.anchorSnapshotId)
-        // A one-certificate path that never reached decide reports the snapshot id too.
-        val noClock = EvaluatorRig(honest, clock = { error("clock") }).evaluate(request(verified = listOf(h.root)))
+        assertEquals(WalkerHarness.SNAPSHOT_ID + 1, rig.detail(gone).anchorSnapshotId)
+        // A one-certificate path that never reached decide logs the snapshot id too, on its DEBUG line.
+        val noClockRig = EvaluatorRig(honest, clock = { error("clock") })
+        val noClock = noClockRig.evaluate(request(verified = listOf(h.root)))
         assertEquals(PathStatus.NOT_WALKED, noClock.path.status)
-        assertEquals(WalkerHarness.SNAPSHOT_ID, noClock.path.anchorSnapshotId)
+        assertNull(noClockRig.detailOrNull(noClock))
+        assertEquals(
+            LogLevel.DEBUG to "evaluate: NOT_WALKED: no decision, anchorSnapshotId=${WalkerHarness.SNAPSHOT_ID}",
+            noClockRig.logged.single(),
+        )
     }
 
     @Test
@@ -205,10 +243,10 @@ class EvaluatorTest {
         val rig = EvaluatorRig(honest, engine = engine)
         val k6 = rig.evaluate(request(verified = listOf(leaf6, h.intermediate, h.root)))
         assertEquals(PathStatus.PARSE_FAILED, k6.path.status)
-        assertEquals(ParseReason.PRODUCER_UNKEYABLE, k6.path.parseReason)
-        assertEquals(KeyabilityClause.TIME, k6.path.keyabilityClause)
+        assertEquals(PathReason.PRODUCER_UNKEYABLE, k6.path.reason)
+        assertEquals(KeyabilityClause.TIME, rig.detail(k6).keyabilityClause)
         assertEquals(ChainSource.PLATFORM, k6.path.source)
-        assertEquals(0, k6.path.anchorSnapshotId)
+        assertEquals(0, rig.detail(k6).anchorSnapshotId)
         assertNull(k6.crlite)
         val broken =
             rig.evaluate(
@@ -218,7 +256,7 @@ class EvaluatorTest {
                     .build(),
             )
         assertEquals(PathStatus.PARSE_FAILED, broken.path.status)
-        assertEquals(ParseReason.STRUCTURE, broken.path.parseReason)
+        assertEquals(PathReason.STRUCTURE, broken.path.reason)
         assertEquals(emptyList(), engine.queries, "never queried")
         assertIs<Verdict.Accepted>(broken, "PARSE_FAILED allows under DEFAULT")
     }
@@ -269,7 +307,7 @@ class EvaluatorTest {
         val v = rig.evaluate(request(presented = listOf(h.leaf, decoy), verified = h.path, host = "Leaf.Example."))
         assertEquals(Rule.NO_SCTS, assertIs<Verdict.Rejected>(v).rule)
         assertEquals(ChainSource.PLATFORM, v.path.source)
-        assertEquals(0, v.path.anchorSnapshotId)
+        assertEquals(0, rig.detail(v).anchorSnapshotId)
         assertEquals(0, rig.verifications, "no walk")
         assertEquals(listOf(h.intermediate.keyHash), keys(v))
         val chain = assertIs<PresentedChain>(seen.single().chain)
@@ -283,10 +321,12 @@ class EvaluatorTest {
     fun `pkixFallback(false) - a 9-certificate NotFound is PATH_BUDGET_EXCEEDED with FallbackNotUsed(DISABLED)`() {
         val f = WalkerFixturesS1ToAj.af().single()
         assertEquals(9, f.presented.size)
-        val disabled = EvaluatorRig(f).presented(f.presented)
+        val rig = EvaluatorRig(f)
+        val disabled = rig.presented(f.presented)
         assertEquals(PathStatus.PATH_BUDGET_EXCEEDED, disabled.path.status)
-        assertEquals(WalkEnd.COMPLETE, disabled.path.endReason)
-        assertFalse(disabled.path.usedFallback)
+        assertEquals(PathReason.FALLBACK_LIMIT, disabled.path.reason)
+        assertEquals(WalkEnd.COMPLETE, rig.detail(disabled).endReason)
+        assertFalse(rig.detail(disabled).usedFallback)
         assertEquals(
             listOf(FallbackReason.DISABLED),
             disabled.findings.filterIsInstance<Finding.FallbackNotUsed>().map { it.reason },
@@ -307,10 +347,11 @@ class EvaluatorTest {
     fun `a NotFound reports the walker's reason directly, never PLATFORM_ONLY`() {
         val f = WalkerFixturesS1ToAj.ae().single()
         for (fallback in listOf(null, FakeFallback.fails())) {
-            val v = EvaluatorRig(f, fallback = fallback).presented(f.presented)
+            val rig = EvaluatorRig(f, fallback = fallback)
+            val v = rig.presented(f.presented)
             assertEquals(PathStatus.NO_ISSUER, v.path.status, "fallback $fallback")
-            assertEquals(NoIssuerReason.UNANCHORED, v.path.noIssuerReason)
-            assertEquals(NoIssuerReason.UNANCHORED, v.path.walkerReason)
+            assertEquals(PathReason.UNANCHORED, v.path.reason)
+            assertEquals(NoIssuerReason.UNANCHORED, rig.detail(v).walkerReason)
             assertEquals(setOf(Rule.NO_ISSUER), v.rules)
         }
     }
@@ -332,7 +373,7 @@ class EvaluatorTest {
         val (_, snapshot, now) = assertNotNull(fallback.seen)
         assertEquals(WalkerHarness.SNAPSHOT_ID, snapshot.id)
         assertEquals(NOW - 5, now)
-        assertTrue(v.path.usedFallback)
+        assertTrue(rig.detail(v).usedFallback)
     }
 
     @Test
@@ -341,8 +382,8 @@ class EvaluatorTest {
         val rig = EvaluatorRig(honest)
         val v = rig.presented(presented)
         assertEquals(PathStatus.PATH_BUDGET_EXCEEDED, v.path.status)
-        assertEquals(WalkEnd.EXPLORATION_BUDGET, v.path.endReason)
-        assertEquals(0, v.path.endDepth)
+        assertEquals(WalkEnd.EXPLORATION_BUDGET, rig.detail(v).endReason)
+        assertEquals(0, rig.detail(v).endDepth)
         assertEquals(0, rig.verifications, "no walk")
     }
 
@@ -365,13 +406,17 @@ class EvaluatorTest {
         val throwing = broken.presented(chain)
         assertEquals(PathStatus.NOT_WALKED, throwing.path.status, "a throwing clock is the boundary's error")
         assertEquals(ChainSource.RECONSTRUCTED, throwing.path.source)
-        assertEquals(WalkerHarness.SNAPSHOT_ID, throwing.path.anchorSnapshotId)
+        assertNull(broken.detailOrNull(throwing))
+        assertEquals(
+            LogLevel.DEBUG to "evaluate: NOT_WALKED: no decision, anchorSnapshotId=${WalkerHarness.SNAPSHOT_ID}",
+            broken.logged.last(),
+        )
         assertEquals(listOf(EngineErrorProducer.BOUNDARY), engineErrors(throwing).map { it.producer })
-        // A path never reached still reports what the request would have consulted: no snapshot for verified paths.
+        // A path never reached still logs what the request would have consulted: no snapshot for a longer verified path.
         val verified = broken.evaluate(request(verified = h.path))
         assertEquals(PathStatus.NOT_WALKED, verified.path.status)
         assertEquals(ChainSource.PLATFORM, verified.path.source)
-        assertEquals(0, verified.path.anchorSnapshotId)
+        assertEquals(LogLevel.DEBUG to "evaluate: NOT_WALKED: no decision, anchorSnapshotId=0", broken.logged.last())
     }
 
     @Test

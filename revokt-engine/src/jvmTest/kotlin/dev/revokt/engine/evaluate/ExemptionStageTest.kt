@@ -111,7 +111,7 @@ class ExemptionStageTest {
             val engine = StubEngine.always(result)
             val v =
                 evaluate(
-                    EvaluationInput(honest.presented, null, snapshot(), form, WalkerHarness.SNAPSHOT_ID),
+                    EvaluationInput(honest.presented, null, snapshot(), form),
                     NamedEngine(engine),
                     { NOW },
                     { now -> Run.decideFixture(honest, null, now) },

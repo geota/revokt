@@ -4,6 +4,7 @@
 package dev.revokt.engine.walker
 
 import dev.revokt.NoIssuerReason
+import dev.revokt.PathReason
 import dev.revokt.PathStatus
 import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.found
@@ -76,7 +77,7 @@ class IssuerProfileTest {
             assertEquals(PathStatus.FOUND, WalkerHarness.decide(f, null, requiredEku = listed).path.status, "$listed")
             val refused = WalkerHarness.decide(f, null, requiredEku = other).path
             assertEquals(PathStatus.NO_ISSUER, refused.status, "$other")
-            assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, refused.noIssuerReason, "$other")
+            assertEquals(PathReason.ALL_CANDIDATES_INVALID, refused.reason, "$other")
             val byDefault = WalkerHarness.decide(f, null).path.status
             assertEquals(if (listed == RequiredEku.SERVER_AUTH) PathStatus.FOUND else PathStatus.NO_ISSUER, byDefault)
         }

@@ -94,7 +94,7 @@ class UnsupportedAlgorithmLabelTest {
         WalkerHarness.check(withJ)
         val decision = WalkerHarness.decide(withJ, fallback = null)
         assertUnsupportedLabel(decision.path)
-        assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, decision.path.walkerReason)
+        assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, decision.detail.walkerReason)
     }
 
     @Test
@@ -103,7 +103,7 @@ class UnsupportedAlgorithmLabelTest {
         WalkerHarness.check(leaf2WithIssuer)
         val decided = WalkerHarness.decide(leaf2Only, fallback = null)
         assertEquals(PathStatus.NO_ISSUER, decided.path.status)
-        assertEquals(NoIssuerReason.NO_CANDIDATE, decided.path.noIssuerReason)
+        assertEquals(PathReason.NO_CANDIDATE, decided.path.reason)
         assertEquals(emptyList(), decided.findings.filterIsInstance<Finding.UnsupportedAlgorithm>())
         assertUnsupportedLabel(WalkerHarness.decide(leaf2WithIssuer, fallback = null).path)
     }
@@ -129,7 +129,7 @@ class UnsupportedAlgorithmLabelTest {
         WalkerHarness.check(f)
         val decision = WalkerHarness.decide(f, fallback = null)
         assertEquals(PathStatus.NO_ISSUER, decision.path.status)
-        assertEquals(NoIssuerReason.ALL_CANDIDATES_INVALID, decision.path.noIssuerReason)
+        assertEquals(PathReason.ALL_CANDIDATES_INVALID, decision.path.reason)
     }
 
     @Test
@@ -162,10 +162,10 @@ class UnsupportedAlgorithmLabelTest {
     fun `decide the leaf alone is NO_CANDIDATE and the leaf with D is UNSUPPORTED_ALGORITHM`() {
         val alone = WalkerHarness.decide(leafOnly, fallback = null).path
         assertEquals(PathStatus.NO_ISSUER, alone.status)
-        assertEquals(NoIssuerReason.NO_CANDIDATE, alone.noIssuerReason)
+        assertEquals(PathReason.NO_CANDIDATE, alone.reason)
         val decision = WalkerHarness.decide(withD, fallback = null)
         assertUnsupportedLabel(decision.path)
-        assertEquals(NoIssuerReason.UNANCHORED, decision.path.walkerReason)
+        assertEquals(NoIssuerReason.UNANCHORED, decision.detail.walkerReason)
         val unsupported = decision.findings.filterIsInstance<Finding.UnsupportedAlgorithm>().single()
         assertEquals(SymOids.UNSUPPORTED_SIGNATURE, unsupported.oid)
         assertEquals(true, unsupported.outcomeDepended)
@@ -215,8 +215,8 @@ class UnsupportedAlgorithmLabelTest {
         for (f in listOf(leafOnly, withD, withJ, leaf2Only, leaf2WithIssuer)) {
             val d = WalkerHarness.decide(f, fallback = null, platformOnly = true)
             assertEquals(PathStatus.NO_ISSUER, d.path.status, "$f")
-            assertEquals(NoIssuerReason.PLATFORM_ONLY, d.path.noIssuerReason, "$f")
-            assertEquals(f.walk.reason, d.path.walkerReason, "$f: the walker's reason is kept")
+            assertEquals(PathReason.PLATFORM_ONLY, d.path.reason, "$f")
+            assertEquals(f.walk.reason, d.detail.walkerReason, "$f: the walker's reason is kept")
             val findings = d.findings.filterIsInstance<Finding.UnsupportedAlgorithm>()
             assertEquals(f.walk.unsupportedOids, findings.map { it.oid }.toSet(), "$f: the OIDs are kept")
             assertTrue(findings.none { it.outcomeDepended }, "$f: outcomeDepended follows the reason")
@@ -258,7 +258,7 @@ class UnsupportedAlgorithmLabelTest {
     /** [path] is `NO_ISSUER(UNSUPPORTED_ALGORITHM)`: the one rule, with the label a server can steer. */
     private fun assertUnsupportedLabel(path: Finding.Path) {
         assertEquals(PathStatus.NO_ISSUER, path.status)
-        assertEquals(NoIssuerReason.UNSUPPORTED_ALGORITHM, path.noIssuerReason)
+        assertEquals(PathReason.UNSUPPORTED_ALGORITHM, path.reason)
     }
 
     private fun exemptedRules(v: Verdict): List<Rule> = v.findings.filterIsInstance<Finding.Exempted>().map { it.rule }

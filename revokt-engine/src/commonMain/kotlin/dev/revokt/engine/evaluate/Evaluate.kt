@@ -42,15 +42,13 @@ internal class NamedEngine(
 /**
  * One evaluation's inputs besides the engine and the decision (spec §5.1 flow step 2): the [presented] chain, leaf
  * first; [host] as host' (already normalised, so it is never normalised twice); the [snapshot] and [policy] read once
- * for this handshake; the [anchorSnapshotId] decision step 1 consumed and the chain's [source], which a path the
- * evaluation never reached reports.
+ * for this handshake; and the chain's [source], which a path the evaluation never reached reports.
  */
 internal class EvaluationInput(
     val presented: List<ByteArray>,
     val host: String?,
     val snapshot: GenerationSnapshot,
     val policy: PolicyForm,
-    val anchorSnapshotId: Long,
     val source: ChainSource = ChainSource.RECONSTRUCTED,
 )
 
@@ -288,7 +286,6 @@ private fun notWalked(input: EvaluationInput): Finding.Path =
         .Builder()
         .status(PathStatus.NOT_WALKED)
         .source(input.source)
-        .anchorSnapshotId(input.anchorSnapshotId)
         .build()
 
 /**

@@ -4,8 +4,8 @@
 package dev.revokt
 
 /**
- * The first §9.2 keyability clause a leaf fails, K1 to K8 in order (spec §4, §9.2). Growable; `keyabilityClause !=
- * null` exactly when `parseReason == PRODUCER_UNKEYABLE`.
+ * The first §9.2 keyability clause a leaf fails, K1 to K8 in order (spec §4, §9.2): on the evaluation's `DEBUG` line
+ * exactly when the path's reason is `PRODUCER_UNKEYABLE`. Growable.
  */
 public enum class KeyabilityClause {
     /** K1: a TLV header in the signed TBS content, outside the opaque extension values, is not single-octet and minimal. */

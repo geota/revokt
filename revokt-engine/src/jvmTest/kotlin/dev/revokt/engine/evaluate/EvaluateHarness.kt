@@ -16,6 +16,7 @@ import dev.revokt.GenerationFiles
 import dev.revokt.NoIssuerReason
 import dev.revokt.ParseReason
 import dev.revokt.PathBuilderFallback
+import dev.revokt.PathReason
 import dev.revokt.PathStatus
 import dev.revokt.PreparedGeneration
 import dev.revokt.PresentedChain
@@ -29,6 +30,7 @@ import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.walker.CandidateIndex
 import dev.revokt.engine.walker.DecideContext
 import dev.revokt.engine.walker.PathDecision
+import dev.revokt.engine.walker.PathDetail
 import dev.revokt.engine.walker.WalkerFixture
 import dev.revokt.engine.walker.WalkerHarness
 import dev.revokt.engine.walker.decide
@@ -139,7 +141,7 @@ internal class Run(
 
     fun evaluate(named: NamedEngine = NamedEngine(engine)): Evaluated =
         evaluate(
-            EvaluationInput(presented, host, snapshot, policy.form, WalkerHarness.SNAPSHOT_ID),
+            EvaluationInput(presented, host, snapshot, policy.form),
             named,
             clock,
             decide,
@@ -193,14 +195,18 @@ internal fun decision(
             .Builder()
             .status(status)
             .source(ChainSource.RECONSTRUCTED)
-            .anchorSnapshotId(WalkerHarness.SNAPSHOT_ID)
-            .apply {
-                if (status == PathStatus.PARSE_FAILED) parseReason(ParseReason.STRUCTURE)
-                if (status == PathStatus.NO_ISSUER) noIssuerReason(NoIssuerReason.NO_CANDIDATE)
-            }.issuerSpkiSha256s(keys.map { it.toByteArray() })
+            .reason(
+                when (status) {
+                    PathStatus.PARSE_FAILED -> PathReason.STRUCTURE
+                    PathStatus.NO_ISSUER -> PathReason.NO_CANDIDATE
+                    PathStatus.PATH_BUDGET_EXCEEDED -> PathReason.EXPLORATION_BUDGET
+                    else -> null
+                },
+            ).issuerSpkiSha256s(keys.map { it.toByteArray() })
             .build()
     return PathDecision(
         path = path,
+        detail = PathDetail(anchorSnapshotId = WalkerHarness.SNAPSHOT_ID),
         issuerKeys = keys.toList(),
         serial = if (status == PathStatus.PARSE_FAILED) null else byteArrayOf(1),
         scts = emptyList(),

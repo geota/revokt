@@ -60,14 +60,14 @@ public fun interface Exemption {
         }
 
         /**
-         * Exempt when the reported reason is `NoIssuerReason.PLATFORM_ONLY`: the platform accepted a chain revokt's
+         * Exempt when the reported reason is `PathReason.PLATFORM_ONLY`: the platform accepted a chain revokt's
          * walker could not anchor (§5.2). On its own it exempts every such chain for every host, so the enterprise
          * recipe pairs it with [hostSuffixIn] (§8).
          */
         @JvmStatic
         public fun platformOnly(): Exemption = PLATFORM_ONLY
 
-        private val PLATFORM_ONLY = Exemption { context -> context.path.noIssuerReason == NoIssuerReason.PLATFORM_ONLY }
+        private val PLATFORM_ONLY = Exemption { context -> context.path.reason == PathReason.PLATFORM_ONLY }
 
         /** [hosts] as host', copied into a set; rejects an entry no normalised host could equal (spec §4, #160). */
         private fun entries(

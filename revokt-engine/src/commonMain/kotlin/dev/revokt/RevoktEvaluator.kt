@@ -13,6 +13,7 @@ import dev.revokt.engine.walker.DecideContext
 import dev.revokt.engine.walker.DecideInputs
 import dev.revokt.engine.walker.IndexedSnapshot
 import dev.revokt.engine.walker.PathDecision
+import dev.revokt.engine.walker.PathDetail
 import dev.revokt.engine.walker.decide
 import dev.revokt.engine.walker.decideVerified
 import dev.revokt.engine.walker.verifiedAnchorSnapshotId
@@ -36,6 +37,9 @@ import dev.revokt.engine.walker.verifiedAnchorSnapshotId
  *   (step 4) makes the walk unnecessary; `EvaluationRequest` has already checked that it starts with the presented
  *   leaf (the maintainer's decision on #195).
  * - **The time** is the request's `nowMillis`, else one read of [clock]; the host is host' (§5.1 flow step 2).
+ * - **One `DEBUG` line per evaluation** to [logger]: the path's status and reason, then the decision's [PathDetail]
+ *   (the walker's reason and counters, the reported path, `anchorSnapshotId`), or "no decision" with the
+ *   `anchorSnapshotId` when the boundary caught a throw before one.
  */
 @OptIn(RevoktInternalApi::class)
 internal class RevoktEvaluator(
@@ -46,8 +50,8 @@ internal class RevoktEvaluator(
     engine: RevocationEngine,
     private val walk: DecideInputs,
     private val clock: () -> Long,
-    private val decidePresented: (List<ByteArray>, CandidateIndex, AnchorSnapshot, DecideContext) -> PathDecision =
-        ::decide,
+    private val logger: RevoktLogger = RevoktLogger { _, _, _ -> },
+    private val deciders: Deciders = Deciders(),
 ) : Evaluator {
     private val engine = NamedEngine(engine)
 
@@ -68,22 +72,41 @@ internal class RevoktEvaluator(
                 normalisedHost(request.host),
                 snapshot,
                 form,
-                anchorSnapshotId =
-                    verified?.let { verifiedAnchorSnapshotId(it, indexed.snapshot) } ?: indexed.snapshot.id,
                 source = request.chainSource,
             )
         val now = request.nowMillis
-        return evaluate(
-            input,
-            engine,
-            clock = if (now != null) ({ now }) else clock,
-            decide = { nowMillis ->
-                if (verified != null) {
-                    decideVerified(chain, indexed.index, indexed.snapshot)
-                } else {
-                    decidePresented(chain, indexed.index, indexed.snapshot, walk.at(nowMillis, platformOnly = false))
-                }
-            },
-        ).verdict
+        val evaluated =
+            evaluate(
+                input,
+                engine,
+                clock = if (now != null) ({ now }) else clock,
+                decide = { nowMillis ->
+                    if (verified != null) {
+                        deciders.verified(chain, indexed.index, indexed.snapshot)
+                    } else {
+                        deciders.presented(
+                            chain,
+                            indexed.index,
+                            indexed.snapshot,
+                            walk.at(nowMillis, platformOnly = false),
+                        )
+                    }
+                },
+            )
+        val verdict = evaluated.verdict
+        val detail =
+            evaluated.decision?.detail?.toString()
+                ?: "no decision, anchorSnapshotId=${
+                    verified?.let { verifiedAnchorSnapshotId(it, indexed.snapshot) } ?: indexed.snapshot.id
+                }"
+        val reason = verdict.path.reason?.let { "($it)" } ?: ""
+        logger.safeLog(LogLevel.DEBUG, "evaluate: ${verdict.path.status}$reason: $detail")
+        return verdict
     }
 }
+
+/** [RevoktEvaluator]'s two decision routes: [decide] for a presented chain, [decideVerified] for a verified path. */
+internal class Deciders(
+    val presented: (List<ByteArray>, CandidateIndex, AnchorSnapshot, DecideContext) -> PathDecision = ::decide,
+    val verified: (List<ByteArray>, CandidateIndex, AnchorSnapshot) -> PathDecision = ::decideVerified,
+)

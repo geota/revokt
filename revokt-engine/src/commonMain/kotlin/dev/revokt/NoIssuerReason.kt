@@ -4,8 +4,8 @@
 package dev.revokt
 
 /**
- * Why a path is `NO_ISSUER` (spec §4, §5.1 walker step 6). Growable; `noIssuerReason != null` exactly when
- * `path.status == NO_ISSUER`.
+ * Why the walk found no path (spec §4, §5.1 walker step 6): the walker's own reason, on the evaluation's `DEBUG` line
+ * as `walkerReason`; the reported one is `Finding.Path.reason`, a [PathReason]. Growable.
  */
 public enum class NoIssuerReason {
     /** The candidate index held no related candidate for the leaf. */
@@ -20,10 +20,10 @@ public enum class NoIssuerReason {
     /**
      * In the walker-only harness and `Evaluator.evaluate`: the walk found no path and met an own signature OID the
      * verifier cannot verify (spec §5.1 decision step 6). Each such OID is in an `UnsupportedAlgorithm` finding with
-     * `outcomeDepended = true`; `walkerReason` keeps the walk's own reason.
+     * `outcomeDepended = true`.
      */
     UNSUPPORTED_ALGORITHM,
 
-    /** On a trust-manager binding: the walker found no path and the PKIX fallback failed too (`walkerReason` keeps why). */
+    /** On a trust-manager binding: the walker found no path and the PKIX fallback failed too. */
     PLATFORM_ONLY,
 }

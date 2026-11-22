@@ -12,6 +12,7 @@ import dev.revokt.KeyabilityClause
 import dev.revokt.KotlinRevocationEngine
 import dev.revokt.NoIssuerReason
 import dev.revokt.ParseReason
+import dev.revokt.PathReason
 import dev.revokt.PathStatus
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
@@ -105,10 +106,11 @@ class EvaluateTest {
                 h.fixture("k6", presented = listOf(leaf6, h.intermediate), walk = ExpectedWalk.found()),
                 engine = engine,
             )
-        val v = run.evaluate().verdict
+        val evaluated = run.evaluate()
+        val v = evaluated.verdict
         assertEquals(PathStatus.PARSE_FAILED, v.path.status)
-        assertEquals(ParseReason.PRODUCER_UNKEYABLE, v.path.parseReason)
-        assertEquals(KeyabilityClause.TIME, v.path.keyabilityClause)
+        assertEquals(PathReason.PRODUCER_UNKEYABLE, v.path.reason)
+        assertEquals(KeyabilityClause.TIME, checkNotNull(evaluated.decision).detail.keyabilityClause)
         assertNull(v.crlite)
         assertEquals(emptyList(), engine.queries, "never queried")
         assertEquals(setOf(Rule.PARSE_FAILED), v.rules)
@@ -457,7 +459,7 @@ class EvaluateTest {
                 }
             }
         }
-        assertEquals(NoIssuerReason.NO_CANDIDATE, verdictOf(cases[5].second).path.noIssuerReason)
+        assertEquals(PathReason.NO_CANDIDATE, verdictOf(cases[5].second).path.reason)
     }
 
     @Test
