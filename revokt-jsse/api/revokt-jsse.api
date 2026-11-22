@@ -1,0 +1,5 @@
+public final class dev/revokt/jsse/JdkHttpFetcher : dev/revokt/HttpFetcher {
+	public fun <init> ()V
+	public fun fetch (Ldev/revokt/FetchRequest;)Ldev/revokt/FetchResponse;
+}
+
