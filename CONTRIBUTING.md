@@ -516,7 +516,9 @@ each, rewrite it while the news holds, close it once the pins are current, and s
     - A target over even the prune's caps, or one whose units are all over its `-max_len` (nothing is left to merge),
       is left out with an error, and the prune job fails the run once the others are pushed. To recover, trim that
       target's directory in `geota/revokt-fuzz-corpus` by hand (delete it, or all but a sample of its units within
-      `-max_len`; the nightly regrows what still adds coverage), then dispatch `fuzz` with `prune`.
+      `-max_len`; the nightly regrows what still adds coverage), then dispatch `fuzz` with `prune`. A target whose
+      units are all over its `-max_len` usually heals without a trim: the nightly seeds nothing for it, so the corpus
+      job pushes its new units, all within `-max_len`, and the next prune drops the over-length ones.
     - Residual risk, accepted: the merge jobs run the fuzzed code on corpus input, and any job of the run can upload a
       `fuzz-merged-<target>` artifact for any target. A misbehaving merge job can therefore make the prune delete
       units of any target, though never add one; the corpus repository's history restores them.

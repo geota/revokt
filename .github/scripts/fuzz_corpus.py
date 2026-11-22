@@ -12,10 +12,11 @@ weekly prune's read and merge (--prune), so a target that outgrew the seed caps 
   counted; the next prune drops it, as ClusterFuzz's does, without keeping a cut-down copy (a prune never adds one).
   A target over the caps (its units, its bytes, or the staged total) is left out: with a warning for the seed, and with
   an error and exit status 3 under --prune, where the other targets are still staged and the workflow fails the run
-  once they are pruned. Under --prune, a target whose units are all over its -max_len (a -max_len lowered) is an error
-  with exit status 3 in the same way: nothing is left to merge, and the prune deletes only what a merge decided. Entries of corpus/ that are not a known target's
-  directory are ignored (a renamed or removed target) and counted. The accepted units are copied to
-  <out dir>/<Class>-<method>/; a target with none gets no directory.
+  once they are pruned. Under --prune, a target whose units are all over its -max_len (a -max_len lowered below every
+  stored unit) is an error with exit status 3 in the same way: nothing is left to merge, and the prune deletes only
+  what a merge decided. Entries of corpus/ that are not a known target's directory are ignored (a renamed or removed
+  target) and counted. The accepted units are copied to <out dir>/<Class>-<method>/; a target with none gets no
+  directory.
 - `check [--prune] <dir> [--within <ref dir>] [--lists <lists dir>]`: the check of a downloaded artifact (the staged
   seed, or the merged corpora), which a job that ran the fuzzed tree's code could have written. Every top-level entry
   must be a non-empty directory of a known target, holding only regular files named by their content's SHA-1, each
