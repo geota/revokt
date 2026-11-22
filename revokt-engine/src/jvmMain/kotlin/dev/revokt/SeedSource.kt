@@ -23,6 +23,10 @@ public class SeedSource internal constructor(
      */
     internal fun open(): Source? = opening.open()
 
+    /** True for [none], the explicit opt-out: no seed source at all, whatever the channel. */
+    @RevoktInternalApi
+    public val isNone: Boolean get() = opening === NoSeed
+
     /**
      * This source for [channel]: `bundled()` becomes the channel's `/revokt/seed-<channel>.zip`, or null when the
      * classpath has none (no seed source); any other source is itself. Called when the `Revokt` is built.
@@ -34,7 +38,7 @@ public class SeedSource internal constructor(
     public companion object {
         /** No seed: an explicit opt-out of the bundled default. Opens null. */
         @JvmStatic
-        public fun none(): SeedSource = SeedSource { null }
+        public fun none(): SeedSource = SeedSource(NoSeed)
 
         /**
          * The archive [opener] opens, re-opened on every start task and seed re-check (an asset pack, a downloaded
@@ -71,6 +75,11 @@ internal fun interface SeedOpening {
     fun open(): Source?
 
     fun resolve(channel: CrliteChannel): SeedOpening? = this
+}
+
+/** [SeedSource.none]'s opening: opens nothing. One object, so [SeedSource.isNone] is an identity check. */
+private object NoSeed : SeedOpening {
+    override fun open(): Source? = null
 }
 
 /**

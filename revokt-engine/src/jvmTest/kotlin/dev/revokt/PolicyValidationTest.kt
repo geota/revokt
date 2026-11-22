@@ -14,6 +14,7 @@ import dev.revokt.engine.policy.validatePolicy as validateForm
  * The V diagnostics of spec §4 that are functions of the policy alone (#123): each fires in exactly its case, with its
  * severity under `OBSERVE` and `ENFORCE` (and `OFF`, which never enforces), and neither preset has any.
  */
+@OptIn(RevoktInternalApi::class)
 class PolicyValidationTest {
     private data class Seen(
         val code: DiagnosticCode,
