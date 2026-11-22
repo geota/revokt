@@ -70,7 +70,9 @@ class DiagnosticsTest {
         // the engine produces. Growable: a new code is appended here and there together.
         val diagnostics =
             "EXEMPTION_ON_EVIDENCE_RULE, STALE_REJECTS_WITHOUT_THRESHOLD, EXEMPT_ON_ALLOW, BUDGET_ALLOWS, " +
-                "EVIDENCE_LOWERED_BELOW_PRESET, STALENESS_CLEARED_FOR_REQUIRED_DATASET"
+                "EVIDENCE_LOWERED_BELOW_PRESET, STALENESS_CLEARED_FOR_REQUIRED_DATASET, CHANNEL_UNSET, " +
+                "NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, NO_REQUIRED_DATASETS, IN_MEMORY_STORE_WITH_FETCHING_SOURCE, " +
+                "FORMAT_UNSUPPORTED, NO_FETCHING_SOURCE, IO_DISPATCHER_UNCONFINED"
         assertEquals(diagnostics.split(", "), DiagnosticCode.entries.map { it.name })
         val warnings = "CAP_NEAR_LIMIT, SEED_UNREADABLE, SEED_CHANNEL_MISMATCH"
         assertEquals(warnings.split(", "), WarningCode.entries.map { it.name })

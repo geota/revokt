@@ -13,9 +13,11 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 /** The JVM's `SeedSource` factories as spec §4 declares them (#111): the two class loaders in order, and re-opening. */
 @OptIn(RevoktInternalApi::class)
@@ -169,6 +171,15 @@ class SeedSourceTest {
         assertSame(resource, resource.resolve(CrliteChannel.COMPAT))
         val of = SeedSource.of { null }
         assertSame(of, of.resolve(CrliteChannel.DEFAULT))
+    }
+
+    @Test
+    fun `only none is none, even beside sources that also open null`() {
+        assertTrue(SeedSource.none().isNone)
+        assertFalse(SeedSource.of { null }.isNone)
+        assertFalse(SeedSource.fromResource("/revokt/test/absent.zip").isNone)
+        assertFalse(SeedSource.bundled().isNone)
+        assertFalse(JvmSeedSource.fromPath(Path.of("absent.zip")).isNone)
     }
 
     @Test
