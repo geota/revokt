@@ -28,6 +28,7 @@ import dev.revokt.engine.walker.WalkerFixture
 import dev.revokt.engine.walker.garbage
 import dev.revokt.engine.walker.subCa
 import dev.revokt.testing.SymOids
+import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -103,7 +104,11 @@ class EvaluateTest {
         val engine = StubEngine.always(CrliteQueryResult.REVOKED)
         val run =
             Run.of(
-                h.fixture("k6", presented = listOf(leaf6, h.intermediate), walk = ExpectedWalk.found()),
+                h.fixture(
+                    "k6",
+                    presented = listOf(leaf6, h.intermediate),
+                    walk = ExpectedWalk(ExpectedWalk.Kind.FOUND),
+                ),
                 engine = engine,
             )
         val evaluated = run.evaluate()
@@ -196,7 +201,7 @@ class EvaluateTest {
                 listOf(garbage(64), h.intermediate.der),
                 honest.snapshot,
                 honest.ok,
-                ExpectedWalk.found(),
+                ExpectedWalk(ExpectedWalk.Kind.FOUND),
             )
         val v = verdictOf(f, generation = noGeneration())
         assertEquals(setOf(Rule.PARSE_FAILED, Rule.NO_DATA), v.rules)
@@ -371,14 +376,33 @@ class EvaluateTest {
     }
 
     @Test
-    fun `walker (o) a second certified key is queried too, and its REVOKED fires`() {
+    fun `walker (o) only the first path's key is queried, so the presented order decides (residual 15)`() {
         val sub = h.subCa()
-        val f = h.fixture("o", presented = listOf(h.leaf, h.intermediate, sub), walk = ExpectedWalk.found())
-        val engine = StubEngine { if (it == sub.keyHash) CrliteQueryResult.REVOKED else CrliteQueryResult.NOT_REVOKED }
-        val v = Run.of(f, engine = engine).evaluate().verdict
-        assertEquals(2, engine.queries.size)
-        assertEquals(Rule.REVOKED, assertIs<Verdict.Rejected>(v).rule)
-        assertContentEquals(sub.keyHash.toByteArray(), v.crlite?.issuerSpkiSha256)
+        val honestKey = h.intermediate.keyHash
+        for ((presented, first) in listOf(
+            listOf(h.leaf, h.intermediate, sub) to h.intermediate,
+            listOf(h.leaf, sub, h.intermediate) to sub,
+        )) {
+            val f = h.fixture("o", presented = presented, walk = ExpectedWalk(ExpectedWalk.Kind.FOUND))
+            val engine =
+                StubEngine {
+                    if (it ==
+                        honestKey
+                    ) {
+                        CrliteQueryResult.REVOKED
+                    } else {
+                        CrliteQueryResult.NOT_REVOKED
+                    }
+                }
+            val v = Run.of(f, engine = engine).evaluate().verdict
+            assertEquals(listOf(first.keyHash), engine.queries.map { it.issuerSpkiHash.toByteString() }, "$f")
+            assertContentEquals(first.keyHash.toByteArray(), v.crlite?.issuerSpkiSha256, "$f")
+            if (first === sub) {
+                assertIs<Verdict.Accepted>(v, "$f: the attacker CA's path hides the honest key")
+            } else {
+                assertEquals(Rule.REVOKED, assertIs<Verdict.Rejected>(v, "$f").rule)
+            }
+        }
     }
 
     // No keys.
@@ -411,7 +435,7 @@ class EvaluateTest {
         fun f(
             id: String,
             presented: List<ByteArray>,
-        ) = WalkerFixture(id, "", presented, honest.snapshot, h.w.ok, ExpectedWalk.found())
+        ) = WalkerFixture(id, "", presented, honest.snapshot, h.w.ok, ExpectedWalk(ExpectedWalk.Kind.FOUND))
         val cases =
             listOf(
                 Triple("PARSE_FAILED(STRUCTURE)", f("pf", listOf(garbage(64), h.intermediate.der)), Rule.PARSE_FAILED),

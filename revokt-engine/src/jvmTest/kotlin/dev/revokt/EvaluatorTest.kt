@@ -92,7 +92,7 @@ class EvaluatorTest {
         assertEquals(PathStatus.FOUND, v.path.status)
         assertEquals(ChainSource.RECONSTRUCTED, v.path.source)
         assertEquals(WalkerHarness.SNAPSHOT_ID, rig.detail(v).anchorSnapshotId)
-        assertEquals(WalkEnd.COMPLETE, rig.detail(v).endReason)
+        assertEquals(1, rig.detail(v).pathsFound)
         assertEquals(listOf(h.intermediate.keyHash), keys(v))
         assertEquals(h.path.map { it.bytesHash }, rig.detail(v).reportedPathSha256s)
         assertEquals(listOf(h.intermediate.keyHash), engine.queries.map { it.issuerSpkiHash.toByteString() })
@@ -111,8 +111,6 @@ class EvaluatorTest {
             "walkerReason",
             "keyabilityClause",
             "terminalKind",
-            "endReason",
-            "endDepth",
             "anchorSnapshotId",
             "usedFallback",
             "pathsFound",
@@ -173,8 +171,7 @@ class EvaluatorTest {
         assertEquals(PathStatus.FOUND, v.path.status)
         assertEquals(ChainSource.PLATFORM, v.path.source)
         assertEquals(0, rig.detail(v).anchorSnapshotId)
-        assertNull(rig.detail(v).endReason)
-        assertNull(rig.detail(v).endDepth)
+        assertEquals(WalkStats(0, 0), rig.detail(v).walkStats)
         assertNull(rig.detail(v).walkerReason)
         assertFalse(rig.detail(v).usedFallback)
         assertEquals(1, rig.detail(v).pathsFound)
@@ -325,7 +322,6 @@ class EvaluatorTest {
         val disabled = rig.presented(f.presented)
         assertEquals(PathStatus.PATH_BUDGET_EXCEEDED, disabled.path.status)
         assertEquals(PathReason.FALLBACK_LIMIT, disabled.path.reason)
-        assertEquals(WalkEnd.COMPLETE, rig.detail(disabled).endReason)
         assertFalse(rig.detail(disabled).usedFallback)
         assertEquals(
             listOf(FallbackReason.DISABLED),
@@ -382,8 +378,7 @@ class EvaluatorTest {
         val rig = EvaluatorRig(honest)
         val v = rig.presented(presented)
         assertEquals(PathStatus.PATH_BUDGET_EXCEEDED, v.path.status)
-        assertEquals(WalkEnd.EXPLORATION_BUDGET, rig.detail(v).endReason)
-        assertEquals(0, rig.detail(v).endDepth)
+        assertEquals(PathReason.EXPLORATION_BUDGET, v.path.reason)
         assertEquals(0, rig.verifications, "no walk")
     }
 

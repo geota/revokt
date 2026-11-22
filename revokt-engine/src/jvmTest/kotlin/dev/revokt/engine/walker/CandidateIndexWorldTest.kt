@@ -25,7 +25,7 @@ import kotlin.test.fail
 
 /**
  * Spec §5.1 deferral rule over §9.1 generator worlds (honest worlds with random world and attacker mutations): at every
- * presented node, `related` and `unrelated` against an oracle built on the JDK's view of the same certificates, and the
+ * presented node, `related` against an oracle built on the JDK's view of the same certificates, and the
  * node order as an invariant. The seed is in every message.
  */
 class CandidateIndexWorldTest {
@@ -71,7 +71,7 @@ class CandidateIndexWorldTest {
     }
 
     @Test
-    fun `candidate index related and unrelated match the relatedness oracle and the node order on generated worlds`() {
+    fun `candidate index related matches the relatedness oracle and the node order on generated worlds`() {
         // The index runs revokt's canonicaliser, the oracle the reference walker's X500Principal call.
         val canonicalisers =
             listOf<Triple<String, (ByteArray) -> String?, (ByteArray) -> String?>>(
@@ -120,7 +120,6 @@ class CandidateIndexWorldTest {
             checkMembership(
                 index,
                 presented,
-                child,
                 seen,
                 related,
                 { related(jdk.getValue(it.bytesHash), c, oracle) },
@@ -136,11 +135,10 @@ class CandidateIndexWorldTest {
         return Triple(presented.size, canonicalOnly, presented.size - presented.distinctBy { it.bytesHash }.size)
     }
 
-    /** `related` is the oracle-related candidates, each once; `unrelated` the other presented ones, by index. */
+    /** `related` is the oracle-related candidates, each once. */
     private fun checkMembership(
         index: CandidateIndex,
         presented: List<Cert>,
-        child: Cert,
         seen: Set<ByteString>,
         related: List<Cert>,
         isRelated: (Cert) -> Boolean,
@@ -154,11 +152,6 @@ class CandidateIndexWorldTest {
             }
         assertEquals(related.size, related.map { it.bytesHash }.toSet().size, "$at: related repeats a certificate")
         assertEquals(expectedRelated.toSet(), related.map { it.bytesHash }.toSet(), "$at: related")
-        assertEquals(
-            distinctPresented.filterNot(isRelated).map { it.bytesHash },
-            index.unrelated(presented, child, seen).map { it.bytesHash }.toList(),
-            "$at: unrelated, by index",
-        )
     }
 
     /**

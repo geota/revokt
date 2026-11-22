@@ -167,7 +167,7 @@ internal class Run(
             fallback: PathBuilderFallback?,
             now: Long,
         ): PathDecision {
-            val index = CandidateIndex(f.snapshot, customCanonicaliser = f.customCanonicaliser)
+            val index = CandidateIndex(f.snapshot)
             val sym = SymVerifier(f.ok, f.unsupported)
             val context =
                 DecideContext(

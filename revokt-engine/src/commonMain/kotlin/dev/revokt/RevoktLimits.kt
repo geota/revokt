@@ -22,14 +22,12 @@ public object RevoktLimits {
     /** Summed presented DER beyond which the chain is `Budget(EXPLORATION_BUDGET)` without a walk. */
     @JvmField public val MAX_PRESENTED_BYTES: Long = 1L shl 20
 
-    /** Related candidates explored at one node; the next one triggers `RELATED_BUDGET`. */
-    @JvmField public val MAX_RELATED_PER_LEVEL: Int = 64
-
-    /** Verifier calls per walk (memo hits excluded). */
-    @JvmField public val MAX_VERIFICATIONS: Int = 256
-
-    /** Candidates for which verification was requested per walk, memo hits included. */
-    @JvmField public val MAX_EXPLORED: Int = 1_024
+    /**
+     * The walk's one work budget: candidates explored per walk, memo hits and candidates the issuer rules refuse
+     * included, a loop not; the next one ends the walk `Budget(EXPLORATION_BUDGET)`. Each exploration makes at most
+     * one verifier call, so it bounds those too.
+     */
+    @JvmField public val MAX_EXPLORED: Int = 256
 
     /** The PKIX fallback is skipped for longer presented chains. */
     @JvmField public val FALLBACK_MAX_PRESENTED: Int = 8

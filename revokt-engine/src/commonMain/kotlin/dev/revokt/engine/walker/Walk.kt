@@ -7,12 +7,11 @@ import dev.revokt.Finding
 import dev.revokt.NoIssuerReason
 import dev.revokt.RevoktInternalApi
 import dev.revokt.TerminalKind
-import dev.revokt.WalkEnd
 import dev.revokt.WalkStats
 import okio.ByteString
 
 /**
- * One path [reconstruct] returns (spec §5.1 declarations): [certs] is leaf → … → terminal, every link `VERIFIED` under
+ * The path [reconstruct] returns (spec §5.1 declarations): [certs] is leaf → … → terminal, every link `VERIFIED` under
  * the next certificate's key, and [terminal] says what the last certificate is. Distinct from `Finding.Path`.
  */
 internal class WalkPath(
@@ -24,8 +23,8 @@ internal class WalkPath(
 
 /**
  * What [reconstruct] found (spec §5.1 declarations). Every variant carries [unsupportedOids] (the probe-listed own
- * signature OIDs of the explored related non-anchors, the nodes, and the leaf once it had a related candidate), the
- * walk's [findings] and its [stats].
+ * signature OIDs of the explored non-anchor candidates, and the leaf's once it had a candidate), the walk's [findings]
+ * and its [stats].
  */
 @OptIn(RevoktInternalApi::class)
 internal sealed interface Walk {
@@ -33,15 +32,15 @@ internal sealed interface Walk {
     val findings: List<Finding>
     val stats: WalkStats
 
-    /** The walk completed and found [paths]; [leafKeys] are their leaf-issuer SPKI hashes. */
+    /** The walk found [path], the first sound one; [leafKey] is its leaf-issuer SPKI hash. */
     class Found(
-        val paths: List<WalkPath>,
-        val leafKeys: Set<ByteString>,
+        val path: WalkPath,
+        val leafKey: ByteString,
         override val unsupportedOids: Set<String>,
         override val findings: List<Finding>,
         override val stats: WalkStats,
     ) : Walk {
-        override fun toString(): String = "Found(paths=$paths, stats=$stats, unsupportedOids=$unsupportedOids)"
+        override fun toString(): String = "Found(path=$path, stats=$stats, unsupportedOids=$unsupportedOids)"
     }
 
     /** The walk completed without a path; [reason] comes from the leaf level only. */
@@ -54,20 +53,12 @@ internal sealed interface Walk {
         override fun toString(): String = "NotFound($reason, stats=$stats, unsupportedOids=$unsupportedOids)"
     }
 
-    /**
-     * A limit stopped the walk: [end] is the limit, [endDepth] the path size at the node where it was detected, and
-     * [partialPaths] the paths found before it, with their leaf-issuer keys [partialLeafKeys].
-     */
+    /** The work budget ran out before a path was found; the walk stops at its first path, so none was. */
     class Budget(
-        val end: WalkEnd,
-        val endDepth: Int,
-        val partialPaths: List<WalkPath>,
-        val partialLeafKeys: Set<ByteString>,
         override val unsupportedOids: Set<String>,
         override val findings: List<Finding>,
         override val stats: WalkStats,
     ) : Walk {
-        override fun toString(): String =
-            "Budget($end, endDepth=$endDepth, partialPaths=$partialPaths, stats=$stats, unsupportedOids=$unsupportedOids)"
+        override fun toString(): String = "Budget(stats=$stats, unsupportedOids=$unsupportedOids)"
     }
 }

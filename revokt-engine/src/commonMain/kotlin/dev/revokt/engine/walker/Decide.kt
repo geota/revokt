@@ -21,7 +21,6 @@ import dev.revokt.RevoktTestingApi
 import dev.revokt.SignatureVerifier
 import dev.revokt.TerminalKind
 import dev.revokt.VerifyResult
-import dev.revokt.WalkEnd
 import dev.revokt.WalkStats
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
@@ -83,8 +82,7 @@ internal class DecideContext(
  * - **Step 3:** the leaf is parsed once (§5.5): over `MAX_CERT_BYTES` is `PARSE_FAILED(OVERSIZE)` (checked before the
  *   parse), unparseable `PARSE_FAILED(STRUCTURE)`, outside the §9.2 keyability profile
  *   `PARSE_FAILED(PRODUCER_UNKEYABLE)` with its clause (D8). Then more than `MAX_PRESENTED` certificates or more than
- *   `MAX_PRESENTED_BYTES` of DER, over the raw chain, is `PATH_BUDGET_EXCEEDED` with `EXPLORATION_BUDGET` at
- *   `endDepth = 0` and no walk. Only then are the other certificates parsed; one the parser rejects is dropped and
+ *   `MAX_PRESENTED_BYTES` of DER, over the raw chain, is `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)` with no walk. Only then are the other certificates parsed; one the parser rejects is dropped and
  *   counted in `candidatesDropped`. `producerKeyable` gates the leaf only.
  * - **Step 5:** [reconstruct]; a `Found` is final.
  * - **Step 6:** on a walk `NotFound` or `Budget`, the PKIX fallback runs when it is enabled and the chain has at most
@@ -241,11 +239,7 @@ private class Decider(
     /** Step 3's `Budget(EXPLORATION_BUDGET)` without a walk: no CRLite query and no `FallbackNotUsed`. */
     private fun presentedCut(leaf: Cert): PathDecision =
         result(
-            base(PathStatus.PATH_BUDGET_EXCEEDED).apply {
-                reason = PathReason.EXPLORATION_BUDGET
-                endReason = WalkEnd.EXPLORATION_BUDGET
-                endDepth = 0
-            },
+            base(PathStatus.PATH_BUDGET_EXCEEDED).apply { reason = PathReason.EXPLORATION_BUDGET },
             keys = emptyList(),
             reported = emptyList(),
             leaf = leaf,
@@ -257,12 +251,9 @@ private class Decider(
     ): PathDecision =
         walked(
             walk,
-            base(PathStatus.FOUND).apply {
-                endReason = WalkEnd.COMPLETE
-                pathsFound = walk.paths.size
-            },
-            keys = walk.leafKeys.toList(),
-            reported = walk.paths.first().hashes(),
+            base(PathStatus.FOUND).apply { pathsFound = 1 },
+            keys = listOf(walk.leafKey),
+            reported = walk.path.hashes(),
             leaf = leaf,
             notUsed = null,
         )
@@ -281,11 +272,7 @@ private class Decider(
         walk: Walk.NotFound,
         leaf: Cert,
     ): PathDecision {
-        val draft =
-            base(PathStatus.FOUND).apply {
-                endReason = WalkEnd.COMPLETE
-                walkerReason = walk.reason
-            }
+        val draft = base(PathStatus.FOUND).apply { walkerReason = walk.reason }
         val fallback = fallback()
         if (fallback is Fallback.Path) {
             return walked(
@@ -316,32 +303,24 @@ private class Decider(
     }
 
     /**
-     * Step 6 on a walk `Budget`: `PATH_BUDGET_EXCEEDED` whatever the fallback does. A fallback path's key is appended
-     * to the partial leaf keys, only so that step 7 reports `REVOKED` when it is reachable; the reported path is the
-     * first partial path, else the fallback path.
+     * Step 6 on a walk `Budget`, which carries no path: `PATH_BUDGET_EXCEEDED(EXPLORATION_BUDGET)` whatever the
+     * fallback does. A fallback path's key is the one key, evaluated only so that step 7 reports `REVOKED` when it is
+     * reachable, and the fallback path is the reported one.
      */
     private fun budget(
         walk: Walk.Budget,
         leaf: Cert,
     ): PathDecision {
-        val keys = LinkedHashSet(walk.partialLeafKeys)
-        var reported = walk.partialPaths.firstOrNull()?.hashes()
         val fallback = fallback()
-        if (fallback is Fallback.Path) {
-            keys += fallback.key
-            reported = reported ?: fallback.hashes
-        }
+        val path = fallback as? Fallback.Path
         return walked(
             walk,
             base(PathStatus.PATH_BUDGET_EXCEEDED).apply {
-                reason = budgetReason(walk.end)
-                endReason = walk.end
-                endDepth = walk.endDepth
-                pathsFound = walk.partialPaths.size
-                usedFallback = fallback is Fallback.Path
+                reason = PathReason.EXPLORATION_BUDGET
+                usedFallback = path != null
             },
-            keys = keys.toList(),
-            reported = reported.orEmpty(),
+            keys = listOfNotNull(path?.key),
+            reported = path?.hashes.orEmpty(),
             leaf = leaf,
             notUsed = (fallback as? Fallback.NotUsed)?.reason,
         )
@@ -473,8 +452,6 @@ private class Decider(
             PathDetail(
                 walkerReason = draft.walkerReason,
                 keyabilityClause = draft.keyabilityClause,
-                endReason = draft.endReason,
-                endDepth = draft.endDepth,
                 anchorSnapshotId = snapshot.id,
                 usedFallback = draft.usedFallback,
                 pathsFound = draft.pathsFound,
@@ -504,11 +481,9 @@ private class Draft(
     var reason: PathReason? = null
     var walkerReason: NoIssuerReason? = null
     var keyabilityClause: KeyabilityClause? = null
-    var endReason: WalkEnd? = null
-    var endDepth: Int? = null
     var usedFallback = false
     var pathsFound = 0
-    var walkStats = WalkStats(0, 0, 0, 0)
+    var walkStats = WalkStats(0, 0)
 }
 
 /** The [PathReason] of a `PARSE_FAILED` leaf's [reason]. */
@@ -527,13 +502,4 @@ internal fun noIssuerReason(reason: NoIssuerReason): PathReason =
         NoIssuerReason.UNANCHORED -> PathReason.UNANCHORED
         NoIssuerReason.UNSUPPORTED_ALGORITHM -> PathReason.UNSUPPORTED_ALGORITHM
         NoIssuerReason.PLATFORM_ONLY -> PathReason.PLATFORM_ONLY
-    }
-
-/** The [PathReason] of a walk that ended on the budget [end]. */
-private fun budgetReason(end: WalkEnd): PathReason =
-    when (end) {
-        WalkEnd.RELATED_BUDGET -> PathReason.RELATED_BUDGET
-        WalkEnd.VERIFICATION_BUDGET -> PathReason.VERIFICATION_BUDGET
-        WalkEnd.EXPLORATION_BUDGET -> PathReason.EXPLORATION_BUDGET
-        WalkEnd.COMPLETE -> error("a walk Budget ends on a budget, not COMPLETE")
     }

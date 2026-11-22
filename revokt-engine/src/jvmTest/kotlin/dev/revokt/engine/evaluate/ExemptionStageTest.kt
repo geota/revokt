@@ -311,7 +311,7 @@ class ExemptionStageTest {
             h.fixture(
                 "other",
                 presented = listOf(otherLeaf, otherIssuer),
-                walk = ExpectedWalk.found(),
+                walk = ExpectedWalk(ExpectedWalk.Kind.FOUND),
                 snapshot = listOf(h.root, otherRoot),
             )
         val r = Run.of(stranger, policy, snapshot(noGeneration())).evaluate().verdict

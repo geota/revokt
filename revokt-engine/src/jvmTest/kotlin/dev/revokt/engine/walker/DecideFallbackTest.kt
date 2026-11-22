@@ -14,7 +14,7 @@ import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktTestingApi
 import dev.revokt.TerminalKind
-import dev.revokt.WalkEnd
+import dev.revokt.WalkStats
 import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
@@ -26,6 +26,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -46,25 +47,26 @@ class DecideFallbackTest {
             val walk = WalkerHarness.walk(f) as Walk.Found
             assertPath(d, f.toString()) {
                 status(PathStatus.FOUND)
-                    .endReason(WalkEnd.COMPLETE)
-                    .pathsFound(walk.paths.size)
-                    .reportedPathSha256s(walk.paths[0].certs.map { it.bytesHash.toByteArray() })
+                    .pathsFound(1)
+                    .reportedPathSha256s(walk.path.certs.map { it.bytesHash.toByteArray() })
                     .terminalKind(TerminalKind.ANCHOR)
                     .anchorSha256(
-                        walk.paths[0]
-                            .certs
+                        walk.path.certs
                             .last()
                             .bytesHash
                             .toByteArray(),
-                    ).issuerSpkiSha256s(walk.leafKeys.map { it.toByteArray() })
+                    ).issuerSpkiSha256s(listOf(walk.leafKey.toByteArray()))
             }
-            assertEquals(walk.paths[0].certs[1].spkiHash, d.issuerKeys[0], "$f: first key")
+            assertEquals(listOf(walk.path.certs[1].spkiHash), d.issuerKeys, "$f: the one key")
             assertEquals(0, fallback.calls, f.toString())
             assertEquals(emptyList(), d.findings, f.toString())
             assertContentEquals(WalkerCerts.cert(f.presented[0]).serial, d.serial, f.toString())
         }
-        // (o): the attacker sub-CA's path is first, so its key leads.
-        assertEquals(2, WalkerHarness.decide(WalkerFixturesAToR.o()[0], null).issuerKeys.size)
+        // (o): the attacker CA's path is first in the presented order, so its key is the only one (§10 residual 15).
+        val (attackerFirst, honestFirst) = WalkerFixturesAToR.o()
+        val sub = WalkerHarness.walk(attackerFirst) as Walk.Found
+        assertEquals(listOf(sub.leafKey), WalkerHarness.decide(attackerFirst, null).issuerKeys)
+        assertTrue(sub.leafKey !in WalkerHarness.decide(honestFirst, null).issuerKeys)
     }
 
     @Test
@@ -96,7 +98,6 @@ class DecideFallbackTest {
                 status(PathStatus.NO_ISSUER)
                     .noIssuerReason(if (platformOnly) NoIssuerReason.PLATFORM_ONLY else NoIssuerReason.UNANCHORED)
                     .walkerReason(NoIssuerReason.UNANCHORED)
-                    .endReason(WalkEnd.COMPLETE)
             }
             assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings, at)
             assertEquals(1, fallback.calls, at)
@@ -114,7 +115,6 @@ class DecideFallbackTest {
                 status(PathStatus.NO_ISSUER)
                     .noIssuerReason(NoIssuerReason.UNANCHORED)
                     .walkerReason(NoIssuerReason.UNANCHORED)
-                    .endReason(WalkEnd.COMPLETE)
             }
             assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings, at)
             assertTrue(d.buildThrew, at)
@@ -135,7 +135,6 @@ class DecideFallbackTest {
             assertPath(d, "fallback found") {
                 status(PathStatus.FOUND)
                     .walkerReason(NoIssuerReason.UNANCHORED)
-                    .endReason(WalkEnd.COMPLETE)
                     .usedFallback(true)
                     .pathsFound(1)
                     .reported(leaf, intermediate, root)
@@ -203,7 +202,6 @@ class DecideFallbackTest {
                     status(PathStatus.NO_ISSUER)
                         .noIssuerReason(NoIssuerReason.UNANCHORED)
                         .walkerReason(NoIssuerReason.UNANCHORED)
-                        .endReason(WalkEnd.COMPLETE)
                 }
                 assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings, case)
                 assertFalse(d.buildThrew, case)
@@ -232,7 +230,6 @@ class DecideFallbackTest {
                     status(PathStatus.NO_ISSUER)
                         .noIssuerReason(NoIssuerReason.UNANCHORED)
                         .walkerReason(NoIssuerReason.UNANCHORED)
-                        .endReason(WalkEnd.COMPLETE)
                 }
                 assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings, case)
                 assertEquals(emptyList(), d.issuerKeys, case)
@@ -364,7 +361,6 @@ class DecideFallbackTest {
                         status(PathStatus.NO_ISSUER)
                             .noIssuerReason(label)
                             .walkerReason(NoIssuerReason.ALL_CANDIDATES_INVALID)
-                            .endReason(WalkEnd.COMPLETE)
                     }
                     assertEquals(listOf(unsupported(!platformOnly), notUsed(reason)), d.findings, at)
                 }
@@ -381,8 +377,8 @@ class DecideFallbackTest {
             val skipped = WalkerHarness.decide(long, FakeFallback.fails())
             assertPath(skipped, "9 presented") {
                 status(PathStatus.PATH_BUDGET_EXCEEDED)
+                    .reason(PathReason.FALLBACK_LIMIT)
                     .walkerReason(NoIssuerReason.ALL_CANDIDATES_INVALID)
-                    .endReason(WalkEnd.COMPLETE)
             }
             assertEquals(listOf(unsupported(false), notUsed(FallbackReason.SKIPPED)), skipped.findings)
             // A related candidate's own key OID is server-chosen and never relabels NO_ISSUER.
@@ -400,7 +396,6 @@ class DecideFallbackTest {
                 status(PathStatus.NO_ISSUER)
                     .noIssuerReason(NoIssuerReason.ALL_CANDIDATES_INVALID)
                     .walkerReason(NoIssuerReason.ALL_CANDIDATES_INVALID)
-                    .endReason(WalkEnd.COMPLETE)
             }
             assertEquals(listOf(notUsed(FallbackReason.FAILED)), d.findings)
         }
@@ -422,8 +417,8 @@ class DecideFallbackTest {
                     val d = WalkerHarness.decide(f, fallback, platformOnly = platformOnly, harness = harness)
                     assertPath(d, at) {
                         status(PathStatus.PATH_BUDGET_EXCEEDED)
+                            .reason(PathReason.FALLBACK_LIMIT)
                             .walkerReason(NoIssuerReason.UNANCHORED)
-                            .endReason(WalkEnd.COMPLETE)
                     }
                     assertEquals(PathReason.FALLBACK_LIMIT, d.path.reason, at)
                     assertEquals(listOf(notUsed(reason)), d.findings, at)
@@ -467,7 +462,6 @@ class DecideFallbackTest {
                 status(PathStatus.NO_ISSUER)
                     .noIssuerReason(if (platformOnly) NoIssuerReason.PLATFORM_ONLY else NoIssuerReason.UNANCHORED)
                     .walkerReason(NoIssuerReason.UNANCHORED)
-                    .endReason(WalkEnd.COMPLETE)
             }
             assertEquals(listOf(notUsed(FallbackReason.DISABLED)), d.findings)
         }
@@ -477,10 +471,10 @@ class DecideFallbackTest {
 
     /**
      * (ad)'s shape for decide: the honest I unrelated to the leaf by encoding, six same-name, mutually cross-signing
-     * junk ahead, `Budget(EXPLORATION_BUDGET)`. The harness row (ad) puts the TeletexString on the leaf's issuer and an
-     * issuer-and-serial AKI on the leaf, which §9.2's K5 and K8 put outside the keyability profile, so through decide
-     * that leaf is `PARSE_FAILED(PRODUCER_UNKEYABLE)`. Here the TeletexString is I's subject and the leaf has no AKI,
-     * which keeps the leaf keyable and the relation test name-only.
+     * junk ahead, `Budget`. The harness row (ad) puts the TeletexString on the leaf's issuer and an issuer-and-serial
+     * AKI on the leaf, which §9.2's K5 and K8 put outside the keyability profile, so through decide that leaf is
+     * `PARSE_FAILED(PRODUCER_UNKEYABLE)`. Here the TeletexString is I's subject and the leaf has no AKI, which keeps
+     * the leaf keyable and the relation test name-only.
      */
     private fun adShape(): Pair<WalkerFixture, Honest> {
         val w = FixtureWorld()
@@ -493,43 +487,31 @@ class DecideFallbackTest {
             w.verifies(h.leaf, j.key)
             keys.forEachIndexed { m, k -> if (m != n) w.verifies(j, k) }
         }
-        val walk = budget(WalkEnd.EXPLORATION_BUDGET, endDepth = 7).copy(candidatesExplored = RevoktLimits.MAX_EXPLORED)
-        val f =
-            w.fixture(
-                "ad",
-                "decide",
-                listOf(h.leaf) + junk + h.intermediate,
-                listOf(h.root),
-                walk,
-                customCanonicaliser = true,
-            )
+        val walk = budget().copy(candidatesExplored = RevoktLimits.MAX_EXPLORED)
+        val f = w.fixture("ad", "decide", listOf(h.leaf) + junk + h.intermediate, listOf(h.root), walk)
         WalkerHarness.check(f)
         return f to h
     }
 
     @Test
-    fun `walker (ad) Budget with a fallback path appends the honest key last, and none with the fallback off`() {
+    fun `walker (ad) Budget with a fallback path keys the fallback's key alone, and none with the fallback off`() {
         val (f, h) = adShape()
         assertEquals(RevoktLimits.FALLBACK_MAX_PRESENTED, f.presented.size)
         val fallback = FakeFallback.finds(*h.path.toTypedArray())
         val d = WalkerHarness.decide(f, fallback, platformOnly = true)
         assertPath(d, "enabled") {
             status(PathStatus.PATH_BUDGET_EXCEEDED)
-                .endReason(WalkEnd.EXPLORATION_BUDGET)
-                .endDepth(7)
+                .reason(PathReason.EXPLORATION_BUDGET)
                 .usedFallback(true)
                 .reported(*h.path.toTypedArray())
                 .keys(h.intermediate)
         }
-        assertEquals(PathReason.EXPLORATION_BUDGET, d.path.reason)
         assertEquals(RevoktLimits.MAX_EXPLORED, d.detail.walkStats.candidatesExplored)
         assertEquals(emptyList(), d.findings)
         assertEquals(1, fallback.calls)
         listOf(null to FallbackReason.DISABLED, FakeFallback.fails() to FallbackReason.FAILED).forEach { (fb, reason) ->
             val off = WalkerHarness.decide(f, fb, platformOnly = true)
-            assertPath(off, "$reason") {
-                status(PathStatus.PATH_BUDGET_EXCEEDED).endReason(WalkEnd.EXPLORATION_BUDGET).endDepth(7)
-            }
+            assertPath(off, "$reason") { status(PathStatus.PATH_BUDGET_EXCEEDED).reason(PathReason.EXPLORATION_BUDGET) }
             assertEquals(listOf(notUsed(reason)), off.findings, "$reason")
         }
         val threw = WalkerHarness.decide(f, FakeFallback.throws(IllegalStateException()))
@@ -548,65 +530,14 @@ class DecideFallbackTest {
         }
     }
 
-    @Test
-    fun `Budget keys are the partial keys then the fallback key if new, and the reported path is the partial one`() {
-        val w = FixtureWorld()
-        val root = w.root("R", "Root", w.key(WalkerCerts.RSA_KEY), WalkerCerts.SHA256_RSA)
-        val name = w.name("Intermediate")
-        // A store anchor named like the leaf's issuer with an RSA key, compatible with the leaf's RSA signature, is the
-        // first related candidate; 64 more with EC keys follow it, so the 65th aborts with A's path partial.
-        val anchor = w.cert("A", name, name, w.key(WalkerCerts.RSA_KEY), sigOid = WalkerCerts.SHA256_RSA)
-        val honest = w.cert("H", name, root.subject, w.key(WalkerCerts.RSA_KEY), signer = root.key)
-        val leaf =
-            w.cert(
-                "L",
-                w.name("leaf.example"),
-                name,
-                signer = anchor.key,
-                sigOid = WalkerCerts.SHA256_RSA,
-                extensions = listOf(sctExtension()),
-                key = w.leafKey(),
-            )
-        w.verifies(leaf, honest.key)
-        val ec = { w.key(WalkerCerts.EC_KEY, WalkerCerts.P256) }
-        val junk = List(RevoktLimits.MAX_RELATED_PER_LEVEL) { w.cert("A$it", name, w.name("Junk issuer $it"), ec()) }
-        val f = w.fixture("budget", "", listOf(leaf), listOf(root, anchor) + junk, notFound(NoIssuerReason.UNANCHORED))
-        val cases =
-            listOf(
-                Triple(
-                    "new key",
-                    FakeFallback.finds(leaf, honest, root) as PathBuilderFallback?,
-                    listOf(anchor, honest),
-                ),
-                Triple("same key", FakeFallback.finds(leaf, anchor), listOf(anchor)),
-                Triple("failed", FakeFallback.fails(), listOf(anchor)),
-                Triple("disabled", null, listOf(anchor)),
-            )
-        for ((case, fallback, keys) in cases) {
-            val d = WalkerHarness.decide(f, fallback)
-            val used = fallback is FakeFallback && case != "failed"
-            assertPath(d, case) {
-                status(PathStatus.PATH_BUDGET_EXCEEDED)
-                    .endReason(WalkEnd.RELATED_BUDGET)
-                    .endDepth(1)
-                    .usedFallback(used)
-                    .pathsFound(1)
-                    .reported(leaf, anchor)
-                    .keys(*keys.toTypedArray())
-            }
-            val reason = if (fallback == null) FallbackReason.DISABLED else FallbackReason.FAILED
-            assertEquals(if (used) emptyList() else listOf(notUsed(reason)), d.findings, case)
-            assertLeafQuery(d, leaf, case)
-        }
-    }
-
     /**
-     * Firefox's candidate order at the leaf (spec §5.1 `related`): 64 store anchors named like the leaf's issuer come
-     * before the presented intermediate S, which is the 65th related candidate and is never explored. The walk ends
-     * `RELATED_BUDGET` with no partial path, so only a fallback path's key is evaluated.
+     * Firefox's candidate order at the leaf (spec §5.1 `related`): `MAX_EXPLORED` store anchors named like the leaf's
+     * issuer come before the presented intermediate S, which would be the 257th exploration and is never explored. A
+     * walk `Budget` carries no path, so only a fallback path's key is evaluated, and the fallback path is the reported
+     * one; with the fallback failed or disabled no key is.
      */
     @Test
-    fun `Budget behind 64 same-name store anchors has no partial path and keys only the fallback's`() {
+    fun `a walk Budget behind MAX_EXPLORED same-name store anchors keys only the fallback's path`() {
         val w = FixtureWorld()
         val root = w.root("R", "Root")
         val name = w.name("Intermediate")
@@ -620,54 +551,56 @@ class DecideFallbackTest {
                 extensions = listOf(sctExtension()),
                 key = w.leafKey(),
             )
-        val junk = List(RevoktLimits.MAX_RELATED_PER_LEVEL) { w.cert("A$it", name, w.name("Junk issuer $it")) }
-        val f = w.fixture("budget", "", listOf(leaf, sub), listOf(root) + junk, notFound(NoIssuerReason.UNANCHORED))
-        for ((case, fallback) in listOf("found" to FakeFallback.finds(leaf, sub, root), "disabled" to null)) {
+        val junk = List(RevoktLimits.MAX_EXPLORED) { w.cert("A$it", name, w.name("Junk issuer $it")) }
+        val f = w.fixture("budget", "", listOf(leaf, sub), listOf(root) + junk, budget())
+        WalkerHarness.check(f)
+        val cases =
+            listOf(
+                "found" to FakeFallback.finds(leaf, sub, root),
+                "failed" to FakeFallback.fails(),
+                "disabled" to null,
+            )
+        for ((case, fallback) in cases) {
             val d = WalkerHarness.decide(f, fallback)
+            val used = case == "found"
             assertPath(d, case) {
                 status(PathStatus.PATH_BUDGET_EXCEEDED)
-                    .endReason(WalkEnd.RELATED_BUDGET)
-                    .endDepth(1)
-                    .usedFallback(fallback != null)
+                    .reason(PathReason.EXPLORATION_BUDGET)
+                    .usedFallback(used)
                     .pathsFound(0)
-                if (fallback != null) reported(leaf, sub, root).keys(sub)
+                if (used) reported(leaf, sub, root).keys(sub)
             }
-            assertEquals(RevoktLimits.MAX_RELATED_PER_LEVEL, d.detail.walkStats.relatedExploredAtLeaf, case)
+            val reason = if (fallback == null) FallbackReason.DISABLED else FallbackReason.FAILED
+            assertEquals(if (used) emptyList() else listOf(notUsed(reason)), d.findings, case)
+            assertLeafQuery(d, leaf, case)
+            assertEquals(RevoktLimits.MAX_EXPLORED, d.detail.walkStats.candidatesExplored, case)
         }
     }
 
     @Test
-    fun `walker (ah) a walk out of verifications is PATH_BUDGET_EXCEEDED with reason VERIFICATION_BUDGET`() {
-        for (f in WalkerFixturesS1ToAj.ah()) {
-            val walk = WalkerHarness.walk(f)
-            if (walk !is Walk.Budget || walk.end != WalkEnd.VERIFICATION_BUDGET) continue
-            val d = WalkerHarness.decide(f, null)
-            assertEquals(PathStatus.PATH_BUDGET_EXCEEDED, d.path.status, "$f")
-            assertEquals(PathReason.VERIFICATION_BUDGET, d.path.reason, "$f")
-            assertEquals(WalkEnd.VERIFICATION_BUDGET, d.detail.endReason, "$f")
-            return
-        }
-        error("no (ah) row ends on VERIFICATION_BUDGET")
+    fun `walker (ah) a walk out of its budget is PATH_BUDGET_EXCEEDED with reason EXPLORATION_BUDGET`() {
+        val f = WalkerFixturesS1ToAj.ah().single()
+        assertIs<Walk.Budget>(WalkerHarness.walk(f))
+        val d = WalkerHarness.decide(f, null)
+        assertEquals(PathStatus.PATH_BUDGET_EXCEEDED, d.path.status)
+        assertEquals(PathReason.EXPLORATION_BUDGET, d.path.reason)
     }
 
     @Test
     fun `walker (i) the harness walks a chain over MAX_PRESENTED, and its fallback is SKIPPED or DISABLED`() {
-        val f = WalkerFixturesAToR.i().single()
+        val f = WalkerFixturesAToR.i().last()
         assertTrue(f.presented.size > RevoktLimits.MAX_PRESENTED)
         val fallbacks = listOf(FakeFallback.finds() to FallbackReason.SKIPPED, null to FallbackReason.DISABLED)
         fallbacks.forEach { (fallback, reason) ->
             val d = WalkerHarness.decide(f, fallback)
-            assertPath(d, "$reason") {
-                status(PathStatus.PATH_BUDGET_EXCEEDED).endReason(WalkEnd.RELATED_BUDGET).endDepth(1)
-            }
-            assertEquals(PathReason.RELATED_BUDGET, d.path.reason, "$reason")
+            assertPath(d, "$reason") { status(PathStatus.PATH_BUDGET_EXCEEDED).reason(PathReason.EXPLORATION_BUDGET) }
             assertEquals(listOf(notUsed(reason)), d.findings)
             assertEquals(0, fallback?.calls ?: 0)
         }
-        // On every trust-manager path the same chain is cut at step 3.
+        // On every trust-manager path the same chain is cut at step 3, with no walk.
         val (cut, calls) = cutDecision(f, FakeFallback.fails())
-        assertEquals(WalkEnd.EXPLORATION_BUDGET, cut.detail.endReason)
-        assertEquals(0, cut.detail.endDepth)
+        assertEquals(PathReason.EXPLORATION_BUDGET, cut.path.reason)
+        assertEquals(WalkStats(0, 0), cut.detail.walkStats)
         assertEquals(0, calls)
         assertEquals(emptyList(), cut.findings)
     }

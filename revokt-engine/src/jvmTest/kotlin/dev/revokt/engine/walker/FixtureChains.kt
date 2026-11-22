@@ -5,7 +5,6 @@ package dev.revokt.engine.walker
 
 import dev.revokt.NoIssuerReason
 import dev.revokt.RevoktLimits
-import dev.revokt.WalkEnd
 import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.budget
 import dev.revokt.engine.walker.ExpectedWalk.Companion.found
@@ -68,8 +67,7 @@ internal class Honest(
         presented: List<FixtureCert>,
         walk: ExpectedWalk,
         snapshot: List<FixtureCert> = listOf(root),
-        customCanonicaliser: Boolean = false,
-    ): WalkerFixture = w.fixture(id, variant, presented, snapshot, walk, customCanonicaliser)
+    ): WalkerFixture = w.fixture(id, variant, presented, snapshot, walk)
 }
 
 internal fun FixtureWorld.fixture(
@@ -78,7 +76,6 @@ internal fun FixtureWorld.fixture(
     presented: List<FixtureCert>,
     snapshot: List<FixtureCert>,
     walk: ExpectedWalk,
-    customCanonicaliser: Boolean = false,
 ): WalkerFixture =
     WalkerFixture(
         id = id,
@@ -87,11 +84,10 @@ internal fun FixtureWorld.fixture(
         snapshot = snapshot.map { it.der },
         ok = ok,
         walk = walk,
-        customCanonicaliser = customCanonicaliser,
         label = ::label,
     )
 
-/** (o)'s attacker sub-CA: a second key that verifies the leaf, certified under the real root. */
+/** (o)'s attacker CA: a second key that verifies the leaf, named like the intermediate, certified by the real root. */
 internal fun Honest.subCa(): FixtureCert =
     w.cert("S", intermediate.subject, root.subject, signer = root.key).also { w.verifies(leaf, it.key) }
 

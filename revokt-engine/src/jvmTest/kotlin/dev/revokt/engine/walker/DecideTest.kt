@@ -15,7 +15,6 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktTestingApi
 import dev.revokt.SignatureVerifier
 import dev.revokt.VerifyResult
-import dev.revokt.WalkEnd
 import dev.revokt.WalkStats
 import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.ExpectedWalk.Companion.notFound
@@ -48,8 +47,7 @@ class DecideTest {
             val f = w.fixture("x", case, chain, listOf(root), notFound(NoIssuerReason.NO_CANDIDATE))
             val (d, calls) = cutDecision(f, fallback)
             assertPath(d, case) { status(PathStatus.FOUND).pathsFound(1).reported(root).keys(root) }
-            assertNull(d.detail.endReason, case)
-            assertEquals(WalkStats(0, 0, 0, 0), d.detail.walkStats, case)
+            assertEquals(WalkStats(0, 0), d.detail.walkStats, case)
             assertEquals(emptyList(), d.findings, case)
             assertEquals(0, calls, "$case: no walk")
             assertEquals(0, fallback.calls, "$case: no fallback")
@@ -139,7 +137,6 @@ class DecideTest {
             )
         assertPath(d, "K6 issuer") {
             status(PathStatus.FOUND)
-                .endReason(WalkEnd.COMPLETE)
                 .pathsFound(1)
                 .reported(leaf, i6, root)
                 .keys(i6)
@@ -147,7 +144,7 @@ class DecideTest {
     }
 
     @Test
-    fun `walker (ag) more than MAX_PRESENTED certificates is EXPLORATION_BUDGET at endDepth 0 without a walk`() {
+    fun `walker (ag) more than MAX_PRESENTED certificates is EXPLORATION_BUDGET without a walk`() {
         val sizes = listOf(RevoktLimits.MAX_PRESENTED to false, RevoktLimits.MAX_PRESENTED + 1 to true, 70 to true)
         sizes.forEach { (size, cut) ->
             with(Honest()) {
@@ -158,7 +155,7 @@ class DecideTest {
                 val at = "$size presented"
                 if (cut) {
                     assertPath(d, at) {
-                        status(PathStatus.PATH_BUDGET_EXCEEDED).endReason(WalkEnd.EXPLORATION_BUDGET).endDepth(0)
+                        status(PathStatus.PATH_BUDGET_EXCEEDED).reason(PathReason.EXPLORATION_BUDGET)
                     }
                     assertEquals(0, calls, "$at: no walk")
                     assertEquals(emptyList(), d.findings, "$at: no FallbackNotUsed")
@@ -189,12 +186,11 @@ class DecideTest {
                     )
                 if (cut) {
                     assertPath(d, "over") {
-                        status(PathStatus.PATH_BUDGET_EXCEEDED).endReason(WalkEnd.EXPLORATION_BUDGET).endDepth(0)
+                        status(PathStatus.PATH_BUDGET_EXCEEDED).reason(PathReason.EXPLORATION_BUDGET)
                     }
                 } else {
                     assertPath(d, "at the cap") {
                         status(PathStatus.FOUND)
-                            .endReason(WalkEnd.COMPLETE)
                             .pathsFound(1)
                             .reported(*path.toTypedArray())
                             .keys(intermediate)
@@ -264,7 +260,6 @@ class DecideTest {
             val d = WalkerHarness.decide(WalkerFixture("drop", "", presented, f.snapshot, f.ok, f.walk), null)
             assertPath(d, "dropped") {
                 status(PathStatus.FOUND)
-                    .endReason(WalkEnd.COMPLETE)
                     .pathsFound(1)
                     .reported(leaf, mismatched, root)
                     .keys(intermediate)

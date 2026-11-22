@@ -40,7 +40,7 @@ internal class EvaluatorRig(
     decidePresented: (List<ByteArray>, CandidateIndex, AnchorSnapshot, DecideContext) -> PathDecision = ::decide,
 ) {
     var lifecycle: RevoktLifecycle = RevoktLifecycle.STARTED
-    var indexed: IndexedSnapshot? = indexed(f.snapshot, WalkerHarness.SNAPSHOT_ID, f.customCanonicaliser)
+    var indexed: IndexedSnapshot? = indexed(f.snapshot, WalkerHarness.SNAPSHOT_ID)
     var lifecycleReads = 0
     var anchorReads = 0
     var generationReads = 0
@@ -127,7 +127,6 @@ internal class EvaluatorRig(
         fun indexed(
             anchors: List<ByteArray>,
             id: Long,
-            customCanonicaliser: Boolean = false,
         ): IndexedSnapshot =
             IndexedSnapshot(
                 AnchorSnapshot
@@ -137,7 +136,7 @@ internal class EvaluatorRig(
                     .anchors(anchors)
                     .createdMillis(NOW)
                     .build(),
-                CandidateIndex(anchors, customCanonicaliser = customCanonicaliser),
+                CandidateIndex(anchors),
             )
     }
 }

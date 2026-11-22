@@ -6,6 +6,8 @@ package dev.revokt.testing
 import dev.revokt.RevoktLimits
 import dev.revokt.SignatureVerifier
 import dev.revokt.VerifyResult
+import dev.revokt.engine.parse.TestDer
+import dev.revokt.engine.walker.FixtureWorld
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -167,7 +169,7 @@ class ReferenceWalkerTest {
     }
 
     @Test
-    fun `an unrelated presented issuer counts only when no related path exists`() {
+    fun `an unrelated presented issuer never counts`() {
         for (seed in 0L until 20) {
             val model = ChainGenerator.honest(seed, depth = 1)
             val leaf = model.honestPath[0]
@@ -177,8 +179,52 @@ class ReferenceWalkerTest {
             model.insertAfterLeaf(model.issue(model.freshName("Unrelated"), root.subject, key, root.key))
             assertEquals(setOf(intermediate.key.hex), model.walk(), "seed $seed with the related issuer")
             model.presented.remove(intermediate)
-            assertEquals(setOf(key.hex), model.walk(), "seed $seed without it")
+            assertEquals(emptySet(), model.walk(), "seed $seed without it")
         }
+    }
+
+    @Test
+    fun `a certificate repeating the leaf's raw subject and SPKI is never a candidate`() {
+        // A self-issued leaf whose own key verifies it, and C, a CA certificate for that key and name under the root.
+        val w = FixtureWorld()
+        val root = w.root("R", "Root")
+        val name = w.name("Self-issued")
+        val key = w.leafKey()
+        val leaf = w.cert("L", name, name, key, signer = w.key()).also { w.verifies(it, key) }
+        val copy = w.cert("C", name, root.subject, key, signer = root.key)
+        val walker = ReferenceWalker(listOf(root.der), SymVerifier(w.ok, emptySet()))
+        assertEquals(emptySet(), walker.walk(listOf(leaf.der, copy.der)))
+        assertEquals(emptySet(), walker.walkByName(listOf(leaf.der, copy.der)))
+    }
+
+    @Test
+    fun `walkByName drops links related by SKI alone`() {
+        // The leaf's issuer name matches nothing; its AKI keyIdentifier matches I's SKI.
+        val w = FixtureWorld()
+        val root = w.root("R", "Root")
+        val iKey = w.key()
+        val i =
+            w.cert(
+                "I",
+                w.name("Intermediate"),
+                root.subject,
+                iKey,
+                signer = root.key,
+                extensions = listOf(FixtureWorld.ski(iKey)),
+            )
+        val aki = TestDer.seq(TestDer.tlv(0x80, iKey.keyIdentifier))
+        val leaf =
+            w.cert(
+                "L",
+                w.name("leaf.example"),
+                w.name("Elsewhere"),
+                signer = iKey,
+                extensions = listOf(FixtureWorld.aki(aki)),
+                key = w.leafKey(),
+            )
+        val walker = ReferenceWalker(listOf(root.der), SymVerifier(w.ok, emptySet()))
+        assertEquals(setOf(i.keyHash.hex()), walker.walk(listOf(leaf.der, i.der)))
+        assertEquals(emptySet(), walker.walkByName(listOf(leaf.der, i.der)))
     }
 
     @Test
