@@ -6,10 +6,10 @@
 package dev.revokt.engine.update
 
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.RevoktLimits
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
+import dev.revokt.WarningCode
 import dev.revokt.engine.fetch.json
 import dev.revokt.engine.fetch.ok
 import dev.revokt.engine.fetch.response
@@ -109,7 +109,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         next(server, listOf(full, delta, delta2))
         server.signature = Server(records = listOf(full.json())).sign()
         val now = ts2 + hour
-        sync(server, now = now).assert(SyncOutcome.FAILED, SyncStage.SIGNATURE, *failed())
+        sync(server, now = now).assert(SyncFailure.SIGNATURE_INVALID)
         // One x5u fetch for both: the sync's verifier validated it once (§7.1, one result per URL per sync).
         assertEquals(
             listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl),
@@ -125,7 +125,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         val server = installedFirst()
         next(server, listOf(full, delta, delta2))
         server.overrides[server.sinceUrl(ts)] = { response(500) }
-        sync(server, now = ts2 + hour).assert(SyncOutcome.FAILED, SyncStage.CHANGESET, *failed()).also {
+        sync(server, now = ts2 + hour).assert(SyncFailure.CHANGESET_FETCH).also {
             assertEquals(500, it.result.httpStatus)
         }
         assertEquals(listOf(monitor, server.sinceUrl(ts)), server.fetcher.requests.map { it.url })
@@ -137,7 +137,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         server.overrides[server.sinceUrl(ts)] = { response(500) }
         // Each a poll interval apart, past the failure backoff the previous one left.
         val at = (1..4).map { ts + it * 7 * hour }
-        for (now in at.take(3)) sync(server, now = now).assert(SyncOutcome.FAILED, SyncStage.CHANGESET, *failed())
+        for (now in at.take(3)) sync(server, now = now).assert(SyncFailure.CHANGESET_FETCH)
         assertEquals(3, sourceRecord(at[2]).consecutiveFailures)
         server.overrides.remove(server.sinceUrl(ts))
         sync(server, now = at[3]).assert(SyncOutcome.UNCHANGED)
@@ -194,7 +194,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         val server = installedFirst()
         next(server, listOf(full, delta, delta2))
         server.overrides[attachments + delta2.location] = { response(404) }
-        sync(server, now = ts2 + hour).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed())
+        sync(server, now = ts2 + hour).assert(SyncFailure.ATTACHMENT_FETCH)
         val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
         assertEquals(emptyList(), storage.names().filter { "/$directory2/" in it })
         assertEquals(directory1, liveDirectory())
@@ -204,13 +204,13 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     fun `#201 - a retried flip over a held directory whose stored delta was altered holds another generation`() {
         val server = Server()
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
-        sync(server).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        sync(server).assert(SyncFailure.STORE_FAILED)
         storage.failWrite = { null }
         val key = "crlite/compat/$directory1/${delta.filename}"
         storage.inner.write(key, delta.body.copyOf().also { it[it.size - 1] = (it.last() + 1).toByte() })
         server.fetcher.requests.clear()
         val now = ts + 2 * hour
-        val run = sync(server, now = now).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        val run = sync(server, now = now).assert(SyncFailure.STORE_FAILED)
         assertEquals(1, run.storeFailures)
         assertTrue(
             "holds another generation" in
@@ -261,7 +261,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
                     throw IllegalArgumentException("corrupt")
                 }
             }
-        sync(server, engine = throwing).assert(SyncOutcome.FAILED, SyncStage.PREPARE, *failed())
+        sync(server, engine = throwing).assert(SyncFailure.ENGINE_FAILED)
         storage.failDelete = { null }
         assertNotNull(store.meta(orphan))
         assertNull(liveDirectory())
@@ -290,7 +290,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         // The second generation flips, then its updater json write fails: the pointer names it, the cursor stays ts.
         next(server, listOf(full, delta, delta2))
         storage.failWrite = { if (it.endsWith("updater.json")) IllegalStateException("updater") else null }
-        sync(server, now = ts2 + hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        sync(server, now = ts2 + hour).assert(SyncFailure.STORE_FAILED)
         storage.failWrite = { null }
         val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
         assertEquals(directory2, liveDirectory())
@@ -333,34 +333,34 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
 
     @Test
     fun `a _since changeset with no signatures resets once, as Firefox's MissingSignatureError does`() =
-        resetsOnce("NO_SIGNATURES", "[]")
+        resetsOnce("absent, not an array or empty", "[]")
 
     @Test
     fun `a _since changeset whose every entry is skipped resets once`() =
-        resetsOnce("NONE_TRIED", """[{"x5u":"$x5u","signature":"","mode":"p384ecdsa"}]""")
+        resetsOnce("no entry has", """[{"x5u":"$x5u","signature":"","mode":"p384ecdsa"}]""")
 
     @Test
-    fun `a _since changeset with a null signature entry resets once`() = resetsOnce("NULL_ENTRY", "[null]")
+    fun `a _since changeset with a null signature entry resets once`() = resetsOnce("is null", "[null]")
 
     @Test
-    fun `a _since changeset whose x5u fetch fails is FAILED at X5U without a reset`() =
-        neverResets("X5U_FETCH", SyncOutcome.FAILED, SyncStage.X5U) { it.overrides[x5u] = { response(500) } }
+    fun `a _since changeset whose x5u fetch fails is X5U_FETCH without a reset`() =
+        neverResets(SyncFailure.X5U_FETCH) { it.overrides[x5u] = { response(500) } }
 
     @Test
-    fun `a _since changeset whose x5u is not PEM is FAILED at SIGNATURE without a reset`() =
-        neverResets("X5U_PEM", SyncOutcome.FAILED, SyncStage.SIGNATURE) { it.pem = "not a PEM chain" }
+    fun `a _since changeset whose x5u is not PEM is X5U_CHAIN without a reset`() =
+        neverResets(SyncFailure.X5U_CHAIN, "FRAMING") { it.pem = "not a PEM chain" }
 
     @Test
-    fun `a _since changeset whose x5u chain fails is FAILED at SIGNATURE without a reset`() =
-        neverResets("X5U_CHAIN", SyncOutcome.FAILED, SyncStage.SIGNATURE) { it.pem = pem(served.take(2)) }
+    fun `a _since changeset whose x5u chain fails is X5U_CHAIN without a reset`() =
+        neverResets(SyncFailure.X5U_CHAIN) { it.pem = pem(served.take(2)) }
 
     @Test
-    fun `a _since changeset whose x5u is outside its validity is CLOCK_SKEW at X5U without a reset`() =
-        neverResets("X5U_VALIDITY", SyncOutcome.CLOCK_SKEW, SyncStage.X5U, millis("2051-01-01T00:00:00Z")) {}
+    fun `a _since changeset whose x5u is outside its validity is CLOCK_SKEW without a reset`() =
+        neverResets(SyncFailure.CLOCK_SKEW, now = millis("2051-01-01T00:00:00Z")) {}
 
     /**
-     * A `_since` changeset signed with [signatures] as its `metadata.signatures` fails with [failure], and the sync
-     * fetches the whole collection once, which verifies and installs.
+     * A `_since` changeset signed with [signatures] as its `metadata.signatures` fails with a failure whose detail
+     * holds [failure], and the sync fetches the whole collection once, which verifies and installs.
      */
     private fun resetsOnce(
         failure: String,
@@ -384,13 +384,13 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     }
 
     /**
-     * A `_since` changeset whose x5u fails with [failure] after [arm] ends the sync as [outcome] at [stage]: the whole
-     * collection is never fetched (the sync's verifier would reuse the failed x5u, §7.1), and nothing advances.
+     * A `_since` changeset whose x5u fails after [arm] ends the sync with [failure], logged with [detail] when given:
+     * the whole collection is never fetched (the sync's verifier would reuse the failed x5u, §7.1), and nothing
+     * advances.
      */
     private fun neverResets(
-        failure: String,
-        outcome: SyncOutcome,
-        stage: SyncStage,
+        failure: SyncFailure,
+        detail: String? = null,
         now: Long = ts2 + hour,
         arm: (Server) -> Unit,
     ) {
@@ -398,8 +398,12 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         next(server, listOf(full, delta, delta2))
         arm(server)
         val run = sync(server, now = now)
-        assertEquals(outcome to stage, run.result.outcome to run.result.stage, "${run.result}")
-        assertTrue(run.result.warnings.any { "$failure:" in it.message }, "${run.result.warnings}")
+        assertEquals(SyncOutcome.FAILED to failure, run.result.outcome to run.result.failure, "${run.result}")
+        if (detail !=
+            null
+        ) {
+            assertTrue(recording.messages.any { "$failure: $detail" in it.second }, "${recording.messages}")
+        }
         assertEquals(listOf(monitor, server.sinceUrl(ts), x5u), server.fetcher.requests.map { it.url })
         assertFalse(recording.messages.any { "fetching the whole collection" in it.second })
         assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
@@ -417,7 +421,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
                     """"last_modified":$ts}],"timestamp":$ts,"padding":"$padding"}""",
             )
         }
-        val run = sync(server).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
+        val run = sync(server).assert(SyncOutcome.INSTALLED, WarningCode.CAP_NEAR_LIMIT)
         assertTrue(
             "monitor/changes is" in
                 run.result.warnings
@@ -432,7 +436,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         next(server, listOf(full, delta2), listOf(tombstone))
         server.since = { listOf(delta2.json()) }
         server.padding = (RevoktLimits.MAX_JSON_BYTES / 2).toInt()
-        val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
+        val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED, WarningCode.CAP_NEAR_LIMIT)
         assertTrue(server.fetcher.requests.any { it.url == server.changesetUrl }, "reset")
         assertTrue(
             "the changeset is" in
@@ -446,7 +450,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     fun `a changeset body above half of MAX_JSON_BYTES is CAP_NEAR_LIMIT on warnings, and the sync installs`() {
         val server = Server()
         server.padding = (RevoktLimits.MAX_JSON_BYTES / 2).toInt()
-        val run = sync(server).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
+        val run = sync(server).assert(SyncOutcome.INSTALLED, WarningCode.CAP_NEAR_LIMIT)
         assertTrue(
             "the changeset is" in
                 run.result.warnings
@@ -466,7 +470,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         sync(server).assert(SyncOutcome.INSTALLED)
         server.pem = padded(half + 1)
         server.ts = ts2
-        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
+        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED, WarningCode.CAP_NEAR_LIMIT)
     }
 
     @Test
@@ -485,7 +489,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
             }
         val records = listOf(full) + deltas
         val server = Server(records = records.map { it.json() }, bodies = records.associate { it.location to it.body })
-        val run = sync(server).assert(SyncOutcome.INSTALLED, null, DiagnosticCode.CAP_NEAR_LIMIT)
+        val run = sync(server).assert(SyncOutcome.INSTALLED, WarningCode.CAP_NEAR_LIMIT)
         assertTrue(
             "${count + 1} records" in
                 run.result.warnings

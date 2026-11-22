@@ -4,6 +4,7 @@
 package dev.revokt.engine.update
 
 import dev.revokt.RevoktLimits
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
 import dev.revokt.engine.store.SourceRecord
 import dev.revokt.engine.store.StoreRead
@@ -34,18 +35,18 @@ internal class LoadedUpdater(
 
 /**
  * The `updater.json` transition at the end of one sync of one source (spec §6.5, §7.1), over [UpdaterRecord]:
- * - every outcome but `STORE_LOCKED` sets `datasetLastAttemptAtMillis` and the source's `lastAttemptAtMillis` to now
- *   ("written at the end of every sync whatever its outcome, `STORE_LOCKED` excepted"); `STORE_LOCKED` writes nothing;
+ * - every outcome sets `datasetLastAttemptAtMillis` and the source's `lastAttemptAtMillis` to now ("written at the end
+ *   of every sync whatever its outcome");
  * - `INSTALLED` advances the cursor (`lastVerifiedLastModified`) to `<ts>` and `lastVerifiedAtMillis`, after the
  *   pointer flip, in the same write as the install. The watermark is raised to the higher of it and `<ts>`, except
  *   for an install made with no generation loaded (§7.1), which sets it to `<ts>`: an older changeset installed then
  *   moves the watermark and the cursor back with the generation, as Firefox's local timestamp becomes the imported
  *   data's;
  * - `UNCHANGED` and `INSTALLED` end a run of failures (`consecutiveFailures = 0`);
- * - `FAILED`, `CLOCK_SKEW` and `STORE_FAILED` are failures: `consecutiveFailures + 1`, leaving the cursor,
+ * - `FAILED`, whatever its [SyncFailure], is a feed failure: `consecutiveFailures + 1`, leaving the cursor,
  *   `lastVerified*` and the watermark untouched;
- * - `ROLLBACK_REFUSED` is not a feed failure (§7.1): `consecutiveFailures` and `lastVerified*` stay;
- * - `BACKOFF` fetched nothing: the attempt fields only.
+ * - `SKIPPED` is not: `ROLLBACK_REFUSED` (§7.1) keeps `consecutiveFailures` and `lastVerified*`, and `BACKOFF`
+ *   fetched nothing: the attempt fields only.
  *
  * The backoff (§7.1 "honour `Backoff` and `Retry-After` up to `MAX_BACKOFF`"): every outcome that polled sets
  * `backoffUntilMillis` to now + the server's wait when the response carried one; otherwise a failure waits the computed
@@ -63,7 +64,8 @@ internal object UpdaterTransitions {
     const val SIGNED_SOURCE_FAILURES: Int = 3
 
     /**
-     * [record] after a sync of [sourceId] that ended as [outcome] at [nowMillis]. For `INSTALLED`,
+     * [record] after a sync of [sourceId] that ended at [nowMillis] with [failure] (`SKIPPED` or `FAILED`), or, when
+     * [failure] is null, `INSTALLED` when [signedTimestampMillis] is given and `UNCHANGED` otherwise. For `INSTALLED`,
      * [signedTimestampMillis] is the installed changeset's `<ts>`, and [noneLoaded] whether it installed with no
      * generation loaded (§7.1): the watermark is then set to `<ts>`, lowered if it was higher, as Firefox's local
      * timestamp becomes the imported data's; otherwise it is raised to the higher of the two. [serverBackoffMillis] is
@@ -72,20 +74,19 @@ internal object UpdaterTransitions {
     fun after(
         record: UpdaterRecord,
         sourceId: String,
-        outcome: SyncOutcome,
+        failure: SyncFailure?,
         nowMillis: Long,
         signedTimestampMillis: Long? = null,
         serverBackoffMillis: Long? = null,
         noneLoaded: Boolean = false,
     ): UpdaterRecord {
-        require((outcome == SyncOutcome.INSTALLED) == (signedTimestampMillis != null)) {
-            "signedTimestampMillis is given exactly for INSTALLED"
-        }
-        require(!noneLoaded || outcome == SyncOutcome.INSTALLED) { "noneLoaded is an install's" }
+        require(failure == null || signedTimestampMillis == null) { "a stopped sync ($failure) installs nothing" }
+        require(!noneLoaded || signedTimestampMillis != null) { "noneLoaded is an install's" }
         require(serverBackoffMillis == null || serverBackoffMillis >= 0) { "a server backoff is negative" }
-        if (outcome == SyncOutcome.STORE_LOCKED) return record
+        val outcome =
+            failure?.outcome ?: if (signedTimestampMillis != null) SyncOutcome.INSTALLED else SyncOutcome.UNCHANGED
         val attempted = (record.sources[sourceId] ?: SourceRecord()).copy(lastAttemptAtMillis = nowMillis)
-        val source = source(attempted, outcome, nowMillis, serverBackoffMillis)
+        val source = source(attempted, outcome, failure, nowMillis, serverBackoffMillis)
         if (signedTimestampMillis == null) {
             return record.copy(datasetLastAttemptAtMillis = nowMillis, sources = record.sources + (sourceId to source))
         }
@@ -99,18 +100,18 @@ internal object UpdaterTransitions {
         )
     }
 
-    /** [attempted] after [outcome]: its failure count and backoff; an install's `lastVerified*` are [after]'s. */
+    /**
+     * [attempted] after [outcome] and [failure]: its failure count and backoff; an install's `lastVerified*` are
+     * [after]'s.
+     */
     private fun source(
         attempted: SourceRecord,
         outcome: SyncOutcome,
+        failure: SyncFailure?,
         nowMillis: Long,
         serverBackoffMillis: Long?,
     ): SourceRecord =
         when (outcome) {
-            SyncOutcome.BACKOFF -> {
-                attempted
-            }
-
             SyncOutcome.INSTALLED, SyncOutcome.UNCHANGED -> {
                 attempted.copy(
                     consecutiveFailures = 0,
@@ -118,7 +119,7 @@ internal object UpdaterTransitions {
                 )
             }
 
-            SyncOutcome.FAILED, SyncOutcome.CLOCK_SKEW, SyncOutcome.STORE_FAILED -> {
+            SyncOutcome.FAILED -> {
                 val failures = attempted.consecutiveFailures.let { if (it == Int.MAX_VALUE) it else it + 1 }
                 val computed = failureBackoffMillis(failures)
                 attempted.copy(
@@ -127,12 +128,13 @@ internal object UpdaterTransitions {
                 )
             }
 
-            SyncOutcome.ROLLBACK_REFUSED -> {
-                attempted.copy(backoffUntilMillis = backoffUntil(nowMillis, serverBackoffMillis, null))
-            }
-
-            SyncOutcome.STORE_LOCKED -> {
-                error("STORE_LOCKED returns before the transition")
+            // BACKOFF fetched nothing; ROLLBACK_REFUSED polled, so a server wait applies, and is not a failure (§7.1).
+            SyncOutcome.SKIPPED -> {
+                if (failure == SyncFailure.BACKOFF) {
+                    attempted
+                } else {
+                    attempted.copy(backoffUntilMillis = backoffUntil(nowMillis, serverBackoffMillis, null))
+                }
             }
         }
 

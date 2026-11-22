@@ -5,8 +5,6 @@
 
 package dev.revokt.engine.seed
 
-import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
@@ -32,7 +30,6 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         storage.failRead = { if (it == updaterKey) IOException("disk") else null }
         val before = contents()
         val failed = failed(load(Seed()), "disk")
-        assertEquals(SyncStage.STORE, failed.stage)
         assertEquals(1, failed.storeFailures)
         assertEquals(before, contents())
         assertNull(live().generationId)
@@ -332,8 +329,7 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         val updater = storage.inner.read(updaterKey)?.toList()
         storage.failWrite = { if (it == pointerKey) IOException("flip") else null }
         val engine = TestEngine()
-        val failed = failed(load(Seed(), engine = engine), "flip", activated = true)
-        assertEquals(SyncStage.STORE, failed.stage)
+        failed(load(Seed(), engine = engine), "flip", activated = true)
         assertEquals("$ts/${delta.id}", engine.live)
         assertTrue(store.meta(GenerationNames.directory(ts, "$ts/${delta.id}")) != null)
         assertEquals(updater, storage.inner.read(updaterKey)?.toList())

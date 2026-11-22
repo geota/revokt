@@ -8,7 +8,7 @@ import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.HttpFetcher
 import dev.revokt.MozillaRemoteSettings
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -66,7 +66,7 @@ class TimedFetchTest {
             }
         val c = client(fetcher)
         val started = System.nanoTime()
-        c.pollChanges().assertFailed(SyncStage.CHANGESET, ClientFailure.TIMEOUT)
+        c.pollChanges().assertFailed(SyncFailure.CHANGESET_FETCH, "no response within")
         val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
         assertTrue(elapsedMillis in 200..10_000, "returned after $elapsedMillis ms")
         assertTrue(interrupted.await(10, TimeUnit.SECONDS), "the hung fetch was interrupted")
@@ -94,7 +94,7 @@ class TimedFetchTest {
             }
         try {
             val c = client(fetcher)
-            c.pollChanges().assertFailed(SyncStage.CHANGESET, ClientFailure.TIMEOUT)
+            c.pollChanges().assertFailed(SyncFailure.CHANGESET_FETCH, "no response within")
             assertEquals(42, c.pollChanges().assertOk())
         } finally {
             release.countDown()
@@ -131,7 +131,7 @@ class TimedFetchTest {
             }
         try {
             val c = client(fetcher, timeoutMillis = 500, io = executor.asCoroutineDispatcher())
-            c.pollChanges().assertFailed(SyncStage.CHANGESET, ClientFailure.TIMEOUT)
+            c.pollChanges().assertFailed(SyncFailure.CHANGESET_FETCH, "no response within")
             release.countDown()
             assertEquals(42, c.pollChanges().assertOk())
             assertEquals(false, nextSawInterrupt.get(), "the next task on the one worker saw a stale interrupt")
@@ -166,7 +166,7 @@ class TimedFetchTest {
         val refused = IllegalStateException("no threads")
         val io = Executor { throw refused }.asCoroutineDispatcher()
         val failed = client(HttpFetcher { ok(monitor) }, io = io).pollChanges()
-        assertSame(refused, failed.assertFailed(SyncStage.CHANGESET, ClientFailure.FETCHER_THREW).cause)
+        assertSame(refused, failed.assertFailed(SyncFailure.CHANGESET_FETCH, "the fetcher").cause)
     }
 
     @Test
@@ -177,7 +177,7 @@ class TimedFetchTest {
                 arrayOf(HttpFetcher::class.java),
             ) { _, _, _ -> null }
                 as HttpFetcher
-        client(nullFetcher).pollChanges().assertFailed(SyncStage.CHANGESET, ClientFailure.FETCHER_THREW)
+        client(nullFetcher).pollChanges().assertFailed(SyncFailure.CHANGESET_FETCH, "the fetcher")
     }
 
     @Test
@@ -193,7 +193,7 @@ class TimedFetchTest {
                 },
                 io = executor.asCoroutineDispatcher(),
             ).pollChanges()
-                .assertFailed(SyncStage.CHANGESET, ClientFailure.FETCHER_THREW)
+                .assertFailed(SyncFailure.CHANGESET_FETCH, "the fetcher")
         assertIs<RejectedExecutionException>(failed.cause)
         assertEquals(false, fetched.get())
     }
@@ -221,7 +221,7 @@ class TimedFetchTest {
             }.apply { start() }
         try {
             val failed = client(fetcher, timeoutMillis = 30_000).pollChanges()
-            assertIs<InterruptedException>(failed.assertFailed(SyncStage.CHANGESET, ClientFailure.FETCHER_THREW).cause)
+            assertIs<InterruptedException>(failed.assertFailed(SyncFailure.CHANGESET_FETCH, "the fetcher").cause)
             assertTrue(Thread.currentThread().isInterrupted, "the interrupt is restored")
         } finally {
             Thread.interrupted()

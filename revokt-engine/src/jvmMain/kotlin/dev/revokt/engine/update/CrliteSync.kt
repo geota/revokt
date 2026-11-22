@@ -8,20 +8,19 @@
 package dev.revokt.engine.update
 
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
 import dev.revokt.LogLevel
-import dev.revokt.PolicyDiagnostic
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktTestingApi
-import dev.revokt.Severity
+import dev.revokt.RevoktWarning
 import dev.revokt.SignatureVerifier
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncResult
-import dev.revokt.SyncStage
+import dev.revokt.WarningCode
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.api.ClubcardFormatException
@@ -31,7 +30,7 @@ import dev.revokt.engine.fetch.ChangesetVerifier
 import dev.revokt.engine.fetch.ClientResult
 import dev.revokt.engine.fetch.CrliteRecord
 import dev.revokt.engine.fetch.RemoteSettingsClient
-import dev.revokt.engine.fetch.SignatureFailure
+import dev.revokt.engine.fetch.resets
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonObject
@@ -89,23 +88,24 @@ internal class CrliteSync(
     /**
      * One sync at [nowMillis], the loader's one clock read for it, in the order of #137 and #141 (spec §5.1, §6.3, §6.5,
      * §7.1, §7.2):
-     * 1. Under the source's persisted backoff (`backoffUntilMillis` after now) → `BACKOFF`, the attempt fields written.
+     * 1. Under the source's persisted backoff (`backoffUntilMillis` after now) → `SKIPPED` (`BACKOFF`), the attempt
+     *    fields written.
      * 2. Poll `monitor/changes`, then fetch the collection's changeset at its `_expected`: from the cursor
      *    (`_since=<cursor>` and `If-None-Match: "<cursor>"`) when `updater.json` holds one and the pointed generation's
      *    `records.json` reads, else the whole collection. A 304 is `UNCHANGED`.
      * 3. Verify it ([ChangesetVerifier]) over the stored records with its changes merged, tombstones first
      *    ([ContentSignature.merge]); everything after reads only the verified records and `<ts>`
      *    ([ChangesetVerification.Verified]), never the changeset's `changes`. A `_since` changeset whose changes do not
-     *    merge, or whose signature fails as Firefox's `InvalidSignatureError` does ([SignatureFailure.resets]), is
+     *    merge, or whose signature fails as Firefox's `InvalidSignatureError` does ([SyncFailure.resets]), is
      *    fetched once more as the whole collection, which must verify (§7.1 "reset-and-retry once"); any other failure
      *    ends the sync.
-     * 4. The schema check and the channel filter ([RemoteSettingsClient.checkRecords]): `SYNC_SCHEMA_REJECTED`.
+     * 4. The schema check and the channel filter ([RemoteSettingsClient.checkRecords]): `SCHEMA_REJECTED`.
      * 5. The generation's records and names ([placeFilters]): not exactly one full, or two attachments that map to one
-     *    name, is `FAILED` with `INDEX_INCONSISTENT` at `INDEX` before any body is fetched.
-     * 6. The rollback guard before any body ([SyncRules.decide]): `UNCHANGED`, `ROLLBACK_REFUSED`, or on.
-     * 7. The cap before any body: a signed record over `MAX_FILTER_BYTES` is `FAILED` with `CAP_NEAR_LIMIT` at
-     *    `ATTACHMENT`, and nothing is fetched. There is no per-sync total, as neither Firefox nor upki has one (the
-     *    maintainer's decision on #137; `MAX_SYNC_BYTES` is dropped).
+     *    name, is `INDEX_INCONSISTENT` before any body is fetched.
+     * 6. The rollback guard before any body ([SyncRules.decide]): `UNCHANGED`, `SKIPPED` (`ROLLBACK_REFUSED`), or on.
+     * 7. The cap before any body: a signed record over `MAX_FILTER_BYTES` is `ATTACHMENT_OVER_CAP`, and nothing is
+     *    fetched. There is no per-sync total, as neither Firefox nor upki has one (the maintainer's decision on #137;
+     *    `MAX_SYNC_BYTES` is dropped).
      * 8. Each body, one at a time, checked against its signed size and hash and written: a full as a blob, reused without
      *    a fetch when its blob is stored and re-hashes (§6.5; a mismatch is fetched and rewritten, `storeFailures++`); a
      *    delta staged as a file of the generation directory, copied without a fetch from a pointed generation whose file
@@ -115,9 +115,10 @@ internal class CrliteSync(
      *
      * Every outcome but `INSTALLED` writes `updater.json` itself ([UpdaterTransitions.after]) and deletes any directory
      * this sync staged: the cursor, `lastVerified*` and the watermark advance only through an install. Every throwable is
-     * caught, an `OutOfMemoryError` included, and is `FAILED` at the stage it hit (§6.5: "every loader task catches
-     * `Throwable`"). A body, record count or response above half its `RevoktLimits` constant is a `CAP_NEAR_LIMIT` warning
-     * on whatever result the sync ends with (§4), and the sync goes on.
+     * caught, an `OutOfMemoryError` included: `STORE_FAILED` for a non-fatal one in a store access, else
+     * `INTERNAL_ERROR` (§6.5: "every loader task catches `Throwable`"). A body, record count or response above half its
+     * `RevoktLimits` constant is a `CAP_NEAR_LIMIT` warning on whatever result the sync ends with (§4), and the sync
+     * goes on.
      *
      * `UNCHANGED`-by-timestamp against a generation the snapshot holds live but the pointer does not name (an install
      * whose flip or `updater.json` failed after `activate`, #184) is not the end: the install is retried, which reuses
@@ -150,7 +151,9 @@ internal class CrliteSync(
     ) {
         private val source = client.source
         private val channel = store.channel
-        private var stage = SyncStage.STORE
+
+        /** Whether a throw now is in a store access, `STORE_FAILED` unless fatal ([thrown]); else `INTERNAL_ERROR`. */
+        private var storing = true
 
         /**
          * The `updater.json` this sync read; null until the read returns, and while it is null nothing writes
@@ -191,9 +194,10 @@ internal class CrliteSync(
 
         /**
          * The sync after [t] escaped a step. Once the install has flipped ([done]) it stays `INSTALLED` and its
-         * `updater.json` stands: the throw is a store failure. Otherwise, as in [install]: a non-fatal throw at `STORE`
-         * is `STORE_FAILED`, anything else `FAILED`; either counts a store failure from the first body fetch on (§6.5:
-         * "an `OutOfMemoryError` during an install is `SyncOutcome.FAILED` for that sync, `storeFailures++`").
+         * `updater.json` stands: the throw is a store failure. Otherwise, as in [install]: a non-fatal throw in a store
+         * access is `STORE_FAILED`, anything else `INTERNAL_ERROR`; either counts a store failure from the first body
+         * fetch on (§6.5: "an `OutOfMemoryError` during an install is `SyncOutcome.FAILED` for that sync,
+         * `storeFailures++`").
          */
         private fun thrown(t: Throwable): SyncResult {
             done?.let {
@@ -201,33 +205,32 @@ internal class CrliteSync(
                 logger.safeLog(LogLevel.WARN, "${source.sourceId} ${store.root}: threw after the install", t)
                 return it
             }
-            val storeFailure = stage == SyncStage.STORE && !isFatal(t)
+            val storeFailure = storing && !isFatal(t)
             if (storeFailure || installing) storeFailures++
-            val outcome = if (storeFailure) SyncOutcome.STORE_FAILED else SyncOutcome.FAILED
-            return end(Ended(outcome, stage, null, "the sync threw at $stage", cause = t))
+            val failure = if (storeFailure) SyncFailure.STORE_FAILED else SyncFailure.INTERNAL_ERROR
+            return end(Ended(failure, "the sync threw", cause = t))
         }
 
         /**
-         * [access] at stage `STORE`, so a store that throws is `STORE_FAILED` ([thrown]); the stage before is restored
-         * after it returns, never on a throw.
+         * [access] as a store access, so a store that throws is `STORE_FAILED` ([thrown]); [storing] is restored after
+         * it returns, never on a throw.
          */
         private inline fun <T> stored(access: () -> T): T {
-            val before = stage
-            stage = SyncStage.STORE
+            val before = storing
+            storing = true
             val value = access()
-            stage = before
+            storing = before
             return value
         }
 
         private fun steps(): SyncResult {
-            stage = SyncStage.STORE
             val loaded = LoadedUpdater.of(store.updater(now))
             read = loaded.record
             storeFailures += loaded.storeFailures
             val nextAttempt = UpdaterTransitions.nextAttemptAtMillis(record, source.sourceId, now)
-            if (nextAttempt != null && nextAttempt > now) return end(Ended(SyncOutcome.BACKOFF, null, null, "backoff"))
+            if (nextAttempt != null && nextAttempt > now) return end(Ended(SyncFailure.BACKOFF, "backoff"))
             val base = stored { reads.deltaBase() }
-            stage = SyncStage.CHANGESET
+            storing = false
             val polled = client.pollChanges()
             val expected = ok(polled) { return it }
             gates.nearCap(polled, "monitor/changes", RevoktLimits.MAX_JSON_BYTES)
@@ -243,7 +246,6 @@ internal class CrliteSync(
                     is Fetched.Ended -> return fetched.result
                     Fetched.Unmergeable -> error("only a _since changeset is unmergeable, and it is fetched again")
                 }
-            stage = SyncStage.SCHEMA
             val crlite = ok(client.checkRecords(verified.records, channel)) { return it }
             val count = crlite.size.toLong()
             gates.nearCap(
@@ -308,18 +310,16 @@ internal class CrliteSync(
                 since: Long?,
                 base: List<JsonObject>,
             ): Fetched {
-                stage = SyncStage.CHANGESET
                 val fetched = client.fetchChangeset(expected, since)
                 if (fetched is ClientResult.Unchanged) {
                     backoff(fetched.backoffMillis)
                     lastStatus = fetched.httpStatus
                     return Fetched.Ended(
-                        end(Ended(SyncOutcome.UNCHANGED, null, null, "304: the collection is at $since")),
+                        end(Ended(null, "304: the collection is at $since")),
                     )
                 }
                 val changeset = ok(fetched) { return Fetched.Ended(it) }
                 gates.nearCap(fetched, "the changeset", RevoktLimits.MAX_JSON_BYTES)
-                stage = SyncStage.SIGNATURE
                 val merged = ContentSignature.merge(base, changeset.changes)
                 if (merged == null && since != null) return Fetched.Unmergeable
                 return when (val verification = signatures.verify(changeset, merged ?: changeset.changes)) {
@@ -343,7 +343,6 @@ internal class CrliteSync(
             crlite: List<CrliteRecord>,
         ): SyncResult {
             val ts = verified.timestamp
-            stage = SyncStage.INDEX
             val records =
                 crlite.map {
                     FilterRecord(
@@ -379,7 +378,6 @@ internal class CrliteSync(
             noneLoaded: Boolean,
         ): SyncResult {
             val ts = verified.timestamp
-            stage = SyncStage.ATTACHMENT
             val byId = crlite.associateBy { it.id }
             val attachments = placed.map { byId.getValue(it.record.id) }
             val full = attachments.single { !it.incremental }
@@ -390,16 +388,14 @@ internal class CrliteSync(
             val bodies = Bodies(GenerationNames.directory(ts, generationId))
             bodies.open()?.let { return it }
             for (r in attachments) bodies.fetch(r, reuse)?.let { return it }
-            stage = SyncStage.INDEX
             val built =
                 when (val build = buildIndex(records, channel) { bodies.bytes(byId.getValue(it.id)) }) {
                     is IndexBuild.Built -> build
                     is IndexBuild.Refused -> return refused(build)
                 }
-            stage = SyncStage.PREPARE
             bodies.unlisted(placed)?.let { filter ->
                 val detail = "${filter.record.id} is in an encoding the engine does not list (${engine.formats})"
-                return end(Ended(SyncOutcome.FAILED, SyncStage.PREPARE, DiagnosticCode.FORMAT_UNSUPPORTED, detail))
+                return end(Ended(SyncFailure.FORMAT_UNSUPPORTED, detail))
             }
             val pending = pending(verified, generationId, built, bodies, bodies.format(placed))
             return installed(pending, noneLoaded)
@@ -444,7 +440,7 @@ internal class CrliteSync(
                 UpdaterTransitions.after(
                     record,
                     source.sourceId,
-                    SyncOutcome.INSTALLED,
+                    null,
                     now,
                     ts,
                     serverBackoffMillis = backoff,
@@ -467,7 +463,7 @@ internal class CrliteSync(
                     // An activated generation's directory is live in the engine: it stays for the retried flip (#184).
                     if (result.activated) staged = null
                     storeFailures += result.storeFailures
-                    end(Ended(result.outcome, result.stage, result.code, "the install failed", cause = result.cause))
+                    end(Ended(result.failure, "the install failed", cause = result.cause))
                 }
             }
         }
@@ -479,29 +475,29 @@ internal class CrliteSync(
         ): SyncResult? =
             when (decision) {
                 SyncDecision.INSTALL -> null
-                SyncDecision.UNCHANGED -> end(Ended(SyncOutcome.UNCHANGED, null, null, "$ts is live"))
-                SyncDecision.ROLLBACK_REFUSED -> end(Ended(SyncOutcome.ROLLBACK_REFUSED, null, null, "$ts rolls back"))
+                SyncDecision.UNCHANGED -> end(Ended(null, "$ts is live"))
+                SyncDecision.ROLLBACK_REFUSED -> end(Ended(SyncFailure.ROLLBACK_REFUSED, "$ts rolls back"))
             }
 
         /** The checks on sizes before and around the bodies: the cap and the half-cap warnings (§4, §5.1 limits). */
         private inner class Gates {
             /** The `CAP_NEAR_LIMIT` warnings of this sync (§4), on whatever result it ends with. */
-            val nearCaps = ArrayList<PolicyDiagnostic>()
+            val nearCaps = ArrayList<RevoktWarning>()
 
             /** The items [nearCaps] warns about. */
             private val warned = HashSet<String>()
 
             /**
              * Spec §5.1's cap over [attachments], every placed record's, before any body is fetched: a signed record
-             * declaring more than `MAX_FILTER_BYTES` is `FAILED` with `CAP_NEAR_LIMIT` at `ATTACHMENT`, or null. Otherwise
-             * each declared size above half of `MAX_FILTER_BYTES` is a `CAP_NEAR_LIMIT` warning (§4: "the signed size
-             * notwithstanding"), a reused full's included.
+             * declaring more than `MAX_FILTER_BYTES` is `ATTACHMENT_OVER_CAP`, or null. Otherwise each declared size
+             * above half of `MAX_FILTER_BYTES` is a `CAP_NEAR_LIMIT` warning (§4: "the signed size notwithstanding"), a
+             * reused full's included.
              */
             fun cap(attachments: List<CrliteRecord>): SyncResult? {
                 val max = client.limits.maxFilterBytes
                 attachments.firstOrNull { it.attachment.size > max }?.let { over ->
                     val detail = "${over.id}: ${over.attachment.size} bytes declared, cap $max"
-                    return end(Ended(SyncOutcome.FAILED, SyncStage.ATTACHMENT, DiagnosticCode.CAP_NEAR_LIMIT, detail))
+                    return end(Ended(SyncFailure.ATTACHMENT_OVER_CAP, detail))
                 }
                 for (r in attachments) {
                     nearCap(
@@ -534,7 +530,7 @@ internal class CrliteSync(
                 what: () -> String,
             ) {
                 if (value > cap / 2 && warned.add(item)) {
-                    nearCaps += warning(DiagnosticCode.CAP_NEAR_LIMIT, "${what()}, above half of $cap")
+                    nearCaps += warning(WarningCode.CAP_NEAR_LIMIT, "${what()}, above half of $cap")
                 }
             }
         }
@@ -783,14 +779,12 @@ internal class CrliteSync(
                 is ClientResult.Failed -> {
                     // A fetcher's fatal error during the body phase is an OutOfMemoryError during an install (§6.5).
                     if (installing && result.cause?.let(::isFatal) == true) storeFailures++
-                    failed(
-                        end(Ended(SyncOutcome.FAILED, result.stage, result.code, result.detail, cause = result.cause)),
-                    )
+                    failed(end(Ended(result.failure, result.detail, cause = result.cause)))
                 }
 
                 // Only the conditional changeset fetch answers Unchanged, and [changeset] reads that one itself.
                 is ClientResult.Unchanged -> {
-                    failed(end(Ended(SyncOutcome.FAILED, stage, null, "304 to an unconditional request")))
+                    failed(end(Ended(SyncFailure.INTERNAL_ERROR, "304 to an unconditional request")))
                 }
             }
         }
@@ -798,26 +792,16 @@ internal class CrliteSync(
         private fun unverified(failure: ChangesetVerification.Failed): SyncResult {
             backoff(failure.backoffMillis)
             failure.httpStatus?.let { lastStatus = it }
-            return end(
-                Ended(failure.outcome, failure.stage, null, "${failure.failure}: ${failure.detail}", failure.cause),
-            )
+            return end(Ended(failure.failure, failure.detail, failure.cause))
         }
 
         private fun refused(refusal: IndexBuild.Refused): SyncResult =
-            end(
-                Ended(
-                    SyncOutcome.FAILED,
-                    refusal.stage,
-                    refusal.code,
-                    "${refusal.reason}: ${refusal.detail}",
-                    refusal.cause,
-                ),
-            )
+            end(Ended(refusal.failure, refusal.detail, refusal.cause))
 
-        /** `STORE_FAILED` at `STORE` for a directory that cannot be this generation, as [install] fails it. */
+        /** `STORE_FAILED` for a directory that cannot be this generation, as [install] fails it. */
         private fun storeFailed(detail: String): SyncResult {
             storeFailures++
-            return end(Ended(SyncOutcome.STORE_FAILED, SyncStage.STORE, null, detail, IllegalStateException(detail)))
+            return end(Ended(SyncFailure.STORE_FAILED, detail, IllegalStateException(detail)))
         }
 
         private fun backoff(millis: Long?) {
@@ -848,7 +832,7 @@ internal class CrliteSync(
                         UpdaterTransitions.after(
                             it,
                             source.sourceId,
-                            ended.outcome,
+                            ended.failure,
                             now,
                             serverBackoffMillis = backoff,
                         )
@@ -859,25 +843,17 @@ internal class CrliteSync(
                 storeFailures++
                 logger.safeLog(LogLevel.WARN, "writing ${store.root}/updater.json failed", t)
             }
-            val warnings = ArrayList<PolicyDiagnostic>()
-            // CLOCK_SKEW is an x5u link outside its validity window at stage X5U (§7.1), the one clock check.
-            val failure =
-                ended.outcome == SyncOutcome.FAILED || ended.outcome == SyncOutcome.STORE_FAILED ||
-                    ended.outcome == SyncOutcome.CLOCK_SKEW
-            if (failure) {
-                val message = "${ended.outcome} at ${ended.stage}: ${ended.detail}"
+            if (ended.outcome == SyncOutcome.FAILED) {
+                val message = "${ended.failure}: ${ended.detail}"
                 logger.safeLog(LogLevel.WARN, "${source.sourceId} ${store.root}: $message", ended.cause)
-                val cause = ended.cause?.let { ": $it" } ?: ""
-                warnings += warning(DiagnosticCode.SYNC_FAILED, message + cause)
             }
-            ended.code?.let { warnings += warning(it, ended.detail) }
-            return result(ended.outcome, ended.stage, warnings, emptyMap(), ended.cause)
+            return result(ended.outcome, ended.failure, emptyList(), emptyMap(), ended.cause)
         }
 
         private fun result(
             outcome: SyncOutcome,
-            stage: SyncStage?,
-            warnings: List<PolicyDiagnostic>,
+            failure: SyncFailure?,
+            warnings: List<RevoktWarning>,
             installed: Map<Dataset, String>,
             cause: Throwable? = null,
         ): SyncResult =
@@ -887,8 +863,8 @@ internal class CrliteSync(
                 .atMillis(now)
                 .installed(installed)
                 .sourceId(source.sourceId)
-                .stage(stage)
-                .httpStatus(if (outcome == SyncOutcome.BACKOFF) null else lastStatus)
+                .failure(failure)
+                .httpStatus(if (failure == SyncFailure.BACKOFF) null else lastStatus)
                 .cause(cause)
                 .warnings(warnings + gates.nearCaps)
                 .build()
@@ -909,23 +885,25 @@ internal class CrliteSync(
 
     @OptIn(RevoktTestingApi::class)
     private fun warning(
-        code: DiagnosticCode,
+        code: WarningCode,
         message: String,
-    ): PolicyDiagnostic =
-        PolicyDiagnostic
+    ): RevoktWarning =
+        RevoktWarning
             .Builder()
             .code(code)
-            .severity(Severity.WARNING)
             .dataset(Dataset.CRLITE)
             .message("${client.source.sourceId}: $message")
             .build()
 
-    /** How a sync that installs nothing ended: [outcome] at [stage], with the diagnostic [code] beyond `SYNC_FAILED`. */
+    /**
+     * How a sync that installs nothing ended: `UNCHANGED` when [failure] is null, else its outcome, `SKIPPED` or
+     * `FAILED`.
+     */
     private class Ended(
-        val outcome: SyncOutcome,
-        val stage: SyncStage?,
-        val code: DiagnosticCode?,
+        val failure: SyncFailure?,
         val detail: String,
         val cause: Throwable? = null,
-    )
+    ) {
+        val outcome: SyncOutcome get() = failure?.outcome ?: SyncOutcome.UNCHANGED
+    }
 }

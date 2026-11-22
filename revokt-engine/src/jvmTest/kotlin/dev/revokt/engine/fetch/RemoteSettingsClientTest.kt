@@ -7,7 +7,7 @@ import dev.revokt.Dataset
 import dev.revokt.FetchResponse
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.RevoktLimits
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.engine.json.JsonString
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -71,7 +71,7 @@ class RemoteSettingsClientTest {
         )) {
             client(
                 ScriptedFetcher { ok(body) },
-            ).pollChanges().assertFailed(SyncStage.CHANGESET, ClientFailure.MALFORMED)
+            ).pollChanges().assertFailed(SyncFailure.CHANGESET_MALFORMED)
         }
         // Other buckets and malformed neighbours do not count.
         assertEquals(
@@ -159,10 +159,10 @@ class RemoteSettingsClientTest {
     fun `a 304 to a request without If-None-Match is FAILED`() {
         client(ScriptedFetcher { response(304) })
             .fetchChangeset(1, null)
-            .assertFailed(SyncStage.CHANGESET, ClientFailure.HTTP_STATUS)
+            .assertFailed(SyncFailure.CHANGESET_FETCH, "status ")
         client(
             ScriptedFetcher { response(304) },
-        ).pollChanges().assertFailed(SyncStage.CHANGESET, ClientFailure.HTTP_STATUS)
+        ).pollChanges().assertFailed(SyncFailure.CHANGESET_FETCH, "status ")
     }
 
     @Test
@@ -175,7 +175,7 @@ class RemoteSettingsClientTest {
             val failed =
                 client(
                     fetcher,
-                ).fetchChangeset(1, null).assertFailed(SyncStage.CHANGESET, ClientFailure.HTTP_STATUS)
+                ).fetchChangeset(1, null).assertFailed(SyncFailure.CHANGESET_FETCH, "status ")
             assertEquals(status, failed.httpStatus)
             assertEquals(1, fetcher.requests.size, "status $status: one request, no redirect followed")
         }
@@ -185,15 +185,15 @@ class RemoteSettingsClientTest {
     fun `_expected and _since must be integers of at least 0 before they enter a query string`() {
         val fetcher = ScriptedFetcher { ok(changeset) }
         val c = client(fetcher)
-        c.fetchChangeset(-1, null).assertFailed(SyncStage.CHANGESET, ClientFailure.QUERY_VALUE)
-        c.fetchChangeset(1, -1).assertFailed(SyncStage.CHANGESET, ClientFailure.QUERY_VALUE)
+        c.fetchChangeset(-1, null).assertFailed(SyncFailure.CHANGESET_FETCH, "not integers")
+        c.fetchChangeset(1, -1).assertFailed(SyncFailure.CHANGESET_FETCH, "not integers")
         assertEquals(0, fetcher.requests.size)
         c.fetchChangeset(0, 0).assertOk()
         assertEquals("$changesetUrl?_expected=0&_since=0", fetcher.requests.single().url)
     }
 
     @Test
-    fun `a changeset that is not the envelope is FAILED at CHANGESET`() {
+    fun `a changeset that is not the envelope is CHANGESET_MALFORMED`() {
         for (body in listOf(
             "not json",
             "[]",
@@ -210,7 +210,7 @@ class RemoteSettingsClientTest {
         )) {
             client(
                 ScriptedFetcher { ok(body) },
-            ).fetchChangeset(1, null).assertFailed(SyncStage.CHANGESET, ClientFailure.MALFORMED)
+            ).fetchChangeset(1, null).assertFailed(SyncFailure.CHANGESET_MALFORMED)
         }
     }
 
@@ -220,20 +220,20 @@ class RemoteSettingsClientTest {
         val failed =
             client(ScriptedFetcher { response(200, over) })
                 .fetchChangeset(1, null)
-                .assertFailed(SyncStage.CHANGESET, ClientFailure.BODY_TOO_LARGE)
+                .assertFailed(SyncFailure.CHANGESET_FETCH, "bytes, cap")
         assertEquals(200, failed.httpStatus)
         client(
             ScriptedFetcher {
                 response(200, over)
             },
-        ).pollChanges().assertFailed(SyncStage.CHANGESET, ClientFailure.BODY_TOO_LARGE)
+        ).pollChanges().assertFailed(SyncFailure.CHANGESET_FETCH, "bytes, cap")
         // At the cap exactly the body is parsed (and here fails as JSON, not as a size).
         val atCap = ByteArray(RevoktLimits.MAX_JSON_BYTES.toInt()) { ' '.code.toByte() }
         client(
             ScriptedFetcher {
                 response(200, atCap)
             },
-        ).fetchChangeset(1, null).assertFailed(SyncStage.CHANGESET, ClientFailure.MALFORMED)
+        ).fetchChangeset(1, null).assertFailed(SyncFailure.CHANGESET_MALFORMED)
     }
 
     @Test
@@ -246,12 +246,12 @@ class RemoteSettingsClientTest {
                     .userAgent(ua)
                     .build()
             val c = client(fetcher, source)
-            c.pollChanges().assertFailed(SyncStage.CHANGESET, ClientFailure.HEADER_VALUE)
-            c.fetchChangeset(1, 2).assertFailed(SyncStage.CHANGESET, ClientFailure.HEADER_VALUE)
+            c.pollChanges().assertFailed(SyncFailure.CHANGESET_FETCH, "holds a CR or LF")
+            c.fetchChangeset(1, 2).assertFailed(SyncFailure.CHANGESET_FETCH, "holds a CR or LF")
             c
                 .fetchX5u(
                     "https://content-signature-2.cdn.mozilla.net/x.chain",
-                ).assertFailed(SyncStage.X5U, ClientFailure.HEADER_VALUE)
+                ).assertFailed(SyncFailure.X5U_FETCH, "holds a CR or LF")
             assertEquals(0, fetcher.requests.size)
         }
         // Other control characters are the fetcher's to refuse; a tab is a legal header character.
@@ -272,7 +272,7 @@ class RemoteSettingsClientTest {
             val failed =
                 client(ScriptedFetcher { throw thrown })
                     .fetchChangeset(1, null)
-                    .assertFailed(SyncStage.CHANGESET, ClientFailure.FETCHER_THREW)
+                    .assertFailed(SyncFailure.CHANGESET_FETCH, "the fetcher")
             assertSame(thrown, failed.cause)
             assertNull(failed.httpStatus)
         }
@@ -392,7 +392,7 @@ class RemoteSettingsClientTest {
         client(
             fetcher,
             limits = raised,
-        ).fetchChangeset(1, null).assertFailed(SyncStage.CHANGESET, ClientFailure.MALFORMED)
+        ).fetchChangeset(1, null).assertFailed(SyncFailure.CHANGESET_MALFORMED)
         assertEquals(RevoktLimits.MAX_JSON_BYTES * 2, fetcher.requests.single().maxBodyBytes)
     }
 }
