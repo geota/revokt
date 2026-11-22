@@ -7,10 +7,13 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
 
-internal actual class ReadWriteGuard actual constructor() {
+/**
+ * A reader-writer lock for the in-memory store: any number of [read] blocks run together, a [write] block runs alone.
+ */
+internal class ReadWriteGuard {
     private val lock = ReentrantReadWriteLock()
 
-    actual fun <T> read(block: () -> T): T = lock.read(block)
+    fun <T> read(block: () -> T): T = lock.read(block)
 
-    actual fun <T> write(block: () -> T): T = lock.write(block)
+    fun <T> write(block: () -> T): T = lock.write(block)
 }

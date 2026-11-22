@@ -51,7 +51,7 @@ class ReconstructTest {
         f: WalkerFixture,
         verifier: SignatureVerifier = SymVerifier(f.ok, f.unsupported),
         probe: Set<String> = verifier.unsupportedOids(),
-        memo: LruMap<Pair<ByteString, ByteString>, VerifyResult> = LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
+        memo: LruMap<Pair<ByteString, ByteString>, VerifyResult> = lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
     ): Walk {
         val index = CandidateIndex(f.snapshot, customCanonicaliser = f.customCanonicaliser)
         return reconstruct(f.presented.map { index.cert(WalkerCerts.parse(it)) }, index, verifier, probe, memo)
@@ -175,7 +175,7 @@ class ReconstructTest {
                     presented = listOf(leaf, fake, intermediate),
                     walk = found(path).copy(verifications = 3, candidatesExplored = 3),
                 )
-            val memo = LruMap<Pair<ByteString, ByteString>, VerifyResult>(RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
+            val memo = lruMap<Pair<ByteString, ByteString>, VerifyResult>(RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
             val first = Counting(SymVerifier(f.ok, f.unsupported))
             check(f, walk(f, first, memo = memo))
             assertEquals(3, first.calls)
@@ -211,7 +211,7 @@ class ReconstructTest {
                     presented = listOf(leaf, fake, intermediate),
                     walk = found(path).copy(unsupportedOids = setOf(SymOids.UNSUPPORTED_SIGNATURE)),
                 )
-            val memo = LruMap<Pair<ByteString, ByteString>, VerifyResult>(RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
+            val memo = lruMap<Pair<ByteString, ByteString>, VerifyResult>(RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
             check(f, walk(f, memo = memo))
             assertEquals(VerifyResult.VERIFIED, memo[leaf.bytesHash to fake.keyHash])
             assertNull(memo[fake.bytesHash to root.keyHash])
@@ -225,7 +225,7 @@ class ReconstructTest {
                     presented = listOf(leaf, intermediate),
                     walk = notFound(NoIssuerReason.ALL_CANDIDATES_INVALID),
                 )
-            val memo = LruMap<Pair<ByteString, ByteString>, VerifyResult>(RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
+            val memo = lruMap<Pair<ByteString, ByteString>, VerifyResult>(RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
             walk(f, Throwing { IllegalStateException("boom") }, memo = memo)
             assertEquals(0, memo.size)
         }
@@ -591,13 +591,13 @@ class ReconstructTest {
         val index = CandidateIndex(emptyList())
         val verifier = SymVerifier(emptySet(), emptySet())
         assertFailsWith<IllegalArgumentException> {
-            reconstruct(emptyList(), index, verifier, emptySet(), LruMap(1))
+            reconstruct(emptyList(), index, verifier, emptySet(), lruMap(1))
         }
         val f = WalkerFixturesAToR.h().single()
         val idx = CandidateIndex(f.snapshot)
         val presented = f.presented.map { idx.cert(WalkerCerts.parse(it)) }
         val copy = presented.toList()
-        reconstruct(presented, idx, SymVerifier(f.ok, f.unsupported), SymOids.UNSUPPORTED, LruMap(16))
+        reconstruct(presented, idx, SymVerifier(f.ok, f.unsupported), SymOids.UNSUPPORTED, lruMap(16))
         assertEquals(copy.size, presented.size)
         copy.zip(presented).forEach { (a, b) -> assertSame(a, b) }
     }

@@ -92,7 +92,7 @@ internal object WalkerHarness {
     fun walk(
         f: WalkerFixture,
         crossCallMemo: LruMap<Pair<ByteString, ByteString>, VerifyResult> =
-            LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
+            lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
     ): Walk {
         val index = CandidateIndex(f.snapshot, customCanonicaliser = f.customCanonicaliser)
         val presented = f.presented.map { index.cert(WalkerCerts.parse(it)) }
@@ -120,7 +120,7 @@ internal object WalkerHarness {
             DecideContext(
                 verifier(sym),
                 sym.unsupportedOids(),
-                LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
+                lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
                 fallback,
                 NOW,
                 platformOnly,

@@ -28,11 +28,11 @@ import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.walker.CandidateIndex
 import dev.revokt.engine.walker.DecideContext
-import dev.revokt.engine.walker.LruMap
 import dev.revokt.engine.walker.PathDecision
 import dev.revokt.engine.walker.WalkerFixture
 import dev.revokt.engine.walker.WalkerHarness
 import dev.revokt.engine.walker.decide
+import dev.revokt.engine.walker.lruMap
 import dev.revokt.testing.SymVerifier
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
@@ -171,7 +171,7 @@ internal class Run(
                 DecideContext(
                     sym,
                     sym.unsupportedOids(),
-                    LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
+                    lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES),
                     fallback,
                     now,
                     platformOnly = false,

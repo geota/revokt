@@ -12,7 +12,7 @@ import kotlin.test.assertNull
 class LruMapTest {
     @Test
     fun `lru map evicts the least recently inserted entry when untouched`() {
-        val m = LruMap<Int, String>(2)
+        val m = lruMap<Int, String>(2)
         m.put(1, "a")
         m.put(2, "b")
         m.put(3, "c")
@@ -24,7 +24,7 @@ class LruMapTest {
 
     @Test
     fun `lru map get refreshes an entry`() {
-        val m = LruMap<Int, String>(2)
+        val m = lruMap<Int, String>(2)
         m.put(1, "a")
         m.put(2, "b")
         assertEquals("a", m[1])
@@ -36,7 +36,7 @@ class LruMapTest {
 
     @Test
     fun `lru map put replaces and refreshes an existing key without growing`() {
-        val m = LruMap<Int, String>(2)
+        val m = lruMap<Int, String>(2)
         m.put(1, "a")
         m.put(2, "b")
         m.put(1, "a2")
@@ -48,7 +48,7 @@ class LruMapTest {
 
     @Test
     fun `lru map a miss changes nothing`() {
-        val m = LruMap<Int, String>(1)
+        val m = lruMap<Int, String>(1)
         assertNull(m[1])
         assertEquals(0, m.size)
         m.put(1, "a")
@@ -61,7 +61,7 @@ class LruMapTest {
 
     @Test
     fun `lru map rejects a capacity below one`() {
-        assertFailsWith<IllegalArgumentException> { LruMap<Int, Int>(0) }
-        assertFailsWith<IllegalArgumentException> { LruMap<Int, Int>(-1) }
+        assertFailsWith<IllegalArgumentException> { lruMap<Int, Int>(0) }
+        assertFailsWith<IllegalArgumentException> { lruMap<Int, Int>(-1) }
     }
 }
