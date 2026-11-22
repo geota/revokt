@@ -11,7 +11,7 @@ import dev.revokt.HttpFetcher
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktTestingApi
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonInteger
@@ -118,12 +118,12 @@ internal class RemoteSettingsClient(
      * The collection's timestamp as `monitor/changes` lists it, the `_expected` for [fetchChangeset]. The request
      * carries `_expected=0` (mandatory, §7.1; this poll has no expectation of its own). The listed `last_modified` must
      * be an integer from 0 to `Long.MAX_VALUE`, so only an integer ever enters the changeset's query string; a body
-     * that lists the collection other than once is `FAILED` (`MALFORMED`).
+     * that lists the collection other than once is `CHANGESET_MALFORMED`.
      */
     fun pollChanges(): ClientResult<Long> {
         val url = joinUrl(source.baseUrl, "buckets/monitor/collections/changes/changeset?_expected=0")
         val body =
-            when (val exchange = exchange(SyncStage.CHANGESET, url, limits.maxJsonBytes, cursor = null)) {
+            when (val exchange = exchange(SyncFailure.CHANGESET_FETCH, url, limits.maxJsonBytes, cursor = null)) {
                 is Exchange.Ended -> return exchange.result
                 is Exchange.Body -> exchange
             }
@@ -148,7 +148,7 @@ internal class RemoteSettingsClient(
      * the changes after the verified cursor [since] (`_since=<since>`, bare, as Firefox's `RemoteSettingsClient` sends
      * it at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, and `If-None-Match: "<since>"`, quoted, as §3 says; a 304 is
      * [ClientResult.Unchanged]). The body is parsed with the engine's JSON tree under `MAX_JSON_BYTES`; its `changes`
-     * are objects and its `timestamp` an integer from 0 to `Long.MAX_VALUE`, else `FAILED` (`MALFORMED`). Nothing in it
+     * are objects and its `timestamp` an integer from 0 to `Long.MAX_VALUE`, else `CHANGESET_MALFORMED`. Nothing in it
      * is trusted until [ChangesetVerifier] verifies it.
      */
     fun fetchChangeset(
@@ -157,15 +157,14 @@ internal class RemoteSettingsClient(
     ): ClientResult<Changeset> {
         if (expected < 0 || (since != null && since < 0)) {
             return ClientResult.Failed(
-                SyncStage.CHANGESET,
-                ClientFailure.QUERY_VALUE,
+                SyncFailure.CHANGESET_FETCH,
                 "_expected $expected, _since $since: not integers ≥ 0",
             )
         }
         val query = "?_expected=$expected" + (since?.let { "&_since=$it" } ?: "")
         val url = joinUrl(source.baseUrl, "buckets/${source.bucket}/collections/$collection/changeset$query")
         val body =
-            when (val exchange = exchange(SyncStage.CHANGESET, url, limits.maxJsonBytes, cursor = since)) {
+            when (val exchange = exchange(SyncFailure.CHANGESET_FETCH, url, limits.maxJsonBytes, cursor = since)) {
                 is Exchange.Ended -> return exchange.result
                 is Exchange.Body -> exchange
             }
@@ -186,18 +185,18 @@ internal class RemoteSettingsClient(
 
     /**
      * The x5u chain's bytes from [url], the changeset's unsigned `x5u` (spec §7.1): [X5uUrl]'s rules first, the
-     * rewrite included, and nothing is fetched when one fails; then the fetch, capped at `MAX_X5U_BYTES`. Stage `X5U`.
+     * rewrite included, and nothing is fetched when one fails (`X5U_URL`); then the fetch, capped at `MAX_X5U_BYTES`
+     * (`X5U_FETCH`).
      */
     fun fetchX5u(url: String): ClientResult<ByteString> {
         val checked = X5uUrl.check(url, source.allowedDomains, source.x5uHostRewrites)
         val allowed =
             checked.url
                 ?: return ClientResult.Failed(
-                    SyncStage.X5U,
-                    ClientFailure.X5U_URL,
+                    SyncFailure.X5U_URL,
                     "${checked.failure}: ${checked.detail}",
                 )
-        return when (val exchange = exchange(SyncStage.X5U, allowed, limits.maxX5uBytes, cursor = null)) {
+        return when (val exchange = exchange(SyncFailure.X5U_FETCH, allowed, limits.maxX5uBytes, cursor = null)) {
             is Exchange.Ended -> exchange.result
             is Exchange.Body -> ClientResult.Ok(exchange.bytes, exchange.status, exchange.backoffMillis, exchange.size)
         }
@@ -205,9 +204,9 @@ internal class RemoteSettingsClient(
 
     /**
      * Schema-checks [records], the verified and merged set (tombstones removed), for this client's collection
-     * ([CrliteSchema]), then keeps [channel]'s. A failing record is `FAILED` at `SCHEMA` (`SYNC_SCHEMA_REJECTED`, §7.1),
+     * ([CrliteSchema]), then keeps [channel]'s. A failing record is `SCHEMA_REJECTED` (§7.1),
      * a §6.3 filename failure included (the issue's reading: 2690 puts the filename "under §6.3's rule" in the schema);
-     * more than `MAX_CHANGESET_RECORDS` kept records is `FAILED` at `CHANGESET`, before any body fetch. Fetches nothing.
+     * more than `MAX_CHANGESET_RECORDS` kept records is `TOO_MANY_RECORDS`, before any body fetch. Fetches nothing.
      */
     fun checkRecords(
         records: List<JsonObject>,
@@ -220,9 +219,9 @@ internal class RemoteSettingsClient(
 
             is RecordCheck.Rejected -> {
                 if (check.index == null) {
-                    ClientResult.Failed(SyncStage.CHANGESET, ClientFailure.TOO_MANY_RECORDS, check.detail)
+                    ClientResult.Failed(SyncFailure.TOO_MANY_RECORDS, check.detail)
                 } else {
-                    ClientResult.Failed(SyncStage.SCHEMA, ClientFailure.SCHEMA, "$dataset: ${check.detail}")
+                    ClientResult.Failed(SyncFailure.SCHEMA_REJECTED, "$dataset: ${check.detail}")
                 }
             }
         }
@@ -231,20 +230,19 @@ internal class RemoteSettingsClient(
      * The base every attachment `location` is joined to (spec §7.1): [MozillaRemoteSettings.attachmentBaseUrl] when set,
      * with no fetch; else the server root's `capabilities.attachments.base_url`, fetched from `<baseUrl>/` under
      * `MAX_JSON_BYTES` and checked by [AttachmentBase], its host under [MozillaRemoteSettings.allowedDomains]. Anything
-     * else is `FAILED` at stage `ATTACHMENT` ([ClientFailure.ATTACHMENT_BASE]), with no fallback. The caller reads it
+     * else, a failed fetch of the root included, is `ATTACHMENT_BASE`, with no fallback. The caller reads it
      * once per sync, before the first attachment it fetches, and keeps nothing after the sync.
      */
     fun attachmentBase(): ClientResult<String> {
         source.attachmentBaseUrl?.let { return ClientResult.Ok(it, null, null) }
         val url = joinUrl(source.baseUrl, "")
         val body =
-            when (val exchange = exchange(SyncStage.ATTACHMENT, url, limits.maxJsonBytes, cursor = null)) {
+            when (val exchange = exchange(SyncFailure.ATTACHMENT_BASE, url, limits.maxJsonBytes, cursor = null)) {
                 is Exchange.Ended -> return exchange.result
                 is Exchange.Body -> exchange
             }
 
-        fun refused(detail: String): ClientResult.Failed =
-            body.failed(SyncStage.ATTACHMENT, ClientFailure.ATTACHMENT_BASE, "$url: $detail")
+        fun refused(detail: String): ClientResult.Failed = body.failed(SyncFailure.ATTACHMENT_BASE, "$url: $detail")
         val capabilities = envelope(body.bytes)?.get("capabilities") as? JsonObject
         val served =
             string((capabilities?.get("attachments") as? JsonObject)?.get("base_url"))
@@ -255,8 +253,9 @@ internal class RemoteSettingsClient(
 
     /**
      * [record]'s attachment from [base] ([attachmentBase]) + its relative `location`, capped at `min(attachment.size,
-     * MAX_FILTER_BYTES)` (spec §5.1). A declared size above `MAX_FILTER_BYTES` is `FAILED` before any fetch
-     * (`CAP_NEAR_LIMIT`, #137); the body's size and SHA-256 must equal the signed record's. Stage `ATTACHMENT`.
+     * MAX_FILTER_BYTES)` (spec §5.1). A declared size above `MAX_FILTER_BYTES` is `ATTACHMENT_OVER_CAP` before any
+     * fetch (#137); a failed fetch is `ATTACHMENT_FETCH`; the body's size and SHA-256 must equal the signed record's,
+     * else `ATTACHMENT_MISMATCH`.
      * [record] comes from [checkRecords] over a changeset whose signature verified: its size and hash are only as
      * trustworthy as that.
      */
@@ -267,28 +266,25 @@ internal class RemoteSettingsClient(
         val attachment = record.attachment
         if (attachment.size > limits.maxFilterBytes) {
             return ClientResult.Failed(
-                SyncStage.ATTACHMENT,
-                ClientFailure.ATTACHMENT_OVER_CAP,
+                SyncFailure.ATTACHMENT_OVER_CAP,
                 "${record.id}: ${attachment.size} bytes declared, cap ${limits.maxFilterBytes}",
             )
         }
         val url = joinUrl(base, attachment.location)
         val body =
-            when (val exchange = exchange(SyncStage.ATTACHMENT, url, attachment.size, cursor = null)) {
+            when (val exchange = exchange(SyncFailure.ATTACHMENT_FETCH, url, attachment.size, cursor = null)) {
                 is Exchange.Ended -> return exchange.result
                 is Exchange.Body -> exchange
             }
         if (body.bytes.size.toLong() != attachment.size) {
             return body.failed(
-                SyncStage.ATTACHMENT,
-                ClientFailure.ATTACHMENT_SIZE,
+                SyncFailure.ATTACHMENT_MISMATCH,
                 "${record.id}: ${body.bytes.size} bytes, signed size ${attachment.size}",
             )
         }
         if (body.bytes.sha256() != attachment.sha256) {
             return body.failed(
-                SyncStage.ATTACHMENT,
-                ClientFailure.ATTACHMENT_HASH,
+                SyncFailure.ATTACHMENT_MISMATCH,
                 "${record.id}: SHA-256 differs from the signed hash",
             )
         }
@@ -305,10 +301,9 @@ internal class RemoteSettingsClient(
             val size: Long get() = bytes.size.toLong()
 
             fun failed(
-                stage: SyncStage,
-                failure: ClientFailure,
+                failure: SyncFailure,
                 detail: String,
-            ): ClientResult.Failed = ClientResult.Failed(stage, failure, detail, status, null, backoffMillis)
+            ): ClientResult.Failed = ClientResult.Failed(failure, detail, status, null, backoffMillis)
         }
 
         class Ended(
@@ -318,10 +313,11 @@ internal class RemoteSettingsClient(
 
     /**
      * One request to [url] under [maxBodyBytes]; [cursor] makes it conditional. Header values are checked before the
-     * fetch: a CR or LF is `FAILED`, never sanitised (#177).
+     * fetch: a CR or LF is `FAILED`, never sanitised (#177). Every failure of the exchange itself is [fetch], the code
+     * of the fetch it is (spec §3: a 401 or 407 is the code of the fetch it interrupted).
      */
     private fun exchange(
-        stage: SyncStage,
+        fetch: SyncFailure,
         url: String,
         maxBodyBytes: Long,
         cursor: Long?,
@@ -337,7 +333,7 @@ internal class RemoteSettingsClient(
                 .build()
         for ((name, value) in request.headers) {
             if ('\r' in value || '\n' in value) {
-                return end(ClientResult.Failed(stage, ClientFailure.HEADER_VALUE, "$name holds a CR or LF"))
+                return end(ClientResult.Failed(fetch, "$name holds a CR or LF"))
             }
         }
         val response: FetchResponse =
@@ -345,15 +341,14 @@ internal class RemoteSettingsClient(
                 is Timed.Done -> {
                     timed.response
                         ?: return end(
-                            ClientResult.Failed(stage, ClientFailure.FETCHER_THREW, "the fetcher returned null"),
+                            ClientResult.Failed(fetch, "the fetcher returned null"),
                         )
                 }
 
                 is Timed.Threw -> {
                     return end(
                         ClientResult.Failed(
-                            stage,
-                            ClientFailure.FETCHER_THREW,
+                            fetch,
                             "the fetcher threw",
                             cause = timed.cause,
                         ),
@@ -363,8 +358,7 @@ internal class RemoteSettingsClient(
                 Timed.TimedOut -> {
                     return end(
                         ClientResult.Failed(
-                            stage,
-                            ClientFailure.TIMEOUT,
+                            fetch,
                             "no response within ${request.timeoutMillis} ms",
                         ),
                     )
@@ -374,14 +368,13 @@ internal class RemoteSettingsClient(
         val backoff = Backoff.read(response)
         if (status == ClientResult.NOT_MODIFIED && cursor != null) return end(ClientResult.Unchanged(backoff))
         if (status != ClientResult.OK) {
-            return end(ClientResult.Failed(stage, ClientFailure.HTTP_STATUS, "status $status", status, null, backoff))
+            return end(ClientResult.Failed(fetch, "status $status", status, null, backoff))
         }
         val bytes = response.bodyBytes
         if (bytes.size > maxBodyBytes) {
             return end(
                 ClientResult.Failed(
-                    stage,
-                    ClientFailure.BODY_TOO_LARGE,
+                    fetch,
                     "${bytes.size} bytes, cap $maxBodyBytes",
                     status,
                     null,
@@ -402,11 +395,13 @@ internal class RemoteSettingsClient(
             null
         }
 
-    /** The changeset or `monitor/changes` body is not the envelope: `FAILED` at `CHANGESET` with the response's status. */
+    /**
+     * The changeset or `monitor/changes` body is not the envelope: `CHANGESET_MALFORMED`, with the response's status.
+     */
     private fun malformed(
         body: Exchange.Body,
         detail: String,
-    ): ClientResult.Failed = body.failed(SyncStage.CHANGESET, ClientFailure.MALFORMED, detail)
+    ): ClientResult.Failed = body.failed(SyncFailure.CHANGESET_MALFORMED, detail)
 
     private fun string(value: JsonValue?): String? = (value as? JsonString)?.value
 

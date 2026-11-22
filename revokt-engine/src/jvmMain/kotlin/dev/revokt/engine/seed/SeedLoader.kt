@@ -9,20 +9,18 @@ package dev.revokt.engine.seed
 
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
 import dev.revokt.LogLevel
-import dev.revokt.PolicyDiagnostic
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktTestingApi
+import dev.revokt.RevoktWarning
 import dev.revokt.SeedSource
-import dev.revokt.Severity
 import dev.revokt.SignatureVerifier
-import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
+import dev.revokt.WarningCode
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.api.ClubcardFormatException
@@ -76,17 +74,17 @@ import okio.ByteString.Companion.toByteString
 /**
  * How one seed load ended (spec §6.5 "Seed archive", §4 S bullet, §5.1): typed, so the start task (#143, #147) maps it
  * to its diagnostics and lifecycle. [storeFailures] is what the load adds to `storeFailures`; [warnings] are the
- * diagnostics it raised (`SEED_UNREADABLE`, `SEED_CHANNEL_MISMATCH`).
+ * runtime warnings it raised (`SEED_UNREADABLE`, `SEED_CHANNEL_MISMATCH`).
  */
 internal sealed interface SeedLoad {
     val storeFailures: Int
-    val warnings: List<PolicyDiagnostic>
+    val warnings: List<RevoktWarning>
 
     /** The source opened no archive: there is no seed. */
     class Absent(
         override val storeFailures: Int = 0,
     ) : SeedLoad {
-        override val warnings: List<PolicyDiagnostic> get() = emptyList()
+        override val warnings: List<RevoktWarning> get() = emptyList()
 
         override fun toString(): String = "Absent"
     }
@@ -94,7 +92,7 @@ internal sealed interface SeedLoad {
     /** `seed.json` names [seedChannel], not the configured channel: `SEED_CHANNEL_MISMATCH`, which `start()` throws. */
     class ChannelMismatch(
         val seedChannel: String,
-        override val warnings: List<PolicyDiagnostic>,
+        override val warnings: List<RevoktWarning>,
     ) : SeedLoad {
         override val storeFailures: Int get() = 0
 
@@ -106,7 +104,7 @@ internal sealed interface SeedLoad {
         val detail: String,
         val cause: Throwable?,
         override val storeFailures: Int,
-        override val warnings: List<PolicyDiagnostic>,
+        override val warnings: List<RevoktWarning>,
     ) : SeedLoad {
         override fun toString(): String = "Unreadable($detail)"
     }
@@ -121,7 +119,7 @@ internal sealed interface SeedLoad {
         val storedTimestampMillis: Long,
         override val storeFailures: Int,
     ) : SeedLoad {
-        override val warnings: List<PolicyDiagnostic> get() = emptyList()
+        override val warnings: List<RevoktWarning> get() = emptyList()
 
         override fun toString(): String = "Skipped(seed $seedTimestampMillis, stored $storedTimestampMillis)"
     }
@@ -137,7 +135,7 @@ internal sealed interface SeedLoad {
         val timestampMillis: Long,
         override val storeFailures: Int,
     ) : SeedLoad {
-        override val warnings: List<PolicyDiagnostic> get() = emptyList()
+        override val warnings: List<RevoktWarning> get() = emptyList()
 
         override fun toString(): String = "Adopted($directory at $timestampMillis)"
     }
@@ -156,27 +154,26 @@ internal sealed interface SeedLoad {
         val timestampMillis: Long,
         override val storeFailures: Int,
     ) : SeedLoad {
-        override val warnings: List<PolicyDiagnostic> get() = emptyList()
+        override val warnings: List<RevoktWarning> get() = emptyList()
 
         override fun toString(): String = "Installed($generationId at epoch $generationEpoch)"
     }
 
     /**
-     * A store read or write failed, at [stage], or the install failed after `activate` ([activated]: the engine holds
-     * the seed and its directory stays, as [InstallResult.Failed] says). A store read that throws fails the load before
-     * anything is written, so `updater.json` is never written from a record that was not read (#209).
+     * A store read or write failed ([failure] `STORE_FAILED`), or the install failed after `activate` ([activated]: the
+     * engine holds the seed and its directory stays, as [InstallResult.Failed] says). A store read that throws fails
+     * the load before anything is written, so `updater.json` is never written from a record that was not read (#209).
      */
     class Failed(
-        val outcome: SyncOutcome,
-        val stage: SyncStage,
+        val failure: SyncFailure,
         val detail: String,
         val cause: Throwable?,
         val activated: Boolean,
         override val storeFailures: Int,
     ) : SeedLoad {
-        override val warnings: List<PolicyDiagnostic> get() = emptyList()
+        override val warnings: List<RevoktWarning> get() = emptyList()
 
-        override fun toString(): String = "Failed($outcome at $stage: $detail, activated=$activated)"
+        override fun toString(): String = "Failed($failure: $detail, activated=$activated)"
     }
 }
 
@@ -288,7 +285,9 @@ internal class SeedLoader(
         if (format !in engine.formats) fail("filterFormat $format is not in the engine's ${engine.formats}")
         if (header.channel != channel.name) {
             val message = "the seed is for ${header.channel}, the configured channel is ${channel.name}"
-            return HeaderRead.Ended(SeedLoad.ChannelMismatch(header.channel, listOf(diagnostic(MISMATCH, message))))
+            return HeaderRead.Ended(
+                SeedLoad.ChannelMismatch(header.channel, listOf(warning(WarningCode.SEED_CHANNEL_MISMATCH, message))),
+            )
         }
         return HeaderRead.Read(archive, header)
     }
@@ -376,7 +375,7 @@ internal class SeedLoader(
                 if (!(t is StoreFault && t.counted)) storeFailures++
                 logger.safeLog(LogLevel.WARN, "${store.root}: the seed load failed at STORE", t)
                 val detail = t.message ?: t.toString()
-                return SeedLoad.Failed(SyncOutcome.STORE_FAILED, SyncStage.STORE, detail, t, false, storeFailures)
+                return SeedLoad.Failed(SyncFailure.STORE_FAILED, detail, t, false, storeFailures)
             }
             // An archive over its total cap is a source fault, not a store fault, so it is not counted (#138).
             val fatalInStore = inStore && isFatal(t)
@@ -934,12 +933,11 @@ internal class SeedLoader(
 
                 is InstallResult.Failed -> {
                     val detail = "the install failed: $result"
-                    if (!result.activated && result.outcome == SyncOutcome.FAILED) {
+                    if (!result.activated && result.failure != SyncFailure.STORE_FAILED) {
                         unreadable(detail, result.cause, storeFailures)
                     } else {
                         SeedLoad.Failed(
-                            result.outcome,
-                            result.stage,
+                            result.failure,
                             detail,
                             result.cause,
                             result.activated,
@@ -981,19 +979,18 @@ internal class SeedLoader(
             detail,
             cause,
             storeFailures,
-            listOf(diagnostic(DiagnosticCode.SEED_UNREADABLE, detail)),
+            listOf(warning(WarningCode.SEED_UNREADABLE, detail)),
         )
     }
 
     @OptIn(RevoktTestingApi::class)
-    private fun diagnostic(
-        code: DiagnosticCode,
+    private fun warning(
+        code: WarningCode,
         message: String,
-    ): PolicyDiagnostic =
-        PolicyDiagnostic
+    ): RevoktWarning =
+        RevoktWarning
             .Builder()
             .code(code)
-            .severity(if (code == MISMATCH) Severity.ERROR else Severity.WARNING)
             .dataset(Dataset.CRLITE)
             .message("seed: $message")
             .build()
@@ -1010,8 +1007,6 @@ internal class SeedLoader(
 
         /** The latest timestamp a generation directory name holds (13 digits, §6.5). */
         private const val MAX_TIMESTAMP = 9_999_999_999_999L
-
-        private val MISMATCH = DiagnosticCode.SEED_CHANNEL_MISMATCH
     }
 }
 

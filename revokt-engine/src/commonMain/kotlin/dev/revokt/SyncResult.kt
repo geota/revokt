@@ -6,8 +6,9 @@ package dev.revokt
 import kotlin.jvm.Transient
 
 /**
- * How one sync ended (spec §4): what it installed, where it stopped and why, without parsing a message. An output type:
- * a value with a private constructor and a `@RevoktTestingApi` builder; equality is by content except [cause].
+ * How one sync ended (spec §4): what it installed, or why it stopped, without parsing a message. An output type: a
+ * value with a private constructor and a `@RevoktTestingApi` builder; equality is by content except [cause]. The
+ * builder checks that [failure] is set exactly when [outcome] is `SKIPPED` or `FAILED`, and is a code of that outcome.
  */
 @OptIn(RevoktTestingApi::class)
 public class SyncResult private constructor(
@@ -26,10 +27,10 @@ public class SyncResult private constructor(
     public val sourceId: String? = builder.sourceId
 
     /**
-     * Where a `FAILED`, `STORE_FAILED` or `CLOCK_SKEW` sync stopped. A 401 or 407 carries the stage of the fetch it
-     * interrupted: `CHANGESET`, `X5U` or `ATTACHMENT` (§3).
+     * Why a `SKIPPED` or `FAILED` sync stopped; null otherwise. A 401 or 407 is the code of the fetch it interrupted:
+     * `CHANGESET_FETCH`, `X5U_FETCH` or `ATTACHMENT_FETCH` (§3).
      */
-    public val stage: SyncStage? = builder.stage
+    public val failure: SyncFailure? = builder.failure
 
     /** The last response status, when a fetch was involved. */
     public val httpStatus: Int? = builder.httpStatus
@@ -38,8 +39,16 @@ public class SyncResult private constructor(
     @Transient
     public val cause: Throwable? = builder.cause
 
-    /** The sync-time diagnostics: matched on code, never on message. */
-    public val warnings: List<PolicyDiagnostic> = builder.warnings
+    /** The sync's runtime warnings, `CAP_NEAR_LIMIT`: matched on code, never on message. */
+    public val warnings: List<RevoktWarning> = builder.warnings
+
+    init {
+        val stopped = outcome == SyncOutcome.SKIPPED || outcome == SyncOutcome.FAILED
+        require((failure != null) == stopped) {
+            "failure is set exactly when outcome is SKIPPED or FAILED (spec §4): got outcome=$outcome, failure=$failure"
+        }
+        require(failure == null || failure.outcome == outcome) { "$failure is not a $outcome code (spec §4)" }
+    }
 
     /** A builder holding this result's values, [cause] included. */
     @RevoktTestingApi
@@ -49,7 +58,7 @@ public class SyncResult private constructor(
             .atMillis(atMillis)
             .installed(installed)
             .sourceId(sourceId)
-            .stage(stage)
+            .failure(failure)
             .httpStatus(httpStatus)
             .cause(cause)
             .warnings(warnings)
@@ -64,7 +73,7 @@ public class SyncResult private constructor(
             "atMillis" to atMillis,
             "installed" to installed,
             "sourceId" to sourceId,
-            "stage" to stage,
+            "failure" to failure,
             "httpStatus" to httpStatus,
             "warnings" to warnings,
         )
@@ -87,13 +96,13 @@ public class SyncResult private constructor(
             private set
         internal var sourceId: String? = null
             private set
-        internal var stage: SyncStage? = null
+        internal var failure: SyncFailure? = null
             private set
         internal var httpStatus: Int? = null
             private set
         internal var cause: Throwable? = null
             private set
-        internal var warnings: List<PolicyDiagnostic> = emptyList()
+        internal var warnings: List<RevoktWarning> = emptyList()
             private set
 
         public fun outcome(outcome: SyncOutcome): Builder = apply { this.outcome = outcome }
@@ -109,14 +118,14 @@ public class SyncResult private constructor(
 
         public fun sourceId(sourceId: String?): Builder = apply { this.sourceId = sourceId }
 
-        public fun stage(stage: SyncStage?): Builder = apply { this.stage = stage }
+        public fun failure(failure: SyncFailure?): Builder = apply { this.failure = failure }
 
         public fun httpStatus(status: Int?): Builder = apply { httpStatus = status }
 
         public fun cause(cause: Throwable?): Builder = apply { this.cause = cause }
 
         /** Replaces the warnings with a read-only copy of [warnings]. */
-        public fun warnings(warnings: List<PolicyDiagnostic>): Builder =
+        public fun warnings(warnings: List<RevoktWarning>): Builder =
             apply {
                 this.warnings =
                     buildList { addAll(warnings) }

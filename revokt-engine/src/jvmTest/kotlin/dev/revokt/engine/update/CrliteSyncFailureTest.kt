@@ -8,7 +8,6 @@ package dev.revokt.engine.update
 import dev.revokt.CrliteChannel
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
-import dev.revokt.DiagnosticCode
 import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.FilterFormat
@@ -18,8 +17,8 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktStorage
 import dev.revokt.SignatureVerifier
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
 import dev.revokt.VerifyResult
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.fetch.FetchLimits
@@ -67,7 +66,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         val at = (0..3).map { ts + hour + it * 7 * hour }
         val throwing = Server()
         throwing.overrides[monitor] = { oom("fetcher") }
-        sync(throwing, now = at[0]).assert(SyncOutcome.FAILED, SyncStage.CHANGESET, *failed()).also {
+        sync(throwing, now = at[0]).assert(SyncFailure.CHANGESET_FETCH).also {
             assertIs<OutOfMemoryError>(it.result.cause)
         }
         val verifierOom =
@@ -85,15 +84,15 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
             Server(),
             now = at[1],
             with = verifierOom,
-        ).assert(SyncOutcome.FAILED, SyncStage.SIGNATURE, *failed()).also {
+        ).assert(SyncFailure.INTERNAL_ERROR).also {
             assertIs<OutOfMemoryError>(it.result.cause)
         }
         val prepareOom = TestEngine().apply { onPrepare = { oom("prepare") } }
-        sync(Server(), now = at[2], engine = prepareOom).assert(SyncOutcome.FAILED, SyncStage.PREPARE, *failed()).also {
+        sync(Server(), now = at[2], engine = prepareOom).assert(SyncFailure.ENGINE_FAILED).also {
             assertIs<OutOfMemoryError>(it.result.cause)
         }
         val activateThrows = TestEngine().apply { onActivate = { error("activate") } }
-        sync(Server(), now = at[3], engine = activateThrows).assert(SyncOutcome.FAILED, SyncStage.ACTIVATE, *failed())
+        sync(Server(), now = at[3], engine = activateThrows).assert(SyncFailure.ENGINE_FAILED)
         assertNothingAdvanced(at[3], failures = 4)
     }
 
@@ -111,10 +110,10 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
             storage.failRead = { if (it.endsWith("updater.json")) thrown else null }
             val run = sync(server, now = at)
             if (thrown is OutOfMemoryError) {
-                run.assert(SyncOutcome.FAILED, SyncStage.STORE, *failed())
+                run.assert(SyncFailure.INTERNAL_ERROR)
                 assertEquals(0, run.storeFailures)
             } else {
-                run.assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+                run.assert(SyncFailure.STORE_FAILED)
                 assertEquals(1, run.storeFailures)
             }
             storage.failRead = { null }
@@ -129,31 +128,31 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `a store that throws is STORE_FAILED at STORE, and a failing updater write is counted, not thrown`() {
+    fun `a store that throws is STORE_FAILED, and a failing updater write is counted, not thrown`() {
         storage.failRead = { if (it.endsWith("updater.json")) IllegalStateException("read") else null }
-        sync(Server()).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed()).also {
+        sync(Server()).assert(SyncFailure.STORE_FAILED).also {
             assertEquals(1, it.storeFailures)
         }
         storage.failRead = { null }
         storage.failWrite = { if (it.endsWith("updater.json")) IllegalStateException("write") else null }
         val server = Server()
         server.signature = Server(records = listOf(full.json())).sign()
-        sync(server, now = ts + 8 * hour).assert(SyncOutcome.FAILED, SyncStage.SIGNATURE, *failed()).also {
+        sync(server, now = ts + 8 * hour).assert(SyncFailure.SIGNATURE_INVALID).also {
             assertEquals(1, it.storeFailures)
         }
     }
 
     @Test
-    fun `store reads and writes that throw are STORE_FAILED at STORE, whatever step they serve`() {
+    fun `store reads and writes that throw are STORE_FAILED, whatever step they serve`() {
         // The reuse probe's blob read.
         storage.failRead = { if ("/blobs/" in it) IllegalStateException("blob read") else null }
-        sync(Server()).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed()).also {
+        sync(Server()).assert(SyncFailure.STORE_FAILED).also {
             assertEquals(1, it.storeFailures)
         }
         // A full's blob write.
         storage.failRead = { null }
         storage.failWrite = { if ("/blobs/" in it) IllegalStateException("blob write") else null }
-        sync(Server(), now = ts + 8 * hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed()).also {
+        sync(Server(), now = ts + 8 * hour).assert(SyncFailure.STORE_FAILED).also {
             assertEquals(1, it.storeFailures)
         }
         // The pointer read of the UNCHANGED check.
@@ -162,7 +161,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         val now = ts + 15 * hour
         sync(server, now = now).assert(SyncOutcome.INSTALLED)
         storage.failRead = { if (it.endsWith("/current")) IllegalStateException("pointer read") else null }
-        sync(server, now = now + hour).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed()).also {
+        sync(server, now = now + hour).assert(SyncFailure.STORE_FAILED).also {
             assertEquals(1, it.storeFailures)
         }
     }
@@ -171,7 +170,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     fun `an OutOfMemoryError counts a store failure from the first body fetch on, not before`() {
         // Before any body: reading updater.json.
         storage.failRead = { if (it.endsWith("updater.json")) OutOfMemoryError("updater read") else null }
-        sync(Server()).assert(SyncOutcome.FAILED, SyncStage.STORE, *failed()).also {
+        sync(Server()).assert(SyncFailure.INTERNAL_ERROR).also {
             assertEquals(0, it.storeFailures)
             assertIs<OutOfMemoryError>(it.result.cause)
         }
@@ -179,7 +178,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         // The body phase (§6.5's install): the delta's fetch, then the full's read-back for buildIndex.
         val fetchOom = Server()
         fetchOom.overrides[attachments + delta.location] = { oom("delta fetch") }
-        sync(fetchOom, now = ts + 8 * hour).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed()).also {
+        sync(fetchOom, now = ts + 8 * hour).assert(SyncFailure.ATTACHMENT_FETCH).also {
             assertEquals(1, it.storeFailures)
         }
         val readBackOom = Server()
@@ -187,14 +186,14 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
             storage.failRead = { if ("/blobs/" in it) OutOfMemoryError("blob read-back") else null }
             response(200, delta.body)
         }
-        sync(readBackOom, now = ts + 15 * hour).assert(SyncOutcome.FAILED, SyncStage.STORE, *failed()).also {
+        sync(readBackOom, now = ts + 15 * hour).assert(SyncFailure.INTERNAL_ERROR).also {
             assertEquals(1, it.storeFailures)
             assertIs<OutOfMemoryError>(it.result.cause)
         }
     }
 
     @Test
-    fun `a server root that fails or names a base outside allowedDomains is FAILED at ATTACHMENT, nothing advanced`() {
+    fun `a server root that fails or names a base outside allowedDomains is ATTACHMENT_BASE, nothing advanced`() {
         val roots =
             listOf<(FetchRequest) -> FetchResponse>(
                 { response(500) },
@@ -211,7 +210,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
             server.overrides["$base/"] = root
             // Each sync after the last one's failure backoff (at most the 6 h poll interval).
             val now = ts + hour + i * 7 * hour
-            sync(server, now = now).assert(SyncOutcome.FAILED, SyncStage.ATTACHMENT, *failed())
+            sync(server, now = now).assert(SyncFailure.ATTACHMENT_BASE)
             // No fallback: no attachment is fetched from any base, and the failure counts.
             assertEquals(emptyList(), server.attachmentRequests())
             assertNothingAdvanced(now, failures = i + 1)
@@ -285,7 +284,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     fun `UNCHANGED against a live generation the pointer does not name retries the install and flips it`() {
         val server = Server()
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
-        sync(server).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        sync(server).assert(SyncFailure.STORE_FAILED)
         assertEquals("$ts/${delta.id}", live().generationId)
         assertNull(liveDirectory())
         assertNull(sourceRecord().lastVerifiedLastModified)
@@ -301,7 +300,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     fun `a retried flip over the same ts re-signed installs, then is UNCHANGED, with no STORE_FAILED loop`() {
         val server = Server()
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
-        sync(server).assert(SyncOutcome.STORE_FAILED, SyncStage.STORE, *failed())
+        sync(server).assert(SyncFailure.STORE_FAILED)
         storage.failWrite = { null }
         val stored = assertNotNull(store.meta(GenerationNames.directory(ts, "$ts/${delta.id}")))
         // Remote Settings re-signs the same collection at the same <ts>: a fresh ECDSA signature.

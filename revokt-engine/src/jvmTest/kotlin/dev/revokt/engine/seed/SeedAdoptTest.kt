@@ -3,8 +3,6 @@
 
 package dev.revokt.engine.seed
 
-import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout

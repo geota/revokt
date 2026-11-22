@@ -6,8 +6,7 @@ package dev.revokt.engine.fetch
 import dev.revokt.FetchResponse
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.SignatureVerifier
-import dev.revokt.SyncOutcome
-import dev.revokt.SyncStage
+import dev.revokt.SyncFailure
 import dev.revokt.VerifyResult
 import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.json.JsonString
@@ -26,11 +25,11 @@ import kotlin.test.assertTrue
 
 /**
  * The changeset signature check (spec §7.1, revision 56, #191) over the §9 rows: a changeset whose first `signatures`
- * entry fails and whose second verifies installs; one with 5 entries, or whose every entry lacks `mode`, is `FAILED` at
- * `SIGNATURE`; two entries sharing one `x5u` URL fetch it once; one whose `metadata` holds only `signature`, or an
- * empty `signatures`, is `FAILED` at `SIGNATURE`; an entry with no `mode` is skipped; a P-256 leaf verifies. Plus the
- * rules around them: the failed URL not retried, the last tried entry's failure, the stages and the backoff. Chains and
- * signatures are #126's fixture's, made by the test JDK.
+ * entry fails and whose second verifies installs; one with 5 entries, or whose every entry lacks `mode`, is
+ * `SIGNATURE_INVALID` or `NO_SIGNATURE`; two entries sharing one `x5u` URL fetch it once; one whose `metadata` holds
+ * only `signature`, or an empty `signatures`, is `NO_SIGNATURE`; an entry with no `mode` is skipped; a P-256 leaf
+ * verifies. Plus the rules around them: the failed URL not retried, the last tried entry's failure, the codes and the
+ * backoff. Chains and signatures are #126's fixture's, made by the test JDK.
  */
 internal class ChangesetVerifierTest : X5uChainFixture() {
     private val host = "https://content-signature-2.cdn.mozilla.net/g/chains"
@@ -106,18 +105,18 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         return verified
     }
 
+    /**
+     * A failure with [failure] at entry [index], whose detail holds [detail] when given (it tells `NO_SIGNATURE`s
+     * apart).
+     */
     private fun ChangesetVerification.assertFailed(
-        failure: SignatureFailure,
+        failure: SyncFailure,
         index: Int?,
-        stage: SyncStage = SyncStage.SIGNATURE,
-        outcome: SyncOutcome = SyncOutcome.FAILED,
+        detail: String? = null,
     ): ChangesetVerification.Failed {
         val failed = assertIs<ChangesetVerification.Failed>(this, "$this")
-        assertEquals(
-            listOf(failure, index, stage, outcome),
-            listOf(failed.failure, failed.index, failed.stage, failed.outcome),
-            failed.detail,
-        )
+        assertEquals(failure to index, failed.failure to failed.index, failed.detail)
+        if (detail != null) assertTrue(detail in failed.detail, "expected \"$detail\" in: ${failed.detail}")
         return failed
     }
 
@@ -126,7 +125,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         // Mozilla's DEFAULT pins root-ca-production-amo, not the fixture's root, so the same chain is not pinned there.
         ChangesetVerifier(client(served(), MozillaRemoteSettings.DEFAULT), verifier, NOW)
             .verify(Changeset(ts, records, listOf(entry())), records)
-            .assertFailed(SignatureFailure.X5U_CHAIN, 0)
+            .assertFailed(SyncFailure.X5U_CHAIN, 0)
             .also { assertTrue("NOT_PINNED" in it.detail, it.detail) }
     }
 
@@ -167,8 +166,8 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         assertEquals(4, ChangesetVerifier.MAX_SIGNATURES)
         // A 5th entry is never read: one that would verify is not tried, so the 4th's failure is the outcome, and a
         // null 5th is not NULL_ENTRY.
-        verify(*Array(4) { entry(signature = bad) }, entry()).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 3)
-        verify(*Array(4) { entry(signature = bad) }, null).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 3)
+        verify(*Array(4) { entry(signature = bad) }, entry()).assertFailed(SyncFailure.SIGNATURE_INVALID, 3)
+        verify(*Array(4) { entry(signature = bad) }, null).assertFailed(SyncFailure.SIGNATURE_INVALID, 3)
         // Within the 4 a verifying entry is accepted whatever follows.
         val fetcher = served()
         verify(entry(), *Array(5) { entry(x5u = "$host/other-$it.chain") }, fetcher = fetcher).assertVerified(0)
@@ -176,21 +175,21 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
     }
 
     @Test
-    fun `entries all lacking signature or x5u, or of another mode, are FAILED at SIGNATURE, unfetched`() {
+    fun `entries all lacking signature or x5u, or of another mode, are NO_SIGNATURE, unfetched`() {
         val fetcher = served()
         // A mode that is "" or not a string (modeGiven with no string) is one revokt cannot verify.
         verify(
             entry(mode = ""),
             entry(mode = null, modeGiven = true),
             fetcher = fetcher,
-        ).assertFailed(SignatureFailure.NONE_TRIED, null)
+        ).assertFailed(SyncFailure.NO_SIGNATURE, null, "no entry has")
         verify(
             entry(mode = "p256ecdsa"),
             entry(mode = "P384ECDSA"),
             entry(signature = null),
             entry(x5u = null),
             fetcher = fetcher,
-        ).assertFailed(SignatureFailure.NONE_TRIED, null)
+        ).assertFailed(SyncFailure.NO_SIGNATURE, null, "no entry has")
         assertEquals(0, fetcher.requests.size)
     }
 
@@ -204,7 +203,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
     }
 
     @Test
-    fun `metadata with only signature, or an empty signatures, is FAILED at SIGNATURE`() {
+    fun `metadata with only signature, or an empty signatures, is NO_SIGNATURE`() {
         val signature = """{"x5u":"$a","mode":"p384ecdsa","signature":"$good"}"""
         for (metadata in listOf(
             """{"signature":$signature}""",
@@ -223,7 +222,9 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
                     }
                 }
             val changeset = client(fetcher).fetchChangeset(ts, null).assertOk()
-            verifier(fetcher).verify(changeset, records).assertFailed(SignatureFailure.NO_SIGNATURES, null)
+            verifier(
+                fetcher,
+            ).verify(changeset, records).assertFailed(SyncFailure.NO_SIGNATURE, null, "absent, not an array or empty")
             assertEquals(1, fetcher.requests.size, "only the changeset is fetched: $metadata")
         }
         // A valid metadata.signature beside a signatures[] whose one entry fails is refused: signature is not read.
@@ -239,7 +240,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
                 }
             }
         val changeset = client(fetcher).fetchChangeset(ts, null).assertOk()
-        verifier(fetcher).verify(changeset, records).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 0)
+        verifier(fetcher).verify(changeset, records).assertFailed(SyncFailure.SIGNATURE_INVALID, 0)
         // And the same signature in signatures[] verifies, through the client's parse.
         val parsed =
             ScriptedFetcher { request ->
@@ -269,11 +270,11 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
     fun `an x5u URL whose fetch or validation failed is not retried by a later entry`() {
         val missing = served(emptyMap())
         verify(entry(), entry(), fetcher = missing)
-            .assertFailed(SignatureFailure.X5U_FETCH, 1, SyncStage.X5U)
-            .also { assertEquals(ClientFailure.HTTP_STATUS to 404, it.clientFailure to it.httpStatus) }
+            .assertFailed(SyncFailure.X5U_FETCH, 1)
+            .also { assertEquals("status 404" to 404, it.detail to it.httpStatus) }
         assertEquals(1, missing.requests.size)
         val unpinned = served(mapOf(a to pem(chain(root = intermediate()))))
-        verify(entry(), entry(), fetcher = unpinned).assertFailed(SignatureFailure.X5U_CHAIN, 1)
+        verify(entry(), entry(), fetcher = unpinned).assertFailed(SyncFailure.X5U_CHAIN, 1)
         assertEquals(1, unpinned.requests.size)
         // Not retried across the sync either.
         val sync = verifier(missing)
@@ -282,7 +283,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
             .verify(
                 Changeset(ts, records, listOf(entry())),
                 records,
-            ).assertFailed(SignatureFailure.X5U_FETCH, 0, SyncStage.X5U)
+            ).assertFailed(SyncFailure.X5U_FETCH, 0)
         assertEquals(2, missing.requests.size)
     }
 
@@ -291,19 +292,22 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         val bodies = mapOf(b to goodPem)
         // a is missing (X5U_FETCH, stage X5U), b's signature is bad (CONTENT_SIGNATURE); a skipped entry comes last.
         verify(entry(x5u = a), entry(x5u = b, signature = bad), entry(mode = "p256ecdsa"), fetcher = served(bodies))
-            .assertFailed(SignatureFailure.CONTENT_SIGNATURE, 1)
+            .assertFailed(SyncFailure.SIGNATURE_INVALID, 1)
         verify(entry(x5u = b, signature = bad), entry(x5u = a), fetcher = served(bodies))
-            .assertFailed(SignatureFailure.X5U_FETCH, 1, SyncStage.X5U)
+            .assertFailed(SyncFailure.X5U_FETCH, 1)
         // A garbled signature is the content check's failure too.
-        verify(entry(signature = "not base64url!")).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 0)
+        verify(entry(signature = "not base64url!")).assertFailed(SyncFailure.SIGNATURE_INVALID, 0)
     }
 
     @Test
-    fun `a PEM failure is FAILED at SIGNATURE, and a link outside its window is CLOCK_SKEW at X5U`() {
-        verify(entry(), fetcher = served(mapOf(a to "no certificate here\n"))).assertFailed(SignatureFailure.X5U_PEM, 0)
+    fun `a PEM failure is X5U_CHAIN, and a link outside its window is CLOCK_SKEW`() {
+        verify(
+            entry(),
+            fetcher = served(mapOf(a to "no certificate here\n")),
+        ).assertFailed(SyncFailure.X5U_CHAIN, 0, "FRAMING")
         val expired = pem(chain(leaf = leaf(validity = window("20200101000000Z", "20250101000000Z"))))
         verify(entry(), fetcher = served(mapOf(a to expired)))
-            .assertFailed(SignatureFailure.X5U_VALIDITY, 0, SyncStage.X5U, SyncOutcome.CLOCK_SKEW)
+            .assertFailed(SyncFailure.CLOCK_SKEW, 0)
         // The same chain at a clock inside the window verifies.
         val fetcher = served(mapOf(a to expired))
         verifier(fetcher, now = millis("2024-06-01T00:00:00Z"))
@@ -327,7 +331,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         assertEquals(
             120_000,
             verify(entry(), fetcher = served(emptyMap(), "Backoff" to "120"))
-                .assertFailed(SignatureFailure.X5U_FETCH, 0, SyncStage.X5U)
+                .assertFailed(SyncFailure.X5U_FETCH, 0)
                 .backoffMillis,
         )
         assertEquals(null, verify(entry()).assertVerified(0).backoffMillis)
@@ -349,7 +353,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
         assertEquals(merged, verified.records)
         assertEquals(ts, verified.timestamp)
         // The changes alone are not what was signed.
-        verifier(served()).verify(delta, changes).assertFailed(SignatureFailure.CONTENT_SIGNATURE, 0)
+        verifier(served()).verify(delta, changes).assertFailed(SyncFailure.SIGNATURE_INVALID, 0)
     }
 
     @Test
@@ -366,13 +370,13 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
             }
         verifier(served(), with = unsupported)
             .verify(Changeset(ts, records, listOf(entry())), records)
-            .assertFailed(SignatureFailure.CONTENT_SIGNATURE, 0)
+            .assertFailed(SyncFailure.SIGNATURE_INVALID, 0)
             .also { assertTrue("UNSUPPORTED" in it.detail, it.detail) }
         // Two records sharing an id leave no payload to verify.
         val twice = records + records.take(1)
         verifier(served())
             .verify(Changeset(ts, twice, listOf(entry())), twice)
-            .assertFailed(SignatureFailure.CONTENT_SIGNATURE, 0)
+            .assertFailed(SyncFailure.SIGNATURE_INVALID, 0)
             .also { assertTrue("RECORDS" in it.detail, it.detail) }
     }
 
@@ -399,17 +403,17 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
     fun `an empty x5u or signature is skipped as Firefox's !x5u and !signature skip it`() {
         val fetcher = served()
         verify(entry(x5u = ""), entry(signature = ""), entry(x5u = "", signature = ""), fetcher = fetcher)
-            .assertFailed(SignatureFailure.NONE_TRIED, null)
+            .assertFailed(SyncFailure.NO_SIGNATURE, null, "no entry has")
         assertEquals(0, fetcher.requests.size)
         verify(entry(signature = ""), entry(x5u = b)).assertVerified(1)
     }
 
     @Test
-    fun `a null element reached in the loop is FAILED at SIGNATURE, as Firefox's destructuring throws`() {
+    fun `a null element reached in the loop is NO_SIGNATURE, as Firefox's destructuring throws`() {
         val fetcher = served()
-        verify(null, entry(), fetcher = fetcher).assertFailed(SignatureFailure.NULL_ENTRY, 0)
+        verify(null, entry(), fetcher = fetcher).assertFailed(SyncFailure.NO_SIGNATURE, 0, "is null")
         assertEquals(0, fetcher.requests.size)
-        verify(entry(signature = bad), null, entry()).assertFailed(SignatureFailure.NULL_ENTRY, 1)
+        verify(entry(signature = bad), null, entry()).assertFailed(SyncFailure.NO_SIGNATURE, 1, "is null")
         // Firefox returns at the first entry that verifies, so a null after it is never reached.
         verify(entry(), null).assertVerified(0)
         // Through the client's parse: a JSON null element is null; another non-object one is skipped.
@@ -423,7 +427,7 @@ internal class ChangesetVerifierTest : X5uChainFixture() {
             }
         val changeset = client(parsed, source).fetchChangeset(ts, null).assertOk()
         assertEquals(null, changeset.signatures[1])
-        verifier(parsed).verify(changeset, records).assertFailed(SignatureFailure.NULL_ENTRY, 1)
+        verifier(parsed).verify(changeset, records).assertFailed(SyncFailure.NO_SIGNATURE, 1, "is null")
     }
 
     @Test
