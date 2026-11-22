@@ -27,9 +27,12 @@ import javax.net.ssl.SSLSocketFactory
  *
  * - **TLS:** every handshake uses `HttpsURLConnection.getDefaultSSLSocketFactory()`, read at each fetch, and so the
  *   platform's trust manager; revokt adds no trust policy (§3 `HttpFetcher`, §5.1 "Fetches run no revokt trust
- *   manager"). The host is matched against the peer certificate by `HttpsURLConnection` after every handshake, resumed
- *   ones included, with a per-connection verifier that refuses any mismatch, so neither a consumer's global
- *   `HttpsURLConnection.setDefaultHostnameVerifier` nor a session another connection cached can turn the check off.
+ *   manager"). `HttpsURLConnection` matches the host against the peer certificate after every handshake, resumed ones
+ *   included, with a per-connection verifier that refuses any mismatch, so neither a consumer's global
+ *   `HttpsURLConnection.setDefaultHostnameVerifier` nor a session another connection cached can turn the check off. A
+ *   default factory whose sockets come with an endpoint identification algorithm already set would bypass that check,
+ *   so the fetch refuses them. The match is the JDK's two-argument `HostnameChecker` (RFC 2818), which lacks the trust
+ *   manager's public-suffix wildcard rule.
  * - **Proxy:** `ProxySelector.getDefault()`; revokt configures none. A per-connection authenticator answers
  *   `RequestorType.PROXY` from `Authenticator.getDefault()` and never answers a server, so a 401 never reaches the
  *   JVM's default credentials. Basic auth to an HTTPS tunnel stays disabled by the JDK unless
@@ -92,8 +95,9 @@ public class JdkHttpFetcher internal constructor(
         readTimeout = timeout
         for ((name, value) in request.headers) setRequestProperty(name, value)
         setRequestProperty("Accept-Encoding", "gzip")
-        // The server closes the connection after this response, so the JDK never pools or drains it (the one value of
-        // this restricted header HttpURLConnection sends).
+        // A server that honours it (RFC 9112 §9.6) closes the connection after this response, and the JDK, which reads
+        // keep-alive from the response, then never pools or drains it. "close" is the one value of this restricted
+        // header that HttpURLConnection sends.
         setRequestProperty("Connection", "close")
     }
 }

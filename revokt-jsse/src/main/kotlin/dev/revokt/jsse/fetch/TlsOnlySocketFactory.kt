@@ -10,12 +10,14 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
 /**
- * The platform's [delegate], refusing any socket that is not an `SSLSocket`. A handshake runs on the delegate's sockets,
- * its trust manager and nothing else (spec §3 `HttpFetcher`). It leaves each socket's endpoint identification as the
- * delegate made it: unset, `HttpsURLConnection` then checks the host against the session's peer certificate after
- * every handshake, full or resumed, on any provider (see [RefusingHostnameVerifier]). One instance per fetch, so the
- * JDK's keep-alive cache, which matches a pooled connection by socket factory identity, never hands this fetch a
- * connection another made.
+ * The platform's [delegate], refusing, with an `SSLException` that closes the socket, any socket that is not an
+ * `SSLSocket` or that already carries an endpoint identification algorithm. A handshake runs on the delegate's sockets,
+ * its trust manager and nothing else (spec §3 `HttpFetcher`). With the algorithm unset, `HttpsURLConnection` checks the
+ * host against the session's peer certificate after every handshake, full or resumed (see [RefusingHostnameVerifier]);
+ * with it preset, `HttpsURLConnection` would skip that check and leave the name to the provider, which may resume a
+ * session a laxer connection cached without checking it (Conscrypt does), so such a socket fails the fetch. Clearing
+ * the algorithm is no remedy: SunJSSE ignores a null one. One instance per fetch, so the JDK's keep-alive cache, which
+ * matches a pooled connection by socket factory identity, never hands this fetch a connection another made.
  */
 internal class TlsOnlySocketFactory(
     private val delegate: SSLSocketFactory,
@@ -62,6 +64,14 @@ internal class TlsOnlySocketFactory(
         if (socket !is SSLSocket) {
             socket.close()
             throw SSLException("the default SSLSocketFactory made a socket that is not an SSLSocket")
+        }
+        val preset = socket.sslParameters.endpointIdentificationAlgorithm
+        if (!preset.isNullOrEmpty()) {
+            socket.close()
+            throw SSLException(
+                "the default SSLSocketFactory presets endpoint identification ($preset), which would skip " +
+                    "HttpsURLConnection's host check on every handshake",
+            )
         }
         return socket
     }

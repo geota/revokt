@@ -16,8 +16,10 @@ import java.io.InterruptedIOException
 import java.net.Authenticator
 import java.net.CacheRequest
 import java.net.CacheResponse
+import java.net.InetAddress
 import java.net.PasswordAuthentication
 import java.net.ResponseCache
+import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.URLConnection
@@ -29,7 +31,10 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.GZIPOutputStream
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -284,6 +289,61 @@ class JdkHttpFetcherTest {
                 }
                 assertEquals(1, server.hits("/x"), "$label: the fetcher's request reached the wrong host")
             }
+        }
+    }
+
+    @Test
+    fun `a default factory whose sockets preset endpoint identification is refused before any request`() {
+        val tls = TestPki.clientContext(TestPki.recordingTrustManager()).socketFactory
+        val presetting =
+            object : SSLSocketFactory() {
+                override fun getDefaultCipherSuites(): Array<String> = tls.defaultCipherSuites
+
+                override fun getSupportedCipherSuites(): Array<String> = tls.supportedCipherSuites
+
+                override fun createSocket(): Socket = preset(tls.createSocket())
+
+                override fun createSocket(
+                    s: Socket,
+                    host: String,
+                    port: Int,
+                    autoClose: Boolean,
+                ): Socket = preset(tls.createSocket(s, host, port, autoClose))
+
+                override fun createSocket(
+                    host: String,
+                    port: Int,
+                ): Socket = preset(tls.createSocket(host, port))
+
+                override fun createSocket(
+                    host: String,
+                    port: Int,
+                    localHost: InetAddress,
+                    localPort: Int,
+                ): Socket = preset(tls.createSocket(host, port, localHost, localPort))
+
+                override fun createSocket(
+                    host: InetAddress,
+                    port: Int,
+                ): Socket = preset(tls.createSocket(host, port))
+
+                override fun createSocket(
+                    address: InetAddress,
+                    port: Int,
+                    localAddress: InetAddress,
+                    localPort: Int,
+                ): Socket = preset(tls.createSocket(address, port, localAddress, localPort))
+
+                private fun preset(socket: Socket): Socket =
+                    socket.also {
+                        val tlsSocket = it as SSLSocket
+                        tlsSocket.sslParameters =
+                            tlsSocket.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+                    }
+            }
+        LoopbackHttps(handlers = mapOf("/ok" to respond(200, "x".encodeToByteArray()))).use { server ->
+            assertFailsWith<SSLException> { JdkHttpFetcher { presetting }.fetch(request(server.url("/ok"))) }
+            assertEquals(0, server.hits("/ok"))
         }
     }
 
