@@ -54,7 +54,7 @@ class HonestCorpusWalkTest {
         val index = CandidateIndex(listOf(ders.last()))
         val presented = ders.dropLast(1).map { index.cert(WalkerCerts.parse(it)) }
         val verifier = JcaSignatureVerifier()
-        val memo = LruMap<Pair<ByteString, ByteString>, VerifyResult>(RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
+        val memo = lruMap<Pair<ByteString, ByteString>, VerifyResult>(RevoktLimits.CROSS_CALL_MEMO_ENTRIES)
         return presented to reconstruct(presented, index, verifier, verifier.unsupportedOids(), memo, eku)
     }
 

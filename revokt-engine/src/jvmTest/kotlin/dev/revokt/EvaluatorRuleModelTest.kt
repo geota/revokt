@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(dev.revokt.RevoktInternalApi::class)
+
 package dev.revokt
 
 import dev.revokt.engine.evaluate.DAY
@@ -9,7 +11,7 @@ import dev.revokt.engine.evaluate.engineErrors
 import dev.revokt.engine.evaluate.generation
 import dev.revokt.engine.evaluate.noGeneration
 import dev.revokt.engine.evaluate.snapshot
-import dev.revokt.engine.update.DatasetGeneration
+import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.walker.ExpectedWalk
 import dev.revokt.engine.walker.FixtureCert
 import dev.revokt.engine.walker.Honest

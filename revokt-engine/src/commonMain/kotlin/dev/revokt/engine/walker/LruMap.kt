@@ -6,12 +6,9 @@ package dev.revokt.engine.walker
 /**
  * A bounded, access-ordered map (spec §5.1 declarations): [get] and [put] refresh an entry, and a [put] that would hold
  * more than `capacity` entries evicts the least recently used one. Safe for concurrent handshake threads (the cross-call
- * memo, `CROSS_CALL_MEMO_ENTRIES`, and the per-trust-manager caches). The JVM actual is a synchronized access-ordered
- * `LinkedHashMap`. `capacity` must be at least 1.
+ * memo, `CROSS_CALL_MEMO_ENTRIES`, and the per-trust-manager caches). Made by [lruMap].
  */
-internal expect class LruMap<K, V>(
-    capacity: Int,
-) {
+internal interface LruMap<K, V> {
     operator fun get(key: K): V?
 
     fun put(
@@ -22,3 +19,9 @@ internal expect class LruMap<K, V>(
     /** The number of entries, at most `capacity`. */
     val size: Int
 }
+
+/**
+ * A fresh [LruMap] of at most [capacity] entries; [capacity] must be at least 1. The JVM's is a synchronized
+ * access-ordered `LinkedHashMap`.
+ */
+internal expect fun <K, V> lruMap(capacity: Int): LruMap<K, V>

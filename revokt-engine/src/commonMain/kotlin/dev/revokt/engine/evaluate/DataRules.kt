@@ -7,10 +7,10 @@ import dev.revokt.Dataset
 import dev.revokt.Finding
 import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.policy.PolicyForm
 import dev.revokt.engine.policy.StalenessTable
-import dev.revokt.engine.update.DatasetGeneration
-import dev.revokt.engine.update.GenerationSnapshot
 
 /**
  * What one data rule reads about one dataset (spec §8 data rules): its published [generation] (null when the snapshot

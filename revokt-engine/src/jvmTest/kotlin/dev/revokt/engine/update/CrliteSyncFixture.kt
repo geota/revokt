@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(dev.revokt.RevoktInternalApi::class)
+
 package dev.revokt.engine.update
 
 import dev.revokt.CrliteChannel
@@ -26,6 +28,8 @@ import dev.revokt.engine.fetch.client
 import dev.revokt.engine.fetch.json
 import dev.revokt.engine.fetch.ok
 import dev.revokt.engine.fetch.response
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.json.JsonInteger
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.SourceRecord

@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.update
 
+import dev.revokt.engine.generation.GenerationSnapshot
 import kotlin.concurrent.Volatile
 
 /**

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(dev.revokt.RevoktInternalApi::class)
+
 package dev.revokt.engine.update
 
 import dev.revokt.CrliteQueryResult
@@ -12,6 +14,7 @@ import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.Window
+import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.store.GenerationMeta
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.MetaJson
@@ -117,37 +120,19 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
-    fun `a constant-answer engine fails the self-check, and the live engine generation and the snapshot stay`() {
-        assertIs<InstallResult.Installed>(install(pending("g1")))
-        val published = snapshot.snapshot
-        val pointer = store.pointer()
-        for (constant in listOf(CrliteQueryResult.NOT_REVOKED, CrliteQueryResult.REVOKED)) {
-            engine.preparedAnswer = { constant }
-            val p = pending("g2", timestamp = 1_792_587_631_205)
-            val f = failed(install(p))
-            assertEquals(SyncOutcome.FAILED, f.outcome)
-            assertEquals(SyncStage.SELF_CHECK, f.stage)
-            assertEquals(DiagnosticCode.ENGINE_SELF_CHECK_FAILED, f.code)
-            assertEquals(1, f.storeFailures)
-            assertEquals(false, f.activated)
-            assertUntouched(p.meta.directory, live = "g1", published = published)
-            assertEquals(pointer, store.pointer())
-            assertEquals("g2", engine.closed.last())
-        }
-    }
-
-    @Test
-    fun `a probe that throws fails the self-check as an engine error`() {
-        engine.preparedAnswer = { error("broken") }
-        val f = failed(install(pending()))
-        assertEquals(SyncStage.SELF_CHECK, f.stage)
-        assertEquals(DiagnosticCode.ENGINE_SELF_CHECK_FAILED, f.code)
+    fun `the install never queries the prepared generation, so a constant-answer engine installs`() {
+        // The self-check moved to the cross-engine suite (EngineProbesTest): prepare is followed by activate directly.
+        engine.preparedAnswer = { error("the install queried the prepared generation") }
+        val r = assertIs<InstallResult.Installed>(install(pending()))
+        assertEquals("g1", r.generationId)
+        assertEquals("g1", engine.live)
     }
 
     @Test
     fun `a prepare or activate that throws fails at its stage and leaves everything as it was`() {
         assertIs<InstallResult.Installed>(install(pending("g1")))
         val published = snapshot.snapshot
+        val pointer = store.pointer()
         val cases =
             listOf(
                 SyncStage.PREPARE to IllegalArgumentException("corrupt"),
@@ -166,7 +151,9 @@ internal class InstallTest : InstallFixture() {
             assertEquals(null, f.code)
             assertEquals(thrown::class, assertNotNull(f.cause)::class)
             assertEquals(1, f.storeFailures)
+            assertEquals(false, f.activated)
             assertUntouched(p.meta.directory, live = "g1", published = published)
+            assertEquals(pointer, store.pointer())
             if (stage == SyncStage.ACTIVATE) assertEquals(listOf("g2"), e.closed)
         }
     }
@@ -290,18 +277,18 @@ internal class InstallTest : InstallFixture() {
     fun `a failed retry deletes an orphan complete directory and keeps a pointed one`() {
         val orphan = pending()
         store.completeGeneration(orphan.meta, orphan.index, orphan.deltas, orphan.records)
-        engine.preparedAnswer = { CrliteQueryResult.NOT_REVOKED }
+        engine.onActivate = { error("activate") }
         // The orphan holds this generation, so it is prepared as it stands, and as the directory the install was given
         // it is deleted on the failure (§6.5).
-        assertEquals(SyncStage.SELF_CHECK, failed(install(pending())).stage)
+        assertEquals(SyncStage.ACTIVATE, failed(install(pending())).stage)
         assertEquals(emptyList(), keysOf(orphan.meta.directory))
         // Pointed to, but not live in this snapshot: a failure leaves it for recovery.
-        engine.preparedAnswer = null
+        engine.onActivate = {}
         val dir = assertIs<InstallResult.Installed>(install(pending())).directory
-        engine.preparedAnswer = { CrliteQueryResult.NOT_REVOKED }
+        engine.onActivate = { error("activate") }
         val fresh = SnapshotRef(empty)
         val f = install(pending(), engine, store, fresh, publication, null, logger)
-        assertEquals(SyncStage.SELF_CHECK, failed(f).stage)
+        assertEquals(SyncStage.ACTIVATE, failed(f).stage)
         assertNotNull(store.readGeneration(dir))
         assertSame(empty, fresh.snapshot)
     }
@@ -309,13 +296,13 @@ internal class InstallTest : InstallFixture() {
     @Test
     fun `a failed install of the pointer's previous generation keeps it, held as the pointer names it`() {
         // The r205b probe: g1, then g2, so the pointer is (g2, g1); then a rollback-inside-the-window install of g1
-        // with a fresh snapshot, whose self-check fails. g1 is held through the pointer's previous, so it stays.
+        // with a fresh snapshot, whose activate fails. g1 is held through the pointer's previous, so it stays.
         val g1 = assertIs<InstallResult.Installed>(install(pending("g1"))).directory
         val g2 = assertIs<InstallResult.Installed>(install(pending("g2", timestamp = 2_000_000_000_000))).directory
         assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
-        engine.preparedAnswer = { CrliteQueryResult.NOT_REVOKED }
+        engine.onActivate = { error("activate") }
         val f = failed(install(pending("g1"), engine, store, SnapshotRef(empty), publication, null, logger))
-        assertEquals(SyncStage.SELF_CHECK, f.stage)
+        assertEquals(SyncStage.ACTIVATE, f.stage)
         assertNotNull(store.readGeneration(g1))
         assertEquals(StoreRead.Found(Pointer(g2, g1)), store.pointer())
     }
@@ -566,7 +553,8 @@ internal class InstallTest : InstallFixture() {
     }
 
     @Test
-    fun `a filter the loader cannot decode fails at PREPARE before the engine sees it`() {
+    fun `a filter that does not decode fails in the engine's prepare, at PREPARE, and nothing installs`() {
+        // The engine's prepare is the install's one decode: the loader no longer decodes the filters itself.
         val p = pending()
         val garbage = byteArrayOf(4, 0, 0)
         for (name in p.deltas.keys) store.stageFile(p.meta.directory, name, garbage)
@@ -574,8 +562,11 @@ internal class InstallTest : InstallFixture() {
         val f = failed(install(PendingGeneration(p.meta, p.index, hashes, p.records)))
         assertEquals(SyncOutcome.FAILED, f.outcome)
         assertEquals(SyncStage.PREPARE, f.stage)
+        assertEquals(null, f.code)
+        assertIs<IllegalArgumentException>(f.cause)
         assertEquals(1, f.storeFailures)
-        assertEquals(emptyList(), engine.prepared)
+        assertEquals(listOf("g1"), engine.prepared)
+        assertEquals(emptyList(), engine.closed)
         assertUntouched(p.meta.directory)
     }
 

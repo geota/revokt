@@ -45,11 +45,11 @@ internal class SeedAdoptTest : SeedFixture() {
     @Test
     fun `with no trusted pointer and nothing to adopt, a newer generation live in the engine is kept`() {
         snapshot.publish(
-            dev.revokt.engine.update.GenerationSnapshot(
+            dev.revokt.engine.generation.GenerationSnapshot(
                 1,
                 mapOf(
                     dev.revokt.Dataset.CRLITE to
-                        dev.revokt.engine.update.DatasetGeneration(
+                        dev.revokt.engine.generation.DatasetGeneration(
                             "${ts + hour}/x",
                             dev.revokt.Freshness.RECORD_LAST_MODIFIED,
                             false,

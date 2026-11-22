@@ -22,7 +22,7 @@ tests; **live checks** are informational.
 - **Cross-engine suite** (0.2): chain corpus × generations against both `RevocationEngine`s under
   the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
-  disagreement fails the job.
+  disagreement fails the job; and the §9.3 engine probes on every generation, against each engine.
 - **Content-signature fixtures** (0.2 gates, except the item tagged [0.3], which needs the §6.5 store; revision 49) with mutations; incremental fixtures; a seed with an expired signer
   leaf must load; a seed 25 h ahead of local now loads like any other, with `ageMillis = 0`, no warning and the watermark at its signed timestamp; a signed changeset 25 h ahead of local now installs against a dataset with no generation, and one 2 days ahead installs beside a live generation, each advancing the watermark, the cursor and `lastVerifiedAtMillis` with no warning, the next poll of the same changeset `UNCHANGED`, and the next server `<ts>` installs; a `mode` other than `p384ecdsa` rejected (stage `SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, no body fetched; (revision 56) a channel with two full filters, or none → `FAILED`, `INDEX_INCONSISTENT`, stage `INDEX`, the previous generation still live, and `SEED_UNREADABLE` for a seed; a delta whose `parent` names no record → placed by its time and installed; a full record without `parent` → loads, and a delta without one → `SYNC_SCHEMA_REJECTED`; a changeset signed by a P-256 leaf (a 64-byte raw pair) → verifies; a changeset whose first `signatures` entry fails and whose second verifies → installs; one with 5 entries, or
   whose every entry has a `mode` other than `p384ecdsa` → `FAILED`, stage `SIGNATURE`; two entries sharing one `x5u` URL → that URL fetched once; one whose `metadata` holds only `signature`, or an empty `signatures` → `FAILED`, stage `SIGNATURE`; an entry with no `mode`, or a `null` one, is tried and verifies, while one whose `mode` is `""` or a number is skipped; (revision 57, #198) an entry whose `x5u` or `signature` is `""` is skipped like a missing one;
@@ -390,8 +390,8 @@ list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput`
 the `revokt-oracle` Rust cdylib and the Panama shim; the Go producer oracle runs **out of process**
 (the CLI, batched over a pipe: one base64 DER per line in; one line per input out, `OK <serial-hex> <spki-sha256-hex> <ct|lax|zc>` or `REJECT <error>` (an empty line, the encoding of an empty input, is answered `REJECT`), with `##` terminating a batch, so the Go CLI and the Kotlin driver are written independently) during fuzzing, since a third set of signal handlers beside the JVM's
 and libFuzzer's is not safe in-process. **Tiers**: PR = committed-corpus
-replay as unit tests, JDK only; nightly = `fuzz.yml`, every target for 300 s, one job per target, with each night's
-corpus kept in the private corpus repository (CONTRIBUTING §6); OSS-Fuzz once the project has users. **Findings**: any exception other than the declared result, any
+replay as unit tests, JDK only; nightly = `fuzz.yml`, every target for 300 s, one job per target, seeded from the private corpus repository,
+which keeps each night's new corpus units and is merged weekly with `-merge=1` (CONTRIBUTING §6); OSS-Fuzz once the project has users. **Findings**: any exception other than the declared result, any
 allocation above budget, any timeout, any difference between implementations outside a declared
 equivalence class, any non-idempotent round trip. **Acceptance**: no open continuous-tier crash at
 release; Kover branch coverage of each parser package not regressed, 90 % as the target; committed
@@ -967,7 +967,7 @@ Verified against upki at tag v1.0.1 (crates.io: 1.0.0; the shim's `Cargo.lock` p
 - *Lifecycle*: `prepare` writes the files verbatim into a fresh directory, writes a TOML config whose
   `cache_dir` is that directory and calls `revokt_upki_config_new`; the returned `PreparedGeneration`
   owns that handle and directory and its `query` runs `revokt_upki_check` against the handle, so the
-  §6.5 self-check exercises the real native path; `activate` publishes the handle with a `@Volatile`
+  engine probes below exercise the real native path; `activate` publishes the handle with a `@Volatile`
   swap and frees the previous handle with `revokt_upki_config_free` once in-flight queries on it drain
   (per-handle in-flight counter), deleting its directory; `PreparedGeneration.close()` without
   `activate` frees the handle and deletes its directory. `Store::from_config` re-opens `index.bin` on
@@ -1010,5 +1010,23 @@ list parses under §9.2 (otherwise it queries the items §9.2 keeps) and `PARSE_
 in the oracle path); (ii) the v4 generations `upki.rustls.dev` serves, fetched by the oracle job; (iii) the v3
 generations re-encoded as v4 by `revokt-oracle`, a bare `clubcard-crlite` `to_bytes(V4)` (upki-mirror
 v1.0.1 does not transcode; upki main added one in `c2ba5e3`, which also sorts the coverage, so the bytes may differ
-from the live mirror's, while verdicts cannot), a third leg; every generation whose `index.bin` revokt did not write passes the spec's §3.2 selection-equivalence check (`C2spIndex.inconsistencies`) before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which is additive because every
-engine-side type above is public from 0.1.
+from the live mirror's, while verdicts cannot), a third leg; every generation whose `index.bin` revokt did not write passes the spec's §3.2 selection-equivalence check (`C2spIndex.inconsistencies`) before it enters the suite. Lands in 0.2; published only if the §12 trigger fires, which first
+needs the internal `RevocationEngine` seam published (spec §3.2).
+
+**Engine probes.** On every generation of the suite, each engine is prepared and its `PreparedGeneration.query` is
+asked a fixed set of probes before any `activate`; they catch an engine that answers a constant, while the oracles
+above cover decoder bugs. The loader never runs them: with one shipped engine, a per-install check would compare the
+clubcard port with itself. The Kotlin engine runs them in `check` on the committed generations. Every input is named,
+so the probes are deterministic, never probabilistic: the absent issuer hash is `SHA-256("revokt-self-check")`,
+incremented in its last byte until absent from every filter's index; a filter's inside SCT is (`logId`, `low`) of its
+first non-empty coverage entry in `index.bin` order; its outside SCT is (`logId`, `high + 1` unsigned), or `low − 1`
+when `high` is the maximum, and none for `[0, MAX]`; filters are iterated in `index.bin` order and index entries by
+ascending issuer hash. The absent issuer hash, serial `0x01`, with each filter's inside and with its outside SCT
+answers in the class `{NOT_COVERED, NOT_ENROLLED, NO_SCTS}`. The `REVOKED` probe answers exactly `REVOKED`, with a
+serial `revokt-clubcard`'s reference evaluator (spec §6.2) calls `Revoked` under the inside SCT of the block's filter,
+chosen first-match (one branch per generation, the first that yields): the first of the serials `0x01`..`0x1000`
+(minimal DER INTEGER content, ascending) that is `Revoked` against some inverted block (`approxM == 0`: every serial;
+`approxM > 0`: a non-member), else an exception-list serial of an inverted block (exceptions make `member` false, so
+`false xor inverted` is `Revoked`), else the first such candidate that is a member of a non-inverted block with
+`approxM > 0`. A probe with no input (no coverage entry, every candidate issuer enrolled, no block that yields) is
+skipped and logged at `INFO`. The first mismatch fails the suite with the probe named.

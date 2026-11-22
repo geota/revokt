@@ -7,8 +7,8 @@ import dev.revokt.SignatureVerifier
 import dev.revokt.VerifyResult
 import dev.revokt.engine.parse.AlgorithmId
 import dev.revokt.engine.parse.VerifierInput
-import dev.revokt.engine.walker.LruMap
 import dev.revokt.engine.walker.isFatal
+import dev.revokt.engine.walker.lruMap
 import dev.revokt.verify.JcaAlgorithms.CURVES
 import dev.revokt.verify.JcaAlgorithms.ECDSA_ONE_ONE
 import dev.revokt.verify.JcaAlgorithms.EC_PUBLIC_KEY
@@ -66,7 +66,7 @@ public class JcaSignatureVerifier
     constructor(
         private val provider: Provider? = null,
     ) : SignatureVerifier {
-        private val keys = LruMap<okio.ByteString, PublicKey>(KEY_CACHE_ENTRIES)
+        private val keys = lruMap<okio.ByteString, PublicKey>(KEY_CACHE_ENTRIES)
         private val unsupported: Set<String> = probe()
 
         /** The number of parsed keys in the cache: at most 1,024, each one that produced `VERIFIED`. */

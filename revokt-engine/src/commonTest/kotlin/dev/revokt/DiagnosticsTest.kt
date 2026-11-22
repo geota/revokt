@@ -58,12 +58,11 @@ class DiagnosticsTest {
 
     @Test
     fun `DiagnosticCode entries are the spec 4 list`() {
-        // Spec §4 (revision 61), `enum class DiagnosticCode`, in its order, 0.3's codes included. Growable: a new code is
+        // Spec §4 (revision 62), `enum class DiagnosticCode`, in its order, 0.3's codes included. Growable: a new code is
         // appended here and there together.
         val spec =
             "NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, " +
                 "STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, " +
-                "ENGINE_SELF_CHECK_FAILED, " +
                 "IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, " +
                 "EXEMPTION_ON_EVIDENCE_RULE, NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, STALE_REJECTS_WITHOUT_THRESHOLD, " +
                 "SEED_PAST_REJECT_THRESHOLD, EXEMPT_ON_ALLOW, UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP, " +
@@ -100,7 +99,6 @@ class DiagnosticsTest {
                 "SCHEMA",
                 "INDEX",
                 "PREPARE",
-                "SELF_CHECK",
                 "ACTIVATE",
                 "STORE",
             ),

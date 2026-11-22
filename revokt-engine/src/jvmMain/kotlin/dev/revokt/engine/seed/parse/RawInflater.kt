@@ -4,9 +4,8 @@
 package dev.revokt.engine.seed.parse
 
 /**
- * One raw deflate stream's inflater (RFC 1951, no zlib wrapper), for a seed archive's deflated entries (spec §6.5). Common
- * Okio has no inflater (`InflaterSource` is JVM-only), so the archive reader is common code over this seam: the JVM's is
- * `java.util.zip.Inflater`, and the linuxX64 purity gate only compiles (spec §3).
+ * One raw deflate stream's inflater (RFC 1951, no zlib wrapper), for a seed archive's deflated entries (spec §6.5): the
+ * archive reader works over this seam, and [rawInflater]'s is `java.util.zip.Inflater`.
  */
 internal interface RawInflater {
     /** Whether the end of the deflate stream was reached. */
@@ -37,6 +36,3 @@ internal interface RawInflater {
     /** Releases the inflater's native state. */
     fun end()
 }
-
-/** A fresh [RawInflater]. */
-internal expect fun rawInflater(): RawInflater

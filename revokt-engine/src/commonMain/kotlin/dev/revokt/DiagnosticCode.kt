@@ -35,9 +35,6 @@ public enum class DiagnosticCode {
     /** V: a CRLite source configured and `CRLITE` not a required dataset. */
     NO_REQUIRED_DATASETS,
 
-    /** sync: the §6.5 self-check mismatched, with [SyncOutcome.FAILED]. */
-    ENGINE_SELF_CHECK_FAILED,
-
     /** V: `RevoktStorage.inMemory()` with a fetching source. */
     IN_MEMORY_STORE_WITH_FETCHING_SOURCE,
 

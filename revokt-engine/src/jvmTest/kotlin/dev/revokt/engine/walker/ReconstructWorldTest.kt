@@ -64,7 +64,7 @@ class ReconstructWorldTest {
                 (CertificateParser.parse(der) as? CertificateParse.Parsed)?.let { index.cert(it.certificate) }
             }
         if (certs.size != presented.size) fail("$at: a generated certificate does not parse")
-        val walk = reconstruct(certs, index, verifier, unsupported, LruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES))
+        val walk = reconstruct(certs, index, verifier, unsupported, lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES))
         val shown = WalkerHarness.describe(walk) { it.hex().take(8) }
         when (walk) {
             is Walk.Found -> {

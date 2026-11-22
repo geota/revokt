@@ -3,21 +3,17 @@
 
 package dev.revokt.engine.update
 
-import dev.revokt.CrliteQuery
-import dev.revokt.CrliteQueryResult
 import dev.revokt.DiagnosticCode
-import dev.revokt.GenerationFiles
 import dev.revokt.LogLevel
 import dev.revokt.PreparedGeneration
 import dev.revokt.RevocationEngine
+import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLogger
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncStage
-import dev.revokt.clubcard.RevoktInternalApi
-import dev.revokt.clubcard.api.ClubcardFilters
-import dev.revokt.clubcard.api.ClubcardFormatException
-import dev.revokt.clubcard.port.CrliteClubcard
 import dev.revokt.engine.c2sp.C2spIndex
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.store.GenerationMeta
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.Pointer
@@ -117,13 +113,13 @@ internal sealed interface InstallResult {
 
 /**
  * Installs [generation] in spec §6.5's order: the `index.bin` cap → the format check (a format [engine] does not list is
- * never offered to `prepare`) → write the generation directory, `meta.json` last → `engine.prepare` → the [SelfCheck]
- * on the prepared state → `engine.activate` → publish the generation snapshot (`generationEpoch++`) → flip the
- * pointer → write [updater] when given.
+ * never offered to `prepare`) → write the generation directory, `meta.json` last → `engine.prepare`, the install's only
+ * decode of the filters → `engine.activate` → publish the generation snapshot (`generationEpoch++`) → flip the pointer → write
+ * [updater] when given.
  *
  * Nothing becomes live before every check passes. A failure before `activate` returns leaves the engine, [snapshot] and
- * the pointer untouched and deletes the directory this install wrote (its blobs stay, content-addressed); a `prepare`,
- * self-check or `activate` failure counts a store failure. A store write failure is `STORE_FAILED` at `STORE`. Every
+ * the pointer untouched and deletes the directory this install wrote (its blobs stay, content-addressed); a `prepare`
+ * or `activate` failure counts a store failure. A store write failure is `STORE_FAILED` at `STORE`. Every
  * throwable is caught, an `OutOfMemoryError` included, which is `FAILED` at the stage it hit with a store failure, so
  * nothing escapes the loader thread.
  *
@@ -131,6 +127,7 @@ internal sealed interface InstallResult {
  * verdict-cache TTL (§6.5). The loader runs this on its dispatcher, or the `start()` caller in the sole-seed path, never
  * two at once.
  */
+@OptIn(RevoktInternalApi::class)
 internal fun install(
     generation: PendingGeneration,
     engine: RevocationEngine,
@@ -198,20 +195,7 @@ private class Install(
             store.readGeneration(directory)?.files
                 ?: return fail(SyncOutcome.STORE_FAILED, null, IllegalStateException("$directory does not read back"))
         stage = SyncStage.PREPARE
-        val filters =
-            try {
-                decode(files)
-            } catch (e: ClubcardFormatException) {
-                return fail(SyncOutcome.FAILED, null, e)
-            }
-        val index = C2spIndex.read(files.bytes(StoreLayout.INDEX))
         val p = engine.prepare(files).also { prepared = it }
-        stage = SyncStage.SELF_CHECK
-        val check = SelfCheck.run(index, filters, { q -> probe(p, q) }, logger)
-        if (check is SelfCheckResult.Mismatch) {
-            val cause = IllegalStateException("engine self-check: $check")
-            return fail(SyncOutcome.FAILED, DiagnosticCode.ENGINE_SELF_CHECK_FAILED, cause)
-        }
         stage = SyncStage.ACTIVATE
         engine.activate(p)
         activated = true
@@ -321,27 +305,6 @@ private class Install(
     /** The directories the pointer names; none when it is absent or malformed (counted by [previous]). */
     private fun pointed(): Set<String> =
         (store.pointer() as? StoreRead.Found)?.value?.let { setOfNotNull(it.live, it.previous) }.orEmpty()
-
-    /** The loader's own decode of every filter, for the self-check's reference evaluator and coverage. */
-    private fun decode(files: GenerationFiles): Map<String, CrliteClubcard> =
-        files.names.filter { it != StoreLayout.INDEX }.associateWith { ClubcardFilters.decode(files.bytes(it)) }
-
-    /**
-     * [p]'s answer to a self-check probe. A throw breaks `query`'s never-throws contract and fails the check as
-     * [CrliteQueryResult.ENGINE_ERROR], which no probe expects; a fatal error is rethrown to [run], and an interrupt is
-     * kept.
-     */
-    @Suppress("TooGenericExceptionCaught") // §3.2: query never throws, so any throwable is the engine's error.
-    private fun probe(
-        p: PreparedGeneration,
-        q: CrliteQuery,
-    ): CrliteQueryResult =
-        try {
-            p.query(q)
-        } catch (t: Throwable) {
-            absorb(t)
-            CrliteQueryResult.ENGINE_ERROR
-        }
 
     /**
      * Publishes the snapshot with this generation for its dataset, the engine's coverage end (null when the engine

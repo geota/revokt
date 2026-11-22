@@ -65,8 +65,8 @@ verifier; non-JVM targets in 1.0.
 | Artifact | Source set | Contents | Depends on |
 |---|---|---|---|
 | `revokt-clubcard` | common | Port of `clubcard` and `clubcard-crlite` query and decoding (no builder), v3 and v4. Public only under `@RevoktInternalApi`. | Okio |
-| `revokt-engine` | common | DER/TBS parser, `EvaluationRequest` and `Evaluator` (sealed; its single implementation lives beside it and is what `Revokt.evaluator` returns), candidate index and path walker, coverage index, generation model, policy and precedence, `Verdict`, updater state machine, Remote Settings protocol, JSON tree and canonical JSON, content-signature logic, C2SP cache reader/writer, `RevocationEngine` (Kotlin), the `SignatureVerifier`, `HttpFetcher`, `PathBuilderFallback`, `RevoktStorage` interfaces, `expect class SeedSource`, `expect fun canonicalSubject`, `RevoktLimits`, the internal policy table; **no public type with a `java.time` member** | `revokt-clubcard`, Okio, kotlinx-coroutines |
-| `revokt-engine` `jvmMain` | jvm | `KotlinRevocationEngine` (the default engine) and its CRLite evaluation, JVM-only until a second target is planned (the native compile checks the common parts only), `Staleness`, `RevoktPolicy` and its `Builder` (the public policy surface, with `java.time` members), `JvmStorage`, `actual canonicalSubject` (`X500Principal.getName(CANONICAL)`), `actual SeedSource` (`of`, `fromResource`, `bundled`), `SeedOpener` and `JvmSeedSource`, `JcaSignatureVerifier(provider)`, `PkixPathBuilderFallback`, `PlatformTrust`, the `Rule → BasicReason` map (`java.security.cert`, so jvmMain; total over `Rule.entries`, asserted by the 0.1 golden fixture), `RevoktLoggers.jul()` | JDK |
+| `revokt-engine` | common | DER/TBS parser, `EvaluationRequest` and `Evaluator` (sealed; its single implementation lives beside it and is what `Revokt.evaluator` returns), candidate index and path walker, coverage index, generation model, policy and precedence, `Verdict`, JSON tree and canonical JSON, content-signature logic, C2SP cache reader/writer, `RevocationEngine` (Kotlin), the `SignatureVerifier`, `HttpFetcher`, `PathBuilderFallback` interfaces, `expect fun canonicalSubject`, `RevoktLimits`, the internal policy table; **no public type with a `java.time` member** | `revokt-clubcard`, Okio, kotlinx-coroutines |
+| `revokt-engine` `jvmMain` | jvm | `KotlinRevocationEngine` (the default engine) and its CRLite evaluation, the updater state machine and sync, the Remote Settings protocol and `MozillaRemoteSettings`, the `RevoktStorage` interface, `RevoktStorage.inMemory()` and the store layout, the seed loader and archive reader, JVM-only until a second target is planned (the native compile checks the common parts only), `Staleness`, `RevoktPolicy` and its `Builder` (the public policy surface, with `java.time` members), `JvmStorage`, `actual canonicalSubject` (`X500Principal.getName(CANONICAL)`), `SeedSource` (`none`, `of`, `fromResource`, `bundled`), `SeedOpener` and `JvmSeedSource`, `JcaSignatureVerifier(provider)`, `PkixPathBuilderFallback`, `PlatformTrust`, the `Rule → BasicReason` map (`java.security.cert`, so jvmMain; total over `Rule.entries`, asserted by the 0.1 golden fixture), `RevoktLoggers.jul()` | JDK |
 | `revokt-jsse` | jvm | `Revokt` facade and `Builder`, `RevoktTrustManager`, `JvmPlatformTrust`, `X509Certificate` adapters, `JdkHttpFetcher` (HttpsURLConnection over the platform's default TLS, the default `http` on the JVM; never on Android, §4) | `revokt-engine` |
 | `revokt-bc` *(optional)* | jvm | BouncyCastle `SignatureVerifier` for ML-DSA, SLH-DSA, composite OIDs and BC-only curves | `revokt-engine`, bcprov |
 | `revokt-okhttp` | jvm | `RevoktOkHttp.install(builder, revokt, delegate?)`, `OkHttpClient.Builder.revokt(…)`, `OkHttpClient.withRevokt(…)`, `OkHttpClient.revoktTrustManager()`, OkHttp-backed `HttpFetcher` | `revokt-jsse`, OkHttp 4.12+ / 5.x |
@@ -216,7 +216,9 @@ and a real draft-19 certificate is `INVALID` (its key does not decode or its sig
 `UNSUPPORTED`.
 
 **Purity gate.** `linuxX64()` only when `revokt.purityGate` is present; never published; BCV
-`klib { enabled = false }`. Generation publication is a `@Volatile` reference whose only writers are
+`klib { enabled = false }`. The expect/actual pairs left in commonMain (`lruMap`, `isFatal` and `restoreInterrupt`,
+`canonicalSubject`) exist so that this compile covers the walker and the content-signature and x5u logic.
+Generation publication is a `@Volatile` reference whose only writers are
 the single-parallelism loader dispatcher and, in the sole-seed synchronous path of §4 S, the `start()`
 caller's thread before any loader task exists; never two at once.
 
@@ -240,7 +242,7 @@ MPL-2.0 is file-level copyleft. Upstream files carry the Exhibit A header only, 
 1. One module, own `LICENSE` and `NOTICE`; every publication's POM lists MPL-2.0 only; CI asserts.
 2. 1:1 translation files in `…clubcard.port` with SPDX and provenance headers; glue in `…clubcard.api` under Apache.
 3. `reuse lint` on every PR plus the header-location rule.
-4. `public` + `@RevoktInternalApi` (error-level opt-in, engine only), BCV `nonPublicMarkers = ["dev.revokt.RevoktInternalApi", "dev.revokt.RevoktTestingApi"]` (so testing builders never enter the 1.0 dump), `implementation` scope. The cross-artifact plumbing `Revokt` (revokt-jsse) drives in revokt-engine (identity registry, store lock, loader, `generationEpoch`/`policyEpoch`) is public under `@RevoktInternalApi`; a Kotlin consumer compile runs beside the Java one in CI, since `@JvmSynthetic` members are invisible to BCV.
+4. `public` + `@RevoktInternalApi` (error-level opt-in, engine only), BCV `nonPublicMarkers = ["dev.revokt.RevoktInternalApi", "dev.revokt.RevoktTestingApi"]` (so testing builders never enter the 1.0 dump), `implementation` scope. The cross-artifact plumbing `Revokt` (revokt-jsse) drives in revokt-engine (identity registry, store lock, loader, `generationEpoch`/`policyEpoch`, the `RevocationEngine` seam of §3.2) is public under `@RevoktInternalApi`; a Kotlin consumer compile runs beside the Java one in CI, since `@JvmSynthetic` members are invisible to BCV.
 5. No `inline fun`, no `const val` in the port.
 6. Never shaded or merged into another Apache artifact.
 7. `UPSTREAM.md`; weekly drift job; re-syncs translate the upstream diff.
@@ -251,20 +253,20 @@ MPL-2.0 is file-level copyleft. Upstream files carry the Exhibit A header only, 
 ### 3.2 `RevocationEngine` and the upki-backed engine
 
 ```kotlin
-interface RevocationEngine : AutoCloseable {
+@RevoktInternalApi interface RevocationEngine : AutoCloseable {
     val formats: Set<FilterFormat>                                   // a generation with any filter (the full or a delta) in another format is never offered to prepare() (§6.5 format check)
     val name: String get() = this::class.simpleName ?: "anonymous"   // the class's simple name, or "anonymous" when the class has none; Finding.EngineError.engineName on every ENGINE_ERROR whose producer is ENGINE (§4, §5.5), so never null there; the Kotlin engine returns "kotlin", the upki engine "upki"; must not throw, and revokt reads it once per instance; on Android under R8, which renames classes, an engine overrides it with a stable string
     fun prepare(generation: GenerationFiles): PreparedGeneration     // serialised: the loader dispatcher, or the start() caller's thread in the sole-seed synchronous path (§4 S), never concurrently; builds an inactive state (decode, validate); throws on a corrupt generation; the engine's live generation is untouched
     fun activate(prepared: PreparedGeneration)                        // loader only; atomic swap with respect to concurrent query(); the previous generation is released once in-flight queries drain; a throw leaves the live generation in place
-    fun install(generation: GenerationFiles): String = prepare(generation).use { activate(it); it.generationId }   // convenience (use {} so an activate() throw closes the prepared generation; close() after activate() is a no-op); the loader never calls it: it runs the §6.5 self-check on the prepared state between the two calls, so a failure leaves the engine untouched and no recovery path has a window
+    fun install(generation: GenerationFiles): String = prepare(generation).use { activate(it); it.generationId }   // convenience (use {} so an activate() throw closes the prepared generation; close() after activate() is a no-op); the loader never calls it: it calls prepare() and activate() as separate §6.5 stages, so a failure names its stage and a prepare() failure leaves the engine untouched
     fun clear() {}                                                   // default body is a no-op for an engine that holds no state; an engine holding a live generation must override: drops it, query() then returns NO_DATA
     fun query(q: CrliteQuery): CrliteQueryResult                        // the only engine input, extracted by revokt's parser from the path-verified leaf and issuer (§5.1) for every engine, so an engine swap cannot change what is looked up; never throws; precedence, fixed for every engine: after close() → ENGINE_ERROR; no generation → NO_DATA; q.scts empty → NO_SCTS; else the §6.2 aggregate
     val coverageEndMillis: Long?                                     // null when the engine cannot tell
 }
-interface PreparedGeneration : AutoCloseable { val generationId: String; fun query(q: CrliteQuery): CrliteQueryResult }   // inactive; close() without activate() discards it; after activate() the engine owns it and close() is a no-op. RevocationEngine.close() is idempotent; an engine instance may be injected into one Revokt only (R: build() throws on a second, identity registry)
+@RevoktInternalApi interface PreparedGeneration : AutoCloseable { val generationId: String; fun query(q: CrliteQuery): CrliteQueryResult }   // inactive; query() answers against it alone (the engine probes of test-plan.md §9.3 use it); close() without activate() discards it; after activate() the engine owns it and close() is a no-op. RevocationEngine.close() is idempotent; an engine instance may be injected into one Revokt only (R: build() throws on a second, identity registry)
 enum class FilterFormat { V3, V4 }                                                             // growable
 enum class CrliteQueryResult { NOT_REVOKED, REVOKED, NOT_COVERED, NOT_ENROLLED, NO_SCTS, NO_DATA, ENGINE_ERROR }   // growable; the only CRLite status type
-class GenerationFiles internal constructor(…) {                      // always C2SP layout: "index.bin" plus the files it names; @RevoktTestingApi Builder; jvmMain: object JvmGenerationFiles { @RevoktTestingApi @JvmStatic fun fromDirectory(dir: java.nio.file.Path, dataset: Dataset, format: FilterFormat): GenerationFiles }, so a third-party engine is testable against the §9 corpus images from revokt-engine alone
+class GenerationFiles internal constructor(…) {                      // always C2SP layout: "index.bin" plus the files it names; @RevoktTestingApi Builder; jvmMain: object JvmGenerationFiles { @RevoktTestingApi @JvmStatic fun fromDirectory(dir: java.nio.file.Path, dataset: Dataset, format: FilterFormat): GenerationFiles }, so an engine is testable against the §9 corpus images from revokt-engine alone
     val generationId: String; val dataset: Dataset; val format: FilterFormat   // the full filter's encoding; each filter is read in its own (mixed encodings allowed), and every one is in the engine's formats (§6.5 format check)
     val names: Set<String>; fun bytes(name: String): ByteArray /* fresh copy; a disk-backed implementation later is not a break */; fun sha256(name: String): ByteArray /* content hash, computed once by the loader */; val sourceTimestampMillis: Long }
 class CrliteSct private constructor(…) { val logId: ByteArray /* 32 bytes */; val timestampMillis: Long /* RFC 6962 u64 carried in Long; compared with java.lang.Long.compareUnsigned */ }   // @RevoktTestingApi Builder
@@ -272,8 +274,11 @@ class CrliteQuery private constructor(…) {                           // growab
     val issuerSpkiHash: ByteArray /* SHA-256 of the issuer's SPKI TLV */; val serial: ByteArray /* rawSerial: DER INTEGER content bytes as encoded (the producer's RawValue.Bytes, §9.2) */; val scts: List<CrliteSct> /* order not significant; empty when no SCT extension has a list that parses under §9.2 (absent, or for example empty, a first item that fails, an inner identifier other than 0x04; §9.2 states every case); a list that fails later keeps the items before the failure */ }
 ```
 
-**Seam.** `Revokt.Builder.revocationEngine(engine: RevocationEngine)` is public from 0.2 (the first `Revokt`; the engine-side types are public from 0.1) and
-defaults to the Kotlin engine (`formats = {V3, V4}`, `name = "kotlin"`). The
+**Seam.** The seam is internal: `RevocationEngine`, `PreparedGeneration`, `KotlinRevocationEngine` and
+`Revokt.Builder.revocationEngine(engine: RevocationEngine)` are `@RevoktInternalApi` (§3.1 item 4), for revokt's own
+tests and the CI-only upki engine, which is the differential test of test-plan.md §9.3. The builder defaults to the
+Kotlin engine (`formats = {V3, V4}`, `name = "kotlin"`). Publishing the seam is revisited only if a real second engine
+appears. The
 updater builds `index.bin` itself for Remote Settings generations (the channel's one full filter and every delta,
 ordered by time, with their coverage; `parent` is not read, §6.5), so every `GenerationFiles` is a directory image any C2SP reader accepts; the
 only engine-specific property is `format`. **`index.bin` consistency.** The loader builds every `index.bin` it
@@ -323,7 +328,7 @@ One configuration surface: fluent `Builder` classes (`fun channel(c: CrliteChann
 over the same builder. Every public value or output type, including every `Finding` subclass, is a final class with a private
 constructor, content-based `equals`/`hashCode`/`toString` (timing fields excluded: a timing field is a measured duration, such as
 `Verdict.elapsedNanos`; timestamps such as `atMillis` and `createdMillis` take part), a nested `Builder` and
-`newBuilder()` (service types such as `KotlinRevocationEngine()`, `AndroidPlatformTrust()`, `JcaSignatureVerifier()` and exceptions have public constructors); on output types (`Verdict.*`, every `Finding`, `RevoktEvent`, `RevoktStatus`,
+`newBuilder()` (service types such as `AndroidPlatformTrust()`, `JcaSignatureVerifier()` and exceptions have public constructors); on output types (`Verdict.*`, every `Finding`, `RevoktEvent`, `RevoktStatus`,
 `RevoktState`, `AnchorSnapshot`, `ExemptionContext`, `PolicyDiagnostic`, `SyncResult`) the builder is `@RevoktTestingApi` (opt-in,
 `WARNING` level, outside the 1.0 promise). `Finding` is a sealed class, **growable** (a subtype may be added in a minor; use `else`); `Verdict` is closed. No data classes, no inline value classes. **Public type rule**: stable stdlib types
 in Kotlin-facing signatures; `java.time` and `long` overloads for Java; one functional type per
@@ -336,7 +341,7 @@ val revokt = Revokt {
     storage = AndroidStorage.noBackup(context, "revokt")
     platformTrust = AndroidPlatformTrust()              // default: auto-detected (AndroidPlatformTrust when android.os.Build resolves, else JvmPlatformTrust); R: on Android a platformTrust that is not AndroidPlatformTrust throws
     signatureVerifier = JcaSignatureVerifier()
-    revocationEngine = KotlinRevocationEngine()           // default; §3.2 seam
+    revocationEngine = KotlinRevocationEngine()           // default; @RevoktInternalApi, the §3.2 seam
     clock = Clock.System                                // Java: clock(java.time.Clock); timeSource(TimeSource) for the monotonic deadlines (testable)
     sources { remoteSettings(MozillaRemoteSettings.DEFAULT); seed(SeedSource.fromResource("/revokt/seed-compat.zip")) }   // seed default when none is configured: SeedSource.bundled(), resolved at build(): /revokt/seed-<channel>.zip from the revokt-seed-<channel> artifact (§6.5; the quickstarts declare it); absent from the classpath → no seed source, and validate() emits NO_DATA_REJECTS_WITHOUT_LOCAL_DATA; present but unreadable → SEED_UNREADABLE at start() (§4 S bullet); seed(SeedSource.none()) opts out explicitly. No fetching source is configured by default (a library never opens the network unasked); a required dataset with local data and no fetching source is V NO_FETCHING_SOURCE, a WARNING under both enforcements (the instance updates only through sync()'s seed re-check, below; air-gapped seed-by-deploy fleets are legitimate). R: every source URL (baseUrl, a pinned attachmentBaseUrl) is https with no userinfo, else build() throws (NSC blocks cleartext on API 28+, the JVM does not).
     logger = RevoktLoggers.jul()                        // RevoktLogger; default auto-detected (§3)
@@ -364,8 +369,8 @@ fun addListener(listener: RevoktListener, executor: Executor); fun removeListene
 val revokt.trustManager: RevoktTrustManager               // the single memoised instance over platformTrust.defaultDelegate(); the delegate is captured at build(), the RevoktTrustManager is created on the first read of this property or the first null-delegate wiring (lazily, under the factory lock; in STARTED with its snapshot), so a seed-only configuration over an empty default trust store starts (fixture (h)) and throws only once something asks for the instance
 fun revokt.trustManager(delegate: X509TrustManager): RevoktTrustManager   // RevoktTrustManager is a final class extending X509ExtendedTrustManager. In STARTED builds the anchor snapshot synchronously inside the factory lock (§5.1 "Anchor snapshot"); a plain delegate (JVM) → IllegalArgumentException; a throwing getAcceptedIssuers() or an empty anchor set → IllegalStateException; nothing registered in either case
 val revokt.evaluator: Evaluator; fun Revokt.Builder.pkixFallback(enabled: Boolean): Builder   // Evaluator.evaluate walks against revokt.trustManager's anchor snapshot (created lazily as above; one @Volatile read at entry, its id reported as anchorSnapshotId) and shares no path or verdict cache; outside STARTED it throws IllegalStateException (there is no step 1 to fall back to)
-expect class SeedSource internal constructor(…) { companion object { fun none(): SeedSource } }   // commonMain; internal open(): okio.Source? (Okio never appears in a public signature)
-// jvmMain: fun interface SeedOpener { fun open(): java.io.InputStream? }   // one functional type, usable from Java as a lambda; the actual companion adds @JvmStatic fun of(opener: SeedOpener): SeedSource /* asset packs, a downloaded seed; re-opened on every start task and sync() seed re-check; wrapped into okio internally */, @JvmStatic fun fromResource(path: String): SeedSource and @JvmStatic fun bundled(): SeedSource /* resolve through SeedSource::class.java.classLoader, then the thread context loader, in that order (app servers) */
+class SeedSource internal constructor(…) { companion object { fun none(): SeedSource } }   // jvmMain; internal open(): okio.Source? (Okio never appears in a public signature)
+// jvmMain: fun interface SeedOpener { fun open(): java.io.InputStream? }   // one functional type, usable from Java as a lambda; the companion also has @JvmStatic fun of(opener: SeedOpener): SeedSource /* asset packs, a downloaded seed; re-opened on every start task and sync() seed re-check; wrapped into okio internally */, @JvmStatic fun fromResource(path: String): SeedSource and @JvmStatic fun bundled(): SeedSource /* resolve through SeedSource::class.java.classLoader, then the thread context loader, in that order (app servers) */
 // jvmMain: object JvmSeedSource { @JvmStatic fun fromPath(path: java.nio.file.Path): SeedSource }   // mirrors JvmStorage
 class MozillaRemoteSettings private constructor(…) { class Builder { fun baseUrl(url: String): Builder; fun bucket(name: String): Builder /* security-state */; fun collection(dataset: Dataset, name: String): Builder /* cert-revocations */; fun attachmentBaseUrl(url: String?): Builder /* default null: read from the server root's capabilities.attachments.base_url once per sync; a value pins it, §7.1 */; fun allowedDomains(domains: Set<String>): Builder /* default cdn.mozilla.net; a host is allowed when it equals a domain or ends with '.' and one, §7.1 */; fun x5uHostRewrite(from: String, to: String): Builder /* applied to the parsed x5u URI host before the allowedDomains check; domains and rewrite targets are compared exactly, ASCII case included; makes a byte-for-byte reverse proxy of the three Mozilla hosts a supported mirror, §7.1. MozillaRemoteSettings.Builder.build() throws IllegalArgumentException when allowedDomains does not allow `to`, when an allowedDomains entry is a single label (such as `net`, which would allow a whole top-level domain), and when an allowedDomains entry, or either side of an x5uHostRewrite, is not a host name in the grammar X5uUrl checks at fetch time: labels of 1 to 63 ASCII letters, digits and '-', separated by single dots, a name of at most 253 characters, no trailing dot, and a last label that is neither all digits nor 0x-hex (so no IP literal); upper case is allowed, since comparison is exact; so build() and the fetch-time check accept the same set  */; fun pinnedRootSpkiSha256s(hashes: Collection<ByteArray>): Builder /* compared by content */; fun userAgent(ua: String): Builder; fun sourceId(id: String): Builder /* default "mozilla-remote-settings"; the updater.json key */; fun build(): MozillaRemoteSettings }; companion object { @JvmField val DEFAULT: MozillaRemoteSettings } }   // the content signature is read from metadata.signatures[], each entry's signature, x5u and mode (an entry is tried when its mode is absent, null or "p384ecdsa", and skipped for any other value; the algorithm is never derived from it); metadata.signature is not read (§7.1)
 @JvmOverloads fun revokt.sslContext(delegate: X509TrustManager? = null, keyManagers: Array<KeyManager>? = null): SSLContext
@@ -404,7 +409,7 @@ enum class Rule(val ruleClass: RuleClass, val layer: Layer?, val exemptable: Boo
 enum class Outcome { ALLOW, REJECT }                     // closed
 enum class Enforcement { ENFORCE, OBSERVE, OFF }         // closed. OFF: platform only; steps 2–4 do not run; no events; evaluations does not advance, unevaluated[OFF] does
 enum class Severity { WARNING, ERROR }                   // closed
-enum class DiagnosticCode /* one per validate()/start()/sync/setter bullet */ { NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, ENGINE_SELF_CHECK_FAILED, IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, EXEMPTION_ON_EVIDENCE_RULE, NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, STALE_REJECTS_WITHOUT_THRESHOLD, SEED_PAST_REJECT_THRESHOLD, EXEMPT_ON_ALLOW, UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP, STRICT_ON_ANDROID_WITHOUT_NO_ISSUER_EXEMPTION, BUDGET_ALLOWS, EVIDENCE_LOWERED_BELOW_PRESET, STALENESS_CLEARED_FOR_REQUIRED_DATASET, SEED_UNREADABLE, SEED_CHANNEL_MISMATCH, STORE_UNREADABLE, STORE_LOCKED, CHANNEL_UNSET, PLATFORM_TRUST_MISMATCH, CAP_NEAR_LIMIT, SYNC_FAILED, SYNC_SCHEMA_REJECTED, IO_DISPATCHER_UNCONFINED }   // growable
+enum class DiagnosticCode /* one per validate()/start()/sync/setter bullet */ { NO_FETCHING_SOURCE, INDEX_INCONSISTENT, STORE_MIGRATED, STORE_NEWER_LAYOUT, STORAGE_UNSET, FORMAT_UNSUPPORTED, NO_DATA_AT_FLIP, NO_REQUIRED_DATASETS, IN_MEMORY_STORE_WITH_FETCHING_SOURCE, RULE_FLIPPED_THIS_MINOR, EXEMPTION_ON_EVIDENCE_RULE, NO_DATA_REJECTS_WITHOUT_LOCAL_DATA, STALE_REJECTS_WITHOUT_THRESHOLD, SEED_PAST_REJECT_THRESHOLD, EXEMPT_ON_ALLOW, UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP, STRICT_ON_ANDROID_WITHOUT_NO_ISSUER_EXEMPTION, BUDGET_ALLOWS, EVIDENCE_LOWERED_BELOW_PRESET, STALENESS_CLEARED_FOR_REQUIRED_DATASET, SEED_UNREADABLE, SEED_CHANNEL_MISMATCH, STORE_UNREADABLE, STORE_LOCKED, CHANNEL_UNSET, PLATFORM_TRUST_MISMATCH, CAP_NEAR_LIMIT, SYNC_FAILED, SYNC_SCHEMA_REJECTED, IO_DISPATCHER_UNCONFINED }   // growable
 enum class EngineErrorProducer { BOUNDARY, ENGINE, EXEMPTION }   // growable; exactly these three in M1
 enum class Layer { PATH, CRLITE }                        // growable; M2: ONECRL, CRLSET, DENYLIST (L1/L2); M3: CT (L4); M4: DISTRUST (L5)
 enum class Dataset { CRLITE /* M2: INTERMEDIATES, ONECRL, CRLSET, DENYLIST; M3: CT_LOGS; M4: DISTRUST */ }   // growable; the freshness rule per dataset and source is §7.2 prose
@@ -420,7 +425,7 @@ enum class RevoktLifecycle { CREATED, STARTED, CLOSED }   // closed; commonMain
 enum class WalkEnd { COMPLETE, RELATED_BUDGET, VERIFICATION_BUDGET, EXPLORATION_BUDGET }   // growable
 enum class ChainSource { PLATFORM, RECONSTRUCTED, PRESENTED /* reserved; produced by no M1 path */ }   // growable; PLATFORM: a platform-verified chain, §5.1 decision step 4 or EvaluationRequest.verifiedPath; M2: MIXED (paths from both a PLATFORM chain and the re-walk)
 enum class SyncOutcome { INSTALLED, UNCHANGED, FAILED, CLOCK_SKEW /* an x5u link outside its validity window at the local clock, stage X5U (§7.1) */, ROLLBACK_REFUSED, BACKOFF, STORE_FAILED, STORE_LOCKED }   // growable
-enum class SyncStage { CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, SELF_CHECK, ACTIVATE, STORE }   // growable; where a sync failed: CHANGESET = the changeset fetch; X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), any x5u PEM or chain failure other than validity (which is CLOCK_SKEW at X5U), or the content signature (§7.1); ATTACHMENT = a body fetch or the over-cap signed record, and a mirror file's fetch or a body whose size or SHA-256 differs from the manifest's (§7.3); each producing bullet names its stage
+enum class SyncStage { CHANGESET, X5U, ATTACHMENT, SIGNATURE, SCHEMA, INDEX, PREPARE, ACTIVATE, STORE }   // growable; where a sync failed: CHANGESET = the changeset fetch; X5U = the x5u fetch or a validity CLOCK_SKEW; SIGNATURE = the metadata.signatures[] entries (none, more than 4, none tried, a null entry), any x5u PEM or chain failure other than validity (which is CLOCK_SKEW at X5U), or the content signature (§7.1); ATTACHMENT = a body fetch or the over-cap signed record, and a mirror file's fetch or a body whose size or SHA-256 differs from the manifest's (§7.3); each producing bullet names its stage
 
 /** jvmMain. Time fields are stored as millis. Java: *Millis properties and java.time.Duration accessors/factories (API 26+). Kotlin: kotlin.time.Duration via @JvmSynthetic extensions. No inline value class on the surface. commonMain sees only an internal PolicyTable these compile to. The split stays: the rules evaluate in commonMain over PolicyForm and PolicyTable, which carry no java.time, while RevoktPolicy's java.time surface needs jvmMain; merging them would move the rules out of commonMain. */
 class Staleness private constructor(…) { val staleAfterMillis: Long; val rejectStaleAfterMillis: Long?   // staleAfter: loud threshold only (DataState.stale). rejectStaleAfter: the only threshold at which Rule.STALE fires; null = STALE never fires for this dataset
@@ -585,8 +590,8 @@ remaining a subsequence.
   `CRLITE ∉ requiredDatasets` → `WARNING` (data loss would be silent). V `IN_MEMORY_STORE_WITH_FETCHING_SOURCE`:
   `RevoktStorage.inMemory()` with a fetching source → `WARNING` (a full re-download per restart, no crash recovery).
   V `FORMAT_UNSUPPORTED`: a `remoteSettings` source while `V3 ∉ revocationEngine.formats` → `WARNING` under
-  `OBSERVE`, `ERROR` under `ENFORCE` (Mozilla serves v3; both shipped engines list it, so it fires only for a
-  third-party engine). V `NO_FETCHING_SOURCE`: a required dataset with a local data source and no fetching source → `WARNING` under both enforcements (the instance updates only through `sync()`'s seed re-check, §4).
+  `OBSERVE`, `ERROR` under `ENFORCE` (Mozilla serves v3; the Kotlin and upki engines both list it, so it fires only for
+  another engine injected through the internal seam). V `NO_FETCHING_SOURCE`: a required dataset with a local data source and no fetching source → `WARNING` under both enforcements (the instance updates only through `sync()`'s seed re-check, §4).
 - **Under `Enforcement.OFF` every V diagnostic is a `WARNING`**, so an `ERROR` can never block the switch
   to the kill switch; this binds every `ERROR`-capable V code, the ones `validate()` adds in `revokt-jsse` included.
 - Each diagnostic names its `DiagnosticCode` and the call that emits it: **B** = `RevoktPolicy.Builder`
@@ -623,12 +628,12 @@ remaining a subsequence.
   per-fetch timeout, §4). Other inline executors are covered by §4's sentence only.
 - R: `outcome(NO_ISSUER) == ALLOW` with the PKIX fallback disabled (§5.1: the fallback is load-bearing).
 - (not a diagnostic) An empty anchor set, a throwing `getAcceptedIssuers()` or a failed index build throws `IllegalStateException` from `trustManager(delegate)` in `STARTED` and from `start()` for consumer trust managers created in `CREATED`, on both platforms (§5.1 "Anchor snapshot").
-- S `SEED_UNREADABLE` / `SEED_CHANNEL_MISMATCH` / `STORE_UNREADABLE` / `STORE_MIGRATED` / `STORE_NEWER_LAYOUT` (per §6.5) / `STORE_LOCKED` (per §5.1 read-only mode); S→`ERROR` thrown by `start()` under `ENFORCE` with `outcome(NO_DATA) == REJECT` when the seed is the only local data source and is unreadable: **in that configuration, and only when the synchronous `meta.json` read finds no complete stored generation (first run, a rebuild, corruption), the seed's verification, `index.bin` rebuild, `prepare`, the §6.5 self-check and `activate` run synchronously inside `start()` on the calling thread, before the flip and before any loader task exists (the one exception to "loader dispatcher only"; a self-check failure is `SEED_UNREADABLE` and throws here; the factory lock is released around this work, §5.1 lifecycle)**; with a complete stored generation the loader decodes it as §5.1 states (falling to `previous`, then the seed, so a readable store masks a bad seed and the common cold start never decodes on the calling thread), otherwise on the loader task (a loud failure in `CREATED`, platform-only, instead of a silent reject-all); `STORE_UNREADABLE` never throws (§6.5); a seed
+- S `SEED_UNREADABLE` / `SEED_CHANNEL_MISMATCH` / `STORE_UNREADABLE` / `STORE_MIGRATED` / `STORE_NEWER_LAYOUT` (per §6.5) / `STORE_LOCKED` (per §5.1 read-only mode); S→`ERROR` thrown by `start()` under `ENFORCE` with `outcome(NO_DATA) == REJECT` when the seed is the only local data source and is unreadable: **in that configuration, and only when the synchronous `meta.json` read finds no complete stored generation (first run, a rebuild, corruption), the seed's verification, `index.bin` rebuild, `prepare` and `activate` run synchronously inside `start()` on the calling thread, before the flip and before any loader task exists (the one exception to "loader dispatcher only"; a `prepare` or `activate` failure is `SEED_UNREADABLE` and throws here; the factory lock is released around this work, §5.1 lifecycle)**; with a complete stored generation the loader decodes it as §5.1 states (falling to `previous`, then the seed, so a readable store masks a bad seed and the common cold start never decodes on the calling thread), otherwise on the loader task (a loud failure in `CREATED`, platform-only, instead of a silent reject-all); `STORE_UNREADABLE` never throws (§6.5); a seed
   channel mismatch is an `ERROR` thrown synchronously by `start()` on both platforms (the `seed.json`
   header is read synchronously).
 - `NOT_STARTED` is not a warning: a trust manager or `sslContext()` obtained before `start()` runs step 1 only until `start()` and counts `unevaluated[NOT_STARTED]` (creating trust managers before `start()` is the recommended main-thread pattern, so it cannot be a stuck alert).
 - R `CHANNEL_UNSET`: no `channel` configured while a CRLite source (a seed included) is. R `PLATFORM_TRUST_MISMATCH`: Android runtime with a non-Android `platformTrust`. R `STORAGE_UNSET`: `AndroidPlatformTrust` with no explicit `storage` (§3).
-- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body or record count above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `ENGINE_SELF_CHECK_FAILED` (the §6.5 self-check mismatch, `SyncOutcome.FAILED`), `INDEX_INCONSISTENT` (§3.2's over-cap built index and §6.5's index-name collision), `FORMAT_UNSUPPORTED` (§3.2). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
+- Sync-time diagnostics on `SyncResult.warnings`: `SYNC_FAILED` (any `FAILED`/`STORE_FAILED`/`CLOCK_SKEW` sync, with the cause), `SYNC_SCHEMA_REJECTED` (a verified changeset whose records fail the collection schema), `CAP_NEAR_LIMIT` (a body or record count above half the `RevoktLimits` constant, not the overridden value, the signed size notwithstanding, and the code on the over-cap `FAILED` of a signed record, §5.1 limits table; the §9 live check warns on it), `INDEX_INCONSISTENT` (§3.2's over-cap built index and §6.5's index-name collision), `FORMAT_UNSUPPORTED` (§3.2). `SyncResult.stage`, `httpStatus` and `cause` say where and why without parsing `message`.
 
 ## 5. Trust manager [M1]
 
@@ -820,8 +825,8 @@ a failure throws `IllegalStateException` before any registry entry or store lock
 pointer and the pointed `meta.json` (channel mismatch or unreadable → treated as no stored generation,
 `STORE_UNREADABLE`, `storeFailures++`), and the `seed.json` header (`SEED_CHANNEL_MISMATCH` →
 `IllegalStateException`). **When the sole-seed `ENFORCE` configuration finds no complete stored
-generation** (§4 S bullet) the factory lock is now released, the seed is verified, rebuilt, prepared,
-self-checked and activated on the calling thread (150–300 ms interpreted on the default channel, §6.4),
+generation** (§4 S bullet) the factory lock is now released, the seed is verified, rebuilt, prepared
+and activated on the calling thread (150–300 ms interpreted on the default channel, §6.4),
 the lock is re-taken, snapshots are built for any trust manager created in the gap (it saw `CREATED`
 and built nothing), and the flip follows; a `trustManager(d)` racing this therefore blocks only for the
 lock's short holds, never for the decode. **The other two racers in the gap, stated**: a second `start()`
@@ -829,9 +834,9 @@ that finds `STARTING` under the lock waits on the lock's condition until the fir
 returns or throws per the first's outcome (it never registers, locks or decodes a second time, so
 `prepare`/`activate` stay serialised; the WorkManager worker's `start()` racing the app's is this case);
 `close()` that finds `STARTING` sets a cancel flag and **waits, unconditionally, until the decoding
-thread has re-taken the lock and left** (the wait's duration is bounded by the decode plus the
-self-check; it is not a timeout); `close()` never releases a store lock it did not take and never calls
-`engine.close()` while a `prepare`/self-check/`activate` is in flight. The three outcomes: (i) the
+thread has re-taken the lock and left** (the wait's duration is bounded by the decode; it is not a
+timeout); `close()` never releases a store lock it did not take and never calls
+`engine.close()` while a `prepare`/`activate` is in flight. The three outcomes: (i) the
 decoder sees the flag before `activate`: it closes the prepared generation, releases the store lock,
 deregisters the identity, and `start()` throws `IllegalStateException("closed")`, lifecycle `CLOSED`;
 (ii) the decoder missed the flag: `activate`, the pointer flip and `updater.json` complete, the
@@ -1105,8 +1110,8 @@ on the verdict regardless. `ENGINE_ERROR` has exactly three producers (`EngineEr
 catch boundary, an engine result (`CrliteQueryResult.ENGINE_ERROR`, or `NO_DATA` while a generation
 is published; with `engineName`, the engine's `RevocationEngine.name`), and an exemption that throws;
 each attaches `Finding.EngineError`. **Interrupts** (JVM): at every catch of consumer code (verifier,
-canonicaliser, fallback, exemption, logger, a throwable's `toString`, the install self-check's engine `query` and
-`coverageEndMillis`) and at the boundary, a caught `InterruptedException` sets the thread's interrupt flag again. The
+canonicaliser, fallback, exemption, logger, a throwable's `toString`, the engine's
+`coverageEndMillis` read at an install) and at the boundary, a caught `InterruptedException` sets the thread's interrupt flag again. The
 fetch timeout path keeps its own interrupt handling.
 
 Layers by milestone: **[M2] L1/L2** over every path the walker (or an exhaustive re-walk) returned;
@@ -1257,10 +1262,10 @@ values are names, never ordinals:
   file.
 - **Prune keeps exactly the directories the pointer names** (`live`, `previous`) and deletes every
   other directory, complete or not, and every unreferenced blob; it runs at `start()` and after every `INSTALLED`
-  sync but one whose flip healed a malformed pointer, never after a failed one; on a failed `prepare()`, self-check or `activate()` the loader deletes
+  sync but one whose flip healed a malformed pointer, never after a failed one; on a failed `prepare()` or `activate()` the loader deletes
   the directory it was given before returning (blobs stay, content-addressed); an interrupted install
   (process death; no `meta.json`) is deleted by prune at the next `start()`; a sync-time `prepare()`/`activate()`
-  throw and a self-check mismatch increment `storeFailures` and are `SyncOutcome.FAILED` (stage `PREPARE`, `ACTIVATE` or `SELF_CHECK`; cursor and watermark do not advance, so the same changeset is retried under backoff); a store write or pointer-flip failure during an install is `SyncOutcome.STORE_FAILED` (stage `STORE`, `storeFailures++`); "newest" is pointer order, never directory timestamp.
+  throw increments `storeFailures` and is `SyncOutcome.FAILED` (stage `PREPARE` or `ACTIVATE`; cursor and watermark do not advance, so the same changeset is retried under backoff); a store write or pointer-flip failure during an install is `SyncOutcome.STORE_FAILED` (stage `STORE`, `storeFailures++`); "newest" is pointer order, never directory timestamp.
 **Order of an install** (an *install* anywhere in this document means this whole sequence): fetch, verify and write **one body at a time** (hash against the signed
 record, write the blob unless the key exists, drop the body) → build `index.bin` (≤ 1 MiB, §3.2) → the format check (on every placed filter, the full
 and each delta, each in its own encoding; a filter whose encoding the engine does not list fails the install,
@@ -1268,27 +1273,12 @@ and each delta, each in its own encoding; a filter whose encoding the engine doe
 `prepare`) →
 write the generation
 directory (`meta.json` last) → `prepared = engine.prepare(files)` (validates and decodes into an inactive
-state; the live generation is untouched) → **engine self-check on `prepared.query`** (deterministic,
-never probabilistic, every input named: the absent issuer hash is `SHA-256("revokt-self-check")`,
-incremented in its last byte until absent from every filter's index; the inside SCT is (`logId`, `low`)
-of the first coverage entry of the filter under test in `index.bin` order; the outside probe is
-(`logId`, `high + 1` unsigned, or `low − 1` when `high` is the maximum); filters are iterated in
-`index.bin` order and index entries by ascending issuer hash, so "some block" is reproducible. The absent
-issuer hash with the inside SCT must answer in the `NOT_ENROLLED` class (`{NOT_COVERED, NOT_ENROLLED,
-NO_SCTS}`, the equivalence class of test-plan.md §9.3, so the upki engine passes); the outside SCT must answer
-`NOT_COVERED` or its class; and the `REVOKED` probe uses a serial the loader's own `revokt-clubcard`
-reference evaluator (§6.2) calls `Revoked`, chosen deterministically and first-match (one branch is
-exercised per generation, the first that yields): the first of the serials
-`0x01`..`0x1000` (minimal DER INTEGER content, ascending) that is `Revoked` against some inverted
-block (`approxM == 0`: every serial; `approxM > 0`: a non-member), else an exception-list serial of an
-inverted block (exceptions make `member` false, so `false xor inverted` is `Revoked`), else the first
-such candidate that is a member of a non-inverted block, with the inside SCT of that filter; when no
-block yields one or no coverage entry exists the probe is skipped and logged at `INFO`; circular for the Kotlin
-engine but it still catches a constant-answer engine, which is its purpose, while the §9 oracle covers
-shared decoder bugs; the same check runs on every `prepare`, the seed's and the `start()` recovery
-chain's included, where a failure is the corresponding load failure, `SEED_UNREADABLE` for the seed)
-→ on a mismatch `prepared.close()`, `storeFailures++`, `SyncOutcome.FAILED` with `ENGINE_SELF_CHECK_FAILED` (stage `SELF_CHECK`), the directory
-deleted, the engine and the published snapshot untouched (no window, nothing to re-install)
+state, the install's only decode of the filters, while the `index.bin` build before it decodes each for its
+coverage; the live generation is untouched; a throw is `SyncOutcome.FAILED`
+at stage `PREPARE`, `prepared` is never activated, `storeFailures++`, the directory is deleted, and the engine and the
+published snapshot are untouched; the same holds for every `prepare`, the seed's and the `start()` recovery chain's
+included, where a failure is the corresponding load failure, `SEED_UNREADABLE` for the seed; the loader never queries
+the prepared state: test-plan.md §9.3's engine probes check each engine's answers in CI instead)
 → `engine.activate(prepared)` → publish the generation snapshot with that id (`generationEpoch++`; the window between `activate` and publish, i.e. between
 install and publish is stated: a verdict in it carries the new answer under the old epoch for at most
 the verdict-cache TTL) → flip the pointer → write `updater.json` → prune (after every `INSTALLED`, once the flip and `updater.json` are written, never after a failure, as upki deletes
