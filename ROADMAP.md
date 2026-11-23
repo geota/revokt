@@ -3,8 +3,8 @@
 
 # Roadmap
 
-**Current focus**: 0.2, a working engine, built as a vertical slice first: one chain evaluated end to end
-through a real `Revokt` before anything else in 0.2 (see [the order](#order), CONTRIBUTING §2).
+**Current focus**: 0.2, a working engine. The vertical slice is done: one chain is evaluated end to end through a
+real `Revokt` (#298). Next is #221, then the rest of 0.2 (see [the order](#order), CONTRIBUTING §2).
 
 > [!WARNING]
 > revokt is pre-release and not production ready. Nothing is published yet, and the public API may change in any
@@ -69,14 +69,16 @@ independent implementations before anything is built on them. Nothing in 0.1 che
 
 ### Order
 
-Decided 2026-11-16 after the design audit (#230). The walker, the feed and the in-memory updater are largely merged,
-but no `Revokt` can be built yet, so the vertical slice comes first:
+Decided 2026-11-16 after the design audit (#230). The vertical slice came first, and it was done on 2026-11-23
+(#298):
 
 1. #110, the `revokt-jsse` module;
 2. #127 (`JvmPlatformTrust`, the PKIX fallback and read fallback) and #128 (`JdkHttpFetcher`);
 3. #139, `Revokt.Builder`, `build()` and `validate()`;
 4. #143, starting and closing a `Revokt` with its seed and evaluator;
 5. alongside these, #138: reading, verifying and installing a seed archive.
+
+Next, #221 keeps public only what a caller of `evaluate` touches, before the rest of 0.2 above is built on that API.
 
 **Moved out of 0.2**, to be scheduled later: #114 (the filter and DER allocation budgets) and #118 (the in-process
 Panama oracle shim). Both refine test infrastructure that already works.
