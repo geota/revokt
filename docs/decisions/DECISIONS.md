@@ -441,3 +441,27 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     is a logged failure. The accepted residual is a fatal error inside the timer's own `schedule` call.
   - **Open for 0.3:** after a stale cursor, send the live generation's timestamp as `_since` instead of a full fetch,
     which keeps the delta path, as Firefox does. 0.2 fetches the whole collection.
+- 2026-11-23 (#145, PR #306; supply-chain review approved): the seed writer and the `data/seed` build. Firefox ships
+  no `cert-revocations` dump and takes CRLite on the first sync, and its periodic Remote Settings dump job verifies
+  nothing, relying on human review. upki-mirror checks hash and size only and deploys raw files to Pages.
+  - **No Maven for seeds yet (maintainer):** in 0.2 a seed is a `revokt-seed-<channel>` jar attached to a GitHub
+    release with attestations, and an app bundles it itself. CONTRIBUTING §9 wanted a separate Portal account that
+    owns only a data namespace, but `dev.revokt:revokt-seed-*` would have given that account's token the code
+    namespace too, and neither reference publishes its data to Maven. Maven publishing, with its own namespace and
+    account, is a later decision. The data licence is in the jar's manifest and a `META-INF/LICENSE-DATA` entry, so
+    `verifyPomLicenses` gains no exception.
+  - **Verify before write (lead):** the job fetches and verifies as a whole-collection sync does, builds, self-loads
+    the archive in memory, then writes it through a temporary file in the same directory, so the final path holds
+    either the previous file or the whole new archive. The signed `<ts>` must fall between the default CRLite
+    `staleAfter` (3 days) before the version day and that day's end; the review added the lower bound. #149 adds the
+    check that a seed is no older than the last release's.
+  - **The archive (lead):** `seed.json` is compact, first and stored, and `filterFormat` comes from the decoded full
+    filter (the loader's cross-check is #305). A minimal writer of its own, since `ZipOutputStream` always writes
+    data descriptors for deflated entries, gives a fixed entry order, a fixed DOS time and level-9 deflate. The bytes
+    are reproducible for the same Temurin 21 build.
+  - **Mixed encodings (lead, on the builder's evidence):** allowed, as the sync and the loader read each filter as
+    served (the maintainer's #137 decision, as Firefox and upki do). Refusing them would fail the weekly job during
+    a V3-to-V4 transition that a live sync installs. Only an encoding the engine doesn't list is refused.
+  - **Placement (lead):** `buildSeed`, `SeedJob` and `SeedZip` are internal code in revokt-engine, reached only by an
+    explicit call. The job's entry in `data/seed` ships nowhere. The version is `-Prevokt.seedVersion=YYYY.MM.DD`,
+    and the attachment base is discovered as a live sync does.
