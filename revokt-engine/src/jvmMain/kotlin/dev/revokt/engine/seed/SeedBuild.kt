@@ -120,7 +120,12 @@ internal fun buildSeed(
                     bodies.getValue(it.id).toByteArray(),
                 )
             }
-        val bytes = SeedZip.write(fixed + attachments)
+        val bytes =
+            try {
+                SeedZip.write(fixed + attachments)
+            } catch (e: IllegalArgumentException) {
+                refuse("the zip writer refuses the entries: ${e.message}")
+            }
         if (bytes.size > SeedArchive.MAX_BYTES) refuse("the archive is ${bytes.size} bytes, over SeedArchive.MAX_BYTES")
         val generationId = "${verified.timestamp}/${signed.last().id}"
         SeedBuild.Built(bytes, verified.timestamp, generationId, filterFormat, index)

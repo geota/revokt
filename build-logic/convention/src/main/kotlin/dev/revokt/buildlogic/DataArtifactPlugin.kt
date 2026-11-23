@@ -54,15 +54,15 @@ abstract class SeedArchiveExec : JavaExec() {
  * `data-artifact` (CONTRIBUTING §3; spec §6.5, §7.2; #145): the build of the `revokt-seed-<channel>` data artifacts.
  * Nothing it compiles is published: the project's `main` source set is the seed job's entry, compiled with
  * `friendPaths` to `revokt-engine` so it calls the engine's internal core (`SeedJob`, `buildSeed`); its `smoke` source
- * set sees only revokt-jsse's public API.
+ * set sees only revokt-jsse's API (the public builder and its `@RevoktInternalApi` engine seam).
  *
  * Per channel, none of them part of `check` (they reach Mozilla):
- * - `writeSeed<Channel>`: the job, on the pinned JDK ([jobLauncher]), writes `build/seed/revokt-seed-<channel>.zip`;
+ * - `writeSeed<Channel>`: the job, on Temurin 21 ([jobLauncher]), writes `build/seed/revokt-seed-<channel>.zip`;
  *   it needs `-Prevokt.seedVersion=YYYY.MM.DD` and is never up to date;
  * - `seedJar<Channel>`: the jar an app bundles, holding that archive, stored, as `revokt/seed-<channel>.zip`, the
  *   data licence text as `META-INF/LICENSE-DATA` and in the manifest, and nothing else;
  * - `verifySeedJar<Channel>` ([VerifySeedJarTask]) and `smokeLoadSeed<Channel>`, which starts a `Revokt` on the jar
- *   alone through the public API (the sole-seed `ENFORCE` configuration, so an unreadable seed throws).
+ *   alone through the public builder (the sole-seed `ENFORCE` configuration, so an unreadable seed throws).
  *
  * No Maven publication: in 0.2 a seed is a GitHub release asset with attestations, which #149 attaches (the maintainer's
  * decision, 2026-11-23). In `check`, with no network: the same chain over the committed test-signed fixture
@@ -155,7 +155,7 @@ class DataArtifactPlugin : Plugin<Project> {
             val jar = seedJar("seedJar$suffix", channel, write.flatMap { it.archive }, licence, jarVersion, "seed")
             val verify = verifySeedJar("verifySeedJar$suffix", channel, jar, write.flatMap { it.archive })
             tasks.register<JavaExec>("smokeLoadSeed$suffix") {
-                description = "Starts a Revokt on the $channel seed jar alone, through the public API, under Mozilla's pins."
+                description = "Starts a Revokt on the $channel seed jar alone, through the public builder, under Mozilla's pins."
                 group = "revokt"
                 dependsOn(verify)
                 javaLauncher.set(launcher)
@@ -197,7 +197,7 @@ class DataArtifactPlugin : Plugin<Project> {
         val verifyTest = verifySeedJar("verifyTestSeedJar", "compat", testJar, writeTest.flatMap { it.archive })
         val smokeTest =
             tasks.register<JavaExec>("smokeLoadTestSeed") {
-                description = "Starts a Revokt on the test seed jar alone, through the public API, under the fixture's test pin."
+                description = "Starts a Revokt on the test seed jar alone, through the public builder, under the fixture's test pin."
                 group = "verification"
                 dependsOn(verifyTest)
                 javaLauncher.set(launcher)
@@ -265,7 +265,8 @@ class DataArtifactPlugin : Plugin<Project> {
         }
 
     /**
-     * The JDK the job and its checks run on, pinned (#145): Temurin, the build's JDK 21. The deflated entries' bytes are
+     * The JDK the job and its checks run on (#145): Temurin, the build's JDK 21, whatever 21.0.x the runner has (#149's
+     * job pins the build through its setup-java version). The deflated entries' bytes are
      * that JDK's zlib's, so a rebuild of one changeset is byte-equal on the same JDK build.
      */
     private fun Project.jobLauncher() =

@@ -14,6 +14,7 @@ import dev.revokt.HttpFetcher
 import dev.revokt.KotlinRevocationEngine
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.RevoktLogger
+import dev.revokt.RevoktPolicy
 import dev.revokt.RevoktStorage
 import dev.revokt.SeedSource
 import dev.revokt.SignatureVerifier
@@ -35,6 +36,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import okio.ByteString
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -83,6 +85,8 @@ internal class SeedJob(
     private val channel: CrliteChannel,
     private val logger: RevoktLogger = RevoktLogger { _, _, _ -> },
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val maxAgeMillis: Long = checkNotNull(RevoktPolicy.DEFAULT.staleness(Dataset.CRLITE)).staleAfterMillis,
+    private val writeFile: (Path, ByteArray) -> Unit = { path, bytes -> Files.write(path, bytes) },
 ) {
     /** The archive, built and self-loaded; nothing is written. */
     fun build(nowMillis: Long): SeedJobResult {
@@ -130,9 +134,12 @@ internal class SeedJob(
 
     /**
      * [build], then the archive written to [out] under [version] (`YYYY.MM.DD`, the run's UTC date, spec §7.2 "date-
-     * versioned"): the version's shape is checked before any fetch, and the signed `<ts>` must not be after that UTC
-     * day ends. The archive goes to a temporary file in [out]'s directory and is moved over [out] only once the self-load
-     * passed, so [out] is either the previous file or the new archive whole.
+     * versioned"). The version's shape is checked before any fetch. The signed `<ts>` must fall in the window from
+     * [maxAgeMillis] before that UTC day starts (the default policy's CRLite `staleAfter`, 3 days: an older changeset is
+     * a frozen or stale source, or a version from the future) to that day's end (a later one means the run's clock is
+     * wrong). The archive goes to a temporary file in [out]'s directory, through [writeFile], and is moved over [out]
+     * only once the self-load passed and the write completed, so [out] is either the previous file or the new archive
+     * whole; a write that fails leaves no temporary file.
      */
     fun write(
         nowMillis: Long,
@@ -143,31 +150,34 @@ internal class SeedJob(
             dateOf(version) ?: return SeedJobResult.Failed(null, "the version '$version' is not a YYYY.MM.DD date")
         val result = build(nowMillis)
         if (result !is SeedJobResult.Built) return result
-        val ts = result.build.timestampMillis
-        val end =
-            day
-                .plusDays(1)
-                .atStartOfDay(ZoneOffset.UTC)
-                .toInstant()
-                .toEpochMilli()
-        if (ts >=
-            end
-        ) {
-            return SeedJobResult.Failed(
-                null,
-                "the signed <ts> $ts is after $version ends (UTC): check the run's clock",
-            )
-        }
+        dateProblem(result.build.timestampMillis, version, day)?.let { return SeedJobResult.Failed(null, it) }
         val directory = out.toAbsolutePath().parent
         Files.createDirectories(directory)
         val temporary = Files.createTempFile(directory, out.fileName.toString(), ".tmp")
         try {
-            Files.write(temporary, result.build.bytes)
+            writeFile(temporary, result.build.bytes)
             Files.move(temporary, out, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (e: IOException) {
+            return SeedJobResult.Failed(null, "writing $out failed: $e")
         } finally {
             Files.deleteIfExists(temporary)
         }
         return SeedJobResult.Built(result.build, out)
+    }
+
+    /** Why the signed [ts] does not belong under [version] (the UTC [day]), or null. */
+    private fun dateProblem(
+        ts: Long,
+        version: String,
+        day: LocalDate,
+    ): String? {
+        val start = startOf(day)
+        val end = startOf(day.plusDays(1))
+        return when {
+            ts >= end -> "the signed <ts> $ts is after $version ends (UTC): check the run's clock"
+            ts < start - maxAgeMillis -> "the signed <ts> $ts is over ${maxAgeMillis}ms before $version: $STALE"
+            else -> null
+        }
     }
 
     /**
@@ -238,7 +248,15 @@ internal class SeedJob(
             }
         }
 
+    private fun startOf(day: LocalDate): Long =
+        day
+            .atStartOfDay(ZoneOffset.UTC)
+            .toInstant()
+            .toEpochMilli()
+
     companion object {
+        private const val STALE = "a stale source, or a wrong version"
+
         private val VERSION: DateTimeFormatter =
             DateTimeFormatter.ofPattern("uuuu.MM.dd").withResolverStyle(ResolverStyle.STRICT)
 

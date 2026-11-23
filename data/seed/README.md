@@ -21,7 +21,7 @@ verifies a whole collection:
 `build/seed/revokt-seed-<channel>.zip`, through a temporary file. `seedJar<Channel>` packs it stored as
 `/revokt/seed-<channel>.zip` in `build/seed/revokt-seed-<channel>-<version>.jar`, and `verifySeedJar<Channel>` checks
 the jar's layout. `smokeLoadSeed<Channel>` then starts
-a `Revokt` on the jar alone, through the public API, in the sole-seed `ENFORCE` configuration.
+a `Revokt` on the jar alone, through the public builder (plus the engine seam that records the generation it activates), in the sole-seed `ENFORCE` configuration.
 
 ```
 ./gradlew :revokt-seed:smokeLoadSeedCompat -Prevokt.seedVersion=YYYY.MM.DD   # the run's UTC date; needs the network
@@ -46,8 +46,9 @@ a `Revokt` on the jar alone, through the public API, in the sole-seed `ENFORCE` 
 The jar has no POM. The data licence, "No copyright claimed; contains Mozilla Remote Settings data", is the manifest's
 `Revokt-Data-License` and the text of `META-INF/LICENSE-DATA`. The engine floor lives in `seed.json`.
 
-**Reproducibility.** One changeset gives byte-equal archives on one JDK build, since the deflate output is that JDK's
-zlib's. The job therefore runs on a pinned Temurin 21 (`DataArtifactPlugin.jobLauncher`).
+**Reproducibility.** One changeset gives byte-equal archives on the same Temurin 21 build, since the deflate output is
+that JDK's zlib's. The build asks for Temurin 21 (`DataArtifactPlugin.jobLauncher`), which takes whatever 21.0.x the
+runner has; #149's job pins the exact build through its setup-java version.
 
 **In `check`, with no network.** `writeTestSeed`, `testSeedJar`, `verifyTestSeedJar` and `smokeLoadTestSeed` run the
 same chain over `src/test/resources/fixture`. That fixture is a Remote Settings exchange signed under the test suite's

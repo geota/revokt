@@ -1370,8 +1370,8 @@ members in the order listed above and `filterFormat` the full filter's decoded e
 encoding the engine lists, as a sync installs it). It refuses whatever the loader would refuse. The job fetches and
 verifies as a sync verifies the whole collection (`monitor/changes`, the changeset with no `_since`, the server root's
 attachment base, each placed attachment by size and SHA-256), loads the archive once from memory under the source's
-pins, and only then writes it, through a temporary file moved into place. One changeset gives one archive on one JDK
-build, whose zlib deflates it; the job pins its JDK.
+pins, and only then writes it, through a temporary file moved into place. One changeset gives one archive on the same
+Temurin 21 build, whose zlib deflates it; #149's job pins that build.
 **Seed-load rule** (the seed always leaves a live generation behind; `SeedLoaderTest`, `SeedLoaderStoreTest`,
 `SeedAdoptTest`). The store is read first: a read that throws fails the load with nothing written (`STORE_FAILED`); a
 malformed `updater.json` reads as absent. Each store fault is counted once, where it is found.
@@ -1551,8 +1551,8 @@ Firefox for Android, no public mirror). Recommended: `DEFAULT` for backends, `CO
 two full-filter cuts for re-parenting. When the stored full is no longer the delta parent, the new full downloads
 in the same sync, on any network: neither Firefox nor upki defers a download on a metered network. **Seeds** verified like a live fetch except x5u validity at the seed's signed
 `last_modified`; a seed-backed generation is never `NO_DATA`; a future-dated seed installs like any other (§6.5); `DataState.fromSeed`, `ageMillis` and
-`stale` are loud. **Data artifacts**: date-versioned (`YYYY.MM.DD`, the run's UTC date, which the signed `<ts>` is not
-after; `SeedWriterTest`), weekly, attested, not in the BOM, no build-time plugin for a consumer (`data-artifact` is
+`stale` are loud. **Data artifacts**: date-versioned (`YYYY.MM.DD`, the run's UTC date; the signed `<ts>` is not
+after that day, nor more than the default CRLite `staleAfter` of 3 days before it; `SeedWriterTest`), weekly, attested, not in the BOM, no build-time plugin for a consumer (`data-artifact` is
 revokt's own build's): a jar holding only the manifest, `META-INF/LICENSE-DATA` and the stored
 `/revokt/seed-<channel>.zip` (`DataArtifactPluginFunctionalTest`). **In 0.2 a seed is a GitHub release asset with
 attestations, not on Maven Central** (the maintainer's decision, 2026-11-23): an app bundles the jar itself, and Maven

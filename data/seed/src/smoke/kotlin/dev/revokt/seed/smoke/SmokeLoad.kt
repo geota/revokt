@@ -23,7 +23,8 @@ import kotlin.system.exitProcess
 
 /**
  * The seed jar's smoke load (#145; `smokeLoadSeed<Channel>`): `--channel compat|default`. A `Revokt` on the class path
- * of revokt-jsse and the seed jar alone, through the public builder, in the sole-seed `ENFORCE` configuration (the
+ * of revokt-jsse and the seed jar alone, through the public builder plus the `@RevoktInternalApi` engine seam (an engine
+ * that records the generation it activates), in the sole-seed `ENFORCE` configuration (the
  * bundled seed, no fetching source, so `MozillaRemoteSettings.DEFAULT`'s pins and no network): `start()` throws on a seed
  * that is absent or unreadable, and the engine must then hold the seed's generation. Exit 0 on success, 1 otherwise.
  */

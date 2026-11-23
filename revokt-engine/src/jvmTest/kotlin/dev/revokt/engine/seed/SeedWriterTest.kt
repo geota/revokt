@@ -272,6 +272,30 @@ internal class SeedWriterTest : SeedFixture() {
     }
 
     @Test
+    fun `a write that fails halfway leaves nothing at the final path and no temporary file`() {
+        val dir = Files.createTempDirectory("seed-job")
+        try {
+            val out = dir.resolve("revokt-seed-compat.zip")
+            val halfway: (java.nio.file.Path, ByteArray) -> Unit = { path, bytes ->
+                Files.write(path, bytes.copyOf(bytes.size / 2))
+                throw java.io.IOException("the disk filled up")
+            }
+            val job = SeedJob(source, Server().fetcher, verifier, CrliteChannel.COMPAT, writeFile = halfway)
+            val failed = assertIs<SeedJobResult.Failed>(job.write(now, "2026.10.21", out))
+            assertTrue("the disk filled up" in failed.detail, failed.detail)
+            assertEquals(emptyList(), dir.listDirectoryEntries())
+            val previous = byteArrayOf(1, 2, 3)
+            out.writeBytes(previous)
+            val again = SeedJob(source, Server().fetcher, verifier, CrliteChannel.COMPAT, writeFile = halfway)
+            assertIs<SeedJobResult.Failed>(again.write(now, "2026.10.21", out))
+            assertContentEquals(previous, out.readBytes())
+            assertEquals(listOf(out), dir.listDirectoryEntries())
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `a previous archive stays whole when a later run fails`() {
         val dir = Files.createTempDirectory("seed-job")
         try {
@@ -301,7 +325,13 @@ internal class SeedWriterTest : SeedFixture() {
             }
             val early = assertIs<SeedJobResult.Failed>(job().write(now, "2026.10.20", out))
             assertTrue("after 2026.10.20 ends" in early.detail, early.detail)
+            // Older than the CRLite staleness default (3 days) before the version day: a frozen source, or a wrong version.
+            for (late in listOf("2026.10.25", "2099.12.31")) {
+                val stale = assertIs<SeedJobResult.Failed>(job().write(now, late, out), late)
+                assertTrue("before $late" in stale.detail, stale.detail)
+            }
             assertEquals(emptyList(), dir.listDirectoryEntries())
+            assertIs<SeedJobResult.Built>(job().write(now, "2026.10.24", out))
             assertIs<SeedJobResult.Built>(job().write(now, "2026.10.21", out))
         } finally {
             dir.toFile().deleteRecursively()

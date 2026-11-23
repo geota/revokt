@@ -27,11 +27,11 @@ internal class SeedZipEntry(
  *
  * One disk and no zip64: a name that is not non-empty printable ASCII, a duplicate name, more than [MAX_ENTRIES]
  * entries, or an archive whose offsets would need zip64 throws [IllegalArgumentException]. The deflate output is the
- * JDK's zlib's, so byte equality across rebuilds holds for one JDK build (the job pins it, data/seed/README.md).
+ * JDK's zlib's, so byte equality across rebuilds holds for the same JDK build (#149's job pins it, data/seed/README.md).
  */
 internal object SeedZip {
-    /** The most entries one end record counts without zip64. */
-    const val MAX_ENTRIES: Int = 0xFFFF
+    /** The most entries one end record counts without zip64: below `0xFFFF`, which is zip64's sentinel there. */
+    const val MAX_ENTRIES: Int = 0xFFFE
 
     /** The DOS date of 1980-02-01: `(year - 1980) << 9 | month << 5 | day`. */
     const val DOS_DATE: Int = (0 shl 9) or (2 shl 5) or 1
