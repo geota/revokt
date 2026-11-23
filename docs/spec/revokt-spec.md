@@ -230,7 +230,8 @@ OkHttp 4.12 and the Okio 3.x floor.
 
 **License: Apache-2.0** for every published artifact except `revokt-clubcard` (MPL-2.0) and, if
 the §12 trigger fires, `revokt-engine-upki` and its `revokt-upki-shim`. Data artifacts: "no copyright claimed; contains Mozilla
-Remote Settings data". Apache over MIT: explicit patent grant and retaliation, contribution
+Remote Settings data", which `verifyPomLicenses` accepts only on the data artifacts' coordinates as each POM states them
+(`DataArtifactPluginFunctionalTest`). Apache over MIT: explicit patent grant and retaliation, contribution
 licensing without a CLA, name protection, JVM scanner expectations.
 
 **`revokt-clubcard`: MPL-2.0 port**, about 44 KB of Rust, contained per §3.1, replaceable later.
@@ -1360,6 +1361,16 @@ output bytes are frozen per `seedFormat`, a change bumps `seedFormat`, which is 
 `index.bin` is **rebuilt from `records.json` and byte-compared** at load (the signature binds records
 and attachment hashes, not parentage), a mismatch → `SEED_UNREADABLE`; the weekly job publishes
 every `seedFormat` the oldest supported minor lists, in the filter format Mozilla signs.
+**The writer** (`buildSeed` and the job's core `SeedJob`, internal to revokt-engine; `SeedWriterTest`): the entries in
+the order `seed.json`, `records.json`, `signature`, `x5u.pem`, `index.bin`, then `attachments/<f>` in placement order;
+`seed.json` stored (the reader accepts it deflated too) and every other entry raw deflate at level 9; each entry dated
+1980-02-01 00:00, with flags 0, no extra field, no comment and no data descriptor; `seed.json` compact JSON with its
+members in the order listed above and `filterFormat` the full filter's decoded encoding (a delta may be in another
+encoding the engine lists, as a sync installs it). It refuses whatever the loader would refuse. The job fetches and
+verifies as a sync verifies the whole collection (`monitor/changes`, the changeset with no `_since`, the server root's
+attachment base, each placed attachment by size and SHA-256), loads the archive once from memory under the source's
+pins, and only then writes it, through a temporary file moved into place. One changeset gives one archive on one JDK
+build, whose zlib deflates it; the job pins its JDK.
 **Seed-load rule** (the seed always leaves a live generation behind; `SeedLoaderTest`, `SeedLoaderStoreTest`,
 `SeedAdoptTest`). The store is read first: a read that throws fails the load with nothing written (`STORE_FAILED`); a
 malformed `updater.json` reads as absent. Each store fault is counted once, where it is found.
@@ -1539,8 +1550,10 @@ Firefox for Android, no public mirror). Recommended: `DEFAULT` for backends, `CO
 two full-filter cuts for re-parenting. When the stored full is no longer the delta parent, the new full downloads
 in the same sync, on any network: neither Firefox nor upki defers a download on a metered network. **Seeds** verified like a live fetch except x5u validity at the seed's signed
 `last_modified`; a seed-backed generation is never `NO_DATA`; a future-dated seed installs like any other (§6.5); `DataState.fromSeed`, `ageMillis` and
-`stale` are loud. **Data artifacts**: date-versioned, weekly, attested, not in the BOM, no
-build-time plugin. **Freshness per dataset** (`Freshness`, reported on `DataState`; a dataset's value joins the enum with the dataset): CRLite ages from the filter
+`stale` are loud. **Data artifacts**: date-versioned (`YYYY.MM.DD`, the run's UTC date, which the signed `<ts>` is not
+after; `SeedWriterTest`), weekly, attested, not in the BOM, no build-time plugin for a consumer (`data-artifact` is
+revokt's own build's): a jar holding only the manifest and the stored `/revokt/seed-<channel>.zip`, a POM with no
+dependency and the data licence, and no Gradle module metadata (`DataArtifactPluginFunctionalTest`). **Freshness per dataset** (`Freshness`, reported on `DataState`; a dataset's value joins the enum with the dataset): CRLite ages from the filter
 record's `last_modified`; OneCRL and intermediates (M2) age from the last **verified poll**, since
 their content changes only when a CA is listed; CRLSet from its sequence time; the denylist from the
 artifact date; seeds from their signed timestamp.

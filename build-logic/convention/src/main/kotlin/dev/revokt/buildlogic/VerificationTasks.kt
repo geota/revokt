@@ -25,7 +25,14 @@ import java.security.MessageDigest
 /** Every message is a remediation instruction, never a bare rule name (CONTRIBUTING §3). */
 private fun fail(message: String): Nothing = throw GradleException(message)
 
-/** Spec §3.1 item 1: each POM declares exactly the module's licence. Reads the generated `pom-default.xml` files. */
+/**
+ * Spec §3.1 item 1 and §3 "Data artifacts": each POM declares exactly its module's licence. Reads the generated
+ * `pom-default.xml` files, and each POM's own `groupId` and `artifactId`: a POM whose coordinates are exactly a data
+ * artifact's ([DataArtifacts.isData]: the data group and the closed set of seed artifact ids, no glob) must declare
+ * exactly the data licence text; every other POM exactly [expectedLicense], which is never the data text (maintainer
+ * decision A7, 2026-11-05). The coordinates are read from the POM, never from configuration, so a code module that
+ * carries the data text fails whatever its build says.
+ */
 abstract class VerifyPomLicensesTask : DefaultTask() {
     @get:Input
     abstract val expectedLicense: Property<String>
@@ -41,16 +48,161 @@ abstract class VerifyPomLicensesTask : DefaultTask() {
     fun verify() {
         val files = poms.files.filter { it.isFile }
         if (files.isEmpty()) fail("verifyPomLicenses: no generated POM found; run the generatePomFileFor* tasks first (maven-publish must be applied).")
-        val expected = expectedLicense.get()
-        for (pom in files) {
-            val names = Regex("<license>\\s*<name>([^<]+)</name>", RegexOption.MULTILINE).findAll(pom.readText()).map { it.groupValues[1].trim() }.toList()
-            if (names != listOf(expected)) {
-                fail(
-                    "verifyPomLicenses: ${pom.relativeTo(rootDir.get().asFile)} declares licences $names, expected exactly [$expected]. " +
-                        "The licence is derived from the module name in Conventions.licenseOf (CONTRIBUTING §3 \"Licensing\"); " +
-                        "do not add a <license> block by hand.",
-                )
+        for (file in files) {
+            val problem = licenseProblem(Pom.read(file), expectedLicense.get()) ?: continue
+            fail("verifyPomLicenses: ${file.relativeTo(rootDir.get().asFile)} $problem")
+        }
+    }
+
+    internal companion object {
+        /** What is wrong with [pom]'s licences for a module whose code licence is [expected], or null. */
+        fun licenseProblem(
+            pom: Pom,
+            expected: String,
+        ): String? {
+            val group = pom.groupId ?: return "has no groupId of its own; every revokt POM names its coordinates."
+            val artifact = pom.artifactId ?: return "has no artifactId of its own; every revokt POM names its coordinates."
+            if (DataArtifacts.isData(group, artifact)) {
+                if (pom.licenses == listOf(DataArtifacts.LICENSE)) return null
+                return "($group:$artifact, a data artifact) declares licences ${pom.licenses}, expected exactly " +
+                    "[${DataArtifacts.LICENSE}] (spec §3 \"Data artifacts\"); the data-artifact plugin writes it."
             }
+            if (expected == DataArtifacts.LICENSE) {
+                return "($group:$artifact) is not a data artifact, so the data licence is not its licence: only " +
+                    "${DataArtifacts.GROUP}:${DataArtifacts.ARTIFACT_IDS} carry it (CONTRIBUTING §3 \"Licensing\")."
+            }
+            if (pom.licenses == listOf(expected)) return null
+            return "($group:$artifact) declares licences ${pom.licenses}, expected exactly [$expected]. " +
+                "The licence is derived from the module name in Conventions.licenseOf (CONTRIBUTING §3 \"Licensing\"); " +
+                "do not add a <license> block by hand."
+        }
+    }
+}
+
+/** The facts the POM checks read from a generated POM: the project element's own children only. */
+internal class Pom(
+    val groupId: String?,
+    val artifactId: String?,
+    val packaging: String?,
+    /** Each `licenses/license`'s `name`, trimmed; an empty string for a licence with none. */
+    val licenses: List<String>,
+    /** The local names of the project element's children (`dependencies`, `parent`, ...). */
+    val elements: Set<String>,
+) {
+    companion object {
+        fun read(file: File): Pom = read(file.readBytes())
+
+        /** [bytes] parsed with no DTD and no external entity, as a POM never needs one. */
+        fun read(bytes: ByteArray): Pom {
+            val factory =
+                javax.xml.parsers.DocumentBuilderFactory.newInstance().apply {
+                    isNamespaceAware = true
+                    isExpandEntityReferences = false
+                    setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+                    setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true)
+                }
+            val root = factory.newDocumentBuilder().parse(bytes.inputStream()).documentElement
+            val children = root.childElements()
+            fun text(name: String): String? = children.firstOrNull { it.localName == name }?.textContent?.trim()
+            val licenses =
+                children.filter { it.localName == "licenses" }.flatMap { it.childElements() }.filter { it.localName == "license" }
+                    .map { l -> l.childElements().firstOrNull { it.localName == "name" }?.textContent?.trim().orEmpty() }
+            return Pom(text("groupId"), text("artifactId"), text("packaging"), licenses, children.map { it.localName }.toSet())
+        }
+
+        private fun org.w3c.dom.Element.childElements(): List<org.w3c.dom.Element> =
+            (0 until childNodes.length).map { childNodes.item(it) }.filterIsInstance<org.w3c.dom.Element>()
+    }
+}
+
+/**
+ * Spec §6.5 "Seed artifacts declare no code dependency" and §7.2 "not in the BOM": every POM of a data-artifact project
+ * is a data artifact's ([DataArtifacts.isData]), packaged as a jar, with no `dependencies`, no `dependencyManagement`
+ * and no `parent`.
+ */
+abstract class VerifyDataPomTask : DefaultTask() {
+    @get:Internal
+    abstract val rootDir: DirectoryProperty
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val poms: ConfigurableFileCollection
+
+    @TaskAction
+    fun verify() {
+        val files = poms.files.filter { it.isFile }
+        if (files.isEmpty()) fail("verifyDataPom: no generated POM found; run the generatePomFileFor* tasks first.")
+        for (file in files) {
+            val problem = problem(Pom.read(file)) ?: continue
+            fail("verifyDataPom: ${file.relativeTo(rootDir.get().asFile)} $problem")
+        }
+    }
+
+    internal companion object {
+        fun problem(pom: Pom): String? {
+            if (!DataArtifacts.isData(pom.groupId.orEmpty(), pom.artifactId.orEmpty())) {
+                return "is ${pom.groupId}:${pom.artifactId}, not a data artifact: a data-artifact project publishes only " +
+                    "${DataArtifacts.GROUP}:${DataArtifacts.ARTIFACT_IDS}."
+            }
+            val forbidden = pom.elements.intersect(setOf("dependencies", "dependencyManagement", "parent"))
+            if (forbidden.isNotEmpty()) {
+                return "declares $forbidden: a seed artifact declares no code dependency; its engine floor is seed.json's " +
+                    "engineFloor (spec §6.5)."
+            }
+            if (pom.packaging != null && pom.packaging != "jar") return "is packaged as ${pom.packaging}, not a jar."
+            return null
+        }
+    }
+}
+
+/**
+ * Spec §6.5 "Seed archive": a seed jar holds exactly `META-INF/MANIFEST.MF` and the channel's
+ * `revokt/seed-<channel>.zip` (plus their directory entries), the archive **stored** and byte-equal to the [zip] the job
+ * wrote, so its SHA-256 is the attested archive's; no class file, no other resource.
+ */
+abstract class VerifySeedJarTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val jar: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val zip: RegularFileProperty
+
+    @get:Input
+    abstract val channel: Property<String>
+
+    @TaskAction
+    fun verify() {
+        val found = problems(jar.get().asFile, zip.get().asFile, channel.get())
+        if (found.isNotEmpty()) fail("verifySeedJar: ${jar.get().asFile.name}:\n" + found.joinToString("\n") { "  - $it" })
+    }
+
+    internal companion object {
+        fun problems(
+            jar: File,
+            zip: File,
+            channel: String,
+        ): List<String> {
+            val resource = DataArtifacts.resource(channel)
+            val allowed = setOf("META-INF/", "META-INF/MANIFEST.MF", "revokt/", resource)
+            val out = ArrayList<String>()
+            java.util.zip.ZipFile(jar).use { z ->
+                val names = z.entries().toList().map { it.name }
+                if (names.size != names.toSet().size) out += "a duplicate entry in $names"
+                val extra = names.filterNot { it in allowed }
+                if (extra.isNotEmpty()) out += "entries $extra: a seed jar holds only the manifest and $resource"
+                if (z.getEntry("META-INF/MANIFEST.MF") == null) out += "no META-INF/MANIFEST.MF"
+                val entry = z.getEntry(resource)
+                if (entry == null) {
+                    out += "no $resource, which SeedSource.bundled() resolves for $channel"
+                } else {
+                    if (entry.method != java.util.zip.ZipEntry.STORED) out += "$resource is deflated: store it (entryCompression = STORED)"
+                    val bytes = z.getInputStream(entry).use { it.readBytes() }
+                    if (!bytes.contentEquals(zip.readBytes())) out += "$resource differs from ${zip.name}, the archive the job wrote"
+                }
+            }
+            return out
         }
     }
 }

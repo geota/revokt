@@ -32,6 +32,8 @@ class RootPlugin : Plugin<Project> {
             nonPublicMarkers.add(Conventions.MARKER_TESTING)
             nonPublicMarkers.add(Conventions.MARKER_CLUBCARD_INTERNAL)
             ignoredProjects.add("revokt-bom")
+            // The seed job's build (data/seed): it publishes data, never code, so it has no API to dump (#145).
+            ignoredProjects.add("revokt-seed")
             @Suppress("OPT_IN_USAGE")
             klib { enabled = false }
         }

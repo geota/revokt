@@ -41,6 +41,7 @@ tasks.withType<Test>().configureEach {
             "revokt.writeRecords",
             "revokt.writeOracleInputs",
             "revokt.storeModel.seed",
+            "revokt.writeSeedFixture",
         )
     for (name in passed) {
         providers.systemProperty(name).orNull?.let { systemProperty(name, it) }

@@ -209,7 +209,10 @@ Robolectric `android-all` jars cached and `robolectric.offline=true`; runner ima
   runs on every PR; a build-logic task `verifyHeaderLocations` fails when an `MPL-2.0` header appears
   outside `revokt-clubcard/src/*/kotlin/**/port/**` (§3.1 item 3, the header-location rule).
 - `verifyPomLicenses` (build-logic task on `check`) reads every publication's generated POM (KMP root and
-  `-jvm` included): `revokt-clubcard` exactly `MPL-2.0`, everything else exactly `Apache-2.0` (§3.1 item 1).
+  `-jvm` included): `revokt-clubcard` exactly `MPL-2.0`, everything else exactly `Apache-2.0` (§3.1 item 1). The one
+  exception is the data artifacts: a POM whose own coordinates are exactly `DataArtifacts`' (the data group and the
+  closed set `revokt-seed-compat`, `revokt-seed-default`) carries exactly "No copyright claimed; contains Mozilla
+  Remote Settings data", and no other POM may (maintainer decision A7, #145).
 
 **Dependencies.**
 - Versions only in `libs.versions.toml`. **Locking**: `lockMode = STRICT`, every lockfile committed; a

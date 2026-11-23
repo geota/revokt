@@ -74,5 +74,9 @@ gradlePlugin {
             id = "revokt.bom"
             implementationClass = "dev.revokt.buildlogic.BomPlugin"
         }
+        register("dataArtifact") {
+            id = "revokt.data-artifact"
+            implementationClass = "dev.revokt.buildlogic.DataArtifactPlugin"
+        }
     }
 }
