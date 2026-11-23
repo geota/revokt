@@ -168,6 +168,20 @@ class PkixPathBuilderFallbackTest {
     }
 
     @Test
+    fun `fallback maps each of two intermediates to its own presented bytes, whatever the order`() {
+        // Step 6 does not re-check linkage, so a path that repeats one intermediate's bytes in both positions would
+        // change the CRLite issuer key: each intermediate must come back as its own presented bytes.
+        val upper = PkixPki.issue("Upper Intermediate", root, ca = true)
+        val lower = PkixPki.issue("Lower Intermediate", upper, ca = true)
+        val under = PkixPki.issue("leaf.two.example", lower, ca = false)
+        val fallback = PkixPathBuilderFallback()
+        val anchors = snapshot(root)
+        val expected = hex(listOf(under.der, lower.der, upper.der, root.der))
+        assertEquals(expected, hex(fallback.build(listOf(under.der, lower.der, upper.der), anchors, PkixPki.NOW)))
+        assertEquals(expected, hex(fallback.build(listOf(under.der, upper.der, lower.der), anchors, PkixPki.NOW)))
+    }
+
+    @Test
     fun `fallback finds the path the raw issuer bytes hide`() {
         // The issuer field spells the intermediate's name as a PrintableString: raw bytes differ, the JDK's
         // X500Principal equality does not (spec §10 residual 1).
