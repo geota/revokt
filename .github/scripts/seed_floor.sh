@@ -10,8 +10,9 @@
 # - older: the run fails;
 # - equal on every channel: nothing new, so publishing is skipped and the run stays green;
 # - otherwise: publish.
-# The first seed release has no floor. A previous release that is missing a channel's jar, or whose attestation does
-# not verify, fails the run: the maintainer repairs it by hand.
+# The first seed release has no floor; a seed-* tag with no published seed release fails the run, so deleting the
+# releases does not reset the floor. A previous release that is missing a channel's jar, or whose attestation does not
+# verify, fails the run: the maintainer repairs it by hand.
 #
 #   seed_floor.sh <version> <dir>   <dir> holds revokt-seed-<channel>-<version>.jar for both channels; writes
 #                                   publish=true|false to $GITHUB_OUTPUT
@@ -37,7 +38,11 @@ prev=$(printf '%s\n' "$releases" | jq -r '.[] | select(.draft | not) | .tag_name
   { grep -Ex 'seed-[0-9]{4}\.[0-9]{2}\.[0-9]{2}' || true; } | sort | tail -n 1)
 
 if [ -z "$prev" ]; then
-  echo "::notice::seed floor: no earlier seed release, so no floor (the first seed release)"
+  # Deleting every seed release must not reset the floor: a seed-* tag left behind means one existed.
+  refs=$(gh api --paginate "repos/$repo/git/matching-refs/tags/seed-") || fail "cannot list the seed tags"
+  tags=$(printf '%s\n' "$refs" | jq -r '.[].ref' | { grep -Ex 'refs/tags/seed-[0-9]{4}\.[0-9]{2}\.[0-9]{2}' || true; })
+  [ -z "$tags" ] || fail "seed tags exist but no published seed release does: restore the release or ask the maintainer"
+  echo "::notice::seed floor: no earlier seed release or tag, so no floor (the first seed release)"
   echo "publish=true" >>"$GITHUB_OUTPUT"
   exit 0
 fi

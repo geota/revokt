@@ -729,19 +729,24 @@ PGP fingerprint, a Gradle `trusted-key` snippet, `gh attestation verify`).
       released, that is the run's own commit, as only the latest `0.x` minor is supported;
     - it refuses a seed whose signed `<ts>` is older than the last seed release's for that channel (§7.2). That
       release's jar must verify by its attestation, as this workflow's on `main`, and its `records.json` `<ts>` must
-      equal the attested one. A seed equal on every channel publishes nothing, and the first seed release has no
-      floor.
+      equal the attested one. A seed equal on every channel publishes nothing. The first seed release has no floor,
+      but a `seed-*` tag with no published seed release fails the run, so deleting releases does not reset it.
   - **The `publish` job** runs on `main` only, in the `seed-publish` environment, and only when the repository
     variable `SEED_PUBLISH_ENABLED` is `true` and the dispatch is not a `dry-run`. It holds `contents: write`,
     `id-token: write` and `attestations: write`:
     - it attests each jar twice: SLSA provenance, and the seed predicate (`docs/attestation/seed-v1.md`), which
       holds the changeset timestamp, the placed record ids, each attachment's size and SHA-256, and the JDK build;
-    - it creates the release `seed-YYYY.MM.DD` as a draft, never "Latest", with both channels' jars and the
-      `.sigstore.json` bundles;
-    - it reads the draft's assets back and requires the smoke-loaded SHA-256 and both attestations;
-    - only then does it publish, which is the announcement.
+    - it checks the jars and predicates against the build job's SHA-256, and refuses an existing `seed-YYYY.MM.DD`
+      tag, release or draft;
+    - it creates that release as a draft, never "Latest", with both channels' jars and the `.sigstore.json` bundles
+      (the provenance also as `.intoto.jsonl`, for Scorecard), and from then on addresses it by its id;
+    - it reads the draft's assets back and requires the smoke-loaded SHA-256 and both attestations, from the API and
+      from the attached bundles;
+    - only then does it publish, which is the announcement, and it checks that the new tag names the run's commit.
   - **`seed-publish`:** deployment branch `main` only; the maintainers as required reviewers ("Prevent self-review"
-    off in the solo phase); no administrator bypass; no secrets. The job uses no secret at all: `GITHUB_TOKEN`, and
+    off in the solo phase); no administrator bypass; no secrets. `SEED_PUBLISH_ENABLED` is set only after the
+    environment exists, and unset if it is ever deleted: a job naming a missing environment creates it with no
+    protection. A `refs/tags/seed-*` tag ruleset blocks deleting or moving a seed tag. The job uses no secret at all: `GITHUB_TOKEN`, and
     the attestations' OIDC identity.
 - The `0.x` promise: no compatibility promise before 1.0, but the API dumps are committed and every
   non-additive diff needs `!`, so the history shows every break on purpose.

@@ -62,14 +62,15 @@ oldest supported engine minor, which is the run's own commit until a minor is re
 
 The job then refuses a seed whose signed `<ts>` is older than the last seed release's for that channel. That release's
 jar must verify by its attestation, and its own `<ts>` must equal the attested one. When every channel's `<ts>` equals
-the last release's, nothing is published.
+the last release's, nothing is published. A `seed-*` tag with no published seed release fails the run.
 
 With publishing on (the `SEED_PUBLISH_ENABLED` repository variable and the `seed-publish` environment), the job then:
 1. attests each jar: SLSA provenance and the seed predicate, [seed-v1](../../docs/attestation/seed-v1.md). The
    predicate holds the `<ts>`, the placed record ids, each attachment's size and SHA-256, and the JDK build;
-2. creates the `seed-YYYY.MM.DD` release as a draft, holding both jars and the `.sigstore.json` bundles;
-3. reads the assets back and checks them;
-4. publishes the release.
+2. creates the `seed-YYYY.MM.DD` release as a draft, holding both jars and the `.sigstore.json` bundles (the provenance
+   also as `.intoto.jsonl`);
+3. reads the assets back and checks them: their SHA-256, and the attestations from the API and from the bundles;
+4. publishes the release and checks that its tag names the run's commit.
 
 The scripts it runs are `.github/scripts/seed_predicate.sh` and `seed_floor.sh`, which `test_seed_scripts.py` tests.
 

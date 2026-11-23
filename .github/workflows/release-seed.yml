@@ -16,10 +16,12 @@
 # The publish job runs on main only, in the seed-publish environment, and only when publishing is on, this is not a
 # dry run, and the seed is newer than the last release. It holds the only write permissions:
 # - it attests the jars: SLSA provenance and the seed-v1 predicate (docs/attestation/seed-v1.md);
-# - it creates the seed-YYYY.MM.DD release as a draft, never "Latest", and attaches the jars and the bundles;
+# - it refuses a seed-YYYY.MM.DD tag, release or draft that already exists;
+# - it creates that release as a draft, never "Latest", and attaches the jars and the bundles (the provenance also as
+#   .intoto.jsonl, for Scorecard); everything after the create goes by the release id;
 # - it reads the draft's assets back, checks their SHA-256 against the smoke-loaded jars and verifies their
-#   attestations;
-# - only then does it publish, which is the announcement.
+#   attestations, from the API and from the attached bundles;
+# - only then does it publish, which is the announcement, and checks that the new tag names this run's commit.
 #
 # No repository or environment secret is used. GITHUB_TOKEN reaches only the steps that call gh, as GH_TOKEN, never
 # as an argument. Both jobs block egress except to the hosts listed with each.
@@ -38,10 +40,11 @@ on:
 
 permissions: read-all
 
-# One run at a time: a run never stops mid-release, and a newer run waits while one awaits approval, so the floor it
-# reads is current. A group holds one running and one pending run; a third replaces the pending second.
+# One run at a time per ref: a run never stops mid-release, and a newer run waits while one awaits approval, so the
+# floor it reads is current. A group holds one running and one pending run; a third replaces the pending second. Only
+# main publishes, and a dispatch from another branch never displaces a pending main run.
 concurrency:
-  group: release-seed
+  group: release-seed-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -68,6 +71,8 @@ jobs:
       default-sha256: ${{ steps.facts.outputs.default-sha256 }}
       compat-ts: ${{ steps.facts.outputs.compat-ts }}
       default-ts: ${{ steps.facts.outputs.default-ts }}
+      compat-predicate-sha256: ${{ steps.facts.outputs.compat-predicate-sha256 }}
+      default-predicate-sha256: ${{ steps.facts.outputs.default-predicate-sha256 }}
     steps:
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
@@ -119,7 +124,7 @@ jobs:
           set -euo pipefail
           curl -fsSL --retry 3 --max-time 300 -o "$RUNNER_TEMP/$JDK_ARCHIVE" \
             "https://github.com/adoptium/temurin21-binaries/releases/download/$JDK_RELEASE/$JDK_ARCHIVE"
-          echo "$JDK_ARCHIVE_SHA256  $RUNNER_TEMP/$JDK_ARCHIVE" | sha256sum -c -
+          echo "${JDK_ARCHIVE_SHA256:?}  $RUNNER_TEMP/$JDK_ARCHIVE" | sha256sum -c --strict -
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: jdkfile
@@ -161,8 +166,11 @@ jobs:
             jar="revokt-seed-$channel-$VERSION.jar"
             cp -- "data/seed/build/seed/$jar" "$OUT/$jar"
             bash .github/scripts/seed_predicate.sh predicate "$OUT/$jar" "$channel" "$VERSION" >| "$OUT/$jar.seed.json"
-            echo "$channel-sha256=$(sha256sum "$OUT/$jar" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-            echo "$channel-ts=$(jq -r .recordsLastModified "$OUT/$jar.seed.json")" >> "$GITHUB_OUTPUT"
+            {
+              echo "$channel-sha256=$(sha256sum "$OUT/$jar" | cut -d' ' -f1)"
+              echo "$channel-ts=$(jq -r .recordsLastModified "$OUT/$jar.seed.json")"
+              echo "$channel-predicate-sha256=$(sha256sum "$OUT/$jar.seed.json" | cut -d' ' -f1)"
+            } >> "$GITHUB_OUTPUT"
             jq -c '{channel, recordsLastModified, records: (.records | length), jdk: .jdk.runtimeVersion}' "$OUT/$jar.seed.json"
           done
       - name: monotonic freshness against the last seed release
@@ -177,7 +185,7 @@ jobs:
           name: seed
           path: ${{ runner.temp }}/seed/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30   # an approval can wait 30 days
 
   publish:
     name: attest and release (seed-publish)
@@ -223,11 +231,35 @@ jobs:
         with:
           name: seed
           path: ${{ runner.temp }}/seed
-      - name: the jars are the smoke-loaded ones
+      # The bytes the build job smoke-loaded and read: the jars, and the predicates about to be signed.
+      - name: the jars and predicates are the build job's
+        env:
+          COMPAT_PREDICATE_SHA256: ${{ needs.build.outputs.compat-predicate-sha256 }}
+          DEFAULT_PREDICATE_SHA256: ${{ needs.build.outputs.default-predicate-sha256 }}
         run: |
           set -euo pipefail
-          printf '%s  %s\n' "$COMPAT_SHA256" "$RUNNER_TEMP/seed/revokt-seed-compat-$VERSION.jar" \
-            "$DEFAULT_SHA256" "$RUNNER_TEMP/seed/revokt-seed-default-$VERSION.jar" | sha256sum -c -
+          seed="$RUNNER_TEMP/seed"
+          printf '%s  %s\n' \
+            "${COMPAT_SHA256:?}" "$seed/revokt-seed-compat-$VERSION.jar" \
+            "${DEFAULT_SHA256:?}" "$seed/revokt-seed-default-$VERSION.jar" \
+            "${COMPAT_PREDICATE_SHA256:?}" "$seed/revokt-seed-compat-$VERSION.jar.seed.json" \
+            "${DEFAULT_PREDICATE_SHA256:?}" "$seed/revokt-seed-default-$VERSION.jar.seed.json" | sha256sum -c --strict -
+      # Refused before anything is signed: a seed-<version> tag (the approval wait can last days), or any release or
+      # draft holding that tag name. Any API error fails the step.
+      - name: no tag, release or draft for this version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tags=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$TAG" \
+            --jq 'map(select(.ref == "refs/tags/" + env.TAG)) | length')
+          if [ "$tags" != 0 ]; then echo "::error::the tag $TAG exists"; exit 1; fi
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == env.TAG) | .id' | wc -l | tr -d ' ')
+          if [ "$releases" != 0 ]; then
+            echo "::error::a release or draft named $TAG exists; delete the leftover draft and re-run"
+            exit 1
+          fi
       - name: provenance
         id: provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -249,6 +281,8 @@ jobs:
           subject-path: ${{ runner.temp }}/seed/revokt-seed-default-${{ needs.build.outputs.version }}.jar
           predicate-type: ${{ env.PREDICATE_TYPE }}
           predicate-path: ${{ runner.temp }}/seed/revokt-seed-default-${{ needs.build.outputs.version }}.jar.seed.json
+      # The provenance bundle goes out twice: as .sigstore.json, and as .intoto.jsonl, which is the name Scorecard's
+      # Signed-Releases check counts as provenance.
       - name: the assets
         env:
           PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
@@ -256,22 +290,21 @@ jobs:
           SEED_DEFAULT: ${{ steps.seed-default.outputs.bundle-path }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/assets"
-          for channel in compat default; do cp -- "$RUNNER_TEMP/seed/revokt-seed-$channel-$VERSION.jar" "$RUNNER_TEMP/assets/"; done
-          cp -- "${PROVENANCE:?}" "$RUNNER_TEMP/assets/revokt-seed-$VERSION.provenance.sigstore.json"
-          cp -- "${SEED_COMPAT:?}" "$RUNNER_TEMP/assets/revokt-seed-compat-$VERSION.jar.seed.sigstore.json"
-          cp -- "${SEED_DEFAULT:?}" "$RUNNER_TEMP/assets/revokt-seed-default-$VERSION.jar.seed.sigstore.json"
-          ls -l "$RUNNER_TEMP/assets"
+          assets="$RUNNER_TEMP/assets"
+          mkdir -p "$assets"
+          for channel in compat default; do cp -- "$RUNNER_TEMP/seed/revokt-seed-$channel-$VERSION.jar" "$assets/"; done
+          cp -- "${PROVENANCE:?}" "$assets/revokt-seed-$VERSION.provenance.sigstore.json"
+          cp -- "${PROVENANCE:?}" "$assets/revokt-seed-$VERSION.intoto.jsonl"
+          cp -- "${SEED_COMPAT:?}" "$assets/revokt-seed-compat-$VERSION.jar.seed.sigstore.json"
+          cp -- "${SEED_DEFAULT:?}" "$assets/revokt-seed-default-$VERSION.jar.seed.sigstore.json"
+          ls -l "$assets"
+      # Everything after the create call goes by the release id it returns, never by the tag name.
       - name: the draft release
+        id: draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # A leftover draft from a failed run would make the tag ambiguous: the maintainer deletes it first.
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null 2>&1; then
-            echo "::error::a release or draft named $TAG exists; delete the leftover draft and re-run"
-            exit 1
-          fi
           notes="$RUNNER_TEMP/notes.md"
           {
             echo "The \`revokt-seed-<channel>\` jars of $VERSION: Mozilla's cert-revocations data, verified and smoke-loaded"
@@ -289,26 +322,63 @@ jobs:
             echo "  --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release-seed.yml --source-ref refs/heads/main"
             echo '```'
           } >| "$notes"
-          gh release create "$TAG" "$RUNNER_TEMP"/assets/* --repo "$GITHUB_REPOSITORY" --draft --latest=false \
-            --target "$GITHUB_SHA" --title "revokt-seed $VERSION" --notes-file "$notes"
-      - name: the draft's assets are the smoke-loaded, attested jars
+          gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" -f name="revokt-seed $VERSION" -F body=@"$notes" \
+            -F draft=true -F prerelease=false -f make_latest=false >| "$RUNNER_TEMP/release.json"
+          id=$(jq -r 'if .draft == true and .tag_name == env.TAG and (.id | type == "number") then .id
+            else error("not the draft asked for") end' "$RUNNER_TEMP/release.json")
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          for file in "$RUNNER_TEMP"/assets/*; do
+            name=$(basename "$file")
+            gh api -X POST "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$name" \
+              -H "Content-Type: application/octet-stream" --input "$file" --jq '.name' >/dev/null
+          done
+      - name: the draft's assets are the smoke-loaded, attested jars and their bundles
         env:
           GH_TOKEN: ${{ github.token }}
+          ID: ${{ steps.draft.outputs.id }}
           SIGNER_WORKFLOW: ${{ github.repository }}/.github/workflows/release-seed.yml
         run: |
           set -euo pipefail
           back="$RUNNER_TEMP/readback"
           mkdir -p "$back"
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.jar' --dir "$back"
-          printf '%s  %s\n' "$COMPAT_SHA256" "$back/revokt-seed-compat-$VERSION.jar" \
-            "$DEFAULT_SHA256" "$back/revokt-seed-default-$VERSION.jar" | sha256sum -c -
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/${ID:?}/assets?per_page=100" \
+            --jq '.[] | "\(.id) \(.name)"' >| "$RUNNER_TEMP/assets.txt"
+          expected=$(cd "$RUNNER_TEMP/assets" && printf '%s\n' * | sort)
+          [ "$(cut -d' ' -f2 "$RUNNER_TEMP/assets.txt" | sort)" = "$expected" ] ||
+            { echo "::error::the draft's assets are not the ones uploaded"; exit 1; }
+          while read -r asset name; do
+            gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$asset" >| "$back/$name"
+          done < "$RUNNER_TEMP/assets.txt"
+          printf '%s  %s\n' \
+            "${COMPAT_SHA256:?}" "$back/revokt-seed-compat-$VERSION.jar" \
+            "${DEFAULT_SHA256:?}" "$back/revokt-seed-default-$VERSION.jar" | sha256sum -c --strict -
+          cmp -- "$back/revokt-seed-$VERSION.provenance.sigstore.json" "$back/revokt-seed-$VERSION.intoto.jsonl"
+          verify=(--repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners)
           for channel in compat default; do
             jar="$back/revokt-seed-$channel-$VERSION.jar"
-            verify=(--repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners)
+            # From the attestation API, then from the attached bundle files.
             gh attestation verify "$jar" "${verify[@]}" >/dev/null
             gh attestation verify "$jar" "${verify[@]}" --predicate-type "$PREDICATE_TYPE" >/dev/null
+            gh attestation verify "$jar" "${verify[@]}" --bundle "$back/revokt-seed-$VERSION.provenance.sigstore.json" >/dev/null
+            gh attestation verify "$jar" "${verify[@]}" --predicate-type "$PREDICATE_TYPE" \
+              --bundle "$back/revokt-seed-$channel-$VERSION.jar.seed.sigstore.json" >/dev/null
           done
       - name: publish (the announcement)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          ID: ${{ steps.draft.outputs.id }}
+        run: |
+          set -euo pipefail
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/${ID:?}" -F draft=false -f make_latest=false >| "$RUNNER_TEMP/published.json"
+          jq -e '.draft == false and .tag_name == env.TAG' "$RUNNER_TEMP/published.json" >/dev/null ||
+            { echo "::error::release $ID is not the published $TAG"; exit 1; }
+          # The tag the publish created must name this run's commit (a tag made meanwhile would be used as it is).
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+          if [ "${ref%% *}" = tag ]; then
+            ref="commit $(gh api "repos/$GITHUB_REPOSITORY/git/tags/${ref#* }" --jq '.object.sha')"
+          fi
+          if [ "${ref#* }" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG names ${ref#* }, not this run's commit $GITHUB_SHA: check the release by hand"
+            exit 1
+          fi
