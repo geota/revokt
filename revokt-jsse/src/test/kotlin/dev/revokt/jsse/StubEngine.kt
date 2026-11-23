@@ -37,7 +37,17 @@ internal class StubEngine(
 
     override val coverageEndMillis: Long? get() = null
 
-    override fun close() = Unit
+    /** The number of close() calls. */
+    var closes = 0
+        private set
+
+    /** What close() throws, after counting; null: nothing. */
+    var closeThrows: Throwable? = null
+
+    override fun close() {
+        closes++
+        closeThrows?.let { throw it }
+    }
 
     // A hostile equals, so the registry is shown to compare by identity.
     override fun equals(other: Any?): Boolean = equalsEverything || this === other

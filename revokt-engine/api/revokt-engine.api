@@ -85,8 +85,11 @@ public final class dev/revokt/DiagnosticCode : java/lang/Enum {
 	public static final field NO_DATA_REJECTS_WITHOUT_LOCAL_DATA Ldev/revokt/DiagnosticCode;
 	public static final field NO_FETCHING_SOURCE Ldev/revokt/DiagnosticCode;
 	public static final field NO_REQUIRED_DATASETS Ldev/revokt/DiagnosticCode;
+	public static final field RULE_FLIPPED_THIS_MINOR Ldev/revokt/DiagnosticCode;
+	public static final field SEED_PAST_REJECT_THRESHOLD Ldev/revokt/DiagnosticCode;
 	public static final field STALENESS_CLEARED_FOR_REQUIRED_DATASET Ldev/revokt/DiagnosticCode;
 	public static final field STALE_REJECTS_WITHOUT_THRESHOLD Ldev/revokt/DiagnosticCode;
+	public static final field UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP Ldev/revokt/DiagnosticCode;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/DiagnosticCode;
 	public static fun values ()[Ldev/revokt/DiagnosticCode;

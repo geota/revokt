@@ -3,10 +3,13 @@ public final class dev/revokt/jsse/JdkHttpFetcher : dev/revokt/HttpFetcher {
 	public fun fetch (Ldev/revokt/FetchRequest;)Ldev/revokt/FetchResponse;
 }
 
-public final class dev/revokt/jsse/Revokt {
+public final class dev/revokt/jsse/Revokt : java/lang/AutoCloseable {
 	public static final field Companion Ldev/revokt/jsse/Revokt$Companion;
 	public synthetic fun <init> (Ldev/revokt/jsse/RevoktConfig;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public static final fun builder ()Ldev/revokt/jsse/Revokt$Builder;
+	public fun close ()V
+	public final fun getEvaluator ()Ldev/revokt/Evaluator;
+	public final fun start ()Ljava/util/List;
 	public fun toString ()Ljava/lang/String;
 	public final fun validate (Ldev/revokt/Enforcement;)Ljava/util/List;
 	public final fun validateOrThrow (Ldev/revokt/Enforcement;)V

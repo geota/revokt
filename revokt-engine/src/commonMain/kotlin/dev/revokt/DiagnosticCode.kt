@@ -4,10 +4,10 @@
 package dev.revokt
 
 /**
- * What a [PolicyDiagnostic] is about (spec §4): one code per configuration check that `validate(enforcement)` runs.
- * Runtime conditions are [WarningCode]s, and why a sync stopped is its [SyncFailure]. Growable: a code may be added in
- * a minor, so a `when` over codes needs an `else` branch. Persist `name`, never `ordinal`. Match on the code, never on
- * the message.
+ * What a [PolicyDiagnostic] is about (spec §4): one code per configuration check that `validate(enforcement)` or
+ * `start()` runs. Runtime conditions are [WarningCode]s, and why a sync stopped is its [SyncFailure]. Growable: a code
+ * may be added in a minor, so a `when` over codes needs an `else` branch. Persist `name`, never `ordinal`. Match on the
+ * code, never on the message.
  */
 public enum class DiagnosticCode {
     /** An exemption registered on an `EVIDENCE` rule. */
@@ -51,4 +51,13 @@ public enum class DiagnosticCode {
 
     /** `ioDispatcher` is `Dispatchers.Unconfined`, so fetches would run on the loader thread. */
     IO_DISPATCHER_UNCONFINED,
+
+    /** `start()`: `STALE` rejects and the seed is already older than its dataset's `rejectStaleAfter`. */
+    SEED_PAST_REJECT_THRESHOLD,
+
+    /** `start()`: `NO_ISSUER` rejects and the signature verifier cannot verify a classical algorithm, key or curve. */
+    UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP,
+
+    /** `start()`: a rule whose preset row flipped from `ALLOW` to `REJECT` in this minor rejects in the policy. */
+    RULE_FLIPPED_THIS_MINOR,
 }

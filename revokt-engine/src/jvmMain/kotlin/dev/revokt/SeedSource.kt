@@ -42,7 +42,8 @@ public class SeedSource internal constructor(
 
         /**
          * The archive [opener] opens, re-opened on every start task and seed re-check (an asset pack, a downloaded
-         * seed). A null stream means there is no archive to open.
+         * seed). A null stream means there is no archive to open. The stream must honour thread interrupts:
+         * `Revokt.close()` cancels a load by interrupting the loader, then waits, without a deadline, for it to return.
          */
         @JvmStatic
         public fun of(opener: SeedOpener): SeedSource = SeedSource { opener.open()?.source() }
