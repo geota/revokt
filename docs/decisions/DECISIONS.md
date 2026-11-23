@@ -453,7 +453,7 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   - **Verify before write (lead):** the job fetches and verifies as a whole-collection sync does, builds, self-loads
     the archive in memory, then writes it through a temporary file in the same directory, so the final path holds
     either the previous file or the whole new archive. The signed `<ts>` must fall between the default CRLite
-    `staleAfter` (3 days) before the version day and that day's end; the review added the lower bound. #149 adds the
+    `staleAfter` (3 days) before the version day and that day's end; the review added the lower bound. #149 is to add the
     check that a seed is no older than the last release's.
   - **The archive (lead):** `seed.json` is compact, first and stored, and `filterFormat` comes from the decoded full
     filter (the loader's cross-check is #305). A minimal writer of its own, since `ZipOutputStream` always writes
