@@ -20,9 +20,11 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktStorage
 import dev.revokt.Rule
 import dev.revokt.SeedSource
+import dev.revokt.engine.runtime.CrliteRuntime
 import java.lang.ref.WeakReference
 import java.net.URI
 import java.net.URISyntaxException
+import java.util.concurrent.atomic.AtomicLong
 import javax.net.ssl.X509TrustManager
 
 /**
@@ -73,7 +75,7 @@ internal class RevoktConfig(
      * The platform trust (spec §3, §5.3): `JvmPlatformTrust()`, with no builder member in 0.2 (the §4 `platformTrust`
      * member is [0.3]). Its default delegate is captured here, at `build()` (§4), before the engine is registered.
      */
-    val platformTrust: PlatformTrust = JvmPlatformTrust()
+    val platformTrust: PlatformTrust = builder.platformTrust
     val defaultDelegate: X509TrustManager = platformTrust.defaultDelegate()
 
     /** Decision step 6's PKIX builder: `platformTrust.pathBuilder()`, or null with `pkixFallback(false)`, never called. */
@@ -85,9 +87,20 @@ internal class RevoktConfig(
     val engineFormats: Set<FilterFormat> = engine.formats.toSet()
     val engineName: String = engine.name
 
+    /**
+     * The data side (spec §5.1): the in-memory store, the generation reference, the seed's start steps and the
+     * evaluator. Created before the engine is registered: it reads the verifier's startup probe, and a verifier that
+     * throws there fails `build()` with the engine still the caller's.
+     */
+    val runtime: CrliteRuntime =
+        CrliteRuntime.of(seed, channel, remoteSettings, engine, signatureVerifier, policy, storage, logger)
+
     init {
         EngineRegistry.register(engine)
     }
+
+    /** This build's place in the process's sequence, from 1: the loader thread's name (spec §5.1). */
+    val sequence: Long = BUILDS.incrementAndGet()
 
     /** Whether [dataset] has a local data source: a seed, for `CRLITE`. */
     fun hasLocalSource(dataset: Dataset): Boolean = dataset == Dataset.CRLITE && seed != null
@@ -165,6 +178,9 @@ internal fun requireSourceUrl(
 }
 
 private const val MAX_PORT = 65_535
+
+/** Every `Revokt` built in this process, counted (spec §5.1: `revokt-loader-<build sequence>`). */
+private val BUILDS = AtomicLong()
 
 /** A cap is raisable only (spec §4 `limits { }`): a value below its `RevoktLimits` constant throws. */
 private fun requireCap(

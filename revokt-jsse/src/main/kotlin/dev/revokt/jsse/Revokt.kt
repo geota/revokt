@@ -1,29 +1,42 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt.jsse
 
 import dev.revokt.CrliteChannel
 import dev.revokt.Enforcement
+import dev.revokt.Evaluator
 import dev.revokt.HttpFetcher
 import dev.revokt.MozillaRemoteSettings
+import dev.revokt.Outcome
+import dev.revokt.PlatformTrust
 import dev.revokt.PolicyDiagnostic
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktInternalApi
+import dev.revokt.RevoktLifecycle
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktLoggers
 import dev.revokt.RevoktPolicy
+import dev.revokt.Rule
 import dev.revokt.SeedSource
 import dev.revokt.Severity
 import dev.revokt.SignatureVerifier
+import dev.revokt.engine.walker.IndexedSnapshot
 import dev.revokt.verify.JcaSignatureVerifier
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.time.Clock
 import kotlin.time.Instant
+import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 /**
@@ -32,11 +45,166 @@ import kotlin.time.TimeSource
  * [Builder]. Final, with no public constructor.
  *
  * [Builder.build] runs the spec §4 R checks and throws [IllegalArgumentException] on the first that fails;
- * [validate] returns the V diagnostics for an enforcement.
+ * [validate] returns the V diagnostics for an enforcement. The lifecycle is `CREATED → STARTED → CLOSED` (spec §5.1):
+ * [start] loads the data and [close] releases it, both idempotent; [evaluator] evaluates in `STARTED`.
  */
 public class Revokt private constructor(
     internal val config: RevoktConfig,
-) {
+) : AutoCloseable {
+    private val runtime = config.runtime
+
+    /** Serialises [start]'s synchronous part and [close]'s flip (spec §5.1; the 0.3 factory lock replaces it). */
+    private val lock = Any()
+
+    @Volatile
+    private var lifecycle: RevoktLifecycle = RevoktLifecycle.CREATED
+
+    /** The anchor snapshot and its index, published by [start]; null before, after [close], or when none could be built. */
+    @Volatile
+    private var indexed: IndexedSnapshot? = null
+
+    /** The thread running [start]'s seed steps, so a call back into [start] or [close] from it throws. */
+    @Volatile
+    private var startThread: Thread? = null
+
+    /** The loader (spec §5.1): one daemon thread, created by [start]; guarded by [lock]. */
+    private var loader: ExecutorService? = null
+
+    @Volatile
+    private var loaderThread: Thread? = null
+
+    /** Counted down when the start task ends, or by [close]: what [start]'s join waits on. Guarded by [lock]. */
+    private var startTaskDone: CountDownLatch? = null
+
+    /** The thread running [close], and the latch it counts down when done, so a second [close] waits for the first. */
+    @Volatile
+    private var closing: Thread? = null
+    private val closed = CountDownLatch(1)
+
+    /**
+     * Evaluates outside any trust manager (spec §4 `revokt.evaluator`) over the anchor index [start] built and the
+     * published generation. Available in every state; `evaluate` throws [IllegalStateException] outside `STARTED`, and in
+     * `STARTED` while no anchor index exists (a default trust store that is empty, throws, or holds no anchor revokt
+     * parses: §11's 0.2 row).
+     */
+    public val evaluator: Evaluator =
+        runtime.evaluator({ lifecycle }, { indexed }, config.pathBuilder, ::nowMillis)
+
+    /**
+     * Starts the instance (spec §4, §5.1 "Lifecycle"), synchronously: call it off the main thread. In order, under one
+     * lock:
+     * 1. `validate(enforcement)`: an `ERROR` throws [IllegalStateException], as [validateOrThrow] does;
+     * 2. the anchor snapshot over the default trust manager and its index; when it cannot be built `start()` goes on with
+     *    none, and [evaluator] throws until one exists (§11's 0.2 row);
+     * 3. the seed's `seed.json` header: a seed for another channel throws [IllegalStateException]
+     *    (`SEED_CHANNEL_MISMATCH`);
+     * 4. under `ENFORCE` with `NO_DATA` rejecting, where the seed is the only local data source, the seed's whole load
+     *    on this thread: a seed that is absent, unreadable, or does not install throws [IllegalStateException]
+     *    (`SEED_UNREADABLE`) instead of every handshake being rejected;
+     * 5. the flip to `STARTED`, and one task on the loader thread `revokt-loader-<n>`: the seed's load unless step 4 ran
+     *    it, then the data's `pending` cleared.
+     *
+     * A `start()` that throws leaves the instance `CREATED`, holding nothing, and may be called again. Then `start()`
+     * waits for that task up to `awaitData` (a bounded wait on the task, not a readiness future: §11's 0.2 row has none)
+     * and returns the start diagnostics: `validate()`'s `WARNING`s, then the S diagnostics of §4
+     * (`SEED_PAST_REJECT_THRESHOLD` once the seed is live, `UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP`,
+     * `RULE_FLIPPED_THIS_MINOR`). Runtime warnings (`SEED_UNREADABLE` where it does not throw) are logged; they reach a
+     * public value with the 0.3 `state`.
+     *
+     * Idempotent: in `STARTED` it returns the diagnostics at once, without waiting. After [close] it throws
+     * [IllegalStateException]; one whose wait sees [close] returns normally. Called from the thread of step 4 (an
+     * engine, a seed source or a verifier calling back) it throws [IllegalStateException].
+     */
+    public fun start(): List<PolicyDiagnostic> {
+        checkNotFromStart()
+        val done: CountDownLatch
+        val flipped: TimeMark
+        synchronized(lock) {
+            when (lifecycle) {
+                RevoktLifecycle.CLOSED -> error("closed: start() after close() (spec §5.1)")
+                RevoktLifecycle.STARTED -> return startDiagnostics()
+                RevoktLifecycle.CREATED -> Unit
+            }
+            validateOrThrow(config.enforcement)
+            val index = runtime.anchorIndex(config.platformTrust, config.defaultDelegate, nowMillis())
+            startThread = Thread.currentThread()
+            val loadSeed =
+                try {
+                    runtime.startSeed(soleSeed(), nowMillis())
+                } finally {
+                    startThread = null
+                }
+            done = CountDownLatch(1)
+            val executor = newLoader()
+            try {
+                executor.execute {
+                    try {
+                        runtime.startTask(loadSeed, ::nowMillis)
+                    } finally {
+                        done.countDown()
+                    }
+                }
+            } catch (
+                // A loader that cannot start (no thread): start() throws, the instance stays CREATED.
+                @Suppress("TooGenericExceptionCaught") t: Throwable,
+            ) {
+                executor.shutdownNow()
+                throw t
+            }
+            indexed = index
+            loader = executor
+            startTaskDone = done
+            lifecycle = RevoktLifecycle.STARTED
+            flipped = config.timeSource.markNow()
+        }
+        join(done, flipped)
+        return startDiagnostics()
+    }
+
+    /**
+     * Closes the instance (spec §5.1 `close()`); it blocks. Idempotent: a second `close()` returns once the first has
+     * finished. In order: the flip to `CLOSED` (under the start lock, so a `close()` racing [start] waits for its
+     * synchronous part); the loader cancelled, and an in-flight install awaited, without a deadline, so the engine is
+     * never closed while it prepares or activates a generation; the generation reference cleared; then `engine.close()`,
+     * always, last, in `CREATED` too (`Revokt` owns the engine). A throw from `engine.close()` is rethrown once every
+     * other step has run, so an engine that did not close is never hidden (`try`-with-resources and `use {}` attach it
+     * as suppressed when their body threw); a second `close()` is then a no-op. Throws [IllegalStateException] on the
+     * loader thread and from [start]'s own thread, before doing anything.
+     */
+    override fun close() {
+        val current = Thread.currentThread()
+        check(current !== loaderThread) { "close() on the revokt loader thread, which it would wait for (spec §5.1)" }
+        checkNotFromStart()
+        val executor: ExecutorService?
+        val first: Boolean
+        synchronized(lock) {
+            first = lifecycle != RevoktLifecycle.CLOSED
+            if (first) {
+                lifecycle = RevoktLifecycle.CLOSED
+                closing = current
+            }
+            executor = loader
+            loader = null
+            if (first) startTaskDone?.countDown()
+        }
+        if (!first) {
+            // The closing thread itself (an engine's close() calling back) returns at once: it cannot wait for itself.
+            if (current !== closing) awaitUninterruptibly { closed.await() }
+            return
+        }
+        try {
+            executor?.let(::stop)
+            runtime.clear()
+            indexed = null
+        } finally {
+            try {
+                runtime.closeEngine()
+            } finally {
+                closed.countDown()
+            }
+        }
+    }
+
     /**
      * The V diagnostics of spec §4 for [enforcement]: the configuration's, then the policy's, then the I/O
      * dispatcher's. An `ERROR` is possible only under [Enforcement.ENFORCE]; under [Enforcement.OFF] every diagnostic is a
@@ -55,6 +223,57 @@ public class Revokt private constructor(
                 errors.joinToString("; ") { "${it.code}: ${it.message}" }
         }
     }
+
+    /** `validate()`'s `WARNING`s for the configured enforcement, then the S diagnostics (spec §4). */
+    private fun startDiagnostics(): List<PolicyDiagnostic> =
+        validate(config.enforcement).filter { it.severity == Severity.WARNING } + runtime.diagnostics(nowMillis())
+
+    /**
+     * The sole-seed `ENFORCE` configuration (spec §4 S bullet): `ENFORCE`, `NO_DATA` rejecting, and a seed, which in 0.2
+     * is always the only local data source (the store is in memory, fresh at every build).
+     */
+    private fun soleSeed(): Boolean =
+        config.enforcement == Enforcement.ENFORCE &&
+            config.policy.outcome(Rule.NO_DATA) == Outcome.REJECT &&
+            config.seed != null
+
+    /** [start]'s wait for the start task: up to `awaitData` from the flip, measured on the configured time source. */
+    private fun join(
+        done: CountDownLatch,
+        flipped: TimeMark,
+    ) {
+        val remaining = config.awaitDataMillis - flipped.elapsedNow().inWholeMilliseconds
+        if (remaining <= 0) return
+        try {
+            done.await(remaining, TimeUnit.MILLISECONDS)
+        } catch (
+            // The caller asked to stop waiting: start() returns, STARTED, with its interrupt kept.
+            @Suppress("SwallowedException") e: InterruptedException,
+        ) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    /** Cancels [executor] and waits for it, uninterruptibly: an in-flight install ends before the engine closes. */
+    private fun stop(executor: ExecutorService) {
+        executor.shutdownNow()
+        awaitUninterruptibly { executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS) }
+    }
+
+    /** The loader: one daemon thread `revokt-loader-<build sequence>` (spec §5.1), started by its first task. */
+    private fun newLoader(): ExecutorService =
+        Executors.newSingleThreadExecutor { task ->
+            Thread(task, "revokt-loader-${config.sequence}").also {
+                it.isDaemon = true
+                loaderThread = it
+            }
+        }
+
+    private fun checkNotFromStart() {
+        check(Thread.currentThread() !== startThread) { "re-entrant start()/close() from the start() thread" }
+    }
+
+    private fun nowMillis(): Long = config.clock.now().toEpochMilliseconds()
 
     override fun toString(): String =
         "Revokt(channel=${config.channel}, enforcement=${config.enforcement}, engine=${config.engineName})"
@@ -110,6 +329,9 @@ public class Revokt private constructor(
 
         /** The monotonic source for deadlines; internal, a test seam. */
         internal var timeSource: TimeSource = TimeSource.Monotonic
+
+        /** The platform trust (spec §3, §5.3): `JvmPlatformTrust()`; internal, a test seam (the §4 member is [0.3]). */
+        internal var platformTrust: PlatformTrust = JvmPlatformTrust()
 
         @get:JvmSynthetic @set:JvmSynthetic
         public var logger: RevoktLogger = RevoktLoggers.jul()
@@ -302,6 +524,26 @@ public class Revokt private constructor(
 
 /** Spec §5.1 limits table: `AWAIT_DATA_<CHANNEL>` is a fixed 2 s on the JVM (measured on Android, 0.3). */
 internal const val AWAIT_DATA_MILLIS: Long = 2_000L
+
+/**
+ * Runs [wait] until it returns without being interrupted, then restores the interrupt it absorbed: [Revokt.close] keeps
+ * its order whatever the caller's thread is told.
+ */
+private inline fun awaitUninterruptibly(wait: () -> Any?) {
+    var interrupted = false
+    while (true) {
+        try {
+            wait()
+            break
+        } catch (
+            // Kept: restored below, once the wait is over.
+            @Suppress("SwallowedException") e: InterruptedException,
+        ) {
+            interrupted = true
+        }
+    }
+    if (interrupted) Thread.currentThread().interrupt()
+}
 
 /** A `java.time.Clock` as a `kotlin.time.Clock`, at millisecond precision. */
 internal class JavaClock(
