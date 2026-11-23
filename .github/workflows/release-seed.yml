@@ -1,0 +1,314 @@
+# SPDX-FileCopyrightText: 2026 revokt contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The weekly seed job (spec §6.5, §7.2; CONTRIBUTING §9): the revokt-seed-<channel> jars as GitHub release assets with
+# attestations, never on Maven Central in 0.2. Publishing is off until the maintainer sets the SEED_PUBLISH_ENABLED
+# repository variable to true and creates the seed-publish environment.
+#
+# The build job runs on every schedule and dispatch, as release.yml's build does, and has read permissions only:
+# - it pins the JDK: Temurin's exact tarball, checked against its SHA-256, is the only JDK Gradle sees, because the
+#   archive's deflated bytes are that JDK's zlib's;
+# - it fetches and verifies Mozilla's cert-revocations changeset for each channel, builds and self-loads the archive,
+#   packs the jar and smoke-loads it through the public API (`smokeLoadSeed<Channel>`). In 0.2 the oldest supported
+#   engine minor is this commit's, since only the latest 0.x minor is supported and none is released yet;
+# - it reads the attestation facts out of each jar (seed_predicate.sh);
+# - it runs the monotonic freshness check against the last seed release (seed_floor.sh).
+# The publish job runs on main only, in the seed-publish environment, and only when publishing is on, this is not a
+# dry run, and the seed is newer than the last release. It holds the only write permissions:
+# - it attests the jars: SLSA provenance and the seed-v1 predicate (docs/attestation/seed-v1.md);
+# - it creates the seed-YYYY.MM.DD release as a draft, never "Latest", and attaches the jars and the bundles;
+# - it reads the draft's assets back, checks their SHA-256 against the smoke-loaded jars and verifies their
+#   attestations;
+# - only then does it publish, which is the announcement.
+#
+# No repository or environment secret is used. GITHUB_TOKEN reaches only the steps that call gh, as GH_TOKEN, never
+# as an argument. Both jobs block egress except to the hosts listed with each.
+name: seed
+
+on:
+  # Monday 05:41 UTC: Firefox's weekly periodic update of release and ESR runs Monday 05:00 UTC; off the hour.
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Build, verify and smoke-load only; never attest or release, even with publishing on"
+        type: boolean
+        default: false
+
+permissions: read-all
+
+# One run at a time: a run never stops mid-release, and a newer run waits while one awaits approval, so the floor it
+# reads is current. A group holds one running and one pending run; a third replaces the pending second.
+concurrency:
+  group: release-seed
+  cancel-in-progress: false
+
+env:
+  # Temurin 21, the exact build (spec §6.5): one changeset gives byte-equal archives only on the same JDK build. Bump all
+  # four together, from Adoptium's release page and its .sha256.txt.
+  JDK_RELEASE: jdk-21.0.13.1%2B2
+  JDK_ARCHIVE: OpenJDK21U-jdk_x64_linux_hotspot_21.0.13.1_2.tar.gz
+  JDK_ARCHIVE_SHA256: bb8a93f9ae6e7a693b2b721e85dbeff26ae1a77447985a8d7afcdd9c7cf6222e
+  JDK_RUNTIME_VERSION: 21.0.13.1+2-LTS
+  PREDICATE_TYPE: https://github.com/geota/revokt/blob/main/docs/attestation/seed-v1.md
+
+jobs:
+  build:
+    name: build, verify and smoke-load the seeds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read       # the checkout and the published releases (the floor)
+      attestations: read   # gh attestation verify of the last seed release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.floor.outputs.publish }}
+      compat-sha256: ${{ steps.facts.outputs.compat-sha256 }}
+      default-sha256: ${{ steps.facts.outputs.default-sha256 }}
+      compat-ts: ${{ steps.facts.outputs.compat-ts }}
+      default-ts: ${{ steps.facts.outputs.default-ts }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: block
+          # Mozilla Remote Settings (data/seed/README.md): monitor/changes, the changeset and the server root; the x5u
+          # chain; the filters. GitHub: the Temurin tarball (github.com, redirected to the asset hosts), the last seed
+          # release and its attestations (api.github.com, the asset hosts), and the run artifact
+          # (*.actions.githubusercontent.com, *.blob.core.windows.net). Sigstore's TUF repositories: the trust roots of
+          # gh attestation verify. Gradle: the wrapper's distribution, the plugin portal, Maven Central, and Google's
+          # Maven for the Android Gradle plugin that configuring the build resolves (ci.yml's JVM jobs need the same).
+          allowed-endpoints: >
+            firefox.settings.services.mozilla.com:443
+            content-signature-2.cdn.mozilla.net:443
+            firefox-settings-attachments.cdn.mozilla.net:443
+            github.com:443
+            api.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+            tuf-repo-cdn.sigstore.dev:443
+            tuf-repo.github.com:443
+            services.gradle.org:443
+            downloads.gradle.org:443
+            plugins.gradle.org:443
+            plugins-artifacts.gradle.org:443
+            repo.maven.apache.org:443
+            repo1.maven.org:443
+            dl.google.com:443
+            maven.google.com:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The version is the run's UTC date, read once (spec §7.2): a run that crosses midnight keeps it.
+      - name: version (the run's UTC date)
+        id: version
+        run: echo "version=$(date -u +%Y.%m.%d)" >> "$GITHUB_OUTPUT"
+      - name: no seed release for this version yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          n=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/seed-$VERSION" \
+            --jq 'map(select(.ref == "refs/tags/seed-" + env.VERSION)) | length')
+          if [ "$n" != 0 ]; then echo "::error::the tag seed-$VERSION exists: one seed release per UTC day"; exit 1; fi
+      - name: the pinned Temurin 21 (checked against its SHA-256)
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --max-time 300 -o "$RUNNER_TEMP/$JDK_ARCHIVE" \
+            "https://github.com/adoptium/temurin21-binaries/releases/download/$JDK_RELEASE/$JDK_ARCHIVE"
+          echo "$JDK_ARCHIVE_SHA256  $RUNNER_TEMP/$JDK_ARCHIVE" | sha256sum -c -
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: jdkfile
+          jdk-file: ${{ runner.temp }}/${{ env.JDK_ARCHIVE }}
+          java-version: "21.0.13"
+          architecture: x64
+      - name: the JDK is the pinned build
+        run: |
+          set -euo pipefail
+          props=$("$JAVA_HOME/bin/java" -XshowSettings:properties -version 2>&1)
+          printf '%s\n' "$props" | grep -Fxq "    java.runtime.version = $JDK_RUNTIME_VERSION" ||
+            { echo "::error::JAVA_HOME is not Temurin $JDK_RUNTIME_VERSION"; exit 1; }
+          printf '%s\n' "$props" | grep -Fxq "    java.vendor = Eclipse Adoptium" ||
+            { echo "::error::JAVA_HOME is not Eclipse Adoptium's"; exit 1; }
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-disabled: true   # never a cache in release or reproducibility jobs (CONTRIBUTING §3)
+          validate-wrappers: true
+      # Toolchain detection off and the one installation path: the job's JVM is the pinned JDK, never the image's
+      # own Temurin 21 (DataArtifactPlugin.jobLauncher asks for any Temurin 21).
+      - name: fetch, verify, build and smoke-load both channels
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: >
+          ./gradlew :revokt-seed:smokeLoadSeedCompat :revokt-seed:smokeLoadSeedDefault
+          -Prevokt.seedVersion="$VERSION"
+          -Porg.gradle.java.installations.auto-detect=false
+          -Porg.gradle.java.installations.paths="$JAVA_HOME"
+          --no-daemon --no-build-cache --no-configuration-cache
+      - name: the attestation facts of each jar
+        id: facts
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          OUT: ${{ runner.temp }}/seed
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          for channel in compat default; do
+            jar="revokt-seed-$channel-$VERSION.jar"
+            cp -- "data/seed/build/seed/$jar" "$OUT/$jar"
+            bash .github/scripts/seed_predicate.sh predicate "$OUT/$jar" "$channel" "$VERSION" >| "$OUT/$jar.seed.json"
+            echo "$channel-sha256=$(sha256sum "$OUT/$jar" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+            echo "$channel-ts=$(jq -r .recordsLastModified "$OUT/$jar.seed.json")" >> "$GITHUB_OUTPUT"
+            jq -c '{channel, recordsLastModified, records: (.records | length), jdk: .jdk.runtimeVersion}' "$OUT/$jar.seed.json"
+          done
+      - name: monotonic freshness against the last seed release
+        id: floor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SIGNER_WORKFLOW: ${{ github.repository }}/.github/workflows/release-seed.yml
+        run: bash .github/scripts/seed_floor.sh "$VERSION" "$RUNNER_TEMP/seed"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: seed
+          path: ${{ runner.temp }}/seed/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: attest and release (seed-publish)
+    needs: build
+    if: >-
+      vars.SEED_PUBLISH_ENABLED == 'true' && github.ref == 'refs/heads/main' && inputs.dry-run != true
+      && needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: seed-publish
+    permissions:
+      contents: write       # the release and its tag
+      id-token: write       # Sigstore signing of the attestations
+      attestations: write   # storing them
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: seed-${{ needs.build.outputs.version }}
+      COMPAT_SHA256: ${{ needs.build.outputs.compat-sha256 }}
+      DEFAULT_SHA256: ${{ needs.build.outputs.default-sha256 }}
+      COMPAT_TS: ${{ needs.build.outputs.compat-ts }}
+      DEFAULT_TS: ${{ needs.build.outputs.default-ts }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: block
+          # GitHub: the run artifact and the OIDC token (*.actions.githubusercontent.com, *.blob.core.windows.net), the
+          # release and attestation APIs (api.github.com), asset uploads (uploads.github.com), and the draft's assets
+          # read back (github.com and the asset hosts). Sigstore's public-good instance, which a public repository's
+          # attestations use: Fulcio signs, Rekor logs, and the TUF repositories hold the trust roots for the check.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            uploads.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+            fulcio.sigstore.dev:443
+            rekor.sigstore.dev:443
+            tuf-repo-cdn.sigstore.dev:443
+            tuf-repo.github.com:443
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: seed
+          path: ${{ runner.temp }}/seed
+      - name: the jars are the smoke-loaded ones
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$COMPAT_SHA256" "$RUNNER_TEMP/seed/revokt-seed-compat-$VERSION.jar" \
+            "$DEFAULT_SHA256" "$RUNNER_TEMP/seed/revokt-seed-default-$VERSION.jar" | sha256sum -c -
+      - name: provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/seed/revokt-seed-compat-${{ needs.build.outputs.version }}.jar
+            ${{ runner.temp }}/seed/revokt-seed-default-${{ needs.build.outputs.version }}.jar
+      - name: seed-v1 (compat)
+        id: seed-compat
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/seed/revokt-seed-compat-${{ needs.build.outputs.version }}.jar
+          predicate-type: ${{ env.PREDICATE_TYPE }}
+          predicate-path: ${{ runner.temp }}/seed/revokt-seed-compat-${{ needs.build.outputs.version }}.jar.seed.json
+      - name: seed-v1 (default)
+        id: seed-default
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/seed/revokt-seed-default-${{ needs.build.outputs.version }}.jar
+          predicate-type: ${{ env.PREDICATE_TYPE }}
+          predicate-path: ${{ runner.temp }}/seed/revokt-seed-default-${{ needs.build.outputs.version }}.jar.seed.json
+      - name: the assets
+        env:
+          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
+          SEED_COMPAT: ${{ steps.seed-compat.outputs.bundle-path }}
+          SEED_DEFAULT: ${{ steps.seed-default.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/assets"
+          for channel in compat default; do cp -- "$RUNNER_TEMP/seed/revokt-seed-$channel-$VERSION.jar" "$RUNNER_TEMP/assets/"; done
+          cp -- "${PROVENANCE:?}" "$RUNNER_TEMP/assets/revokt-seed-$VERSION.provenance.sigstore.json"
+          cp -- "${SEED_COMPAT:?}" "$RUNNER_TEMP/assets/revokt-seed-compat-$VERSION.jar.seed.sigstore.json"
+          cp -- "${SEED_DEFAULT:?}" "$RUNNER_TEMP/assets/revokt-seed-default-$VERSION.jar.seed.sigstore.json"
+          ls -l "$RUNNER_TEMP/assets"
+      - name: the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A leftover draft from a failed run would make the tag ambiguous: the maintainer deletes it first.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null 2>&1; then
+            echo "::error::a release or draft named $TAG exists; delete the leftover draft and re-run"
+            exit 1
+          fi
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo "The \`revokt-seed-<channel>\` jars of $VERSION: Mozilla's cert-revocations data, verified and smoke-loaded"
+            echo "by this repository's seed job (CONTRIBUTING §9). An app bundles the jar of its channel itself."
+            echo
+            echo "| Jar | Signed \`<ts>\` | SHA-256 |"
+            echo "|---|---|---|"
+            echo "| \`revokt-seed-compat-$VERSION.jar\` | $COMPAT_TS | \`$COMPAT_SHA256\` |"
+            echo "| \`revokt-seed-default-$VERSION.jar\` | $DEFAULT_TS | \`$DEFAULT_SHA256\` |"
+            echo
+            echo "Verify a jar before bundling it (data/seed/README.md):"
+            echo
+            echo '```'
+            echo "gh attestation verify revokt-seed-compat-$VERSION.jar --repo $GITHUB_REPOSITORY \\"
+            echo "  --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release-seed.yml --source-ref refs/heads/main"
+            echo '```'
+          } >| "$notes"
+          gh release create "$TAG" "$RUNNER_TEMP"/assets/* --repo "$GITHUB_REPOSITORY" --draft --latest=false \
+            --target "$GITHUB_SHA" --title "revokt-seed $VERSION" --notes-file "$notes"
+      - name: the draft's assets are the smoke-loaded, attested jars
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNER_WORKFLOW: ${{ github.repository }}/.github/workflows/release-seed.yml
+        run: |
+          set -euo pipefail
+          back="$RUNNER_TEMP/readback"
+          mkdir -p "$back"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.jar' --dir "$back"
+          printf '%s  %s\n' "$COMPAT_SHA256" "$back/revokt-seed-compat-$VERSION.jar" \
+            "$DEFAULT_SHA256" "$back/revokt-seed-default-$VERSION.jar" | sha256sum -c -
+          for channel in compat default; do
+            jar="$back/revokt-seed-$channel-$VERSION.jar"
+            verify=(--repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners)
+            gh attestation verify "$jar" "${verify[@]}" >/dev/null
+            gh attestation verify "$jar" "${verify[@]}" --predicate-type "$PREDICATE_TYPE" >/dev/null
+          done
+      - name: publish (the announcement)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false

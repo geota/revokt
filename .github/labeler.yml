@@ -13,6 +13,9 @@
 "area/bom":
   - changed-files:
       - any-glob-to-any-file: ["revokt-bom/**"]
+"area/seed":
+  - changed-files:
+      - any-glob-to-any-file: ["data/seed/**", ".github/workflows/release-seed.yml", ".github/scripts/seed_*", "docs/attestation/seed-*"]
 "area/deps":
   - changed-files:
       - any-glob-to-any-file: ["gradle/libs.versions.toml", "gradle/verification-metadata.xml", "gradle/verification-keyring.keys", "**/*.lockfile", "renovate.json"]

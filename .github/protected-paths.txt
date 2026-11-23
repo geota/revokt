@@ -9,6 +9,7 @@ revokt-clubcard/**
 **/signature/**
 data/seed/**
 .github/**
+.github/workflows/release-seed.yml
 build-logic/**
 docs/spec/**
 gradle/libs.versions.toml

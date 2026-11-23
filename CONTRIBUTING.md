@@ -437,8 +437,9 @@ every required check in Appendix B passes**.
   setup needs: GitHub and its Actions cache and artifact storage, Adoptium, the Gradle distribution and plugin
   portal, Maven Central, Google's Maven, and JetBrains' downloads for the Kotlin/Native compile. Loopback is
   allowed, so the project's loopback TLS fixtures run; a test that reaches any other host fails the job. A
-  test could still reach an allowed host; `NoHttpClientInTests` is the second line. The `static` job and the
-  other workflows stay on `audit`. harden-runner does not run on macOS and Windows, so those two jobs rely on
+  test could still reach an allowed host; `NoHttpClientInTests` is the second line. The seed job
+  (`release-seed.yml`, section 9) blocks egress too, each job allowing only its own hosts: Mozilla's three
+  Remote Settings hosts are allowed only in its build job. The `static` job and the other workflows stay on `audit`. harden-runner does not run on macOS and Windows, so those two jobs rely on
   `NoHttpClientInTests` alone; the table marks them advisory.
 - Coverage: Kover branch floor of 90 % per parser package over the committed replay (§9.1), as a hard rule.
   The path walker, the store, the updater and the fetch layer have floors a little under their measured branch
@@ -626,6 +627,7 @@ ADR-0006). Done means merged.
 | Producer drift and CT sample | the scheduled producer job (spec §9.2) | weekly; pin bumps; release | release | planned |
 | Device benchmarks | the private `revokt-bench` repository's scheduled job on the ephemeral device runner | nightly | release (regression threshold) | planned |
 | Reproducible builds, SBOM (CycloneDX, `jvmRuntimeClasspath` for KMP modules, attested), provenance (`actions/attest-build-provenance`, SLSA Build L2; L3 if the publish step moves to a reusable workflow), PGP signatures, release environment with a second maintainer's approval, tag ruleset | release workflow (section 9) | release | yes | planned: `release.yml` exists and is disabled in the solo phase |
+| Seed data artifacts: the pinned JDK build, Mozilla's signature verified, smoke load, monotonic `<ts>`, provenance and seed attestations, draft-then-publish, `seed-publish` environment | `release-seed.yml` (section 9) | weekly | the seed release | built (#149); publishing off until `SEED_PUBLISH_ENABLED` and `seed-publish` exist |
 | Project health | OpenSSF Scorecard weekly + badge; per-check targets in `docs/dev/scorecard.md` (the maximum the default token allows on a personal account, with the measured score recorded; `Packaging` and `Signed-Releases` need the jars, `.asc`, `.sigstore.json` and `.intoto.jsonl` attached to the GitHub release, since Scorecard reads release assets, not Maven Central) | scheduled | informational | live |
 | Owner-power audit trail | a weekly job (`housekeeping`'s `rulesets-audit`) compares the live rulesets, environment reviewers and repository merge settings with `docs/dev/rulesets/` (written by `.github/scripts/rulesets_export.sh`) and opens or updates one issue holding the diff, closing it when they match again; only the members that need an admin read (the bypass list, seven merge settings) are ever left out, and only when they come back unreadable without `RULESETS_AUDIT_TOKEN`; any other absent or null member, a removed protection included, is a difference (on a personal account every control reduces to the owner's good faith plus this public trail and the key custody split of section 9) | scheduled | issue on diff | live (#241); until `RULESETS_AUDIT_TOKEN` (Administration: read, in the `audit` environment, `main` only) is set, github.token cannot read the rulesets' bypass list or seven of the nine merge settings (`allow_auto_merge`, `allow_merge_commit`, `allow_rebase_merge`, `allow_squash_merge`, `delete_branch_on_merge`, `squash_merge_commit_message`, `squash_merge_commit_title`), so those go unchecked; `has_issues` and `web_commit_signoff_required` are checked |
 | Labels, size, stale, claim | labeler, `size/XL` from PR-lint (above 1000 production lines), stale (exempts `blocked`), `/claim` workflow | PR / scheduled | PR-lint yes | live |
@@ -715,12 +717,32 @@ PGP fingerprint, a Gradle `trusted-key` snippet, `gh attestation verify`).
   its **AI-authorship figure** (Aider's practice): the share of merged PRs carrying `Co-authored-by` and the
   share of new lines from those PRs by `git blame`, with formatting commits in `.git-blame-ignore-revs`.
 - **Data artifacts** (`revokt-seed-*`) are, in 0.2, **GitHub release assets with attestations, not on Maven Central**
-  (the maintainer's decision, 2026-11-23): the weekly job attaches the `revokt-seed-<channel>` jars to a release
-  through its own `seed-publish` environment, and an app bundles the jar itself. The job verifies Mozilla's content
-  signature before packaging (§7.1 verification, §6.5 archive layout), records the Remote Settings changeset timestamp,
-  the record ids and each attachment's SHA-256 in the attestation, and smoke-loads the released artefact with the
-  oldest supported engine minor before announcing it. Maven publishing, with a separate Portal account owning only the
-  data namespace, is a later decision. Never in the BOM (§7.2); its workflow has its own CODEOWNERS entry.
+  (the maintainer's decision, 2026-11-23). An app bundles the jar itself. Maven publishing, with a separate Portal
+  account owning only the data namespace, is a later decision. Never in the BOM (§7.2).
+  - **The weekly job:** `.github/workflows/release-seed.yml`, Monday 05:41 UTC and on dispatch, one run at a time. It
+    has its own CODEOWNERS entry and is a release workflow for the cooling check (section 8).
+  - **The `build` job** has read permissions only:
+    - it installs the pinned Temurin 21 build from its tarball, checked against a SHA-256 in the workflow, with
+      Gradle's toolchain detection off, since the archive bytes are that JDK's (§6.5);
+    - it verifies Mozilla's content signature before packaging (§7.1 verification, §6.5 archive layout);
+    - it smoke-loads each jar through the public API with the oldest supported engine minor. Until a minor is
+      released, that is the run's own commit, as only the latest `0.x` minor is supported;
+    - it refuses a seed whose signed `<ts>` is older than the last seed release's for that channel (§7.2). That
+      release's jar must verify by its attestation, as this workflow's on `main`, and its `records.json` `<ts>` must
+      equal the attested one. A seed equal on every channel publishes nothing, and the first seed release has no
+      floor.
+  - **The `publish` job** runs on `main` only, in the `seed-publish` environment, and only when the repository
+    variable `SEED_PUBLISH_ENABLED` is `true` and the dispatch is not a `dry-run`. It holds `contents: write`,
+    `id-token: write` and `attestations: write`:
+    - it attests each jar twice: SLSA provenance, and the seed predicate (`docs/attestation/seed-v1.md`), which
+      holds the changeset timestamp, the placed record ids, each attachment's size and SHA-256, and the JDK build;
+    - it creates the release `seed-YYYY.MM.DD` as a draft, never "Latest", with both channels' jars and the
+      `.sigstore.json` bundles;
+    - it reads the draft's assets back and requires the smoke-loaded SHA-256 and both attestations;
+    - only then does it publish, which is the announcement.
+  - **`seed-publish`:** deployment branch `main` only; the maintainers as required reviewers ("Prevent self-review"
+    off in the solo phase); no administrator bypass; no secrets. The job uses no secret at all: `GITHUB_TOKEN`, and
+    the attestations' OIDC identity.
 - The `0.x` promise: no compatibility promise before 1.0, but the API dumps are committed and every
   non-additive diff needs `!`, so the history shows every break on purpose.
 

@@ -30,6 +30,14 @@ gh attestation verify revokt-engine-jvm-<version>.jar --repo geota/revokt
 gpg --verify revokt-engine-jvm-<version>.jar.asc        # fingerprint published here once a release key exists
 ```
 
+A seed release (`seed-YYYY.MM.DD`) attaches the `revokt-seed-<channel>` jars with their `.sigstore.json` bundles, and
+no PGP signature. Verify a seed jar as this repository's seed job on `main`:
+
+```
+gh attestation verify revokt-seed-compat-<version>.jar --repo geota/revokt \
+  --signer-workflow geota/revokt/.github/workflows/release-seed.yml --source-ref refs/heads/main
+```
+
 Gradle consumers add the key to `gradle/verification-metadata.xml` (`<trusted-key id="…" group="dev.revokt"/>`).
 
 No release key exists yet; this section is updated in the PR that creates it (CONTRIBUTING §9).
