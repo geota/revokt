@@ -320,3 +320,53 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   - **Connections and bodies:** `useCaches` is false and `Connection: close` is sent. Only gzip, x-gzip and identity
     bodies are accepted, and the cap applies while inflating.
   - **Residuals:** JDK transparent Negotiate/NTLM, and the process `CookieHandler`.
+- 2026-11-22 (lead, #139 under rev61, PR #293): `dev.revokt.jsse.Revokt` and its builder.
+  - **Where the issue and the spec differ, the spec wins:** no `fetcherDelegate`, `FetcherTls`, `Factory` or
+    extended-delegate check (#219), and `http` defaults to `JdkHttpFetcher()`. No `meteredNetwork` (#224) and no
+    `maxTrustManagers` (0.3). `revocationEngine` is `@RevoktInternalApi` (#220). The URL check covers `baseUrl` and
+    a pinned `attachmentBaseUrl`, since the x5u host list is gone (#223). `IO_DISPATCHER_UNCONFINED` joins
+    `validate()`.
+  - **API:** no `storage(…)` setter in 0.2 (always in memory until the 0.3 store, #221) and no `platformTrust`
+    member. `pkixFallback(enabled)` is public. Java gets flat fluent members, and the `sources {}` and `limits {}`
+    DSL is `@JvmSynthetic`. There is one remote-settings source and one seed per `Revokt`, as upki has one
+    `fetch_url` and Firefox one server pref. `clock` takes a kotlin.time clock or a `java.time.Clock`, and
+    `timeSource` is internal. `close()` is #143's.
+  - **Engines:** an injected engine may back only one `Revokt` ever, tracked in a weak identity set that `build()`
+    registers last.
+  - **Behaviour:** `CHANNEL_UNSET` counts the implicit bundled seed, so `Revokt {}` with no channel throws. The spec
+    has no default channel, where Firefox picks one by platform. A local data source is a seed that is not `none()`
+    after resolution. A cap below its constant throws at `build()`. The seven V and R codes join `DiagnosticCode`.
+    `pkixFallback(false)` needs a policy that rejects `NO_ISSUER`.
+  - **Source URLs:** `build()` refuses every URL the default fetch path would refuse, so a configuration can't build
+    and then fail every sync. A source URL is `https` with a host read by `java.net.URI`, no userinfo, no query or
+    fragment, and no port or one from 1 to 65535. A host outside a DNS name, such as one with an underscore, is
+    refused, since public CAs issue no certificate for it. Messages name the field and the rule, never the URL,
+    which may carry credentials. upki checks nothing, and Firefox accepts any server pref.
+  - **`awaitData`:** one rule in Kotlin and Java: a negative duration, `INFINITE`, or one too long for a `Long` count
+    of milliseconds throws. The default is an internal 2 s (§5.1), and the per-channel constants are 0.3.
+- 2026-11-22 (lead, #127, PR #295; security review approved): `JvmPlatformTrust`, the PKIX fallback and the read
+  fallback.
+  - **Canonical subjects:** `CandidateIndex` takes `platformTrust::canonicalSubject` (no `customCanonicaliser`,
+    which #226 removed).
+  - **Bytes:** a fallback path's element 0 is the presented leaf's exact bytes, intermediates map by identity to
+    their presented bytes, and the anchor is the snapshot's bytes read. `getEncoded()` is used only for a certificate
+    outside the presented set, that is an AIA fetch. In 0.2 the read fallback serves only the anchor snapshot; the
+    presented-chain wiring is 0.3.
+  - **Internal in 0.2:** `PlatformTrust`, `PkixPathBuilderFallback` and `JvmPlatformTrust` are
+    `@RevoktInternalApi`, with no public `platformTrust(…)` setter, under #221's first-consumer rule (as #139 did for
+    storage). This changed from the builder's public proposal.
+  - **Read fallback:** the §9.2 canon runs only on a `STRUCTURE` parse failure, keeps the `MAX_CERT_BYTES` checks
+    and has a Jazzer target. An anchor whose `getEncoded()` throws is dropped. Firefox and webpki require strict DER
+    and have no equivalent.
+  - **Builder parameters:** the spec's list, otherwise JDK defaults (`maxPathLength` 5, as SunJSSE's
+    `PKIXValidator` uses). A malformed presented non-leaf certificate is skipped rather than making the fallback
+    null: a null fallback means `PLATFORM_ONLY`, which `DEFAULT` allows unchecked, while a found path still has its
+    issuer checked. webpki and mozilla::pkix also skip a bad candidate.
+  - **The snapshot fails closed:** an empty, null or throwing `getAcceptedIssuers()`, a null element, or no
+    parseable anchor throws `IllegalStateException`, for #143's `start()` to catch (§4's start()-throws line is
+    scoped [0.3]). The snapshot's sha256 is over the distinct bytes read, sorted.
+  - **AIA** follows the JDK property, untouched and asserted, with a DIVERGENCES row (W16). Firefox preloads
+    intermediates, and webpki never fetches. `defaultDelegate` is the default `TrustManagerFactory` algorithm and
+    provider, so FIPS providers are respected.
+  - **Review follow-ups:** a two-intermediate test pins the bytes mapping, which step 6 doesn't re-check. Keying the
+    anchor memo on the snapshot's sha256 and guarding an empty JDK path are #296.
