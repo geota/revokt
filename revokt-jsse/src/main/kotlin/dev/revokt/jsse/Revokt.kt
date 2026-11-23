@@ -125,37 +125,40 @@ public class Revokt private constructor(
                 RevoktLifecycle.STARTED -> return startDiagnostics()
                 RevoktLifecycle.CREATED -> Unit
             }
-            validateOrThrow(config.enforcement)
-            val index = runtime.anchorIndex(config.platformTrust, config.defaultDelegate, nowMillis())
+            // Every step below may call consumer code (the logger, the trust store, the seed source, the engine), and
+            // the lock is re-entrant: a call back into start() or close() from this thread throws instead.
             startThread = Thread.currentThread()
-            val loadSeed =
-                try {
-                    runtime.startSeed(soleSeed(), nowMillis())
-                } finally {
-                    startThread = null
-                }
-            done = CountDownLatch(1)
-            val executor = newLoader()
             try {
-                executor.execute {
-                    try {
-                        runtime.startTask(loadSeed, ::nowMillis)
-                    } finally {
-                        done.countDown()
+                validateOrThrow(config.enforcement)
+                val index = runtime.anchorIndex(config.platformTrust, config.defaultDelegate, nowMillis())
+                val loadSeed = runtime.startSeed(soleSeed(), nowMillis())
+                done = CountDownLatch(1)
+                val executor = newLoader()
+                try {
+                    executor.execute {
+                        try {
+                            runtime.startTask(loadSeed, ::nowMillis)
+                        } finally {
+                            done.countDown()
+                        }
                     }
+                } catch (
+                    // A loader that cannot start (no thread): start() throws, the instance stays CREATED. Under the
+                    // sole-seed path the engine already holds the seed then, so a retry's load ends Skipped and throws
+                    // SEED_UNREADABLE; this happens only under thread exhaustion.
+                    @Suppress("TooGenericExceptionCaught") t: Throwable,
+                ) {
+                    executor.shutdownNow()
+                    throw t
                 }
-            } catch (
-                // A loader that cannot start (no thread): start() throws, the instance stays CREATED.
-                @Suppress("TooGenericExceptionCaught") t: Throwable,
-            ) {
-                executor.shutdownNow()
-                throw t
+                indexed = index
+                loader = executor
+                startTaskDone = done
+                lifecycle = RevoktLifecycle.STARTED
+                flipped = config.timeSource.markNow()
+            } finally {
+                startThread = null
             }
-            indexed = index
-            loader = executor
-            startTaskDone = done
-            lifecycle = RevoktLifecycle.STARTED
-            flipped = config.timeSource.markNow()
         }
         join(done, flipped)
         return startDiagnostics()
@@ -192,17 +195,27 @@ public class Revokt private constructor(
             if (current !== closing) awaitUninterruptibly { closed.await() }
             return
         }
+        var failure: Throwable? = null
         try {
             executor?.let(::stop)
             runtime.clear()
             indexed = null
-        } finally {
-            try {
-                runtime.closeEngine()
-            } finally {
-                closed.countDown()
-            }
+        } catch (
+            // Rethrown below, after engine.close(), which always runs; with engine.close()'s own throw suppressed in it.
+            @Suppress("TooGenericExceptionCaught") t: Throwable,
+        ) {
+            failure = t
         }
+        try {
+            runtime.closeEngine()
+        } catch (
+            @Suppress("TooGenericExceptionCaught") t: Throwable,
+        ) {
+            failure?.addSuppressed(t) ?: run { failure = t }
+        } finally {
+            closed.countDown()
+        }
+        failure?.let { throw it }
     }
 
     /**

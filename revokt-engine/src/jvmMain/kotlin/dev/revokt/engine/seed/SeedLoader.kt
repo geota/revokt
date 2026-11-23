@@ -252,7 +252,8 @@ internal class SeedLoader(
      *
      * Any seed fault is [SeedLoad.Unreadable]; a failed `prepare` or `activate` is too (§6.5: "the corresponding load
      * failure, `SEED_UNREADABLE` for the seed"). Any directory this load staged is deleted on a failure before the
-     * install.
+     * install. A read interrupted by the thread's interrupt (okio's `InterruptedIOException`) is `SEED_UNREADABLE` as
+     * well, with the interrupt kept.
      */
     fun load(nowMillis: Long): SeedLoad = Attempt(nowMillis).run()
 

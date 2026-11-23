@@ -201,6 +201,31 @@ class RevoktLifecycleTest {
     }
 
     @Test
+    fun `start and close from the logger during the anchor step throw, and nothing starts or closes`() {
+        for (call in listOf<(Revokt) -> Unit>({ it.start() }, { it.close() })) {
+            val thrown = ArrayList<Throwable?>()
+            val stub = StubEngine()
+            lateinit var revokt: Revokt
+            val builder = bare().enforcement(Enforcement.OBSERVE)
+            builder.platformTrust = FakePlatformTrust { emptyList() }
+            builder.logger =
+                dev.revokt.RevoktLogger { _, message, _ ->
+                    if ("no anchor snapshot" in message) thrown += runCatching { call(revokt) }.exceptionOrNull()
+                }
+            revokt = builder.open(stub)
+            revokt.start()
+            val e = thrown.single()
+            assertTrue(e is IllegalStateException && "re-entrant" in e.message.orEmpty(), "$e")
+            assertEquals(0, stub.closes, "the call back closed nothing")
+            revokt.close()
+            assertEquals(1, stub.closes)
+            val loaders = loaderThreads(revokt)
+            loaders.forEach { it.join(5_000) }
+            assertTrue(loaders.none { it.isAlive }, "no loader thread outlives close()")
+        }
+    }
+
+    @Test
     fun `close on the loader thread throws, before doing anything`() {
         val thrown = AtomicReference<Throwable>()
         lateinit var revokt: Revokt
