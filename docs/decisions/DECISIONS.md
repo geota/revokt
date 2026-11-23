@@ -465,3 +465,24 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   - **Placement (lead):** `buildSeed`, `SeedJob` and `SeedZip` are internal code in revokt-engine, reached only by an
     explicit call. The job's entry in `data/seed` ships nowhere. The version is `-Prevokt.seedVersion=YYYY.MM.DD`,
     and the attachment base is discovered as a live sync does.
+- 2026-11-23 (lead, #149, PR #310; supply-chain review approved): the weekly seed release job, `release-seed.yml`,
+  so cooling's `release` prefix covers it. Firefox's periodic Remote Settings dump job runs weekly, verifies nothing
+  and gates on human review, and its client ignores an older changeset. upki-mirror builds with `contents: read` and
+  deploys with `pages` and `id-token`, with no rollback check or attestation.
+  - **Off by default:** a release happens only from main, in the `seed-publish` environment, with
+    `SEED_PUBLISH_ENABLED` true and the `dry-run` input false. The maintainer creates the environment and sets the
+    variable last; a missing environment would be created with no protection.
+  - **One release per run:** the tag is `seed-YYYY.MM.DD`. The draft is created through the API, and its id is kept
+    for the upload, the read-back and the publish, with `make_latest=false`. The assets are read back and checked
+    against the smoke-loaded jars (`sha256sum -c --strict`) and both attestations, each attached bundle included,
+    before publishing. The tag is re-checked before attesting, and its commit is compared with `GITHUB_SHA` after.
+  - **Attestations:** SLSA provenance, also attached as `.intoto.jsonl`, plus a seed predicate. The predicate holds
+    the signed `<ts>`, each placed record with its hash, the zip's hash and the JDK build, and its type is a document
+    in the repository, not `revokt.dev`, which nothing shows the project owns. The predicate is the build's own
+    account of its output; what stays independent is Mozilla's content signature, which every load checks.
+  - **Monotonic floor:** the job verifies the last published seed's attestation (signer workflow, source ref main)
+    and refuses an older `<ts>`. An equal one skips the publish, the first release passes, and a missing or
+    unverifiable previous release, or a seed tag without a published release, fails closed. The Gradle re-check of
+    the previous content signature is #308, and the smoke load against the oldest published minor is #309.
+  - **Runner:** the JDK is a Temurin 21 tarball pinned by SHA-256, with Gradle's auto-detect off. Each job has
+    harden-runner egress in block mode. The schedule is Monday 05:41 UTC, with concurrency per ref and no cancel.
