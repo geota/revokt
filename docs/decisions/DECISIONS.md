@@ -393,3 +393,25 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     engine's as suppressed. A second `close()` is a no-op that waits for the first. Firefox's shutdown blocker also
     waits without a bound. The accepted residual is a seed opener that ignores interrupts, which `close()` waits for.
     The okio-backed sources end the load at the next read.
+- 2026-11-23 (lead, #221, PR #301, under the maintainer's 2026-11-16 acceptance of audit B-F3 and B-F10): the 0.2
+  public API is what a caller of `evaluate` reaches. A type, member or enum value is public once a public member
+  produces or consumes it; until then it is `internal`, or `@RevoktInternalApi` where another revokt module uses it.
+  webpki keeps a small public surface with private constructors and limits, and Firefox exposes no sync status.
+  - **Sync types internal in 0.2:** `SyncResult`, `SyncOutcome`, `SyncFailure`, `RevoktWarning` and `WarningCode`
+    go public with `sync()` in 0.3. This supersedes the "ship public" part of #2 (2026-11-05). upki's `FetchError` is
+    public only because `fetch()` is.
+  - **Construction:** output types have internal builders. `FetchRequest.Builder` stays `@RevoktTestingApi` for
+    fetcher tests. Test factories come with a `revokt-testing` module in 0.3, since a new published module is
+    ask-first.
+  - **Storage:** `RevoktStorage` is `@RevoktInternalApi`, and `StoreLockedException` is internal. In 0.3 the store is
+    a sealed type built by factories and never implemented by a consumer. The #229 store design is unchanged. upki
+    takes only a cache directory, and Firefox uses the profile directory.
+  - **Limits:** only the four caps the builder raises stay public (`MAX_FILTER_BYTES`, `MAX_JSON_BYTES`,
+    `MAX_X5U_BYTES`, `MAX_CHANGESET_RECORDS`). `MAX_DEPTH` and the other limits are internal, and constants for
+    features not built yet are gone.
+  - **Removed until they have a producer:** `CredentialType` and `ExemptionContext.credentialType` (M5),
+    `ChainSource.PRESENTED`, and three `Freshness` values (M2). `MozillaRemoteSettings` has no public getters.
+  - **Internal for good:** `NoIssuerReason`, `ParseReason`, `KeyabilityClause` and `TerminalKind`, the DEBUG line's
+    vocabulary. The 0.3 status counters are keyed by `PathReason`.
+  - **Kept:** `Exemptions.and` and `or`. The engine seam's data types and `PathBuilderFallback` are
+    `@RevoktInternalApi` with the seam, as #127 did for `PlatformTrust`.
