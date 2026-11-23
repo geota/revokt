@@ -370,3 +370,26 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     provider, so FIPS providers are respected.
   - **Review follow-ups:** a two-intermediate test pins the bytes mapping, which step 6 doesn't re-check. Keying the
     anchor memo on the snapshot's sha256 and guarding an empty JDK path are #296.
+- 2026-11-23 (lead, #143, PR #298; security review approved after one fix): `Revokt.start()` and `close()`. Firefox's
+  cert_storage loads CRLite on one serial background queue, and a query before the load gets `STATE_NO_FILTER`.
+  `RemoteSecuritySettings.init()` is idempotent and logs its errors. upki's `Verifier::new` reads synchronously, fails
+  on no data, and has no thread or close.
+  - **Where the issue and the spec differ, the spec wins:** no `CLOCK_BEHIND` (§7.1) and no §6.5 self-check.
+    `SEED_PAST_REJECT_THRESHOLD`, `UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP` and `RULE_FLIPPED_THIS_MINOR` join
+    `DiagnosticCode`, and nothing joins `WarningCode`. The pre-start trust-manager, storage-identity and factory-lock
+    throws are 0.3.
+  - **start():** returns `List<PolicyDiagnostic>` (§11), logs runtime `RevoktWarning`s at WARN, and has no
+    `StartResult`. One private monitor guards it. A `start()` or `close()` called back from the start thread throws,
+    from the CREATED check onwards, the anchor step included: the review found that a logger calling back during the
+    anchor step could otherwise reopen a closed instance. `SEED_CHANNEL_MISMATCH` always throws. In the sole-seed
+    `ENFORCE` configuration (`ENFORCE`, `NO_DATA` rejected, a seed configured), an unreadable, absent or failed
+    un-activated seed throws.
+  - **Loader:** one daemon `revokt-loader-<n>` thread, created at `start()`. The join is a bounded wait on the start
+    task's latch, up to `awaitData`, and keeps the caller's interrupt. `pending` is cleared at the end of the start
+    task. A store read the start task couldn't resolve is re-read by #147's first sync.
+  - **close():** flips to CLOSED, stops scheduling, cancels the loader and waits for it with no bound, clears the
+    reference, and calls `engine.close()` last. A non-fatal `engine.close()` throw is rethrown after every step,
+    since try-with-resources and `use {}` attach it as suppressed; an earlier step's throw wins and carries the
+    engine's as suppressed. A second `close()` is a no-op that waits for the first. Firefox's shutdown blocker also
+    waits without a bound. The accepted residual is a seed opener that ignores interrupts, which `close()` waits for.
+    The okio-backed sources end the load at the next read.
