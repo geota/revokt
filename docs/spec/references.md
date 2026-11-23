@@ -673,3 +673,27 @@ Appendix A of the spec: what was verified against live sources and reference cod
     revokt re-checks a fallback path against the rules above.
   - **Roots:** no root in the JDK 21 `cacerts` (118, Temurin 21.0.13) or macOS `SystemRootCertificates` (158) carries
     nameConstraints, checked with OpenSSL on 2026-11-19, so the anchor rule refuses none of them.
+- **#147 sources** (the §5.1 sync schedule and the §7.1 conditional request, read 2026-11-23: Firefox at
+  `cac25a6fa321b0051932359b84c4e2fe3caabdc5` through the GitHub contents API, upki v1.0.1 in the cargo git checkout of
+  tag `v1.0.1`, `9821cce`):
+  - **Firefox's poll timer:** `services/settings/servicesSettings.manifest` registers the `update-timer` entry
+    `services-settings-poll-changes,services.settings.poll_interval,21600,86400` (a 6 h default, a 24 h maximum), and
+    `modules/libpref/init/all.js` (line 1730) sets the pref to 86400 (24 h). `UpdateTimerManager.sys.mjs` fires a timer
+    at its persisted last fire time plus the interval, soon after the first tick when there is none (a
+    `timerFirstInterval` of 30 s, clamped to 10 s to 2 min, lines 97 to 107), resets a last fire time in the future
+    (lines 209 to 216), and waits at least `timerMinimumDelay` (120 s, clamped to 30 s to 300 s, lines 88 to 95 and 315)
+    between two fires. There is no jitter: `remote-settings.sys.mjs` also polls on each Push broadcast, the startup
+    HELLO included (lines 740 to 792).
+  - **Firefox's backoff:** a poll inside the persisted `server.backoff` throws before any request (lines 381 to 402), and
+    nothing retries a failed poll before the next timer or broadcast. `monitor/changes` sends `_since=<last_etag>`,
+    saved only when every collection synced (line 608) and cleared on a server error (line 480).
+  - **Firefox's conditional changeset:** `RemoteSettingsClient.sys.mjs` sends `_since` = the local database's own
+    timestamp (`maybeSync`, line 744; `since = retry || !hasLocalData ? undefined : localTimestamp`, line 1164) and no
+    `If-None-Match` (`_fetchChangeset`, lines 1350 to 1365). `RemoteSecuritySettings.sys.mjs` then reinstalls, on each
+    `remote-settings:changes-poll-end`, the CRLite filters whose hashes cert_storage has not loaded (lines 645 to 700).
+    No sync starts while the browser shuts down (`maybeSync`, line 720), and one cut off by it reports `SHUTDOWN_ERROR`
+    (line 934).
+  - **upki:** no loop and no thread; `PACKAGING.md` asks packagers to run `upki fetch` "every two hours or so" and
+    "shortly after network-up events". `revocation/fetch.rs` sends `If-Modified-Since` (the local manifest's
+    modification time) only when the local manifest parses (lines 64 to 80), and on a 304 still re-hashes every listed
+    file and downloads any that is missing or differs (lines 202 to 211).

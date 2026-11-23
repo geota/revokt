@@ -50,12 +50,17 @@ import dev.revokt.safeLog
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
-/** One sync's [result], and what it added to `storeFailures` (spec §6.5), for the loader to count. */
+/**
+ * One sync's [result], what it added to `storeFailures` (spec §6.5), for the loader to count, and the `updater.json`
+ * record it wrote ([updater]; null when it wrote none: its read or its write threw), which the schedule reads the
+ * source's `backoffUntilMillis` and the seed `STALE` gate from (#147), so it never reads the store again.
+ */
 internal class SyncRun(
     val result: SyncResult,
     val storeFailures: Int,
+    val updater: UpdaterRecord? = null,
 ) {
-    override fun toString(): String = "SyncRun($result, storeFailures=$storeFailures)"
+    override fun toString(): String = "SyncRun($result, storeFailures=$storeFailures, updater=$updater)"
 }
 
 /**
@@ -90,8 +95,9 @@ internal class CrliteSync(
      * 1. Under the source's persisted backoff (`backoffUntilMillis` after now) → `SKIPPED` (`BACKOFF`), the attempt
      *    fields written.
      * 2. Poll `monitor/changes`, then fetch the collection's changeset at its `_expected`: from the cursor
-     *    (`_since=<cursor>` and `If-None-Match: "<cursor>"`) when `updater.json` holds one and the pointed generation's
-     *    `records.json` reads, else the whole collection. A 304 is `UNCHANGED`.
+     *    (`_since=<cursor>` and `If-None-Match: "<cursor>"`) when `updater.json` holds one, it is the live generation's
+     *    `<ts>` (#147) and the pointed generation's `records.json` reads, else the whole collection. A 304 is
+     *    `UNCHANGED`.
      * 3. Verify it ([ChangesetVerifier]) over the stored records with its changes merged, tombstones first
      *    ([ContentSignature.merge]); everything after reads only the verified records and `<ts>`
      *    ([ChangesetVerification.Verified]), never the changeset's `changes`. A `_since` changeset whose changes do not
@@ -179,6 +185,9 @@ internal class CrliteSync(
         /** The result once [install] activated, flipped and wrote `updater.json`: nothing after may undo it. */
         private var done: SyncResult? = null
 
+        /** The `updater.json` record this sync wrote, once a write of it returned ([SyncRun.updater]). */
+        private var written: UpdaterRecord? = null
+
         @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable, an OutOfMemoryError too.
         fun run(): SyncRun {
             val result =
@@ -188,7 +197,7 @@ internal class CrliteSync(
                     restoreInterrupt(t)
                     thrown(t)
                 }
-            return SyncRun(result, storeFailures)
+            return SyncRun(result, storeFailures, written)
         }
 
         /**
@@ -236,7 +245,10 @@ internal class CrliteSync(
             val cursor = record.sources[source.sourceId]?.lastVerifiedLastModified
             // The stored records are the merge base of a _since changeset only: the whole collection, fetched when there is
             // no cursor (an absent or malformed updater.json) or no stored records to merge with, merges over nothing (#236).
-            val since = cursor?.takeIf { base != null }
+            // The cursor is sent only while it is the live generation's <ts> (§7.1, #147 from #205's review): a 304 to it
+            // must speak for what is served, as Firefox's `_since` is its local data's own timestamp. After a fallback
+            // (the seed, or `previous`, live while the cursor names a newer generation) the whole collection is fetched.
+            val since = cursor?.takeIf { base != null && it == reads.liveTimestamp() }
             val merged = if (since != null) base.orEmpty() else emptyList()
             val verified =
                 when (val fetched = Changesets().verified(expected, since, merged)) {
@@ -449,6 +461,7 @@ internal class CrliteSync(
             return when (val result = install(pending, engine, store, snapshot, publication, updated, logger)) {
                 is InstallResult.Installed -> {
                     staged = null
+                    written = updated
                     storeFailures += result.storeFailures
                     val installed =
                         result(SyncOutcome.INSTALLED, null, emptyList(), mapOf(Dataset.CRLITE to result.generationId))
@@ -836,6 +849,7 @@ internal class CrliteSync(
                             serverBackoffMillis = backoff,
                         )
                     store.writeUpdater(next, now)
+                    written = next
                 }
             } catch (t: Throwable) {
                 restoreInterrupt(t)

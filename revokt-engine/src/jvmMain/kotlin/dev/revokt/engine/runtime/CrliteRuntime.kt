@@ -8,6 +8,7 @@ package dev.revokt.engine.runtime
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.Evaluator
+import dev.revokt.HttpFetcher
 import dev.revokt.LogLevel
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.PathBuilderFallback
@@ -23,7 +24,10 @@ import dev.revokt.RevoktPolicy
 import dev.revokt.RevoktStorage
 import dev.revokt.SeedSource
 import dev.revokt.SignatureVerifier
+import dev.revokt.SyncOutcome
 import dev.revokt.WarningCode
+import dev.revokt.engine.fetch.FetchLimits
+import dev.revokt.engine.fetch.RemoteSettingsClient
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.policy.seedPastRejectThreshold
@@ -32,7 +36,11 @@ import dev.revokt.engine.seed.SeedLoad
 import dev.revokt.engine.seed.SeedLoader
 import dev.revokt.engine.seed.SeedPolicy
 import dev.revokt.engine.store.StoreLayout
+import dev.revokt.engine.store.UpdaterRecord
+import dev.revokt.engine.update.CrliteSync
+import dev.revokt.engine.update.PollSchedule
 import dev.revokt.engine.update.SnapshotRef
+import dev.revokt.engine.update.SyncRun
 import dev.revokt.engine.walker.AnchorSnapshots
 import dev.revokt.engine.walker.DecideInputs
 import dev.revokt.engine.walker.IndexedSnapshot
@@ -41,21 +49,25 @@ import dev.revokt.engine.walker.isFatal
 import dev.revokt.engine.walker.lruMap
 import dev.revokt.engine.walker.restoreInterrupt
 import dev.revokt.safeLog
+import kotlinx.coroutines.CoroutineDispatcher
 import okio.ByteString
 import javax.net.ssl.X509TrustManager
+import kotlin.random.Random
 
 /**
  * The data side of one `Revokt` (spec §4, §5.1 "Lifecycle", §11's 0.2 row): the store over [storage], the one published
  * generation reference, the seed's start steps, the S diagnostics, the anchor index build and the [Evaluator]. The JVM
  * binding (revokt-jsse) keeps the lifecycle, the start lock, the loader thread and the join, and calls these in the order
- * §5.1 gives: [startSeed] under its lock on the `start()` caller, [startTask] on the loader, [clear] and [closeEngine]
- * from `close()`. Never two of them at once, so the reference has one writer at a time (spec §3 "Purity gate").
- * `@RevoktInternalApi`: the binding's plumbing, outside the public API.
+ * §5.1 gives: [startSeed] under its lock on the `start()` caller, [startTask] and each scheduled [sync] on the loader,
+ * [clear] and [closeEngine] from `close()`. Never two of them at once, so the reference has one writer at a time (spec
+ * §3 "Purity gate"). `@RevoktInternalApi`: the binding's plumbing, outside the public API.
  *
  * - [seed] is the resolved seed (null: no local data source), [channel] the configured one (set whenever a CRLite
  *   source is, `Revokt.Builder.build()`'s `CHANNEL_UNSET`), [fetchingSource] whether a fetching source serves CRLite.
  * - The seed's x5u chain must end in [pinnedRootSpkis]: the configured Remote Settings source's pins, else
  *   `MozillaRemoteSettings.DEFAULT`'s ([of]); the seed is Mozilla's signed collection either way (spec §6.5).
+ * - [client] is the Remote Settings client of the fetching source (null: none, so nothing syncs), and [random] the
+ *   schedule's jitter source (#147).
  */
 @RevoktInternalApi
 @Suppress("LongParameterList") // One per configuration value the data side reads; `of` is the binding's entry.
@@ -71,6 +83,8 @@ public class CrliteRuntime internal constructor(
     collection: String?,
     storage: RevoktStorage,
     private val logger: RevoktLogger,
+    client: RemoteSettingsClient? = null,
+    private val random: Random = Random.Default,
 ) {
     private val store: StoreLayout? = channel?.let { StoreLayout(storage, Dataset.CRLITE, it) }
 
@@ -92,6 +106,16 @@ public class CrliteRuntime internal constructor(
             null
         }
 
+    /** The CRLite updater over [client] (spec §11's 0.2 row), or null when no fetching source serves CRLite. */
+    private val updater: CrliteSync? =
+        if (client != null && store != null) CrliteSync(client, store, engine, snapshot, verifier, logger) else null
+
+    /** The fetching source's id, for its entry in `updater.json`. */
+    private val sourceId: String? = client?.source?.sourceId
+
+    /** Whether a fetching source is configured, so the loader schedules a [sync] after the start task (#147). */
+    public val polls: Boolean get() = updater != null
+
     /** The verifier's startup probe (spec §3 "Verifier contract"), read once, here, for the walk and the S diagnostics. */
     private val probe: Set<String> = verifier.unsupportedOids().toSet()
 
@@ -100,8 +124,11 @@ public class CrliteRuntime internal constructor(
     private var seedTimestampMillis: Long? = null
 
     /**
-     * Whether the start task's store read threw, so no generation loaded although the store may hold one (the #273
-     * review on #143): a sync must re-read the store before it treats the absent generation as "none loaded" (#147).
+     * Whether the seed load's store step did not resolve (the #273 review on #143, spec §7.1 "no sync runs after a
+     * stored-generation read that threw until that read resolves"): its read threw, or its install failed before
+     * `activate`, or it found a stored generation 0.2 does not load (`Skipped`, `Adopted`). No generation is live then,
+     * although the store may hold one, so a sync would wrongly treat it as "none loaded" and ignore the watermark. While
+     * it is set, every sync re-runs the seed load first and syncs only once it resolves ([sync], #147).
      */
     @Volatile
     public var storeReadUnresolved: Boolean = false
@@ -165,23 +192,43 @@ public class CrliteRuntime internal constructor(
     }
 
     /**
-     * The loader's start task (spec §5.1 "one loader task"): the seed load when [loadSeed], then `pending` cleared for
-     * every configured dataset (§8): a dataset the load left without a generation is published with `pending = false`
-     * and `generationEpoch++`, so `NO_DATA` can fire. Never throws: a throwable from any step is logged and the task
-     * still clears `pending`, as §5.1 has every loader task catch `Throwable`; a fatal error is rethrown after that.
+     * The loader's start task (spec §5.1 "one loader task": the seed, then the first sync): the seed load when
+     * [loadSeed], then, when a fetching source is configured ([polls]), the first sync, as [sync] runs it, then
+     * `pending` cleared for every configured dataset (§8): a dataset the task left without a generation is published
+     * with `pending = false` and `generationEpoch++`, so `NO_DATA` can fire. Returns when the loader syncs next (a
+     * wall-clock time on [nowMillis]'s clock, for [delayMillis]), or null when nothing polls. Never throws: a throwable
+     * from any step is logged and the task still clears `pending`, as §5.1 has every loader task catch `Throwable`; a
+     * fatal error is rethrown after that.
      */
     @Suppress("TooGenericExceptionCaught") // §5.1: every loader task catches Throwable.
     public fun startTask(
         loadSeed: Boolean,
         nowMillis: () -> Long,
-    ) {
+    ): Long? {
         var fatal: Throwable? = null
         try {
-            if (loadSeed) loaded(checkNotNull(loader).load(nowMillis()), nowMillis)
+            if (loadSeed) {
+                storeReadUnresolved =
+                    loaded(checkNotNull(loader).load(nowMillis()), nowMillis, resolved = true)
+            }
         } catch (t: Throwable) {
             restoreInterrupt(t)
             if (isFatal(t)) fatal = t
             logger.safeLog(LogLevel.ERROR, "the start task's seed step threw", t)
+        }
+        var next: Long? = null
+        if (polls && fatal == null) {
+            var clockRead = false
+            try {
+                val now = nowMillis()
+                clockRead = true
+                next = sync(now)
+            } catch (t: Throwable) {
+                restoreInterrupt(t)
+                if (isFatal(t)) fatal = t
+                // sync() logs its own throwable and lets out only a fatal one; the clock's is logged here.
+                if (!clockRead) logger.safeLog(LogLevel.ERROR, "the clock threw before the first sync", t)
+            }
         }
         try {
             clearPending()
@@ -191,13 +238,117 @@ public class CrliteRuntime internal constructor(
             logger.safeLog(LogLevel.ERROR, "the start task could not clear pending", t)
         }
         fatal?.let { throw it }
+        return next
     }
 
-    /** What the loader does with a seed load's end: the live seed's `<ts>`, or the warning for a load that did not. */
+    /**
+     * One sync of the fetching source at [nowMillis], the loader's one clock read for it (spec §5.1, §7.1, #147), and
+     * the time of the next one ([PollSchedule]): 6 h plus a jitter in `[0, 36 min)` after a poll that did not fail,
+     * the source's backoff after one that did, and 15 min after a sync that wrote nothing.
+     * 1. While [storeReadUnresolved], the seed load runs again first, to re-read the store; the sync runs only once it
+     *    resolves, and otherwise fetches nothing, writes nothing and is retried in 15 min.
+     * 2. [CrliteSync.syncOnce]; its result is logged (spec §11's 0.2 row has no `state`): `INSTALLED` at `INFO`, each
+     *    warning at `WARN`; `FAILED` is logged by the sync.
+     * 3. The seed's `STALE` gate (§8): once `updater.json` records an attempt since the seed's install, the seed
+     *    generation is published again with the gate open and `generationEpoch++`.
+     *
+     * A non-fatal throwable is logged and swallowed, and the next sync is at [retryAtMillis]; a fatal one is logged and
+     * rethrown for the loader to reschedule first (§6.5: "nothing escapes the loader thread"; the loader's task swallows
+     * what it rethrows, so the log line is its only trace). Throws [IllegalStateException] when nothing polls.
+     */
+    @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable.
+    public fun sync(nowMillis: Long): Long {
+        val sync = checkNotNull(updater) { "no fetching source" }
+        return try {
+            if (storeReadUnresolved && !reread(nowMillis)) return PollSchedule.retryAtMillis(nowMillis)
+            val run = sync.syncOnce(nowMillis)
+            report(run)
+            openGate(run.updater)
+            PollSchedule.nextAtMillis(run, checkNotNull(sourceId), nowMillis, random)
+        } catch (t: Throwable) {
+            restoreInterrupt(t)
+            if (isFatal(t)) {
+                logger.safeLog(LogLevel.ERROR, "the sync threw a fatal error, rethrown", t)
+                throw t
+            }
+            logger.safeLog(LogLevel.ERROR, "the sync threw", t)
+            PollSchedule.retryAtMillis(nowMillis)
+        }
+    }
+
+    /**
+     * The delay from [nowMillis] until [atMillis], a time [startTask] or [sync] returned, clamped to 60 s to 24 h
+     * ([PollSchedule.delayMillis]): the loader waits it on its monotonic timer.
+     */
+    public fun delayMillis(
+        atMillis: Long,
+        nowMillis: Long,
+    ): Long = PollSchedule.delayMillis(atMillis, nowMillis)
+
+    /** When the loader syncs after a sync step that threw a fatal error: 15 min after [nowMillis]. */
+    public fun retryAtMillis(nowMillis: Long): Long = PollSchedule.retryAtMillis(nowMillis)
+
+    /**
+     * The seed load again, for [storeReadUnresolved] (#147): true once the store read resolves, which here is a load
+     * that left the seed live (`Installed`, or `Failed` after `activate`). Anything else keeps the read unresolved: a
+     * read that throws again, an install that failed before `activate`, a stored generation 0.2 does not load
+     * (`Skipped`, `Adopted`), and a seed that no longer reaches the store read (`Unreadable`, `Absent`). Fail closed:
+     * no sync then, rather than one that ignores the watermark beside a generation the store may hold.
+     */
+    private fun reread(nowMillis: Long): Boolean {
+        val load = checkNotNull(loader) { "only the seed load leaves the store read unresolved" }.load(nowMillis)
+        storeReadUnresolved = loaded(load, { nowMillis }, resolved = false)
+        if (storeReadUnresolved) {
+            logger.safeLog(
+                LogLevel.WARN,
+                "the store read is still unresolved ($load): no sync until it resolves (spec §7.1)",
+            )
+        }
+        return !storeReadUnresolved
+    }
+
+    /** Logs [run]'s result (spec §11's 0.2 row: no `state` yet): `FAILED` is the sync's own log line. */
+    private fun report(run: SyncRun) {
+        val result = run.result
+        if (result.outcome == SyncOutcome.INSTALLED) {
+            logger.safeLog(LogLevel.INFO, "${result.sourceId}: installed ${result.installed.values.joinToString()}")
+        }
+        for (w in result.warnings) logger.safeLog(LogLevel.WARN, "${w.code}: ${w.message}")
+        if (run.storeFailures > 0) logger.safeLog(LogLevel.WARN, "the sync counted ${run.storeFailures} store failures")
+    }
+
+    /**
+     * Opens the live seed generation's `STALE` gate (spec §8: "until a sync attempt has completed since the seed was
+     * installed", `datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`, both in [record], which the sync wrote; null when
+     * it wrote none, which is no attempt): published again with the gate open and `generationEpoch++`.
+     */
+    private fun openGate(record: UpdaterRecord?) {
+        val attempt = record?.datasetLastAttemptAtMillis ?: return
+        val current = snapshot.snapshot
+        val live = current.datasets[Dataset.CRLITE] ?: return
+        if (live.generationId == null || !live.fromSeed || live.staleGateOpen) return
+        if (attempt < (record.seedInstalledAtMillis ?: Long.MIN_VALUE)) return
+        snapshot.publish(
+            GenerationSnapshot(
+                current.generationEpoch + 1,
+                current.datasets + (Dataset.CRLITE to live.copy(staleGateOpen = true)),
+                current.coverageEndMillis,
+            ),
+        )
+    }
+
+    /**
+     * What the loader does with a seed load's end: the live seed's `<ts>`, or the warning for a load that did not.
+     * Returns whether the store read stays unresolved ([storeReadUnresolved]): after a load that threw or failed before
+     * `activate`, or that found a stored generation 0.2 does not load (`Skipped`, `Adopted`); after one that never
+     * reached the store read (`Unreadable`, `Absent`, `ChannelMismatch`), [resolved], which is the start task's reading
+     * (nothing read yet, the 0.2 store fresh) and not a re-read's.
+     */
     private fun loaded(
         load: SeedLoad,
         nowMillis: () -> Long,
-    ) {
+        resolved: Boolean,
+    ): Boolean {
         when (load) {
             is SeedLoad.Installed -> {
                 seedTimestampMillis = load.timestampMillis
@@ -208,17 +359,26 @@ public class CrliteRuntime internal constructor(
             }
 
             is SeedLoad.Failed -> {
-                if (!load.activated) storeReadUnresolved = true
+                return !load.activated
             }
 
             is SeedLoad.Absent -> {
                 logAbsent()
+                return !resolved
             }
 
-            // Unreadable and ChannelMismatch are logged by the loader; Skipped and Adopted need a stored generation
-            // this in-memory store, fresh at every build, cannot hold at start (0.3 loads them).
-            is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch, is SeedLoad.Skipped, is SeedLoad.Adopted -> {}
+            // Logged by the loader.
+            is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch -> {
+                return !resolved
+            }
+
+            // A stored generation this in-memory store, fresh at every build, cannot hold at start; 0.3 loads it. 0.2
+            // does not, so nothing is live beside it, and a sync must not take that for "none loaded" (fail closed).
+            is SeedLoad.Skipped, is SeedLoad.Adopted -> {
+                return true
+            }
         }
+        return false
     }
 
     /** Every configured dataset out of `pending`; a dataset with no generation advances the epoch (spec §8). */
@@ -321,7 +481,9 @@ public class CrliteRuntime internal constructor(
 
         /**
          * The runtime of a `Revokt` whose store is [storage]: the seed pins and collection from [remoteSettings], else
-         * `MozillaRemoteSettings.DEFAULT`'s.
+         * `MozillaRemoteSettings.DEFAULT`'s. When [remoteSettings] serves CRLite and a channel is set, its client fetches
+         * through [http] on [ioDispatcher] under the four caps (spec §4 `limits { }`), and the schedule draws its jitter
+         * from [random] (#147).
          */
         @Suppress("LongParameterList") // One per configuration value the data side reads.
         public fun of(
@@ -333,9 +495,25 @@ public class CrliteRuntime internal constructor(
             policy: RevoktPolicy,
             storage: RevoktStorage,
             logger: RevoktLogger,
+            http: HttpFetcher,
+            ioDispatcher: CoroutineDispatcher,
+            caps: FetchCaps,
+            random: Random,
         ): CrliteRuntime {
             val source = remoteSettings ?: MozillaRemoteSettings.DEFAULT
             val fetching = remoteSettings?.collection(Dataset.CRLITE) != null
+            val client =
+                if (fetching && channel != null) {
+                    RemoteSettingsClient(
+                        checkNotNull(remoteSettings),
+                        Dataset.CRLITE,
+                        http,
+                        ioDispatcher,
+                        FetchLimits(caps.maxJsonBytes, caps.maxX5uBytes, caps.maxFilterBytes, caps.maxChangesetRecords),
+                    )
+                } else {
+                    null
+                }
             return CrliteRuntime(
                 seed = seed,
                 channel = channel,
@@ -348,7 +526,18 @@ public class CrliteRuntime internal constructor(
                 collection = source.collection(Dataset.CRLITE)?.let { source.bucket + "/" + it },
                 storage = storage,
                 logger = logger,
+                client = client,
+                random = random,
             )
         }
     }
+
+    /** The four caps a fetching source fetches under (spec §4 `limits { }`), each at least its `RevoktLimits` constant. */
+    @RevoktInternalApi
+    public class FetchCaps(
+        public val maxFilterBytes: Long,
+        public val maxJsonBytes: Long,
+        public val maxX5uBytes: Long,
+        public val maxChangesetRecords: Int,
+    )
 }

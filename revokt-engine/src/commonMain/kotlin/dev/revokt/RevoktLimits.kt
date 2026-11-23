@@ -54,4 +54,13 @@ public object RevoktLimits {
     @JvmField public val MAX_CHANGESET_RECORDS: Int = 1_024
 
     internal val MAX_BACKOFF: Long = 24L * 60 * 60 * 1_000
+
+    /** §7.1 "poll at most every 6 h": the spacing after a poll that did not fail, before the jitter (#147). */
+    internal val POLL_INTERVAL: Long = 6L * 60 * 60 * 1_000
+
+    /** The jitter added to [POLL_INTERVAL], uniform in `[0, POLL_JITTER)`: it only lengthens the wait (#147). */
+    internal val POLL_JITTER: Long = 36L * 60 * 1_000
+
+    /** The shortest wait between two scheduled syncs, so a `Retry-After: 0` cannot loop the loader (#147). */
+    internal val MIN_POLL_DELAY: Long = 60_000
 }
