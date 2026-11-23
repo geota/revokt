@@ -11,7 +11,7 @@ import okio.ByteString.Companion.toByteString
  * engine swap cannot change what is looked up. Growable: a field added in a minor does not break engines. A value
  * type: equality is by content, and, as for the query itself, the order of [scts] is not significant.
  */
-@OptIn(RevoktTestingApi::class)
+@RevoktInternalApi
 public class CrliteQuery private constructor(
     builder: Builder,
 ) {
@@ -47,8 +47,7 @@ public class CrliteQuery private constructor(
     internal val serialByteString: ByteString get() = serialBytes
 
     /** A builder holding this query's values. */
-    @RevoktTestingApi
-    public fun newBuilder(): Builder =
+    internal fun newBuilder(): Builder =
         Builder()
             .issuerSpkiHash(issuerHash.toByteArray())
             .serial(serialBytes.toByteArray())
@@ -67,8 +66,7 @@ public class CrliteQuery private constructor(
         "CrliteQuery(issuerSpkiHash=${issuerHash.hex()}, serial=${serialBytes.hex()}, scts=$scts)"
 
     /** Builds a [CrliteQuery] for tests and fakes. */
-    @RevoktTestingApi
-    public class Builder {
+    internal class Builder {
         internal var issuerSpkiHash: ByteString? = null
             private set
         internal var serial: ByteString? = null

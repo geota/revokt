@@ -7,7 +7,6 @@ import dev.revokt.Dataset
 import dev.revokt.DiagnosticCode
 import dev.revokt.Outcome
 import dev.revokt.PolicyDiagnostic
-import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
 import dev.revokt.Severity
 
@@ -129,7 +128,6 @@ internal val CLASSICAL_OIDS: List<String> =
         "1.3.101.112",
     )
 
-@OptIn(RevoktTestingApi::class)
 private fun diagnostic(
     code: DiagnosticCode,
     rule: Rule?,

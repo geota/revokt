@@ -6,9 +6,8 @@ package dev.revokt
 /**
  * One finding about a configuration (spec §4), returned by `validate(enforcement)`; a runtime condition is a
  * [RevoktWarning]. Tests and consumers match on [code], never on [message]. An output type: a value with a private
- * constructor and a `@RevoktTestingApi` builder.
+ * constructor and an internal builder.
  */
-@OptIn(RevoktTestingApi::class)
 public class PolicyDiagnostic private constructor(
     builder: Builder,
 ) {
@@ -28,8 +27,7 @@ public class PolicyDiagnostic private constructor(
     public val message: String = requireNotNull(builder.message) { "message is not set" }
 
     /** A builder holding this diagnostic's values. */
-    @RevoktTestingApi
-    public fun newBuilder(): Builder =
+    internal fun newBuilder(): Builder =
         Builder()
             .code(code)
             .severity(severity)
@@ -55,8 +53,7 @@ public class PolicyDiagnostic private constructor(
         fields().joinToString(prefix = "PolicyDiagnostic(", postfix = ")") { (name, value) -> "$name=$value" }
 
     /** Builds a [PolicyDiagnostic] for tests and fakes. */
-    @RevoktTestingApi
-    public class Builder {
+    internal class Builder {
         internal var code: DiagnosticCode? = null
             private set
         internal var severity: Severity? = null
@@ -84,10 +81,9 @@ public class PolicyDiagnostic private constructor(
 
 /**
  * A [PolicyDiagnostic] for revokt's own producers, such as `Revokt.validate()` in revokt-jsse, which cannot reach the
- * private constructor; consumers and tests use the `@RevoktTestingApi` builder.
+ * private constructor or the internal builder.
  */
 @RevoktInternalApi
-@OptIn(RevoktTestingApi::class)
 public fun policyDiagnostic(
     code: DiagnosticCode,
     severity: Severity,

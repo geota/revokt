@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt
 
 import okio.ByteString.Companion.toByteString
@@ -8,7 +10,11 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 
-/** Reads [GenerationFiles] from disk (spec §3.2), so a third-party engine can be tested against a C2SP directory image. */
+/**
+ * Reads [GenerationFiles] from disk (spec §3.2), so an engine can be tested against a C2SP directory image.
+ * `@RevoktInternalApi` with the engine seam it feeds (#221).
+ */
+@RevoktInternalApi
 public object JvmGenerationFiles {
     private const val INDEX = "index.bin"
 
@@ -25,7 +31,6 @@ public object JvmGenerationFiles {
      * @throws IllegalArgumentException when `index.bin` is malformed, or a file it names is not a regular file in [dir]
      *   (a symbolic link is not one, so a named file is never read from outside [dir]).
      */
-    @RevoktTestingApi
     @JvmStatic
     public fun fromDirectory(
         dir: Path,

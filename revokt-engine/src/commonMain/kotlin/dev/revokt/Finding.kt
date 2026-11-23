@@ -8,8 +8,8 @@ import okio.ByteString.Companion.toByteString
 
 /**
  * What an evaluation found, carried on a verdict (spec §4). Growable: a subtype may be added in a minor, so a `when`
- * over findings needs an `else` branch. Every subtype is a value type with a private constructor and a
- * `@RevoktTestingApi` builder; equality is by content, and `ByteArray` getters return fresh copies.
+ * over findings needs an `else` branch. Every subtype is a value type with a private constructor and an
+ * internal builder; equality is by content, and `ByteArray` getters return fresh copies.
  */
 public sealed class Finding {
     /**
@@ -19,7 +19,6 @@ public sealed class Finding {
      * [reason] is set exactly when [status] is `NO_ISSUER`, `PARSE_FAILED` or `PATH_BUDGET_EXCEEDED`, and is a reason
      * of that status.
      */
-    @OptIn(RevoktTestingApi::class)
     public class Path private constructor(
         builder: Builder,
     ) : Finding() {
@@ -60,8 +59,7 @@ public sealed class Finding {
         public val anchorSha256: ByteArray? get() = anchor?.toByteArray()
 
         /** A builder holding this finding's values. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder =
+        internal fun newBuilder(): Builder =
             Builder()
                 .status(status)
                 .source(source)
@@ -87,8 +85,7 @@ public sealed class Finding {
             fields().joinToString(prefix = "Path(", postfix = ")") { (name, value) -> "$name=${shown(value)}" }
 
         /** Builds a [Finding.Path] for tests and fakes; [build] checks the invariants the constructor does. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var status: PathStatus? = null
                 private set
             internal var source: ChainSource? = null
@@ -120,7 +117,6 @@ public sealed class Finding {
      * What decision step 7 found for one leaf-issuer key (spec §4, §5.1): the engine's answer, the key it was asked
      * about and the coverage end of the generation that answered.
      */
-    @OptIn(RevoktTestingApi::class)
     public class Crlite private constructor(
         builder: Builder,
     ) : Finding() {
@@ -135,8 +131,7 @@ public sealed class Finding {
         public val issuerSpkiSha256: ByteArray? get() = issuerSpki?.toByteArray()
 
         /** A builder holding this finding's values. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder =
+        internal fun newBuilder(): Builder =
             Builder().result(result).issuerSpkiSha256(issuerSpkiSha256).coverageEndMillis(coverageEndMillis)
 
         override fun equals(other: Any?): Boolean =
@@ -151,8 +146,7 @@ public sealed class Finding {
             "Crlite(result=$result, issuerSpkiSha256=${issuerSpki?.hex()}, coverageEndMillis=$coverageEndMillis)"
 
         /** Builds a [Finding.Crlite] for tests and fakes. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var result: CrliteQueryResult? = null
                 private set
             internal var issuerSpkiSha256: ByteString? = null
@@ -176,7 +170,6 @@ public sealed class Finding {
      * how old it was, and the data rules that fired for it. Every generation is Mozilla-signed (#218), so the only
      * data-quality dimension is age.
      */
-    @OptIn(RevoktTestingApi::class)
     public class DataState private constructor(
         builder: Builder,
     ) : Finding() {
@@ -216,8 +209,7 @@ public sealed class Finding {
         public val rules: Set<Rule> = builder.rules
 
         /** A builder holding this finding's values. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder =
+        internal fun newBuilder(): Builder =
             Builder()
                 .dataset(dataset)
                 .generationId(generationId)
@@ -253,9 +245,8 @@ public sealed class Finding {
             fields().joinToString(prefix = "DataState(", postfix = ")") { (name, value) -> "$name=$value" }
 
         /** Builds a [Finding.DataState] for tests and fakes. */
-        @RevoktTestingApi
         @Suppress("TooManyFunctions") // One setter per spec §4 field, plus build().
-        public class Builder {
+        internal class Builder {
             internal var dataset: Dataset? = null
                 private set
             internal var generationId: String? = null
@@ -307,7 +298,6 @@ public sealed class Finding {
      * An algorithm OID a layer could not verify (spec §4, §5.1): the walk emits one per OID it met, on every outcome,
      * with [outcomeDepended] true exactly when the path is `NO_ISSUER` with reason `UNSUPPORTED_ALGORITHM`.
      */
-    @OptIn(RevoktTestingApi::class)
     public class UnsupportedAlgorithm private constructor(
         builder: Builder,
     ) : Finding() {
@@ -320,8 +310,7 @@ public sealed class Finding {
         public val outcomeDepended: Boolean = builder.outcomeDepended
 
         /** A builder holding this finding's values. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder = Builder().oid(oid).where(where).outcomeDepended(outcomeDepended)
+        internal fun newBuilder(): Builder = Builder().oid(oid).where(where).outcomeDepended(outcomeDepended)
 
         override fun equals(other: Any?): Boolean =
             other is UnsupportedAlgorithm &&
@@ -335,8 +324,7 @@ public sealed class Finding {
             "UnsupportedAlgorithm(oid=$oid, where=$where, outcomeDepended=$outcomeDepended)"
 
         /** Builds a [Finding.UnsupportedAlgorithm] for tests and fakes. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var oid: String? = null
                 private set
             internal var where: Layer? = null
@@ -358,7 +346,6 @@ public sealed class Finding {
      * A verifier or algorithm failure the walk recorded (spec §3 "Verifier contract", §4, §5.1): the link counts as
      * `INVALID`. Never the PKIX fallback, which is [FallbackNotUsed].
      */
-    @OptIn(RevoktTestingApi::class)
     public class VerifierError private constructor(
         builder: Builder,
     ) : Finding() {
@@ -368,8 +355,7 @@ public sealed class Finding {
         public val message: String = requireNotNull(builder.message) { "message is not set" }
 
         /** A builder holding this finding's values. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder = Builder().oid(oid).message(message)
+        internal fun newBuilder(): Builder = Builder().oid(oid).message(message)
 
         override fun equals(other: Any?): Boolean =
             other is VerifierError && oid == other.oid && message == other.message
@@ -379,8 +365,7 @@ public sealed class Finding {
         override fun toString(): String = "VerifierError(oid=$oid, message=$message)"
 
         /** Builds a [Finding.VerifierError] for tests and fakes. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var oid: String? = null
                 private set
             internal var message: String? = null
@@ -410,15 +395,13 @@ public sealed class Finding {
      * or `Budget` and no fallback path was evaluated. "Not used" rather than "not run": a [FallbackReason.FAILED]
      * fallback did run.
      */
-    @OptIn(RevoktTestingApi::class)
     public class FallbackNotUsed private constructor(
         builder: Builder,
     ) : Finding() {
         public val reason: FallbackReason = requireNotNull(builder.reason) { "reason is not set" }
 
         /** A builder holding this finding's values. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder = Builder().reason(reason)
+        internal fun newBuilder(): Builder = Builder().reason(reason)
 
         override fun equals(other: Any?): Boolean = other is FallbackNotUsed && reason == other.reason
 
@@ -427,8 +410,7 @@ public sealed class Finding {
         override fun toString(): String = "FallbackNotUsed(reason=$reason)"
 
         /** Builds a [Finding.FallbackNotUsed] for tests and fakes. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var reason: FallbackReason? = null
                 private set
 
@@ -442,7 +424,6 @@ public sealed class Finding {
      * A presented certificate whose outer signature AlgorithmIdentifier differs from its TBS one after NULL/absent
      * normalisation (spec §5.1): once per such certificate, computed at parse time.
      */
-    @OptIn(RevoktTestingApi::class)
     public class AlgorithmIdMismatch private constructor(
         builder: Builder,
     ) : Finding() {
@@ -454,8 +435,7 @@ public sealed class Finding {
         }
 
         /** A builder holding this finding's values. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder = Builder().certIndex(certIndex)
+        internal fun newBuilder(): Builder = Builder().certIndex(certIndex)
 
         override fun equals(other: Any?): Boolean = other is AlgorithmIdMismatch && certIndex == other.certIndex
 
@@ -464,8 +444,7 @@ public sealed class Finding {
         override fun toString(): String = "AlgorithmIdMismatch(certIndex=$certIndex)"
 
         /** Builds a [Finding.AlgorithmIdMismatch] for tests and fakes. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var certIndex: Int? = null
                 private set
 
@@ -480,7 +459,6 @@ public sealed class Finding {
      * [EngineErrorProducer.ENGINE] error names its engine: [engineName] is the engine's `RevocationEngine.name` (§3.2),
      * so never null there.
      */
-    @OptIn(RevoktTestingApi::class)
     public class EngineError private constructor(
         builder: Builder,
     ) : Finding() {
@@ -498,8 +476,7 @@ public sealed class Finding {
         }
 
         /** A builder holding this finding's values. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder = Builder().message(message).producer(producer).engineName(engineName)
+        internal fun newBuilder(): Builder = Builder().message(message).producer(producer).engineName(engineName)
 
         override fun equals(other: Any?): Boolean =
             other is EngineError &&
@@ -512,8 +489,7 @@ public sealed class Finding {
         override fun toString(): String = "EngineError(message=$message, producer=$producer, engineName=$engineName)"
 
         /** Builds a [Finding.EngineError] for tests and fakes; [build] checks the invariant the constructor does. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var message: String? = null
                 private set
             internal var producer: EngineErrorProducer? = null
@@ -532,15 +508,13 @@ public sealed class Finding {
     }
 
     /** A fired `REJECT` rule an exemption lifted (spec §4, §8 exemptions): one per exempted rule. */
-    @OptIn(RevoktTestingApi::class)
     public class Exempted private constructor(
         builder: Builder,
     ) : Finding() {
         public val rule: Rule = requireNotNull(builder.rule) { "rule is not set" }
 
         /** A builder holding this finding's values. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder = Builder().rule(rule)
+        internal fun newBuilder(): Builder = Builder().rule(rule)
 
         override fun equals(other: Any?): Boolean = other is Exempted && rule == other.rule
 
@@ -549,8 +523,7 @@ public sealed class Finding {
         override fun toString(): String = "Exempted(rule=$rule)"
 
         /** Builds a [Finding.Exempted] for tests and fakes. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var rule: Rule? = null
                 private set
 

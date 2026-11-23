@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt.engine.walker
 
 import dev.revokt.CrliteSct
 import dev.revokt.KeyabilityClause
+import dev.revokt.RevoktInternalApi
 import dev.revokt.engine.parse.Keyability
 import dev.revokt.engine.parse.Oid
 import dev.revokt.engine.parse.ParsedCertificate

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt.engine.fetch
 
 import dev.revokt.CrliteChannel
@@ -9,6 +11,7 @@ import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.HttpFetcher
 import dev.revokt.MozillaRemoteSettings
+import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktTestingApi
 import dev.revokt.SyncFailure

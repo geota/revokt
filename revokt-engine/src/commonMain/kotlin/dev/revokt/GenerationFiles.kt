@@ -13,8 +13,9 @@ import okio.ByteString.Companion.toByteString
  * any C2SP reader accepts it. A `RevocationEngine` receives it whatever its source; [format] is the only
  * engine-specific property. Construction validates the image: `index.bin` must parse and must not name itself, and
  * the names must be exactly `index.bin` and the filters it names. The constructor is internal; tests and fakes build
- * one with the [Builder] (`@RevoktTestingApi`), or from disk with `JvmGenerationFiles.fromDirectory`.
+ * one with the internal [Builder], or from disk with `JvmGenerationFiles.fromDirectory`.
  */
+@RevoktInternalApi
 public class GenerationFiles internal constructor(
     public val generationId: String,
     public val dataset: Dataset,
@@ -50,8 +51,7 @@ public class GenerationFiles internal constructor(
         requireNotNull(hashes[name]) { "the generation holds no file named $name" }.toByteArray()
 
     /** A builder holding this generation's values. */
-    @RevoktTestingApi
-    public fun newBuilder(): Builder =
+    internal fun newBuilder(): Builder =
         Builder()
             .generationId(generationId)
             .dataset(dataset)
@@ -76,8 +76,7 @@ public class GenerationFiles internal constructor(
             "sourceTimestampMillis=$sourceTimestampMillis)"
 
     /** Builds a [GenerationFiles] for tests and fakes; [build] validates the image as the constructor does. */
-    @RevoktTestingApi
-    public class Builder {
+    internal class Builder {
         private var generationId: String? = null
         private var dataset: Dataset = Dataset.CRLITE
         private var format: FilterFormat? = null

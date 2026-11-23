@@ -149,8 +149,8 @@ class RevoktBuilderTest {
                 awaitData(3.seconds)
                 ioDispatcher = dispatcher
                 limits {
-                    maxFilterBytes = 32 * RevoktLimits.MiB
-                    maxJsonBytes = 8 * RevoktLimits.MiB
+                    maxFilterBytes = (32L shl 20)
+                    maxJsonBytes = (8L shl 20)
                     maxX5uBytes = 128L shl 10
                     maxChangesetRecords = 4_096
                 }
@@ -170,8 +170,8 @@ class RevoktBuilderTest {
                 .enforcement(Enforcement.OBSERVE)
                 .awaitData(java.time.Duration.ofSeconds(3))
                 .ioDispatcherForTest(dispatcher)
-                .maxFilterBytes(32 * RevoktLimits.MiB)
-                .maxJsonBytes(8 * RevoktLimits.MiB)
+                .maxFilterBytes((32L shl 20))
+                .maxJsonBytes((8L shl 20))
                 .maxX5uBytes(128L shl 10)
                 .maxChangesetRecords(4_096)
                 .http(fetcher)
@@ -189,8 +189,8 @@ class RevoktBuilderTest {
             assertEquals(Enforcement.OBSERVE, config.enforcement)
             assertEquals(3_000L, config.awaitDataMillis)
             assertSame(dispatcher, config.ioDispatcher)
-            assertEquals(32 * RevoktLimits.MiB, config.maxFilterBytes)
-            assertEquals(8 * RevoktLimits.MiB, config.maxJsonBytes)
+            assertEquals((32L shl 20), config.maxFilterBytes)
+            assertEquals((8L shl 20), config.maxJsonBytes)
             assertEquals(128L shl 10, config.maxX5uBytes)
             assertEquals(4_096, config.maxChangesetRecords)
             assertSame(fetcher, config.http)

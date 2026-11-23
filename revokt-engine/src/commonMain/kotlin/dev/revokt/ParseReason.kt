@@ -6,7 +6,7 @@ package dev.revokt
 /**
  * Why a leaf is `PARSE_FAILED` (spec §4, §5.1 decision step 3), reported as the matching [PathReason]. Growable.
  */
-public enum class ParseReason {
+internal enum class ParseReason {
     /** Not a structurally valid `Certificate` (spec §9.2: definite lengths, well-formed tags, no trailing bytes). */
     STRUCTURE,
 

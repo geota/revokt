@@ -15,7 +15,6 @@ import dev.revokt.LogLevel
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
-import dev.revokt.RevoktTestingApi
 import dev.revokt.RevoktWarning
 import dev.revokt.SeedSource
 import dev.revokt.SignatureVerifier
@@ -984,7 +983,6 @@ internal class SeedLoader(
         )
     }
 
-    @OptIn(RevoktTestingApi::class)
     private fun warning(
         code: WarningCode,
         message: String,

@@ -8,7 +8,6 @@ import dev.revokt.DiagnosticCode
 import dev.revokt.Enforcement
 import dev.revokt.Outcome
 import dev.revokt.PolicyDiagnostic
-import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
 import dev.revokt.RuleClass
 import dev.revokt.Severity
@@ -139,7 +138,6 @@ private fun stalenessClearedForRequiredDataset(policy: PolicyForm): List<PolicyD
         }
 }
 
-@OptIn(RevoktTestingApi::class)
 private fun diagnostic(
     code: DiagnosticCode,
     severity: Severity,

@@ -6,7 +6,7 @@ package dev.revokt
 /**
  * The policy result of one evaluation (spec §4), independent of `Enforcement`: [Rejected] means "policy says reject",
  * and only the trust manager decides whether to throw. Closed: exactly [Accepted] and [Rejected]. Both are output types,
- * values with a private constructor and a `@RevoktTestingApi` builder; equality, hashing and `toString` are by content
+ * values with a private constructor and an internal builder; equality, hashing and `toString` are by content
  * except [elapsedNanos], a timing field, and the internal cache key `generationEpoch`. Every field is plain data:
  * rules, findings and data states, no lambdas and no platform objects, so the same facts can be handed to a policy
  * language later (#81, #84).
@@ -42,7 +42,7 @@ public sealed interface Verdict {
     // class rather than here, because the API dump does not leave out an opt-in member of an interface.
 
     /** The policy accepts the chain: no fired `REJECT` rule is left once exemptions have run. */
-    @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
+    @OptIn(RevoktInternalApi::class)
     public class Accepted private constructor(
         builder: Builder,
     ) : Verdict {
@@ -68,8 +68,7 @@ public sealed interface Verdict {
         public val generationEpoch: Long = builder.generationEpoch
 
         /** A builder holding this verdict's values, [elapsedNanos] included. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder =
+        internal fun newBuilder(): Builder =
             Builder()
                 .rules(rules)
                 .findings(findings)
@@ -89,8 +88,7 @@ public sealed interface Verdict {
             fields().joinToString(prefix = "Accepted(", postfix = ")") { (name, value) -> "$name=$value" }
 
         /** Builds a [Verdict.Accepted] for tests and fakes. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var rules: Set<Rule> = emptySet()
                 private set
             internal var findings: List<Finding> = emptyList()
@@ -140,7 +138,7 @@ public sealed interface Verdict {
      * null (Java's `getRule()` is `@NotNull` here). The builder checks that [rule] is one of [rules] and that no
      * `Finding.Exempted` in [findings] names it.
      */
-    @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
+    @OptIn(RevoktInternalApi::class)
     public class Rejected private constructor(
         builder: Builder,
     ) : Verdict {
@@ -173,8 +171,7 @@ public sealed interface Verdict {
         }
 
         /** A builder holding this verdict's values, [elapsedNanos] included. */
-        @RevoktTestingApi
-        public fun newBuilder(): Builder =
+        internal fun newBuilder(): Builder =
             Builder()
                 .rules(rules)
                 .rule(rule)
@@ -195,8 +192,7 @@ public sealed interface Verdict {
             fields().joinToString(prefix = "Rejected(", postfix = ")") { (name, value) -> "$name=$value" }
 
         /** Builds a [Verdict.Rejected] for tests and fakes; [build] checks the invariant the constructor does. */
-        @RevoktTestingApi
-        public class Builder {
+        internal class Builder {
             internal var rules: Set<Rule> = emptySet()
                 private set
             internal var rule: Rule? = null

@@ -74,7 +74,7 @@ public final class dev/revokt/jsse/Revokt$Sources {
 	public final synthetic fun seed (Ldev/revokt/SeedSource;)V
 }
 
-public final class dev/revokt/jsse/RevoktDslKt {
+public final class dev/revokt/jsse/RevoktDsl {
 	public static final synthetic fun Revokt (Lkotlin/jvm/functions/Function1;)Ldev/revokt/jsse/Revokt;
 	public static final synthetic fun awaitData-HG0u8IE (Ldev/revokt/jsse/Revokt$Builder;J)Ldev/revokt/jsse/Revokt$Builder;
 }

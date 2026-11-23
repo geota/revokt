@@ -4,12 +4,14 @@
 // detekt 1.23 resolves types with a Kotlin 2.0 compiler that cannot read the 2.4 stdlib's metadata, so it reports the code
 // after an inline lambda's non-local return or `Nothing` call as unreachable; kotlinc's own unreachable-code check holds.
 @file:Suppress("UnreachableCode")
+@file:OptIn(RevoktInternalApi::class)
 
 package dev.revokt.engine.store
 
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.GenerationFiles
+import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktStorage
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.IndexFormatException

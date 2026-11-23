@@ -5,7 +5,6 @@ package dev.revokt.engine.evaluate
 
 import dev.revokt.Dataset
 import dev.revokt.Finding
-import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
@@ -68,7 +67,6 @@ internal val DATA_RULES: List<DataRuleRow> =
  * `stale` is `ageMillis > staleAfter` for a dataset with a staleness entry, the loud flag that fires no rule; `rules` is
  * what [DATA_RULES] fire. A required dataset the snapshot does not hold has no generation and is not pending.
  */
-@OptIn(RevoktTestingApi::class)
 internal fun dataStates(
     snapshot: GenerationSnapshot,
     policy: PolicyForm,

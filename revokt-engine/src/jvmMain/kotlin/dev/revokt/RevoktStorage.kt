@@ -12,6 +12,7 @@ import kotlin.jvm.JvmStatic
  * [IllegalArgumentException] for any other name, and for the reserved key `.lock`, which only [lock] uses. Methods
  * are thread-safe, reads concurrently.
  */
+@RevoktInternalApi
 public interface RevoktStorage {
     /**
      * The content of [name], or null when no file has that key. A read that fails throws; it never returns null, which
@@ -36,10 +37,11 @@ public interface RevoktStorage {
 
     /**
      * Takes the store's exclusive lock, held until the result is closed: acquired in `start()` and held to `close()`,
-     * never per write. Waits at most 1 s, then throws [StoreLockedException].
+     * never per write. The 0.3 store bounds the wait (spec §3); [inMemory] holds nothing.
      */
     public fun lock(): AutoCloseable
 
+    @RevoktInternalApi
     public companion object {
         /**
          * A store held in memory for the process's lifetime (the builder default; meant for tests and 0.2): nothing is

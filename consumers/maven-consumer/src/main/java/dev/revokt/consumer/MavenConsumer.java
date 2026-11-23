@@ -8,7 +8,7 @@ import dev.revokt.RevoktLimits;
 public final class MavenConsumer {
     private MavenConsumer() {}
 
-    public static int maxCertBytes() {
-        return RevoktLimits.MAX_CERT_BYTES;
+    public static int maxChangesetRecords() {
+        return RevoktLimits.MAX_CHANGESET_RECORDS;
     }
 }

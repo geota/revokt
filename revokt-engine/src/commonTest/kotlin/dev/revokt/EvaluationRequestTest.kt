@@ -83,7 +83,7 @@ class EvaluationRequestTest {
                 EvaluationRequest.Builder().verifiedPath(longest + der(99)).build()
             }
         assertEquals(
-            "verifiedPath holds more than MAX_DEPTH + 1 certificates, the longest path a walk builds",
+            "verifiedPath holds more than 17 certificates, the longest path a walk builds",
             e.message,
         )
     }

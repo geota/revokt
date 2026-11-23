@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt.engine.walker
 
 import dev.revokt.FallbackReason
@@ -8,6 +10,7 @@ import dev.revokt.Finding
 import dev.revokt.NoIssuerReason
 import dev.revokt.PathReason
 import dev.revokt.PathStatus
+import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktTestingApi
 import dev.revokt.engine.parse.Span
 import dev.revokt.engine.parse.TestCert

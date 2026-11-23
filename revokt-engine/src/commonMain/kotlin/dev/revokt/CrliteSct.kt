@@ -10,7 +10,7 @@ import okio.ByteString.Companion.toByteString
  * One SCT as a CRLite query sees it (spec §3.2): the log id and the timestamp. The timestamp is RFC 6962's `u64` carried
  * in a [Long] and compared unsigned. A value type: equality is by content.
  */
-@OptIn(RevoktTestingApi::class)
+@RevoktInternalApi
 public class CrliteSct private constructor(
     builder: Builder,
 ) {
@@ -29,8 +29,7 @@ public class CrliteSct private constructor(
     internal val logIdBytes: ByteString get() = log
 
     /** A builder holding this SCT's values. */
-    @RevoktTestingApi
-    public fun newBuilder(): Builder = Builder().logId(log.toByteArray()).timestampMillis(timestampMillis)
+    internal fun newBuilder(): Builder = Builder().logId(log.toByteArray()).timestampMillis(timestampMillis)
 
     override fun equals(other: Any?): Boolean =
         other is CrliteSct && log == other.log && timestampMillis == other.timestampMillis
@@ -40,8 +39,7 @@ public class CrliteSct private constructor(
     override fun toString(): String = "CrliteSct(logId=${log.hex()}, timestampMillis=${timestampMillis.toULong()})"
 
     /** Builds a [CrliteSct] for tests and fakes. */
-    @RevoktTestingApi
-    public class Builder {
+    internal class Builder {
         internal var logId: ByteString? = null
             private set
         internal var timestampMillis: Long? = null

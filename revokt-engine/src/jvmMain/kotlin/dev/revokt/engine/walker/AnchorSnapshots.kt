@@ -6,7 +6,6 @@ package dev.revokt.engine.walker
 import dev.revokt.AnchorSnapshot
 import dev.revokt.PlatformTrust
 import dev.revokt.RevoktInternalApi
-import dev.revokt.RevoktTestingApi
 import dev.revokt.engine.parse.PlatformRead
 import okio.Buffer
 import okio.ByteString
@@ -36,7 +35,6 @@ import javax.net.ssl.X509TrustManager
 public object AnchorSnapshots {
     private val ids = AtomicLong()
 
-    @OptIn(RevoktTestingApi::class)
     @Suppress("TooGenericExceptionCaught") // a delegate's getAcceptedIssuers() can throw anything; §5.1 makes it an ISE
     public fun build(
         platformTrust: PlatformTrust,

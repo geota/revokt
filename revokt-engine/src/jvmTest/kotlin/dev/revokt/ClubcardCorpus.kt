@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class, dev.revokt.RevoktInternalApi::class)
+
 package dev.revokt
 
 import dev.revokt.clubcard.RevoktInternalApi

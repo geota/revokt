@@ -21,7 +21,6 @@ import okio.ByteString.Companion.toByteString
  * field, and `ByteArray` getters return fresh copies. An index outside `0 until size` throws
  * `IndexOutOfBoundsException`.
  */
-@OptIn(RevoktTestingApi::class)
 public class PresentedChain private constructor(
     builder: Builder,
 ) {
@@ -83,8 +82,7 @@ public class PresentedChain private constructor(
     public fun dnsNames(i: Int): List<String> = entries[i].dnsNames
 
     /** A builder holding this chain's certificates, and which of them were not parsed. */
-    @RevoktTestingApi
-    public fun newBuilder(): Builder =
+    internal fun newBuilder(): Builder =
         Builder()
             .certificates(entries.map { it.der.toByteArray() })
             .unparsed(entries.indices.filterTo(HashSet()) { !entries[it].parsed })
@@ -122,8 +120,7 @@ public class PresentedChain private constructor(
      * Builds a [PresentedChain] for tests and fakes from certificate DERs, leaf first. [build] parses each with revokt's
      * parser; one it rejects is kept, not parsed.
      */
-    @RevoktTestingApi
-    public class Builder {
+    internal class Builder {
         internal var certificates: List<ByteString> = emptyList()
             private set
         internal var unparsed: Set<Int> = emptySet()

@@ -5,11 +5,10 @@ package dev.revokt
 
 /**
  * One runtime warning (spec §4): carried on [SyncResult.warnings] and raised by the seed load. Tests and consumers
- * match on [code], never on [message]. An output type: a value with a private constructor and a `@RevoktTestingApi`
- * builder.
+ * match on [code], never on [message]. An output type: a value with a private constructor and an internal builder.
+ * Internal until the public `sync()` and `state` (0.3, #221).
  */
-@OptIn(RevoktTestingApi::class)
-public class RevoktWarning private constructor(
+internal class RevoktWarning private constructor(
     builder: Builder,
 ) {
     // The constructor takes its Builder, so the accessor Kotlin emits for the nested Builder keeps one signature as
@@ -23,8 +22,7 @@ public class RevoktWarning private constructor(
     public val message: String = requireNotNull(builder.message) { "message is not set" }
 
     /** A builder holding this warning's values. */
-    @RevoktTestingApi
-    public fun newBuilder(): Builder =
+    internal fun newBuilder(): Builder =
         Builder()
             .code(code)
             .dataset(dataset)
@@ -46,8 +44,7 @@ public class RevoktWarning private constructor(
         fields().joinToString(prefix = "RevoktWarning(", postfix = ")") { (name, value) -> "$name=$value" }
 
     /** Builds a [RevoktWarning] for tests and fakes. */
-    @RevoktTestingApi
-    public class Builder {
+    internal class Builder {
         internal var code: WarningCode? = null
             private set
         internal var dataset: Dataset? = null
