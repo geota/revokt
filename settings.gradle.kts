@@ -32,6 +32,10 @@ include(":revokt-engine")
 include(":revokt-jsse")
 include(":revokt-bom")
 
+// The seed job (spec §6.5, §7.2, #145): builds the revokt-seed-<channel> jars (GitHub release assets in 0.2), never code.
+include(":revokt-seed")
+project(":revokt-seed").projectDir = file("data/seed")
+
 // CI-only: the upki-backed engine needs JDK 22 and the native shim (native/). Never part of `./gradlew check`.
 if (providers.gradleProperty("revokt.native").isPresent) {
     include(":revokt-engine-upki")

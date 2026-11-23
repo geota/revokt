@@ -1,0 +1,7 @@
+# url	file (written by SeedCheckFixtureWriter; test keys only)
+https://firefox.settings.services.mozilla.com/v1/buckets/monitor/collections/changes/changeset?_expected=0	0.body
+https://firefox.settings.services.mozilla.com/v1/buckets/security-state/collections/cert-revocations/changeset?_expected=1792587631204	1.body
+https://content-signature-2.cdn.mozilla.net/chains/test.chain	2.body
+https://firefox.settings.services.mozilla.com/v1/	3.body
+https://firefox-settings-attachments.cdn.mozilla.net/security-state-staging/cert-revocations/5cc04cc0-2229-4273-bdd3-be095a8f0468.filter	corpus:compat-full/20261017-1-compat.filter
+https://firefox-settings-attachments.cdn.mozilla.net/security-state-staging/cert-revocations/dc62e538-927e-4179-ac2b-02f4d7ce8361.filter	corpus:compat-delta/20261021-1-compat.filter.delta

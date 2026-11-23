@@ -56,6 +56,70 @@ abstract class VerifyPomLicensesTask : DefaultTask() {
 }
 
 /**
+ * Spec §6.5 "Seed archive" and §3 "Data artifacts": a seed jar holds exactly `META-INF/MANIFEST.MF`, the data licence
+ * text as [DataArtifacts.LICENSE_ENTRY], and the channel's `revokt/seed-<channel>.zip` (plus their directory entries).
+ * The archive is **stored** and byte-equal to the [zip] the job wrote, so its SHA-256 is the attested archive's; the
+ * manifest's [DataArtifacts.LICENSE_ATTRIBUTE] and the licence entry are exactly [DataArtifacts.LICENSE]; no class file,
+ * no other resource.
+ */
+abstract class VerifySeedJarTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val jar: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val zip: RegularFileProperty
+
+    @get:Input
+    abstract val channel: Property<String>
+
+    @TaskAction
+    fun verify() {
+        val found = problems(jar.get().asFile, zip.get().asFile, channel.get())
+        if (found.isNotEmpty()) fail("verifySeedJar: ${jar.get().asFile.name}:\n" + found.joinToString("\n") { "  - $it" })
+    }
+
+    internal companion object {
+        fun problems(
+            jar: File,
+            zip: File,
+            channel: String,
+        ): List<String> {
+            val resource = DataArtifacts.resource(channel)
+            val allowed = setOf("META-INF/", "META-INF/MANIFEST.MF", DataArtifacts.LICENSE_ENTRY, "revokt/", resource)
+            val out = ArrayList<String>()
+            java.util.zip.ZipFile(jar).use { z ->
+                val names = z.entries().toList().map { it.name }
+                if (names.size != names.toSet().size) out += "a duplicate entry in $names"
+                val extra = names.filterNot { it in allowed }
+                if (extra.isNotEmpty()) out += "entries $extra: a seed jar holds only the manifest, the licence and $resource"
+                val manifest = z.getEntry("META-INF/MANIFEST.MF")?.let { e -> z.getInputStream(e).use { java.util.jar.Manifest(it) } }
+                val declared = manifest?.mainAttributes?.getValue(DataArtifacts.LICENSE_ATTRIBUTE)
+                if (manifest == null) {
+                    out += "no META-INF/MANIFEST.MF"
+                } else if (declared != DataArtifacts.LICENSE) {
+                    out += "the manifest's ${DataArtifacts.LICENSE_ATTRIBUTE} is '$declared', not the data licence text (spec §3)"
+                }
+                val licence = z.getEntry(DataArtifacts.LICENSE_ENTRY)?.let { e -> z.getInputStream(e).use { it.readBytes() } }
+                if (licence?.decodeToString()?.trim() != DataArtifacts.LICENSE) {
+                    out += "${DataArtifacts.LICENSE_ENTRY} is not the data licence text (spec §3)"
+                }
+                val entry = z.getEntry(resource)
+                if (entry == null) {
+                    out += "no $resource, which SeedSource.bundled() resolves for $channel"
+                } else {
+                    if (entry.method != java.util.zip.ZipEntry.STORED) out += "$resource is deflated: store it (entryCompression = STORED)"
+                    val bytes = z.getInputStream(entry).use { it.readBytes() }
+                    if (!bytes.contentEquals(zip.readBytes())) out += "$resource differs from ${zip.name}, the archive the job wrote"
+                }
+            }
+            return out
+        }
+    }
+}
+
+/**
  * Spec §3 "Dependency scopes": Okio and revokt-clubcard are `implementation` (never in an api variant); kotlinx-coroutines
  * is `api` in revokt-engine; revokt-engine is `api` in revokt-jsse; OkHttp, Ktor and bcprov appear only in their own binding; nothing under native/ or the upki
  * engine is reachable from a published module.
