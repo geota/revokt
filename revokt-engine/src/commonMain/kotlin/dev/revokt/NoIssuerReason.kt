@@ -7,7 +7,7 @@ package dev.revokt
  * Why the walk found no path (spec §4, §5.1 walker step 6): the walker's own reason, on the evaluation's `DEBUG` line
  * as `walkerReason`; the reported one is `Finding.Path.reason`, a [PathReason]. Growable.
  */
-public enum class NoIssuerReason {
+internal enum class NoIssuerReason {
     /** The candidate index held no related candidate for the leaf. */
     NO_CANDIDATE,
 

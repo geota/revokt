@@ -6,10 +6,9 @@ package dev.revokt
 /**
  * What an [Exemption] is asked about (spec §4, §8 exemptions): one fired, exemptable `REJECT` rule and the facts of the
  * evaluation that fired it. An output type, growable: new evidence (M3 SCTs, M4 the distrust record) lands as new
- * nullable properties. A value with a private constructor and a `@RevoktTestingApi` builder; equality is by content.
- * The builder checks that [chain] is null exactly when [credentialType] is not `X509`.
+ * nullable properties. A value with a private constructor and an internal builder; equality is by content. M5 adds
+ * `credentialType`, and with it a null [chain] for a non-X.509 credential; until then [chain] is never null.
  */
-@OptIn(RevoktTestingApi::class)
 public class ExemptionContext private constructor(
     builder: Builder,
 ) {
@@ -17,10 +16,8 @@ public class ExemptionContext private constructor(
     // fields are added (the class is growable).
     public val rule: Rule = requireNotNull(builder.rule) { "rule is not set" }
 
-    /** The presented chain; null for a non-X.509 credential (M5). */
-    public val chain: PresentedChain? = builder.chain
-
-    public val credentialType: CredentialType = builder.credentialType
+    /** The presented chain; never null before M5, which makes it null for a non-X.509 credential. */
+    public val chain: PresentedChain? = requireNotNull(builder.chain) { "chain is not set" }
 
     /** The verdict's path finding; for an empty reported path its `anchorSha256` is null. */
     public val path: Finding.Path = requireNotNull(builder.path) { "path is not set" }
@@ -36,20 +33,11 @@ public class ExemptionContext private constructor(
     /** The verdict's data states: an entry for every required and every consulted dataset. */
     public val dataStates: Map<Dataset, Finding.DataState> = builder.dataStates
 
-    init {
-        require((chain == null) == (credentialType != CredentialType.X509)) {
-            "chain is null exactly when credentialType is not X509 (spec §4): got credentialType=$credentialType, " +
-                "chain ${if (chain == null) "null" else "set"}"
-        }
-    }
-
     /** A builder holding this context's values. */
-    @RevoktTestingApi
-    public fun newBuilder(): Builder =
+    internal fun newBuilder(): Builder =
         Builder()
             .rule(rule)
             .chain(chain)
-            .credentialType(credentialType)
             .path(path)
             .primedHost(host)
             .nowMillis(nowMillis)
@@ -60,7 +48,6 @@ public class ExemptionContext private constructor(
         listOf(
             "rule" to rule,
             "chain" to chain,
-            "credentialType" to credentialType,
             "path" to path,
             "host" to host,
             "nowMillis" to nowMillis,
@@ -74,14 +61,11 @@ public class ExemptionContext private constructor(
     override fun toString(): String =
         fields().joinToString(prefix = "ExemptionContext(", postfix = ")") { (name, value) -> "$name=$value" }
 
-    /** Builds an [ExemptionContext] for tests and fakes; [build] checks the invariant the constructor does. */
-    @RevoktTestingApi
-    public class Builder {
+    /** Builds an [ExemptionContext]; the evaluator's and in-module tests'. */
+    internal class Builder {
         internal var rule: Rule? = null
             private set
         internal var chain: PresentedChain? = null
-            private set
-        internal var credentialType: CredentialType = CredentialType.X509
             private set
         internal var path: Finding.Path? = null
             private set
@@ -95,8 +79,6 @@ public class ExemptionContext private constructor(
         public fun rule(rule: Rule): Builder = apply { this.rule = rule }
 
         public fun chain(chain: PresentedChain?): Builder = apply { this.chain = chain }
-
-        public fun credentialType(type: CredentialType): Builder = apply { credentialType = type }
 
         public fun path(path: Finding.Path): Builder = apply { this.path = path }
 

@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt.engine.seed
 
+import dev.revokt.RevoktInternalApi
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout

@@ -12,7 +12,7 @@ import okio.ByteString.Companion.toByteString
  * and `ByteArray` getters return fresh copies. The snapshot also keeps the platform's own encodings of the anchors
  * (`getEncoded()`), which the PKIX fallback re-parses (§5.1 "PKIX fallback contract").
  */
-@OptIn(RevoktTestingApi::class)
+@RevoktInternalApi
 public class AnchorSnapshot private constructor(
     builder: Builder,
 ) {
@@ -51,8 +51,7 @@ public class AnchorSnapshot private constructor(
     public val anchors: List<ByteArray> get() = anchorDers.map { it.toByteArray() }
 
     /** A builder holding this snapshot's values. */
-    @RevoktTestingApi
-    public fun newBuilder(): Builder =
+    internal fun newBuilder(): Builder =
         Builder()
             .id(id)
             .sha256(digest.toByteArray())
@@ -77,8 +76,7 @@ public class AnchorSnapshot private constructor(
             "createdMillis=$createdMillis, preloadGenerationId=$preloadGenerationId)"
 
     /** Builds an [AnchorSnapshot] for tests and fakes. */
-    @RevoktTestingApi
-    public class Builder {
+    internal class Builder {
         internal var id: Long? = null
             private set
         internal var sha256: ByteString? = null

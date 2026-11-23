@@ -356,7 +356,7 @@ internal class InstallTest : InstallFixture() {
                     PendingGeneration(p.meta.copy(collection = "x/y", signed = resigned), p.index, p.deltas, p.records),
                 "freshness" to
                     PendingGeneration(
-                        p.meta.copy(freshness = Freshness.LAST_VERIFIED_POLL, signed = resigned),
+                        p.meta.copy(freshness = Freshness.SEED_SIGNED_TIME, signed = resigned),
                         p.index,
                         p.deltas,
                         p.records,

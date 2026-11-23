@@ -14,7 +14,6 @@ import dev.revokt.LogLevel
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
-import dev.revokt.RevoktTestingApi
 import dev.revokt.RevoktWarning
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncFailure
@@ -145,7 +144,7 @@ internal class CrliteSync(
     }
 
     /** One sync's state: what it read, what it fetched and what the failure path writes. */
-    @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
+    @OptIn(RevoktInternalApi::class)
     private inner class Attempt(
         private val now: Long,
     ) {
@@ -883,7 +882,6 @@ internal class CrliteSync(
         )
     }
 
-    @OptIn(RevoktTestingApi::class)
     private fun warning(
         code: WarningCode,
         message: String,

@@ -10,7 +10,4 @@ public enum class ChainSource {
 
     /** Rebuilt by revokt's walker from the presented certificates and the anchors. */
     RECONSTRUCTED,
-
-    /** Reserved: produced by no M1 path. */
-    PRESENTED,
 }

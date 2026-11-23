@@ -4,7 +4,6 @@
 package dev.revokt.engine.evaluate
 
 import dev.revokt.ChainSource
-import dev.revokt.CredentialType
 import dev.revokt.CrliteQuery
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
@@ -16,7 +15,6 @@ import dev.revokt.PathStatus
 import dev.revokt.PresentedChain
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktInternalApi
-import dev.revokt.RevoktTestingApi
 import dev.revokt.Rule
 import dev.revokt.Verdict
 import dev.revokt.engine.generation.GenerationSnapshot
@@ -77,7 +75,7 @@ internal class Evaluated(
  * and the rest are not exempt. A throwing exemption is not exempt and adds `ENGINE_ERROR` with a
  * `Finding.EngineError(EXEMPTION)`. A caught `InterruptedException` sets the thread's interrupt flag again ([absorb]).
  */
-@OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
+@OptIn(RevoktInternalApi::class)
 internal fun evaluate(
     input: EvaluationInput,
     engine: NamedEngine,
@@ -136,7 +134,7 @@ private class Outcomes(
  * `Finding.Crlite` per key. With no CRLite generation in the snapshot the engine is never asked: the finding is
  * synthesised as `NO_DATA`, which fires nothing. With no key nothing is queried.
  */
-@OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
+@OptIn(RevoktInternalApi::class)
 private fun queryCrlite(
     decision: PathDecision,
     snapshot: GenerationSnapshot,
@@ -175,7 +173,6 @@ private fun queryCrlite(
  * registered, in `Rule.PRECEDENCE` order. The `PresentedChain` is built only once one is about to run, from the
  * decision's own parses so nothing is parsed twice.
  */
-@OptIn(RevoktTestingApi::class)
 private fun exempt(
     pre: List<FiredRule>,
     input: EvaluationInput,
@@ -198,7 +195,6 @@ private fun exempt(
                 .Builder()
                 .rule(rule)
                 .chain(presented)
-                .credentialType(CredentialType.X509)
                 .path(decision.path)
                 .primedHost(input.host)
                 .nowMillis(now)
@@ -224,7 +220,7 @@ private fun exempt(
  * order, the engine errors (the engine's, the boundary's, the exemptions', each in the order they occurred) and one
  * `Exempted` per exempted rule, in `Rule.PRECEDENCE` order.
  */
-@OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
+@OptIn(RevoktInternalApi::class)
 private fun verdict(
     outcomes: Outcomes,
     path: Finding.Path,
@@ -280,7 +276,6 @@ private fun verdict(
 }
 
 /** The path of an evaluation that never reached the walk (spec §5.5): `NOT_WALKED`, nothing else known. */
-@OptIn(RevoktTestingApi::class)
 private fun notWalked(input: EvaluationInput): Finding.Path =
     Finding.Path
         .Builder()
@@ -350,7 +345,6 @@ private class Accumulator(
      * when [engineFired] (key aggregation fired the engine's `ENGINE_ERROR`; on `Budget` or beside a `REVOKED` key it
      * is a `Crlite` finding only), then the boundary's, then the exemptions'.
      */
-    @OptIn(RevoktTestingApi::class)
     fun engineErrors(
         engineFired: Boolean,
         published: Boolean,
@@ -379,7 +373,6 @@ private class Accumulator(
             exemptionErrors.forEach { add(error(it, EngineErrorProducer.EXEMPTION, null)) }
         }
 
-    @OptIn(RevoktTestingApi::class)
     private fun error(
         message: String,
         producer: EngineErrorProducer,

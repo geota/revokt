@@ -59,20 +59,10 @@ class FindingTest {
             NoIssuerReason.entries.map { it.name },
         )
         assertEquals(listOf("SKIPPED", "DISABLED", "FAILED"), FallbackReason.entries.map { it.name })
-        assertEquals(listOf("PLATFORM", "RECONSTRUCTED", "PRESENTED"), ChainSource.entries.map { it.name })
+        assertEquals(listOf("PLATFORM", "RECONSTRUCTED"), ChainSource.entries.map { it.name })
         assertEquals(listOf("ANCHOR"), TerminalKind.entries.map { it.name })
-        assertEquals(listOf("X509"), CredentialType.entries.map { it.name })
         assertEquals(listOf("BOUNDARY", "ENGINE", "EXEMPTION"), EngineErrorProducer.entries.map { it.name })
-        assertEquals(
-            listOf(
-                "RECORD_LAST_MODIFIED",
-                "LAST_VERIFIED_POLL",
-                "SEED_SIGNED_TIME",
-                "SEQUENCE_TIME",
-                "ARTIFACT_DATE",
-            ),
-            Freshness.entries.map { it.name },
-        )
+        assertEquals(listOf("RECORD_LAST_MODIFIED", "SEED_SIGNED_TIME"), Freshness.entries.map { it.name })
     }
 
     @Test

@@ -70,7 +70,7 @@ public class JcaSignatureVerifier
         private val unsupported: Set<String> = probe()
 
         /** The number of parsed keys in the cache: at most 1,024, each one that produced `VERIFIED`. */
-        public val cachedKeyCount: Int get() = keys.size
+        internal val cachedKeyCount: Int get() = keys.size
 
         override fun unsupportedOids(): Set<String> = unsupported
 

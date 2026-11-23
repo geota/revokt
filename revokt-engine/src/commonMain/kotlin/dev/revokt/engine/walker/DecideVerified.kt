@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt.engine.walker
 
 import dev.revokt.AnchorSnapshot
@@ -9,7 +11,7 @@ import dev.revokt.Finding
 import dev.revokt.KeyabilityClause
 import dev.revokt.ParseReason
 import dev.revokt.PathStatus
-import dev.revokt.RevoktTestingApi
+import dev.revokt.RevoktInternalApi
 import dev.revokt.TerminalKind
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
@@ -35,7 +37,6 @@ import okio.ByteString.Companion.toByteString
  *   could not query under it, and the `FOUND` decision with no key is the boundary's error in `evaluate`, never a
  *   clean answer.
  */
-@OptIn(RevoktTestingApi::class)
 internal fun decideVerified(
     path: List<ByteArray>,
     index: CandidateIndex,
@@ -96,7 +97,6 @@ internal fun decideVerified(
 }
 
 /** A `PARSE_FAILED` decision for the verified leaf: no key, no reported path, nothing queried. */
-@OptIn(RevoktTestingApi::class)
 private fun parseFailed(
     base: Finding.Path.Builder,
     snapshotId: Long,

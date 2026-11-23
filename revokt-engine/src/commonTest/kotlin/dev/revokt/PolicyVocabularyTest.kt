@@ -58,20 +58,12 @@ class PolicyVocabularyTest {
                         "PLATFORM_ONLY",
                     ),
                 "Dataset" to listOf("CRLITE"),
-                "CredentialType" to listOf("X509"),
-                "ChainSource" to listOf("PLATFORM", "RECONSTRUCTED", "PRESENTED"),
+                "ChainSource" to listOf("PLATFORM", "RECONSTRUCTED"),
                 "ParseReason" to listOf("STRUCTURE", "OVERSIZE", "PRODUCER_UNKEYABLE"),
                 "KeyabilityClause" to
                     listOf("HEADER", "TBS_SHAPE", "INTEGER", "OID", "NAME", "TIME", "KEY", "EXTENSION"),
                 "TerminalKind" to listOf("ANCHOR"),
-                "Freshness" to
-                    listOf(
-                        "RECORD_LAST_MODIFIED",
-                        "LAST_VERIFIED_POLL",
-                        "SEED_SIGNED_TIME",
-                        "SEQUENCE_TIME",
-                        "ARTIFACT_DATE",
-                    ),
+                "Freshness" to listOf("RECORD_LAST_MODIFIED", "SEED_SIGNED_TIME"),
                 "EngineErrorProducer" to listOf("BOUNDARY", "ENGINE", "EXEMPTION"),
                 "CrliteQueryResult" to
                     listOf(
@@ -91,7 +83,6 @@ class PolicyVocabularyTest {
                 "PathStatus" to names(PathStatus.entries),
                 "NoIssuerReason" to names(NoIssuerReason.entries),
                 "Dataset" to names(Dataset.entries),
-                "CredentialType" to names(CredentialType.entries),
                 "ChainSource" to names(ChainSource.entries),
                 "ParseReason" to names(ParseReason.entries),
                 "KeyabilityClause" to names(KeyabilityClause.entries),

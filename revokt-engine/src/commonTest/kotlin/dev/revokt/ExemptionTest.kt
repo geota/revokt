@@ -60,7 +60,7 @@ class ExemptionTest {
         }
         assertNotEquals<Any>(context(), "context")
         val text = context().toString()
-        for (field in listOf("rule", "chain", "credentialType", "path", "host", "nowMillis", "dataStates")) {
+        for (field in listOf("rule", "chain", "path", "host", "nowMillis", "dataStates")) {
             assertTrue("$field=" in text, "$field missing from $text")
         }
     }
@@ -83,7 +83,6 @@ class ExemptionTest {
                 "host" to { host(null) },
                 "nowMillis" to { nowMillis(1) },
                 "dataStates" to { dataStates(emptyMap()) },
-                // credentialType has one value in M1 (X509), so no second value to differ by.
             )
         for ((field, change) in changed) {
             assertNotEquals(base, base.newBuilder().change().build(), field)
@@ -109,7 +108,6 @@ class ExemptionTest {
             (c.dataStates as MutableMap<Dataset, Finding.DataState>).clear()
         }
         assertNull(c.host)
-        assertEquals(CredentialType.X509, c.credentialType)
         val builder = { ExemptionContext.Builder().chain(chain) }
         assertEquals("rule is not set", message { builder().path(path(null)).nowMillis(0).build() })
         assertEquals("path is not set", message { builder().rule(Rule.NO_SCTS).nowMillis(0).build() })
@@ -117,10 +115,9 @@ class ExemptionTest {
     }
 
     @Test
-    fun `the chain is null exactly when the credential is not X509`() {
-        // M1 has only X509, so an X.509 context without a chain is the one way to break it (spec §4: null for M5's MTC).
-        val broken = message { context().newBuilder().chain(null).build() }
-        assertTrue("chain is null exactly when credentialType is not X509" in broken, broken)
+    fun `the chain is required until M5`() {
+        // Only X.509 until M5's credentialType, so a context without a chain is refused (spec §4: null for M5's MTC).
+        assertEquals("chain is not set", message { context().newBuilder().chain(null).build() })
         assertEquals(chain, context().chain)
     }
 

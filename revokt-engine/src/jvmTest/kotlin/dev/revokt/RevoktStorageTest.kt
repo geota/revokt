@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt
 
 import kotlin.test.Test
@@ -114,15 +116,6 @@ class RevoktStorageTest {
         first.close()
         store.lock().use { store.write("k", byteArrayOf(1)) }
         assertTrue("k" in store.names())
-    }
-
-    @Test
-    fun `StoreLockedException carries its message and cause`() {
-        val cause = IllegalStateException("held")
-        val e = StoreLockedException("locked", cause)
-        assertEquals("locked", e.message)
-        assertEquals(cause, e.cause)
-        assertNull(StoreLockedException("locked").cause)
     }
 
     @Test

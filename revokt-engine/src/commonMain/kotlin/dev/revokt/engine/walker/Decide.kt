@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt.engine.walker
 
 import dev.revokt.AnchorSnapshot
@@ -131,7 +133,7 @@ private sealed interface Fallback {
 }
 
 /** One decision's state: the findings so far, the dropped count and whether `build` threw. */
-@OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
+@OptIn(RevoktInternalApi::class)
 private class Decider(
     private val chain: List<ByteArray>,
     private val index: CandidateIndex,

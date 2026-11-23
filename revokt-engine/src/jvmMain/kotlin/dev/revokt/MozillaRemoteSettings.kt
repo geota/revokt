@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt
 
 import dev.revokt.engine.fetch.AllowedDomains
@@ -21,7 +23,8 @@ import kotlin.jvm.JvmField
  * `x5uHostRewrite("content-signature-2.cdn.mozilla.net", mirrorHost)`, and verifies and installs as `SIGNED` under the
  * default [sourceId]. The https and no-userinfo rule on every URL here is checked when the `Revokt` is built, and the
  * x5u port rule when an x5u URL is fetched; this type checks only the allowed domains and the rewrites ([Builder]). A
- * value type: equality is by content, and `ByteArray` getters return fresh copies.
+ * value type: equality is by content. A configuration input only: its values are read by the engine, not by callers
+ * (#221), so a caller derives a mirror from [DEFAULT] with [newBuilder].
  */
 public class MozillaRemoteSettings private constructor(
     builder: Builder,
@@ -33,10 +36,11 @@ public class MozillaRemoteSettings private constructor(
      * The Kinto API base: default `…/v1`; `…/v2` is the documented alternative (spec §7.1). The client joins it to each
      * path with exactly one `/`, so a trailing `/` here makes no difference.
      */
+    @RevoktInternalApi
     public val baseUrl: String = builder.baseUrl
 
     /** The bucket every collection lives in: default `security-state`. */
-    public val bucket: String = builder.bucket
+    internal val bucket: String = builder.bucket
 
     private val collections: Map<Dataset, String> = buildMap { putAll(builder.collections) }
 
@@ -47,6 +51,7 @@ public class MozillaRemoteSettings private constructor(
      * allows, or the sync is `FAILED` with `ATTACHMENT_BASE` (spec §7.1). The client joins the base to the location
      * with exactly one `/`, as for [baseUrl].
      */
+    @RevoktInternalApi
     public val attachmentBaseUrl: String? = builder.attachmentBaseUrl
 
     /**
@@ -57,7 +62,7 @@ public class MozillaRemoteSettings private constructor(
      * as Mozilla's are. The server root response is unsigned: this rule is what keeps a compromised settings host from
      * pointing clients at arbitrary hosts.
      */
-    public val allowedDomains: Set<String> = buildSet { addAll(builder.allowedDomains) }
+    internal val allowedDomains: Set<String> = buildSet { addAll(builder.allowedDomains) }
 
     /**
      * The x5u host rewrites, from a host to the one fetched instead: applied once to the parsed x5u URI host before the
@@ -66,15 +71,15 @@ public class MozillaRemoteSettings private constructor(
      * rewritten URI, re-applies the scheme, userinfo and port rules to it, and requires its parsed host to equal the
      * target (spec §7.1).
      */
-    public val x5uHostRewrites: Map<String, String> = buildMap { putAll(builder.x5uHostRewrites) }
+    internal val x5uHostRewrites: Map<String, String> = buildMap { putAll(builder.x5uHostRewrites) }
 
     private val pins: Set<ByteString> = buildSet { addAll(builder.pinnedRootSpkiSha256s) }
 
     /** The `User-Agent` sent with every request. */
-    public val userAgent: String = builder.userAgent
+    internal val userAgent: String = builder.userAgent
 
     /** The source's name: its `updater.json` key and `SyncResult.sourceId`. Default `mozilla-remote-settings`. */
-    public val sourceId: String = builder.sourceId
+    internal val sourceId: String = builder.sourceId
 
     init {
         for (domain in allowedDomains) {
@@ -105,10 +110,11 @@ public class MozillaRemoteSettings private constructor(
     }
 
     /** The collection [dataset] is fetched from (default `cert-revocations` for [Dataset.CRLITE]), or null when none. */
+    @RevoktInternalApi
     public fun collection(dataset: Dataset): String? = collections[dataset]
 
     /** The SPKI SHA-256 hashes the x5u chain's terminal must match, compared by content; fresh copies, in order set. */
-    public val pinnedRootSpkiSha256s: List<ByteArray> get() = pins.map { it.toByteArray() }
+    internal val pinnedRootSpkiSha256s: List<ByteArray> get() = pins.map { it.toByteArray() }
 
     internal val pinnedRootSpkis: Set<ByteString> get() = pins
 

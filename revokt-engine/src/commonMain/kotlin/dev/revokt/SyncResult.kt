@@ -7,11 +7,10 @@ import kotlin.jvm.Transient
 
 /**
  * How one sync ended (spec §4): what it installed, or why it stopped, without parsing a message. An output type: a
- * value with a private constructor and a `@RevoktTestingApi` builder; equality is by content except [cause]. The
+ * value with a private constructor and an internal builder; equality is by content except [cause]. The
  * builder checks that [failure] is set exactly when [outcome] is `SKIPPED` or `FAILED`, and is a code of that outcome.
  */
-@OptIn(RevoktTestingApi::class)
-public class SyncResult private constructor(
+internal class SyncResult private constructor(
     builder: Builder,
 ) {
     // The constructor takes its Builder, so the accessor Kotlin emits for the nested Builder keeps one signature as
@@ -51,8 +50,7 @@ public class SyncResult private constructor(
     }
 
     /** A builder holding this result's values, [cause] included. */
-    @RevoktTestingApi
-    public fun newBuilder(): Builder =
+    internal fun newBuilder(): Builder =
         Builder()
             .outcome(outcome)
             .atMillis(atMillis)
@@ -86,8 +84,7 @@ public class SyncResult private constructor(
         fields().joinToString(prefix = "SyncResult(", postfix = ")") { (name, value) -> "$name=$value" }
 
     /** Builds a [SyncResult] for tests and fakes. */
-    @RevoktTestingApi
-    public class Builder {
+    internal class Builder {
         internal var outcome: SyncOutcome? = null
             private set
         internal var atMillis: Long? = null

@@ -367,7 +367,7 @@ tests; **live checks** are informational.
   engine whose `query` throws on the second key → `ENGINE_ERROR(BOUNDARY)` with `engineName` null, the first key's
   finding kept and no third query.
 - **`Rule` model tests** (tagged by milestone: **0.1** the enum, preset tables, golden fixture, the `revokt-engine` jvmMain `Rule → BasicReason` map and precedence; **0.2** everything that needs `evaluate` alone; **0.3** exceptions, caches, counters, the shadow policy, listeners and the Java compile; revision 49 moved the parts of [0.2] items that need 0.3 machinery to [0.3]): [0.1] both preset tables are total over `Rule.entries`, the two status-map ranges are subsets of it, the `Rule → BasicReason` map is total, and the `RevoktStatus` and `RevoktEvent` rule-keyed maps are zero-filled over `Rule.entries`; `entries == entries.sortedBy { ruleClass }`; the golden growability fixture diff is
-  additive; the `PathStatus → Rule` and `CrliteQueryResult → Rule` tables; `parseFailed` zero-filled over `ParseReason.entries`; [0.2] `Verdict.rule` is the
+  additive; the `PathStatus → Rule` and `CrliteQueryResult → Rule` tables; `parseFailed` zero-filled over the `PARSE_FAILED` `PathReason`s; [0.2] `Verdict.rule` is the
   first fired non-exempted `REJECT` rule; a leaf failing K6 →
   `PARSE_FAILED(PRODUCER_UNKEYABLE)` with `keyabilityClause = TIME` in the decision's detail and `crlite == null`, and an issuer candidate
   outside the profile not dropped; per-dataset

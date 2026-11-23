@@ -5,7 +5,6 @@
 
 package dev.revokt.engine.evaluate
 
-import dev.revokt.CredentialType
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
 import dev.revokt.EngineErrorProducer
@@ -183,7 +182,6 @@ class ExemptionStageTest {
         assertEquals(NOW, c.nowMillis)
         assertEquals(v.path, c.path)
         assertEquals(v.dataStates, c.dataStates)
-        assertEquals(CredentialType.X509, c.credentialType)
         val chain = c.chain!!
         assertEquals(3, chain.size)
         presented.forEachIndexed { i, der -> assertContentEquals(der, chain.der(i), "certificate $i") }
