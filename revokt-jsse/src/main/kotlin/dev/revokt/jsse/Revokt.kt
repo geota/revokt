@@ -9,6 +9,7 @@ import dev.revokt.CrliteChannel
 import dev.revokt.Enforcement
 import dev.revokt.Evaluator
 import dev.revokt.HttpFetcher
+import dev.revokt.LogLevel
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.Outcome
 import dev.revokt.PlatformTrust
@@ -31,9 +32,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.time.TimeMark
@@ -67,8 +70,8 @@ public class Revokt private constructor(
     @Volatile
     private var startThread: Thread? = null
 
-    /** The loader (spec §5.1): one daemon thread, created by [start]; guarded by [lock]. */
-    private var loader: ExecutorService? = null
+    /** The loader (spec §5.1): one daemon thread, created by [start], which also runs the sync schedule; guarded by [lock]. */
+    private var loader: ScheduledExecutorService? = null
 
     @Volatile
     private var loaderThread: Thread? = null
@@ -102,7 +105,9 @@ public class Revokt private constructor(
      *    on this thread: a seed that is absent, unreadable, or does not install throws [IllegalStateException]
      *    (`SEED_UNREADABLE`) instead of every handshake being rejected;
      * 5. the flip to `STARTED`, and one task on the loader thread `revokt-loader-<n>`: the seed's load unless step 4 ran
-     *    it, then the data's `pending` cleared.
+     *    it, then, with a fetching source, the first sync, then the data's `pending` cleared. The loader then syncs on
+     *    its schedule (spec §5.1, §7.1, #147): 6 h plus a jitter of up to 36 min after a poll that did not fail, the
+     *    source's backoff after one that did, every wait between 60 s and 24 h.
      *
      * A `start()` that throws leaves the instance `CREATED`, holding nothing, and may be called again. Then `start()`
      * waits for that task up to `awaitData` (a bounded wait on the task, not a readiness future: §11's 0.2 row has none)
@@ -136,10 +141,13 @@ public class Revokt private constructor(
                 val executor = newLoader()
                 try {
                     executor.execute {
+                        var next: Long? = null
                         try {
-                            runtime.startTask(loadSeed, ::nowMillis)
+                            next = runtime.startTask(loadSeed, ::nowMillis)
                         } finally {
+                            // Rescheduled before a fatal error propagates, so the schedule never stops (#147, §6.5).
                             done.countDown()
+                            if (runtime.polls) reschedule(executor, next)
                         }
                     }
                 } catch (
@@ -178,7 +186,7 @@ public class Revokt private constructor(
         val current = Thread.currentThread()
         check(current !== loaderThread) { "close() on the revokt loader thread, which it would wait for (spec §5.1)" }
         checkNotFromStart()
-        val executor: ExecutorService?
+        val executor: ScheduledExecutorService?
         val first: Boolean
         synchronized(lock) {
             first = lifecycle != RevoktLifecycle.CLOSED
@@ -267,19 +275,82 @@ public class Revokt private constructor(
         }
     }
 
+    /**
+     * The next sync on [executor], at [atMillis] (a wall-clock time the runtime returned; null after a sync step that
+     * threw, which retries in 15 min), as a delay clamped to 60 s to 24 h and waited on the loader's monotonic timer
+     * ([PollTimer]). Nothing is scheduled after [close]: its flip is read here, and a timer it has already shut down
+     * refuses the task, which is dropped. A clock that throws here retries in 15 min too; a fatal error from it is
+     * rethrown once the next sync is scheduled.
+     */
+    private fun reschedule(
+        executor: ScheduledExecutorService,
+        atMillis: Long?,
+    ) {
+        if (lifecycle == RevoktLifecycle.CLOSED) return
+        var fatal: Throwable? = null
+        // A consumer clock that throws: retry in 15 min, as after a sync that threw.
+        val retry = runtime.delayMillis(runtime.retryAtMillis(0), 0)
+        val delay =
+            try {
+                val now = nowMillis()
+                runtime.delayMillis(atMillis ?: runtime.retryAtMillis(now), now)
+            } catch (e: VirtualMachineError) {
+                fatal = e
+                retry
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                runtime.log(LogLevel.ERROR, "the clock was interrupted", e)
+                retry
+            } catch (
+                @Suppress("TooGenericExceptionCaught") t: Throwable,
+            ) {
+                runtime.log(LogLevel.ERROR, "the clock threw", t)
+                retry
+            }
+        try {
+            config.pollTimer.schedule(executor, delay) { sync(executor) }
+        } catch (
+            // close() shut the loader down after the flip was read: nothing runs after close() (spec §5.1).
+            @Suppress("SwallowedException") e: RejectedExecutionException,
+        ) {
+            // Dropped.
+        }
+        fatal?.let { throw it }
+    }
+
+    /**
+     * One scheduled sync on the loader (spec §5.1, #147), then the next one scheduled, in a `finally`, so that a fatal
+     * error, which the runtime rethrows, never ends the schedule; the runtime restores an interrupt it absorbed.
+     */
+    private fun sync(executor: ScheduledExecutorService) {
+        var next: Long? = null
+        try {
+            next = runtime.sync(nowMillis())
+        } finally {
+            reschedule(executor, next)
+        }
+    }
+
     /** Cancels [executor] and waits for it, uninterruptibly: an in-flight install ends before the engine closes. */
-    private fun stop(executor: ExecutorService) {
+    private fun stop(executor: ScheduledExecutorService) {
         executor.shutdownNow()
         awaitUninterruptibly { executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS) }
     }
 
-    /** The loader: one daemon thread `revokt-loader-<build sequence>` (spec §5.1), started by its first task. */
-    private fun newLoader(): ExecutorService =
-        Executors.newSingleThreadExecutor { task ->
+    /**
+     * The loader: one daemon thread `revokt-loader-<build sequence>` (spec §5.1), started by its first task, which also
+     * waits the schedule's delays. A cancelled sync leaves its queue, and `shutdownNow()` drops the queued one.
+     */
+    private fun newLoader(): ScheduledExecutorService =
+        ScheduledThreadPoolExecutor(1) { task ->
             Thread(task, "revokt-loader-${config.sequence}").also {
                 it.isDaemon = true
                 loaderThread = it
             }
+        }.apply {
+            removeOnCancelPolicy = true
+            executeExistingDelayedTasksAfterShutdownPolicy = false
+            continueExistingPeriodicTasksAfterShutdownPolicy = false
         }
 
     private fun checkNotFromStart() {
@@ -342,6 +413,12 @@ public class Revokt private constructor(
 
         /** The monotonic source for deadlines; internal, a test seam. */
         internal var timeSource: TimeSource = TimeSource.Monotonic
+
+        /** Where the loader waits for its next sync (#147): the loader's own timer; internal, a test seam. */
+        internal var pollTimer: PollTimer = PollTimer.LOADER
+
+        /** The sync schedule's jitter source (#147); internal, a test seam. */
+        internal var random: Random = Random.Default
 
         /** The platform trust (spec §3, §5.3): `JvmPlatformTrust()`; internal, a test seam (the §4 member is [0.3]). */
         internal var platformTrust: PlatformTrust = JvmPlatformTrust()
@@ -556,6 +633,23 @@ private inline fun awaitUninterruptibly(wait: () -> Any?) {
         }
     }
     if (interrupted) Thread.currentThread().interrupt()
+}
+
+/**
+ * Where the loader waits for its next sync (spec §5.1, #147): [schedule] runs [task] on [loader] after [delayMillis].
+ * [LOADER] is the loader's monotonic timer; a test's timer records the delays and runs the task when it chooses. A
+ * timer whose loader is shut down throws `RejectedExecutionException`.
+ */
+internal fun interface PollTimer {
+    fun schedule(
+        loader: ScheduledExecutorService,
+        delayMillis: Long,
+        task: Runnable,
+    )
+
+    companion object {
+        val LOADER = PollTimer { loader, delay, task -> loader.schedule(task, delay, TimeUnit.MILLISECONDS) }
+    }
 }
 
 /** A `java.time.Clock` as a `kotlin.time.Clock`, at millisecond precision. */

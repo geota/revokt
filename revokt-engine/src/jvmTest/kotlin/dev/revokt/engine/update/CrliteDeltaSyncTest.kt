@@ -285,7 +285,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `a cursor older than the pointed generation replays a superset of changes and installs`() {
+    fun `a cursor older than the live generation fetches the whole collection, and installs`() {
         val server = installedFirst()
         // The second generation flips, then its updater json write fails: the pointer names it, the cursor stays ts.
         next(server, listOf(full, delta, delta2))
@@ -295,7 +295,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
         assertEquals(directory2, liveDirectory())
         assertEquals(ts, sourceRecord(ts2 + hour).lastVerifiedLastModified)
-        // A third: _since the old cursor, merged over the second generation's records.
+        // A third. The cursor is not the live generation's <ts>, so it is not sent (#147, §7.1): the whole collection.
         val delta3 =
             Rec(
                 "f1e2d3c4-0000-4000-8000-000000000004",
@@ -311,8 +311,10 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         server.fetcher.requests.clear()
         val now = server.ts + 8 * hour
         sync(server, now = now).assert(SyncOutcome.INSTALLED)
-        assertEquals(server.sinceUrl(ts), server.fetcher.requests[1].url)
-        assertFalse(server.fetcher.requests.any { it.url == server.changesetUrl }, "no reset")
+        assertEquals(server.changesetUrl, server.fetcher.requests[1].url)
+        assertFalse(server.fetcher.requests.any { "_since" in it.url }, "no cursor sent")
+        assertFalse(server.fetcher.requests.any { "If-None-Match" in it.headers }, "no cursor sent")
+        // The stored full and the deltas the live generation holds are reused: only the new delta is fetched.
         assertEquals(listOf(attachments + delta3.location), server.attachmentRequests())
         assertEquals(server.ts, sourceRecord(now).lastVerifiedLastModified)
     }

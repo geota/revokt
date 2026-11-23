@@ -71,6 +71,10 @@ internal class RevoktConfig(
     val maxChangesetRecords = builder.maxChangesetRecords
     val pkixFallback = builder.pkixFallback
 
+    /** The loader's timer and the schedule's jitter source (#147): internal test seams. */
+    val pollTimer: PollTimer = builder.pollTimer
+    val random = builder.random
+
     /**
      * The platform trust (spec §3, §5.3): `JvmPlatformTrust()`, with no builder member in 0.2 (the §4 `platformTrust`
      * member is [0.3]). Its default delegate is captured here, at `build()` (§4), before the engine is registered.
@@ -93,7 +97,20 @@ internal class RevoktConfig(
      * throws there fails `build()` with the engine still the caller's.
      */
     val runtime: CrliteRuntime =
-        CrliteRuntime.of(seed, channel, remoteSettings, engine, signatureVerifier, policy, storage, logger)
+        CrliteRuntime.of(
+            seed,
+            channel,
+            remoteSettings,
+            engine,
+            signatureVerifier,
+            policy,
+            storage,
+            logger,
+            http,
+            ioDispatcher,
+            CrliteRuntime.FetchCaps(maxFilterBytes, maxJsonBytes, maxX5uBytes, maxChangesetRecords),
+            random,
+        )
 
     init {
         EngineRegistry.register(engine)

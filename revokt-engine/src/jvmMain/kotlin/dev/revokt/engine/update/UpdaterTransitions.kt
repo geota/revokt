@@ -55,7 +55,7 @@ internal class LoadedUpdater(
  */
 internal object UpdaterTransitions {
     /** §7.1 "poll at most every 6 h": the cap of the computed failure backoff (§5.1 limits, `MAX_BACKOFF`). */
-    const val POLL_INTERVAL_MILLIS: Long = 6L * 60 * 60 * 1_000
+    val POLL_INTERVAL_MILLIS: Long = RevoktLimits.POLL_INTERVAL
 
     /** The first failure's wait; each further consecutive failure doubles it, up to [POLL_INTERVAL_MILLIS]. */
     const val FIRST_FAILURE_BACKOFF_MILLIS: Long = 15L * 60 * 1_000

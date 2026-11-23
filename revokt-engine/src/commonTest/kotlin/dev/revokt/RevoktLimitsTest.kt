@@ -26,6 +26,9 @@ class RevoktLimitsTest {
         assertEquals(64L shl 10, RevoktLimits.MAX_X5U_BYTES)
         assertEquals(1_024, RevoktLimits.MAX_CHANGESET_RECORDS)
         assertEquals(24 * hour, RevoktLimits.MAX_BACKOFF)
+        assertEquals(6 * hour, RevoktLimits.POLL_INTERVAL)
+        assertEquals(36L * 60 * 1_000, RevoktLimits.POLL_JITTER)
+        assertEquals(60_000, RevoktLimits.MIN_POLL_DELAY)
     }
 
     @Test
