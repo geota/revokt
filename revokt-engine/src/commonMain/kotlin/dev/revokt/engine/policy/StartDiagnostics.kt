@@ -42,11 +42,10 @@ internal fun seedPastRejectThreshold(
     nowMillis: Long,
 ): List<PolicyDiagnostic> {
     val threshold = policy.staleness(Dataset.CRLITE)?.rejectStaleAfterMillis
-    return if (policy.outcome(Rule.STALE) == Outcome.REJECT &&
-        seedTimestampMillis != null &&
-        threshold != null &&
-        nowMillis - seedTimestampMillis > threshold
-    ) {
+    if (policy.outcome(Rule.STALE) != Outcome.REJECT || seedTimestampMillis == null || threshold == null) {
+        return emptyList()
+    }
+    return if (nowMillis - seedTimestampMillis > threshold) {
         listOf(
             diagnostic(
                 DiagnosticCode.SEED_PAST_REJECT_THRESHOLD,
