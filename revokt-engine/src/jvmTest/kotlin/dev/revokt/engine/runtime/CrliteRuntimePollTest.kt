@@ -356,9 +356,30 @@ internal class CrliteRuntimePollTest : SeedFixture() {
         // A fatal one is rethrown, for the loader to reschedule first; the sync itself completed (UNCHANGED).
         thrown = OutOfMemoryError("random")
         assertFailsWith<OutOfMemoryError> { runtime.sync(now + 7 * hour) }
+        assertTrue(recording.messages.any { it.first == LogLevel.ERROR && "fatal error, rethrown" in it.second })
         assertEquals(now + 7 * hour, sourceRecord(now + 7 * hour).lastAttemptAtMillis)
         // A store read that throws, even fatally, is the sync's own catch: nothing written, so retried in 15 min.
         storage.failRead = { name -> if (name == updaterKey) OutOfMemoryError("updater") else null }
         assertEquals(now + 8 * hour + 15 * minute, runtime.sync(now + 8 * hour))
+    }
+
+    @Test
+    fun `a clock that throws before the first sync is logged, and the start task still clears pending`() {
+        val server = Server()
+        val runtime = runtime(seed = null, server = server)
+        var reads = 0
+        val clock = {
+            check(reads++ > 0) { "clock" }
+            ts
+        }
+        assertNull(runtime.startTask(loadSeed = false, nowMillis = clock), "no next time: the loader retries in 15 min")
+        assertTrue(server.fetcher.requests.isEmpty())
+        assertFalse(runtime.crlite().pending)
+        assertEquals(1, recording.messages.count { it.first == LogLevel.ERROR && "the clock threw" in it.second })
+        // A fatal one is logged the same way, and rethrown once pending is cleared.
+        val fatal = runtime(seed = null, server = Server())
+        assertFailsWith<OutOfMemoryError> { fatal.startTask(loadSeed = false) { throw OutOfMemoryError("clock") } }
+        assertFalse(fatal.crlite().pending)
+        assertEquals(2, recording.messages.count { it.first == LogLevel.ERROR && "the clock threw" in it.second })
     }
 }

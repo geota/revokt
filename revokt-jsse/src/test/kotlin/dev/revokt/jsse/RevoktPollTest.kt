@@ -9,8 +9,11 @@ import dev.revokt.Enforcement
 import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.HttpFetcher
+import dev.revokt.LogLevel
 import dev.revokt.RevoktInternalApi
+import dev.revokt.RevoktLogger
 import org.junit.jupiter.api.Timeout
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -46,6 +49,7 @@ class RevoktPollTest {
     private val timer = ManualTimer()
     private val clock = FakeClock(1_792_587_631_204)
     private val engine = StubEngine()
+    private val logs = ConcurrentLinkedQueue<Pair<LogLevel, String>>()
 
     @AfterTest
     fun release() {
@@ -118,6 +122,7 @@ class RevoktPollTest {
     private fun Revokt.Builder.open(http: HttpFetcher): Revokt {
         pollTimer = timer
         clock = this@RevoktPollTest.clock
+        logger = RevoktLogger { level, message, _ -> logs += level to message }
         return remoteSettings(remoteSettings())
             .enforcement(Enforcement.OBSERVE)
             .ioExecutor(io)
@@ -212,11 +217,33 @@ class RevoktPollTest {
         timer.fire()
         assertEquals(15 * minute, timer.next())
         assertEquals(1, feed.requests.get(), "that sync never ran")
+        assertTrue(
+            logs.any { (level, message) -> level == LogLevel.ERROR && "fatal error, rethrown" in message },
+            "the loader's task swallows the rethrow, so the log line is its only trace: $logs",
+        )
         // The loader survived and the schedule goes on.
         clock.millis += 15 * minute
         timer.fire()
         assertEquals(30 * minute, timer.next(), "the second consecutive failure")
         assertEquals(2, feed.requests.get())
+        assertTrue(loaderThreads(revokt).isNotEmpty())
+    }
+
+    @Test
+    fun `a clock that throws before a scheduled sync is logged, and the sync retried in 15 min`() {
+        val feed = Feed(status(503), status(503))
+        val revokt = bare().open(feed)
+        revokt.start()
+        assertEquals(15 * minute, timer.next())
+        clock.millis += 15 * minute
+        clock.throwOnce = IllegalStateException("clock")
+        timer.fire()
+        assertEquals(15 * minute, timer.next())
+        assertEquals(1, feed.requests.get(), "that sync never ran")
+        assertTrue(logs.any { (level, message) -> level == LogLevel.ERROR && "the clock threw" in message }, "$logs")
+        clock.millis += 15 * minute
+        timer.fire()
+        assertEquals(30 * minute, timer.next())
         assertTrue(loaderThreads(revokt).isNotEmpty())
     }
 }

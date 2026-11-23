@@ -198,7 +198,7 @@ public class CrliteRuntime internal constructor(
      * with `pending = false` and `generationEpoch++`, so `NO_DATA` can fire. Returns when the loader syncs next (a
      * wall-clock time on [nowMillis]'s clock, for [delayMillis]), or null when nothing polls. Never throws: a throwable
      * from any step is logged and the task still clears `pending`, as §5.1 has every loader task catch `Throwable`; a
-     * fatal error is rethrown after that, and the loader then reschedules at [retryAtMillis] (#147).
+     * fatal error is rethrown after that.
      */
     @Suppress("TooGenericExceptionCaught") // §5.1: every loader task catches Throwable.
     public fun startTask(
@@ -218,11 +218,16 @@ public class CrliteRuntime internal constructor(
         }
         var next: Long? = null
         if (polls && fatal == null) {
+            var clockRead = false
             try {
-                next = sync(nowMillis())
+                val now = nowMillis()
+                clockRead = true
+                next = sync(now)
             } catch (t: Throwable) {
-                // sync() lets only a fatal error out.
-                fatal = t
+                restoreInterrupt(t)
+                if (isFatal(t)) fatal = t
+                // sync() logs its own throwable and lets out only a fatal one; the clock's is logged here.
+                if (!clockRead) logger.safeLog(LogLevel.ERROR, "the clock threw before the first sync", t)
             }
         }
         try {
@@ -247,9 +252,9 @@ public class CrliteRuntime internal constructor(
      * 3. The seed's `STALE` gate (§8): once `updater.json` records an attempt since the seed's install, the seed
      *    generation is published again with the gate open and `generationEpoch++`.
      *
-     * A non-fatal throwable is logged and swallowed, and the next sync is at [retryAtMillis]; a fatal one is rethrown
-     * for the loader to reschedule first (§6.5: "nothing escapes the loader thread"). Throws [IllegalStateException]
-     * when nothing polls.
+     * A non-fatal throwable is logged and swallowed, and the next sync is at [retryAtMillis]; a fatal one is logged and
+     * rethrown for the loader to reschedule first (§6.5: "nothing escapes the loader thread"; the loader's task swallows
+     * what it rethrows, so the log line is its only trace). Throws [IllegalStateException] when nothing polls.
      */
     @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable.
     public fun sync(nowMillis: Long): Long {
@@ -262,7 +267,10 @@ public class CrliteRuntime internal constructor(
             PollSchedule.nextAtMillis(run, checkNotNull(sourceId), nowMillis, random)
         } catch (t: Throwable) {
             restoreInterrupt(t)
-            if (isFatal(t)) throw t
+            if (isFatal(t)) {
+                logger.safeLog(LogLevel.ERROR, "the sync threw a fatal error, rethrown", t)
+                throw t
+            }
             logger.safeLog(LogLevel.ERROR, "the sync threw", t)
             PollSchedule.retryAtMillis(nowMillis)
         }

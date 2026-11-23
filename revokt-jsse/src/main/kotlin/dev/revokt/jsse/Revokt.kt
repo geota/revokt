@@ -144,6 +144,10 @@ public class Revokt private constructor(
                         var next: Long? = null
                         try {
                             next = runtime.startTask(loadSeed, ::nowMillis)
+                        } catch (e: VirtualMachineError) {
+                            // The loader's task swallows what it throws: this line is the error's only trace.
+                            runtime.log(LogLevel.ERROR, "the start task threw a fatal error, rethrown", e)
+                            throw e
                         } finally {
                             // Rescheduled before a fatal error propagates, so the schedule never stops (#147, §6.5).
                             done.countDown()
@@ -320,12 +324,26 @@ public class Revokt private constructor(
 
     /**
      * One scheduled sync on the loader (spec §5.1, #147), then the next one scheduled, in a `finally`, so that a fatal
-     * error, which the runtime rethrows, never ends the schedule; the runtime restores an interrupt it absorbed.
+     * error, which the runtime rethrows, never ends the schedule; the runtime restores an interrupt it absorbed. A clock
+     * that throws before the sync is a logged failure, retried in 15 min; a fatal error is logged and rethrown.
      */
     private fun sync(executor: ScheduledExecutorService) {
         var next: Long? = null
         try {
             next = runtime.sync(nowMillis())
+        } catch (e: VirtualMachineError) {
+            // The loader's task swallows what it throws: this line is the error's only trace.
+            runtime.log(LogLevel.ERROR, "the sync task threw a fatal error, rethrown", e)
+            throw e
+        } catch (e: InterruptedException) {
+            // A consumer clock's: logged, the interrupt restored, retried in 15 min.
+            Thread.currentThread().interrupt()
+            runtime.log(LogLevel.ERROR, "the clock was interrupted before the sync", e)
+        } catch (
+            // A consumer clock that throws: logged and retried in 15 min (the runtime catches the sync's own).
+            @Suppress("TooGenericExceptionCaught") t: Throwable,
+        ) {
+            runtime.log(LogLevel.ERROR, "the clock threw before the sync", t)
         } finally {
             reschedule(executor, next)
         }
