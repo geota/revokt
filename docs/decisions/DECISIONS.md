@@ -415,3 +415,29 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     vocabulary. The 0.3 status counters are keyed by `PathReason`.
   - **Kept:** `Exemptions.and` and `or`. The engine seam's data types and `PathBuilderFallback` are
     `@RevoktInternalApi` with the seam, as #127 did for `PlatformTrust`.
+- 2026-11-23 (lead, #147, PR #303; security review approved): polling Remote Settings on the `Revokt` loader.
+  Firefox polls every 24 h with no jitter and relies on Push, with a 120 s floor. upki leaves scheduling to the
+  packager.
+  - **First sync:** it runs in the start task after the seed (§5.1), and `start()`'s join stays bounded by
+    `awaitData`, so an instance with no seed can wait briefly for its first data. `pending` clears after it. The
+    builder proposed a separate task; the lead kept the spec.
+  - **Schedule:** after a poll that didn't fail, the next is 6 h plus U[0, 36 min), and the jitter only lengthens the
+    wait. A `FAILED` sync waits exactly the backoff #131 persists. `INSTALLED`, `UNCHANGED` and `ROLLBACK_REFUSED`
+    wait the longer of the interval and the backoff. Every delay is clamped to [60 s, 24 h]; the floor stops a
+    `Retry-After: 0` loop. The target is computed on the wall clock and waited for on the monotonic one. A sync that
+    writes nothing retries in 15 min, in memory only.
+  - **Fail closed on an unresolved store read:** while the start task's store read is unresolved, each sync re-runs
+    the seed load first and syncs only if that load installs. 0.3's stored-generation load must clear the flag
+    (#287).
+  - **Conditional requests:** `_since` and `If-None-Match` are sent only when the cursor equals the live
+    generation's timestamp; otherwise the whole collection is fetched. This closes the #205 review's case of a 304
+    keeping an instance on a fallback. Firefox keys `_since` on its own database, and upki sends
+    `If-Modified-Since` only when its local manifest parses.
+  - **STALE gate:** after the first completed attempt, the seed generation is republished with the gate open (§8).
+  - **close():** it blocks the reschedule and interrupts the running sync. A sync waiting on a fetch ends `FAILED`
+    and installs nothing, and one in prepare or activate is waited for (#143's residual).
+  - **Failures never end polling:** the schedule catches every throwable and reschedules in a `finally`. A fatal
+    error is logged at ERROR and then rethrown, since the scheduled task swallows it. A consumer clock that throws
+    is a logged failure. The accepted residual is a fatal error inside the timer's own `schedule` call.
+  - **Open for 0.3:** after a stale cursor, send the live generation's timestamp as `_since` instead of a full fetch,
+    which keeps the delta path, as Firefox does. 0.2 fetches the whole collection.
