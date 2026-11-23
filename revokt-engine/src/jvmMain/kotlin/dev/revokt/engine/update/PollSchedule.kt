@@ -69,8 +69,9 @@ internal object PollSchedule {
         nowMillis: Long,
     ): Long {
         if (atMillis <= nowMillis) return RevoktLimits.MIN_POLL_DELAY
-        // atMillis > nowMillis, so only a negative now can overflow the difference, upwards.
-        val delay = if (nowMillis < 0 && atMillis > Long.MAX_VALUE + nowMillis) Long.MAX_VALUE else atMillis - nowMillis
+        // atMillis > nowMillis, so the difference is positive unless it overflowed, upwards.
+        val difference = atMillis - nowMillis
+        val delay = if (difference < 0) Long.MAX_VALUE else difference
         return delay.coerceIn(RevoktLimits.MIN_POLL_DELAY, RevoktLimits.MAX_BACKOFF)
     }
 }

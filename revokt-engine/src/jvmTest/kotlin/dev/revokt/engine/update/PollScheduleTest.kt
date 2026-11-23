@@ -91,6 +91,15 @@ class PollScheduleTest {
     @Test
     fun `a sync SKIPPED under a backoff waits until the backoff ends`() {
         assertEquals(now + 3 * hour, next(run(SyncFailure.BACKOFF, backoffUntil = now + 3 * hour)))
+        // A record whose backoff is gone by then: due at once, which the delay floors at 60 s.
+        val due = next(run(SyncFailure.BACKOFF, backoffUntil = null))
+        assertEquals(now, due)
+        assertEquals(minute, PollSchedule.delayMillis(due, now))
+    }
+
+    @Test
+    fun `a FAILED sync whose record holds no backoff retries in 15 min, never at once`() {
+        assertEquals(now + 15 * minute, next(run(SyncFailure.CHANGESET_FETCH, backoffUntil = null)))
     }
 
     @Test
@@ -115,5 +124,6 @@ class PollScheduleTest {
         assertEquals(24 * hour, PollSchedule.delayMillis(now + 24 * hour, now))
         assertEquals(24 * hour, PollSchedule.delayMillis(now + 24 * hour + 1, now))
         assertEquals(24 * hour, PollSchedule.delayMillis(Long.MAX_VALUE, -now), "no overflow")
+        assertEquals(6 * hour, PollSchedule.delayMillis(6 * hour - minute, -minute), "a negative now, no overflow")
     }
 }
