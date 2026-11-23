@@ -133,7 +133,7 @@ revokt/
   revokt-engine-upki/          included in settings only under -Prevokt.native (needs JDK 22; CI-only, never published)
   native/                      Cargo workspace (revokt-upki-shim, revokt-oracle) and the Go producer and zlint CLIs; NOT Gradle modules; the Rust crates built by the native CI job, the Go CLIs by their golden recorder
   consumers/                   maven-consumer, java-consumer, kotlin-consumer, android-consumer (the §3.1/§9 consumer builds; run under -Prevokt.ci)
-  data/seed/                   the weekly seed job (publishes revokt-seed-<channel>; separate publishing identity, section 9)
+  data/seed/                   the weekly seed job (builds the revokt-seed-<channel> jars, GitHub release assets in 0.2; section 9)
   corpus/                      committed fixture corpora (small) with their SHA-256 manifest; the large corpus is the public revokt-corpus repository, pinned by tag + manifest
   docs/spec/ docs/adr/ docs/dev/
   LICENSE LICENSES/ NOTICE SECURITY.md MAINTAINERS.md GOVERNANCE.md CODEOWNERS CODE_OF_CONDUCT.md CONTRIBUTING.md AGENTS.md CLAUDE.md -> AGENTS.md REUSE.toml
@@ -209,10 +209,9 @@ Robolectric `android-all` jars cached and `robolectric.offline=true`; runner ima
   runs on every PR; a build-logic task `verifyHeaderLocations` fails when an `MPL-2.0` header appears
   outside `revokt-clubcard/src/*/kotlin/**/port/**` (§3.1 item 3, the header-location rule).
 - `verifyPomLicenses` (build-logic task on `check`) reads every publication's generated POM (KMP root and
-  `-jvm` included): `revokt-clubcard` exactly `MPL-2.0`, everything else exactly `Apache-2.0` (§3.1 item 1). The one
-  exception is the data artifacts: a POM whose own coordinates are exactly `DataArtifacts`' (the data group and the
-  closed set `revokt-seed-compat`, `revokt-seed-default`) carries exactly "No copyright claimed; contains Mozilla
-  Remote Settings data", and no other POM may (maintainer decision A7, #145).
+  `-jvm` included): `revokt-clubcard` exactly `MPL-2.0`, everything else exactly `Apache-2.0` (§3.1 item 1). The
+  data artifacts have no POM in 0.2: the seed jar carries "No copyright claimed; contains Mozilla Remote Settings
+  data" in its manifest and as `META-INF/LICENSE-DATA`, which `verifySeedJar` checks (#145).
 
 **Dependencies.**
 - Versions only in `libs.versions.toml`. **Locking**: `lockMode = STRICT`, every lockfile committed; a
@@ -715,11 +714,13 @@ PGP fingerprint, a Gradle `trusted-key` snippet, `gh attestation verify`).
   change, every data-format or `store.version` change, every `seedFormat` bump. Each release also states
   its **AI-authorship figure** (Aider's practice): the share of merged PRs carrying `Co-authored-by` and the
   share of new lines from those PRs by `git blame`, with formatting commits in `.git-blame-ignore-revs`.
-- **Data artifacts** (`revokt-seed-*`) are published by the weekly job under a **separate Portal account owning
-  only the data namespace**, through its own `seed-publish` environment; the job verifies Mozilla's content
-  signature before packaging (§7.1 verification, §6.5 archive layout), records the Remote Settings changeset timestamp, the record ids and each
-  attachment's SHA-256 in the attestation, and smoke-loads the published artefact with the oldest supported
-  engine minor before announcing it. Never in the BOM (§7.2); its workflow has its own CODEOWNERS entry.
+- **Data artifacts** (`revokt-seed-*`) are, in 0.2, **GitHub release assets with attestations, not on Maven Central**
+  (the maintainer's decision, 2026-11-23): the weekly job attaches the `revokt-seed-<channel>` jars to a release
+  through its own `seed-publish` environment, and an app bundles the jar itself. The job verifies Mozilla's content
+  signature before packaging (§7.1 verification, §6.5 archive layout), records the Remote Settings changeset timestamp,
+  the record ids and each attachment's SHA-256 in the attestation, and smoke-loads the released artefact with the
+  oldest supported engine minor before announcing it. Maven publishing, with a separate Portal account owning only the
+  data namespace, is a later decision. Never in the BOM (§7.2); its workflow has its own CODEOWNERS entry.
 - The `0.x` promise: no compatibility promise before 1.0, but the API dumps are committed and every
   non-additive diff needs `!`, so the history shows every break on purpose.
 

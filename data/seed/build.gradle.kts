@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The seed job (spec §6.5, §7.2; #145): builds the revokt-seed-<channel> data artifacts through the data-artifact
-// convention plugin. Nothing compiled here is published; the scheduled run and the publishing are #149.
+// convention plugin. Nothing compiled here ships; the scheduled run and the GitHub release asset are #149.
 plugins {
     id("revokt.data-artifact")
 }

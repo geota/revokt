@@ -32,7 +32,7 @@ class RootPlugin : Plugin<Project> {
             nonPublicMarkers.add(Conventions.MARKER_TESTING)
             nonPublicMarkers.add(Conventions.MARKER_CLUBCARD_INTERNAL)
             ignoredProjects.add("revokt-bom")
-            // The seed job's build (data/seed): it publishes data, never code, so it has no API to dump (#145).
+            // The seed job's build (data/seed): it builds data jars, never code, so it has no API to dump (#145).
             ignoredProjects.add("revokt-seed")
             @Suppress("OPT_IN_USAGE")
             klib { enabled = false }
@@ -67,7 +67,7 @@ class RootPlugin : Plugin<Project> {
             sources.from(
                 layout.projectDirectory.asFileTree.matching {
                     include("**/*.kt", "**/*.kts", "**/*.java", "**/*.rs", "**/*.go", "**/*.py")
-                    exclude("build/**", "*/build/**", "build-logic/*/build/**", "consumers/*/build/**", ".gradle/**", "**/.gradle/**", ".git/**", "**/node_modules/**", "LICENSES/**", "**/target/**")
+                    exclude("build/**", "*/build/**", "data/*/build/**", "build-logic/*/build/**", "consumers/*/build/**", ".gradle/**", "**/.gradle/**", ".git/**", "**/node_modules/**", "LICENSES/**", "**/target/**")
                 },
             )
         }

@@ -32,7 +32,7 @@ include(":revokt-engine")
 include(":revokt-jsse")
 include(":revokt-bom")
 
-// The seed job (spec §6.5, §7.2, #145): publishes the revokt-seed-<channel> data artifacts, never code.
+// The seed job (spec §6.5, §7.2, #145): builds the revokt-seed-<channel> jars (GitHub release assets in 0.2), never code.
 include(":revokt-seed")
 project(":revokt-seed").projectDir = file("data/seed")
 

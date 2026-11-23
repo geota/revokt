@@ -12,9 +12,6 @@ import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 import org.gradle.api.file.RegularFile
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Provider
-import org.gradle.api.publish.PublishingExtension
-import org.gradle.api.publish.maven.MavenPublication
-import org.gradle.api.publish.tasks.GenerateModuleMetadata
 import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.SourceSetContainer
@@ -36,6 +33,17 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.jlleitschuh.gradle.ktlint.KtlintExtension
 
+/** Writes the data licence text (spec §3, [DataArtifacts.LICENSE]) to [output], one line. */
+abstract class WriteDataLicenseTask : org.gradle.api.DefaultTask() {
+    @get:OutputFile
+    abstract val output: RegularFileProperty
+
+    @org.gradle.api.tasks.TaskAction
+    fun write() {
+        output.get().asFile.writeText(DataArtifacts.LICENSE + "\n")
+    }
+}
+
 /** A [JavaExec] that writes one seed archive, [archive], its declared output. */
 abstract class SeedArchiveExec : JavaExec() {
     @get:OutputFile
@@ -51,18 +59,18 @@ abstract class SeedArchiveExec : JavaExec() {
  * Per channel, none of them part of `check` (they reach Mozilla):
  * - `writeSeed<Channel>`: the job, on the pinned JDK ([jobLauncher]), writes `build/seed/revokt-seed-<channel>.zip`;
  *   it needs `-Prevokt.seedVersion=YYYY.MM.DD` and is never up to date;
- * - `seedJar<Channel>`: the jar holding that archive, stored, as `revokt/seed-<channel>.zip`, and the manifest;
+ * - `seedJar<Channel>`: the jar an app bundles, holding that archive, stored, as `revokt/seed-<channel>.zip`, the
+ *   data licence text as `META-INF/LICENSE-DATA` and in the manifest, and nothing else;
  * - `verifySeedJar<Channel>` ([VerifySeedJarTask]) and `smokeLoadSeed<Channel>`, which starts a `Revokt` on the jar
- *   alone through the public API (the sole-seed `ENFORCE` configuration, so an unreadable seed throws);
- * - the `seed<Channel>` publication: the jar, a POM with the data licence and no dependency, no Gradle module metadata.
+ *   alone through the public API (the sole-seed `ENFORCE` configuration, so an unreadable seed throws).
  *
- * In `check`, with no network: the same chain over the committed test-signed fixture (`writeTestSeed`, `testSeedJar`,
- * `verifyTestSeedJar`, `smokeLoadTestSeed` under the fixture's test pin), `verifyPomLicenses` and `verifyDataPom`.
+ * No Maven publication: in 0.2 a seed is a GitHub release asset with attestations, which #149 attaches (the maintainer's
+ * decision, 2026-11-23). In `check`, with no network: the same chain over the committed test-signed fixture
+ * (`writeTestSeed`, `testSeedJar`, `verifyTestSeedJar`, `smokeLoadTestSeed` under the fixture's test pin).
  */
 class DataArtifactPlugin : Plugin<Project> {
     override fun apply(target: Project): Unit = with(target) {
         pluginManager.apply("org.jetbrains.kotlin.jvm")
-        pluginManager.apply("maven-publish")
         pluginManager.apply("org.jlleitschuh.gradle.ktlint")
         pluginManager.apply("io.gitlab.arturbosch.detekt")
 
@@ -86,7 +94,7 @@ class DataArtifactPlugin : Plugin<Project> {
             }
         tasks.named<KotlinCompile>("compileKotlin") { friendPaths.from(engineOn("compileClasspath")) }
         tasks.named<KotlinCompile>("compileTestKotlin") { friendPaths.from(engineOn("testCompileClasspath")) }
-        // The job's classes are never packed: the published jars are the seed jars below.
+        // The job's classes are never packed: the jars an app bundles are the seed jars below.
         tasks.named("jar") { enabled = false }
 
         extensions.configure<KtlintExtension> {
@@ -111,12 +119,17 @@ class DataArtifactPlugin : Plugin<Project> {
         tasks.withType<Test>().configureEach { useJUnitPlatform() }
 
         val version: Provider<String> = providers.gradleProperty(DataArtifacts.VERSION_PROPERTY)
-        val publishedVersion = version.getOrElse(UNSET_VERSION)
+        val jarVersion = version.getOrElse(UNSET_VERSION)
         val launcher = jobLauncher()
+        val licence =
+            tasks.register<WriteDataLicenseTask>("writeDataLicense") {
+                description = "Writes the data licence text (spec §3) that every seed jar carries as ${DataArtifacts.LICENSE_ENTRY}."
+                output.set(layout.buildDirectory.file("data-license/${DataArtifacts.LICENSE_ENTRY.substringAfterLast('/')}"))
+            }
 
         for (channel in DataArtifacts.CHANNELS) {
             val suffix = channel.replaceFirstChar { it.uppercase() }
-            val artifactId = DataArtifacts.artifactId(channel)
+            val base = DataArtifacts.name(channel)
             val write =
                 tasks.register<SeedArchiveExec>("writeSeed$suffix") {
                     description = "Fetches, verifies and writes the $channel seed archive from Mozilla Remote Settings (network; never in check)."
@@ -124,7 +137,7 @@ class DataArtifactPlugin : Plugin<Project> {
                     javaLauncher.set(launcher)
                     classpath = sourceSets.getByName("main").runtimeClasspath
                     mainClass.set(JOB_MAIN)
-                    archive.set(layout.buildDirectory.file("seed/$artifactId.zip"))
+                    archive.set(layout.buildDirectory.file("seed/$base.zip"))
                     val out = archive
                     argumentProviders.add(
                         CommandLineArgumentProvider {
@@ -139,7 +152,7 @@ class DataArtifactPlugin : Plugin<Project> {
                     outputs.cacheIf { false }
                     notCompatibleWithConfigurationCache("fetches from the network at execution; never cached")
                 }
-            val jar = seedJar("seedJar$suffix", channel, write.flatMap { it.archive }, publishedVersion, "seed")
+            val jar = seedJar("seedJar$suffix", channel, write.flatMap { it.archive }, licence, jarVersion, "seed")
             val verify = verifySeedJar("verifySeedJar$suffix", channel, jar, write.flatMap { it.archive })
             tasks.register<JavaExec>("smokeLoadSeed$suffix") {
                 description = "Starts a Revokt on the $channel seed jar alone, through the public API, under Mozilla's pins."
@@ -151,37 +164,7 @@ class DataArtifactPlugin : Plugin<Project> {
                 args("--channel", channel)
                 notCompatibleWithConfigurationCache("runs after the network write")
             }
-            extensions.configure<PublishingExtension> {
-                publications.register<MavenPublication>("seed$suffix") {
-                    groupId = DataArtifacts.GROUP
-                    this.artifactId = artifactId
-                    this.version = publishedVersion
-                    artifact(jar)
-                    pom {
-                        packaging = "jar"
-                        name.set(artifactId)
-                        description.set(
-                            "revokt, a Kotlin TLS revocation library, is not affiliated with Revokt (revokt.com). " +
-                                "Mozilla CRLite seed data for the $channel channel (spec §6.5).",
-                        )
-                        url.set("https://revokt.dev")
-                        licenses { license { name.set(DataArtifacts.LICENSE) } }
-                        scm {
-                            url.set("https://github.com/geota/revokt")
-                            connection.set("scm:git:https://github.com/geota/revokt.git")
-                        }
-                        developers {
-                            developer {
-                                id.set("geota")
-                                name.set("Adrian Maceiras")
-                            }
-                        }
-                    }
-                }
-            }
         }
-        // Spec §6.5 "Seed artifacts declare no code dependency": no module metadata, which could carry a platform.
-        tasks.withType<GenerateModuleMetadata>().configureEach { enabled = false }
 
         // The check path: the same tasks over the committed test-signed fixture, no network.
         val fixture = layout.projectDirectory.dir("src/test/resources/fixture")
@@ -210,7 +193,7 @@ class DataArtifactPlugin : Plugin<Project> {
                     },
                 )
             }
-        val testJar = seedJar("testSeedJar", "compat", writeTest.flatMap { it.archive }, "check", "test-seed")
+        val testJar = seedJar("testSeedJar", "compat", writeTest.flatMap { it.archive }, licence, "check", "test-seed")
         val verifyTest = verifySeedJar("verifyTestSeedJar", "compat", testJar, writeTest.flatMap { it.archive })
         val smokeTest =
             tasks.register<JavaExec>("smokeLoadTestSeed") {
@@ -228,43 +211,39 @@ class DataArtifactPlugin : Plugin<Project> {
                 doLast { marker.get().asFile.writeText("ok\n") }
             }
 
-        val poms = layout.buildDirectory.dir("publications").map { dir -> dir.asFileTree.matching { include("**/pom-default.xml") } }
-        val verifyPomLicenses =
-            tasks.register<VerifyPomLicensesTask>("verifyPomLicenses") {
-                description = "Every generated POM declares exactly its licence: the data text for the data artifacts' coordinates only (spec §3)."
-                group = "verification"
-                expectedLicense.set(Conventions.licenseOf(project.name))
-                rootDir.set(rootProject.layout.projectDirectory)
-                this.poms.from(poms)
-                dependsOn(tasks.matching { it.name.startsWith("generatePomFileFor") })
-            }
-        val verifyDataPom =
-            tasks.register<VerifyDataPomTask>("verifyDataPom") {
-                description = "Every POM is a data artifact's, a jar with no dependency, no dependencyManagement and no parent (spec §6.5)."
-                group = "verification"
-                rootDir.set(rootProject.layout.projectDirectory)
-                this.poms.from(poms)
-                dependsOn(tasks.matching { it.name.startsWith("generatePomFileFor") })
-            }
-        tasks.named("check") { dependsOn(verifyPomLicenses, verifyDataPom, smokeTest) }
+        tasks.named("check") { dependsOn(smokeTest) }
     }
 
-    /** The seed jar of [channel]: [zip] stored as `revokt/seed-<channel>.zip`, no timestamps, a fixed entry order. */
+    /**
+     * The seed jar of [channel]: [zip] stored as `revokt/seed-<channel>.zip`, the data licence text ([licence]) as
+     * `META-INF/LICENSE-DATA` and in the manifest, no timestamps, a fixed entry order.
+     */
     private fun Project.seedJar(
         name: String,
         channel: String,
         zip: Provider<RegularFile>,
+        licence: TaskProvider<WriteDataLicenseTask>,
         version: String,
         directory: String,
     ): TaskProvider<Jar> =
         tasks.register<Jar>(name) {
             description = "Packs the $channel seed archive as ${DataArtifacts.resource(channel)} (spec §6.5)."
             group = "revokt"
-            archiveFileName.set("${DataArtifacts.artifactId(channel)}-$version.jar")
+            archiveFileName.set("${DataArtifacts.name(channel)}-$version.jar")
             destinationDirectory.set(layout.buildDirectory.dir(directory))
             from(zip) {
                 into(DataArtifacts.resource(channel).substringBeforeLast('/'))
                 rename { DataArtifacts.resource(channel).substringAfterLast('/') }
+            }
+            from(licence.flatMap { it.output }) { into(DataArtifacts.LICENSE_ENTRY.substringBeforeLast('/')) }
+            manifest {
+                attributes(
+                    mapOf(
+                        DataArtifacts.LICENSE_ATTRIBUTE to DataArtifacts.LICENSE,
+                        "Implementation-Title" to DataArtifacts.name(channel),
+                        "Implementation-Version" to version,
+                    ),
+                )
             }
             entryCompression = ZipEntryCompression.STORED
             isPreserveFileTimestamps = false
@@ -301,7 +280,7 @@ class DataArtifactPlugin : Plugin<Project> {
         const val SMOKE_MAIN = "dev.revokt.seed.smoke.SmokeLoadKt"
         const val TEST_SMOKE_MAIN = "dev.revokt.seed.smoke.TestPinSmokeLoad"
 
-        /** The POM version without `-Prevokt.seedVersion`: `check` generates the POM, nothing publishes it. */
-        const val UNSET_VERSION = "0.0.0-UNSET"
+        /** The jars' version without `-Prevokt.seedVersion`: only the network tasks, which refuse to run, need one. */
+        const val UNSET_VERSION = "unset"
     }
 }
