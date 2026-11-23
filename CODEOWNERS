@@ -12,6 +12,7 @@
 /**/signature/                     @geota
 /data/seed/                        @geota
 /.github/                          @geota
+/.github/workflows/release-seed.yml @geota
 /build-logic/                      @geota
 /docs/spec/                        @geota
 /gradle/libs.versions.toml         @geota

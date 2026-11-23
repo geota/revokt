@@ -64,9 +64,9 @@ abstract class SeedArchiveExec : JavaExec() {
  * - `verifySeedJar<Channel>` ([VerifySeedJarTask]) and `smokeLoadSeed<Channel>`, which starts a `Revokt` on the jar
  *   alone through the public builder (the sole-seed `ENFORCE` configuration, so an unreadable seed throws).
  *
- * No Maven publication: in 0.2 a seed is a GitHub release asset with attestations, which #149 attaches (the maintainer's
- * decision, 2026-11-23). In `check`, with no network: the same chain over the committed test-signed fixture
- * (`writeTestSeed`, `testSeedJar`, `verifyTestSeedJar`, `smokeLoadTestSeed` under the fixture's test pin).
+ * No Maven publication: in 0.2 a seed is a GitHub release asset with attestations, which release-seed.yml attaches
+ * (the maintainer's decision, 2026-11-23). In `check`, with no network: the same chain over the committed test-signed
+ * fixture (`writeTestSeed`, `testSeedJar`, `verifyTestSeedJar`, `smokeLoadTestSeed` under the fixture's test pin).
  */
 class DataArtifactPlugin : Plugin<Project> {
     override fun apply(target: Project): Unit = with(target) {
@@ -265,9 +265,10 @@ class DataArtifactPlugin : Plugin<Project> {
         }
 
     /**
-     * The JDK the job and its checks run on (#145): Temurin, the build's JDK 21, whatever 21.0.x the runner has (#149's
-     * job pins the build through its setup-java version). The deflated entries' bytes are
-     * that JDK's zlib's, so a rebuild of one changeset is byte-equal on the same JDK build.
+     * The JDK the job and its checks run on (#145): Temurin, the build's JDK 21, whatever 21.0.x is installed. The
+     * weekly job (release-seed.yml) pins the exact build: it installs it from a SHA-256-checked tarball and turns
+     * toolchain detection off. The deflated entries' bytes are that JDK's zlib's, so a rebuild of one changeset is
+     * byte-equal on the same JDK build.
      */
     private fun Project.jobLauncher() =
         extensions.getByType<JavaToolchainService>().launcherFor {

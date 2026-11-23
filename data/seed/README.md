@@ -47,14 +47,40 @@ The jar has no POM. The data licence, "No copyright claimed; contains Mozilla Re
 `Revokt-Data-License` and the text of `META-INF/LICENSE-DATA`. The engine floor lives in `seed.json`.
 
 **Reproducibility.** One changeset gives byte-equal archives on the same Temurin 21 build, since the deflate output is
-that JDK's zlib's. The build asks for Temurin 21 (`DataArtifactPlugin.jobLauncher`), which takes whatever 21.0.x the
-runner has; #149's job pins the exact build through its setup-java version.
+that JDK's zlib's. The build asks for Temurin 21 (`DataArtifactPlugin.jobLauncher`), whatever 21.0.x is installed. The
+weekly job pins the exact build: it installs Temurin's tarball, checked against a SHA-256 in the workflow, turns Gradle's
+toolchain detection off, and records the build in the attestation.
 
 **In `check`, with no network.** `writeTestSeed`, `testSeedJar`, `verifyTestSeedJar` and `smokeLoadTestSeed` run the
 same chain over `src/test/resources/fixture`. That fixture is a Remote Settings exchange signed under the test suite's
 own keys, never a real or Mozilla key, and its filters are the committed `corpus/clubcard` ones. Regenerate it with
 revokt-engine's `SeedCheckFixtureWriter`.
 
-**Still to come (#149).** The weekly schedule, which attaches the jars to a GitHub release through the `seed-publish`
-environment, with an attestation (changeset timestamp, record ids, each attachment's SHA-256). Also the smoke load of the
-released artifact with the oldest supported engine minor.
+**The weekly job** (`.github/workflows/release-seed.yml`, CONTRIBUTING §9). It runs every Monday at 05:41 UTC and on
+dispatch. It runs both channels' `smokeLoadSeed<Channel>` with the run's UTC date. Each jar is smoke-loaded with the
+oldest supported engine minor, which is the run's own commit until a minor is released.
+
+The job then refuses a seed whose signed `<ts>` is older than the last seed release's for that channel. That release's
+jar must verify by its attestation, and its own `<ts>` must equal the attested one. When every channel's `<ts>` equals
+the last release's, nothing is published. A `seed-*` tag with no published seed release fails the run.
+
+With publishing on (the `SEED_PUBLISH_ENABLED` repository variable and the `seed-publish` environment), the job then:
+1. attests each jar: SLSA provenance and the seed predicate, [seed-v1](../../docs/attestation/seed-v1.md). The
+   predicate holds the `<ts>`, the placed record ids, each attachment's size and SHA-256, and the JDK build;
+2. creates the `seed-YYYY.MM.DD` release as a draft, holding both jars and the `.sigstore.json` bundles (the provenance
+   also as `.intoto.jsonl`);
+3. reads the assets back and checks them: their SHA-256, and the attestations from the API and from the bundles;
+4. publishes the release and checks that its tag names the run's commit.
+
+The scripts it runs are `.github/scripts/seed_predicate.sh` and `seed_floor.sh`, which `test_seed_scripts.py` tests.
+
+**Using a seed.** Download the jar of your channel from the newest `seed-*` release, verify it, and bundle it. `SeedSource.bundled()`
+then finds `/revokt/seed-<channel>.zip` on the class path:
+
+```
+gh attestation verify revokt-seed-compat-<version>.jar --repo geota/revokt \
+  --signer-workflow geota/revokt/.github/workflows/release-seed.yml --source-ref refs/heads/main
+```
+
+Add `--predicate-type https://github.com/geota/revokt/blob/main/docs/attestation/seed-v1.md` to check the seed
+predicate instead of the provenance.
