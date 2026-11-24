@@ -43,7 +43,8 @@ class Case(unittest.TestCase):
         for fname, data in files.items():
             (d / fname).write_bytes(data)
         if manifest is None:
-            manifest = {"target": target, "module": "revokt-engine", "hash": "1234abcd5678ef90", "files": sorted(files)}
+            manifest = {"target": target, "module": "revokt-engine", "hash": "1234abcd5678ef90", "reproduced": True,
+                        "files": sorted(files)}
         (d / "manifest.json").write_bytes(manifest if isinstance(manifest, bytes) else json.dumps(manifest).encode())
         return d
 
@@ -56,12 +57,14 @@ class Case(unittest.TestCase):
 class GoodArtifact(Case):
     def test_accepted(self):
         f = fa.check_artifact(self.artifact(), "Foo.bar")
-        self.assertEqual((f.target, f.module, f.hash), ("Foo.bar", "revokt-engine", "1234abcd5678ef90"))
+        self.assertEqual((f.target, f.module, f.hash, f.reproduced),
+                         ("Foo.bar", "revokt-engine", "1234abcd5678ef90", True))
         self.assertEqual([n for n, _ in f.files], ["finding-1.tar.age"])
         self.assertTrue(f.files[0][1].startswith("-----BEGIN AGE ENCRYPTED FILE-----\n"))
 
     def test_empty_hash_is_allowed(self):
-        m = {"target": "Foo.bar", "module": "revokt-engine", "hash": "", "files": ["finding-1.tar.age"]}
+        m = {"target": "Foo.bar", "module": "revokt-engine", "hash": "", "reproduced": True,
+             "files": ["finding-1.tar.age"]}
         self.assertEqual(fa.check_artifact(self.artifact(manifest=m), "Foo.bar").hash, "")
 
     def test_a_long_armour_with_exact_lines(self):
@@ -70,7 +73,8 @@ class GoodArtifact(Case):
 
 class HostileManifest(Case):
     def manifest(self, **over):
-        m = {"target": "Foo.bar", "module": "revokt-engine", "hash": "1234abcd5678ef90", "files": ["finding-1.tar.age"]}
+        m = {"target": "Foo.bar", "module": "revokt-engine", "hash": "1234abcd5678ef90", "reproduced": True,
+             "files": ["finding-1.tar.age"]}
         m.update(over)
         return m
 
@@ -87,6 +91,9 @@ class HostileManifest(Case):
             {"hash": "1234abcd5678ef90zz"},
             {"hash": "a" * 65},
             {"hash": None},
+            {"reproduced": "true"},
+            {"reproduced": 1},
+            {"reproduced": None},
             {"files": ["../finding-1.tar.age"]},
             {"files": ["finding-1.tar.age", "finding-1.tar.age"]},
             {"files": []},
@@ -102,7 +109,9 @@ class HostileManifest(Case):
         extra = self.manifest(note="hi")
         missing = self.manifest()
         del missing["module"]
-        for m in (extra, missing, ["not", "an", "object"]):
+        unmarked = self.manifest()
+        del unmarked["reproduced"]
+        for m in (extra, missing, unmarked, ["not", "an", "object"]):
             with self.subTest(m=m):
                 self.setUp()
                 self.rejected(self.artifact(manifest=m))
@@ -128,7 +137,7 @@ class Oversized(Case):
         payload = os.urandom(int(fa.MAX_FILE * 0.7))
         for i in range(5):
             self.artifact(target=f"T{i}.x", files={"finding-1.tar.age": armour(payload)})
-        accepted, rejected = fa.collect(self.root)
+        accepted, rejected, _ = fa.collect(self.root)
         self.assertEqual([f.target for f in accepted], ["T0.x", "T1.x", "T2.x", "T3.x"])
         self.assertEqual(len(rejected), 1)
         self.assertIn("fuzz-finding-T4.x", rejected[0])
@@ -165,7 +174,7 @@ class ArtifactShape(Case):
 
     def test_listed_file_missing(self):
         listed = ["finding-1.tar.age", "finding-2.tar.age"]
-        m = {"target": "Foo.bar", "module": "revokt-engine", "hash": "", "files": listed}
+        m = {"target": "Foo.bar", "module": "revokt-engine", "hash": "", "reproduced": True, "files": listed}
         self.rejected(self.artifact(manifest=m))
 
     def test_symlink_and_subdirectory(self):
@@ -179,7 +188,7 @@ class ArtifactShape(Case):
 
     def test_unexpected_artifact_name_is_not_printed(self):
         (self.root / "planted\n::error::x").mkdir()
-        accepted, rejected = fa.collect(self.root)
+        accepted, rejected, _ = fa.collect(self.root)
         self.assertEqual(accepted, [])
         self.assertEqual(len(rejected), 1)
         self.assertNotIn("planted", rejected[0])
@@ -191,14 +200,14 @@ class SingleArtifactLayout(Case):
         for f in d.iterdir():
             f.rename(self.root / f.name)
         d.rmdir()
-        accepted, rejected = fa.collect(self.root)
+        accepted, rejected, _ = fa.collect(self.root)
         self.assertEqual(([f.target for f in accepted], rejected), (["Foo.bar"], []))
 
     def test_top_level_files_with_a_directory_are_rejected(self):
         d = self.artifact()
         for f in d.iterdir():
             f.rename(self.root / f.name)
-        accepted, rejected = fa.collect(self.root)
+        accepted, rejected, _ = fa.collect(self.root)
         self.assertEqual(accepted, [])
         self.assertEqual(len(rejected), 1)
 
@@ -208,11 +217,38 @@ class TooManyFindings(Case):
         files = {f"finding-{i}.tar.age": armour() for i in (1, 2, 3)}
         for t in ("A.a", "B.b", "C.c"):
             self.artifact(target=t, files=dict(files))
-        accepted, rejected = fa.collect(self.root)
+        accepted, rejected, _ = fa.collect(self.root)
         self.assertEqual([f.target for f in accepted], ["A.a", "B.b"])
         self.assertEqual(len(rejected), 1)
         self.assertIn("C.c", rejected[0])
         self.assertIn(f"more than {fa.MAX_FINDINGS} findings", rejected[0])
+
+
+class NotReproduced(Case):
+    def unreproduced(self, target):
+        m = {"target": target, "module": "revokt-engine", "hash": "1234abcd5678ef90", "reproduced": False,
+             "files": ["finding-1.tar.age"]}
+        return self.artifact(target=target, manifest=m)
+
+    def test_skipped_not_rejected(self):
+        self.unreproduced("Run.failure")
+        self.artifact(target="Real.finding")
+        accepted, rejected, skipped = fa.collect(self.root)
+        self.assertEqual(([f.target for f in accepted], rejected, skipped), (["Real.finding"], [], 1))
+
+    def test_skipped_do_not_count_against_the_cap(self):
+        files = {f"finding-{i}.tar.age": armour() for i in range(1, 9)}
+        m = {"target": "A.a", "module": "revokt-engine", "hash": "", "reproduced": False, "files": sorted(files)}
+        self.artifact(target="A.a", files=dict(files), manifest=m)
+        self.artifact(target="B.b")
+        accepted, rejected, skipped = fa.collect(self.root)
+        self.assertEqual(([f.target for f in accepted], rejected, skipped), (["B.b"], [], 1))
+
+    def test_a_malformed_unreproduced_artifact_is_still_rejected(self):
+        d = self.unreproduced("Run.failure")
+        (d / "finding-1.tar.age").write_bytes(b"not armour\n")
+        accepted, rejected, skipped = fa.collect(self.root)
+        self.assertEqual((accepted, len(rejected), skipped), ([], 1, 0))
 
 
 class StubApi(BaseHTTPRequestHandler):
@@ -267,7 +303,8 @@ class Filing(Case):
 
     def test_files_new_and_skips_known(self):
         self.artifact(target="New.one")
-        m = {"target": "Old.one", "module": "revokt-clubcard", "hash": "deadbeef", "files": ["finding-1.tar.age"]}
+        m = {"target": "Old.one", "module": "revokt-clubcard", "hash": "deadbeef", "reproduced": True,
+             "files": ["finding-1.tar.age"]}
         self.artifact(target="Old.one", manifest=m)
         StubApi.pages = {1: [{"summary": "something else"}], 2: [{"summary": "fuzz: Old.one deadbeef"}]}
         rc, out = self.run_main()
@@ -279,10 +316,12 @@ class Filing(Case):
         self.assertIn("rage -d -i <identity-file> finding.age > finding.bin", body["description"])
         package = {"ecosystem": "maven", "name": "dev.revokt:revokt-engine"}
         self.assertEqual(body["vulnerabilities"][0]["package"], package)
-        self.assertEqual(out.strip(), "filed 1 draft advisories; 1 already filed; 0 artifacts rejected")
+        self.assertEqual(out.strip(),
+                         "filed 1 draft advisories; 1 already filed; 0 not reproduced, skipped; 0 artifacts rejected")
 
     def test_no_hash_is_never_deduplicated(self):
-        m = {"target": "Foo.bar", "module": "revokt-engine", "hash": "", "files": ["finding-1.tar.age"]}
+        m = {"target": "Foo.bar", "module": "revokt-engine", "hash": "", "reproduced": True,
+             "files": ["finding-1.tar.age"]}
         self.artifact(manifest=m)
         StubApi.pages = {1: [{"summary": "fuzz: Foo.bar "}]}
         rc, _ = self.run_main()
@@ -297,6 +336,15 @@ class Filing(Case):
         self.assertEqual([p["summary"] for p in StubApi.posted], ["fuzz: Good.one 1234abcd5678ef90"])
         self.assertIn("::error::rejected fuzz-finding-Bad.one:", out)
         self.assertNotIn("not armour", out)
+
+    def test_not_reproduced_is_never_filed(self):
+        m = {"target": "Foo.bar", "module": "revokt-engine", "hash": "1234abcd5678ef90", "reproduced": False,
+             "files": ["finding-1.tar.age"]}
+        self.artifact(manifest=m)
+        rc, out = self.run_main()
+        self.assertEqual((rc, StubApi.posted), (0, []))
+        self.assertEqual(out.strip(),
+                         "filed 0 draft advisories; 0 already filed; 1 not reproduced, skipped; 0 artifacts rejected")
 
     def test_no_artifacts_is_not_a_failure(self):
         shutil.rmtree(self.root)

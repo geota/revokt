@@ -408,7 +408,7 @@ PEM; the nameConstraints and subjectAltName readers of the walker's issuer rules
 the mailbox grammar, and the subject's emailAddress and CN-ID reader (`NameConstraintsFuzzTest`, #237);
 the path walker (below); [M2] CRX3, zip, `crl-set`, OneCRL, preload DER; [M3] precert TBS, log
 list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput` wrapper;
-`-Xmx256m -rss_limit_mb=1024 -timeout=10` (the §9.2 parser target overrides with `-timeout=1`); `-max_len` = each target's cap + 1 (filters:
+`-Xmx256m -rss_limit_mb=2560 -timeout=10` (the §9.2 parser target overrides with `-timeout=1`); `-max_len` = each target's cap + 1 (filters:
 `MAX_FILTER_BYTES + 1`); allocation budgets in each decoder; differential oracles in-process through
 the `revokt-oracle` Rust cdylib and the Panama shim; the Go producer oracle runs **out of process**
 (the CLI, batched over a pipe: one base64 DER per line in; one line per input out, `OK <serial-hex> <spki-sha256-hex> <ct|lax|zc>` or `REJECT <error>` (an empty line, the encoding of an empty input, is answered `REJECT`), with `##` terminating a batch, so the Go CLI and the Kotlin driver are written independently) during fuzzing, since a third set of signal handlers beside the JVM's
@@ -416,7 +416,8 @@ and libFuzzer's is not safe in-process. **Tiers**: PR = committed-corpus
 replay as unit tests, JDK only; nightly = `fuzz.yml`, every target for 300 s, one job per target, seeded from the private corpus repository,
 which keeps each night's new corpus units and is merged weekly with `-merge=1` (CONTRIBUTING §6); OSS-Fuzz once the project has users. **Findings**: any exception other than the declared result, any
 allocation above budget, any timeout, any difference between implementations outside a declared
-equivalence class, any non-idempotent round trip. **Acceptance**: no open continuous-tier crash at
+equivalence class, any non-idempotent round trip; a nightly failure is a finding only when its saved input, replayed alone
+under the harness, fails again and the empty input passes (as ClusterFuzz files only reproducible crashes; CONTRIBUTING §6). **Acceptance**: no open continuous-tier crash at
 release; Kover branch coverage of each parser package not regressed, 90 % as the target; committed
 corpus capped at a few MB, overflow in a corpus repository.
 

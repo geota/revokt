@@ -24,7 +24,7 @@ kotlin {
 }
 
 // Spec §9.1 harness: a fuzzing run (JAZZER_FUZZ set, as Jazzer reads it; fuzz.yml) gets -Xmx256m, so the JVM stays under
-// the -rss_limit_mb=1024 the workflow passes.
+// the -rss_limit_mb=2560 the workflow passes.
 val jazzerFuzz = providers.environmentVariable("JAZZER_FUZZ").orNull?.lowercase()
 if (jazzerFuzz == "1" || jazzerFuzz == "true" || jazzerFuzz == "yes") {
     tasks.named<Test>("jvmTest") { maxHeapSize = "256m" }

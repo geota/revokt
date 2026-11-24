@@ -4,10 +4,12 @@
 # Fuzzing (spec §9.1, CONTRIBUTING §6; #115, #213): one matrix entry per Jazzer @FuzzTest method, as `./gradlew
 # fuzzTargets` discovers them, for the chosen time each, on GitHub-hosted runners: nightly for 300 s a target (the
 # nightly fuzzing tier, in place of ClusterFuzzLite until OSS-Fuzz, #119), and when a maintainer dispatches it; never
-# on pull_request or pull_request_target. The fuzz job holds no secret: a finding is
-# minimised, sealed with age (ASCII armour) to the FUZZ_AGE_RECIPIENT repository variable, and uploaded with a manifest
-# as a 7-day artifact. The advisory job, on a fresh runner with FUZZ_ADVISORY_TOKEN and none of the fuzzed tree, checks
-# that artifact as hostile data and files one private draft security advisory per new finding, the ciphertext inline
+# on pull_request or pull_request_target. The fuzz job holds no secret: a failure is a finding only if a saved input,
+# replayed alone, fails again while the empty input passes (#321); a finding is minimised, sealed with age (ASCII
+# armour) to the FUZZ_AGE_RECIPIENT repository variable, and uploaded with a manifest as a 7-day artifact. Any other
+# failure is a run failure: its logs are sealed the same way under another artifact name, and no advisory is filed.
+# The advisory job, on a fresh runner with FUZZ_ADVISORY_TOKEN and none of the fuzzed tree, checks the finding
+# artifacts as hostile data and files one private draft security advisory per new finding, the ciphertext inline
 # (CONTRIBUTING §6). No reproducer, stack trace or fuzzer log reaches a job log, artifact or advisory in the clear. The
 # corpus job, on another fresh runner with CFL_CORPUS_TOKEN and none of the fuzzed tree, takes each target's generated
 # corpus as data, validates it and adds it to the private geota/revokt-fuzz-corpus repository. The seed job (#265), on a
@@ -305,7 +307,7 @@ jobs:
           mkdir -p "$dest"
           cp -R -- "$src/." "$dest/"
           echo "$NAME: seeded with $(find "$dest" -type f | wc -l) units from the corpus repository"
-      # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set), -rss_limit_mb=1024, the
+      # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set), -rss_limit_mb=2560, the
       # target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
       # configuration parameters, which reach the test JVM as system properties; they come after Jazzer's own
       # (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last.
@@ -334,7 +336,7 @@ jobs:
           FUZZ_SECONDS=${FUZZ_SECONDS:-300}
           case $FUZZ_SECONDS in ''|*[!0-9]*) echo "::error::seconds must be a whole number"; exit 1 ;; esac
           if [ "$FUZZ_SECONDS" -lt 1 ] || [ "$FUZZ_SECONDS" -gt 3600 ]; then echo "::error::seconds must be 1 to 3600"; exit 1; fi
-          args=(fake_argv0 "-max_total_time=$FUZZ_SECONDS" -rss_limit_mb=1024 "-timeout=$TIMEOUT")
+          args=(fake_argv0 "-max_total_time=$FUZZ_SECONDS" -rss_limit_mb=2560 "-timeout=$TIMEOUT")
           if [ -n "$MAX_LEN" ]; then
             args+=("-max_len=$MAX_LEN")
           else
@@ -384,18 +386,72 @@ jobs:
           rm -f "$out/before-test.log"
           grep -E '^Done [0-9]+ runs in [0-9]+ second' "$out/gradle.log" || true
           if [ "$status" -eq 0 ]; then exit 0; fi
-          # A failure once the test task may have started is a finding, with or without a reproducer file.
+          # A failure once the test task may have started goes to the reproduce step, which decides whether it is a
+          # finding (#321).
           if [ "$started" -eq 1 ]; then
-            echo "finding=true" >> "$GITHUB_OUTPUT"
-            echo "::error file=$SOURCE::$NAME: a finding; it is uploaded encrypted to the maintainer's age key (CONTRIBUTING §6)"
+            echo "started=true" >> "$GITHUB_OUTPUT"
+            echo "$NAME: the fuzz run failed; the reproduce step replays its saved inputs"
           else
             echo "::error file=$SOURCE::$NAME: the build failed before fuzzing started"
           fi
           exit "$status"
+      # Spec §9.1 Findings (#321), as ClusterFuzz files only reproducible crashes: the failure is a finding only if one
+      # of its saved crash, timeout or oom inputs, replayed alone under the same harness (the module's fuzzReplay: the
+      # standalone driver on the target's fuzzerTestOneInput, -Xmx256m, -rss_limit_mb=2560, the target's -timeout and
+      # -max_len), fails again, and a control replay of the empty input passes. Anything else (no such input, a control
+      # that fails too, or no input that fails again) is a run failure: the job stays red with a fixed error, the logs
+      # are sealed for the maintainer under another artifact name, and no advisory is filed. The replays' output stays
+      # in $RUNNER_TEMP/fuzz-out, and the log shows only the verdict. The fuzz step has already failed the job; if this
+      # step fails before it writes reproduced=true, the seal step treats the failure as a run failure.
+      - name: reproduce
+        id: reproduce
+        if: failure() && steps.fuzz.outputs.started == 'true'
+        env:
+          NAME: ${{ matrix.target.name }}
+          SOURCE: ${{ matrix.target.source }}
+          PROJECT: ${{ matrix.target.project }}
+          CLASS: ${{ matrix.target.class }}
+          MAX_LEN: ${{ matrix.target.maxLen }}
+          TIMEOUT: ${{ matrix.target.timeout }}
+        run: |
+          set -euo pipefail
+          out=$RUNNER_TEMP/fuzz-out
+          maxlen=()
+          if [ -n "$MAX_LEN" ]; then maxlen=("-Prevokt.fuzzMaxLen=$MAX_LEN"); fi
+          # One input, once, in a fresh JVM; its status is the replay's.
+          replay() {
+            ./gradlew "$PROJECT:fuzzReplay" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
+              "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzInput=$1" "-Prevokt.fuzzOutput=$out/replayed-$2" \
+              "-Prevokt.fuzzTimeout=$TIMEOUT" "${maxlen[@]}" --no-daemon < /dev/null > "$out/replay-$2.log" 2>&1
+          }
+          inputs=()
+          for f in "$out"/input-*-crash "$out"/input-*-timeout "$out"/input-*-oom; do
+            if [ -f "$f" ]; then inputs+=("$f"); fi
+          done
+          reproduced=false
+          if [ "${#inputs[@]}" -eq 0 ]; then
+            reason="it saved no crash, timeout or oom input"
+          else
+            : > "$out/empty"
+            if ! replay "$out/empty" control; then
+              reason="the control replay of the empty input failed too"
+            else
+              reason="no saved input fails again when replayed alone"
+              for f in "${inputs[@]}"; do
+                if ! replay "$f" "${f##*/}"; then reproduced=true; break; fi
+              done
+            fi
+          fi
+          echo "reproduced=$reproduced" >> "$GITHUB_OUTPUT"
+          if [ "$reproduced" = true ]; then
+            echo "::error file=$SOURCE::$NAME: a finding that reproduces; it is uploaded encrypted to the maintainer's age key (CONTRIBUTING §6)"
+          else
+            echo "::error file=$SOURCE::$NAME: the run failed, but not with a finding ($reason); no advisory is filed, and its logs are uploaded encrypted (CONTRIBUTING §6)"
+          fi
       # libFuzzer's -minimize_crash=1 on each crash, timeout and oom input (the module's fuzzMinimize, at most 300 s each),
       # so it is small enough to triage; its output stays in $RUNNER_TEMP/fuzz-out, and the log shows only the counts.
       - name: minimise
-        if: failure() && steps.fuzz.outputs.finding == 'true'
+        if: failure() && steps.reproduce.outputs.reproduced == 'true'
         env:
           PROJECT: ${{ matrix.target.project }}
           CLASS: ${{ matrix.target.class }}
@@ -416,21 +472,24 @@ jobs:
             if [ -s "$out/min-$base" ]; then minimised=$((minimised + 1)); fi
           done
           echo "minimised $minimised of $inputs finding inputs"
-      # One sealed file per finding, so the advisory job can file it as text: a gzipped tar of the input, its minimised
-      # form and minimiser log, the JUnit XML (its first 64 KiB) and the fuzzer log (its last 64 KiB), encrypted with
-      # `age -a` (ASCII armour) to FUZZ_AGE_RECIPIENT. A stack trace can quote the input, so the traces are sealed too,
-      # and a finding without an input file is sealed with the traces alone. The files are numbered, not named by
-      # libFuzzer's crash-<sha1> (the fuzz step has already renamed them), as a hash of a short input gives the input
-      # away; at most 8 per target.
+      # One sealed file per saved input, so the advisory job can file it as text: a gzipped tar of the input, its
+      # minimised form and minimiser log, its replay log and the control's, the JUnit XML (its first 64 KiB) and the
+      # fuzzer log (its last 64 KiB), encrypted with `age -a` (ASCII armour) to FUZZ_AGE_RECIPIENT. A stack trace can
+      # quote the input, so the traces are sealed too, and a failure without an input file is sealed with the traces
+      # alone. The files are numbered, not named by libFuzzer's crash-<sha1> (the fuzz step has already renamed them),
+      # as a hash of a short input gives the input away; at most 8 per target.
       # manifest.json holds the target, its module, Jazzer's DEDUP_TOKEN (a hash of the finding's stack frames, empty
-      # without one) and the file names. The log shows the target, the token and the count.
+      # without one), whether the reproduce step reproduced it, and the file names. A finding goes up as
+      # fuzz-finding-<target>, the advisory job's input; a run failure as fuzz-run-failure-<target>, which the advisory
+      # job never downloads. The log shows the target, the verdict, the token and the count.
       - name: seal the finding
         id: seal
-        if: failure() && steps.fuzz.outputs.finding == 'true'
+        if: failure() && steps.fuzz.outputs.started == 'true'
         env:
           NAME: ${{ matrix.target.name }}
           MODULE: ${{ matrix.target.module }}
           RECIPIENT: ${{ vars.FUZZ_AGE_RECIPIENT }}
+          REPRODUCED: ${{ steps.reproduce.outputs.reproduced }}
         run: |
           set -euo pipefail
           out=$RUNNER_TEMP/fuzz-out
@@ -455,7 +514,9 @@ jobs:
               cp "$f" "$stage/input"
               if [ -s "$out/min-$base" ]; then cp "$out/min-$base" "$stage/minimised"; fi
               if [ -f "$out/minimise-$base.log" ]; then tail -c 65536 "$out/minimise-$base.log" > "$stage/minimise.log"; fi
+              if [ -f "$out/replay-$base.log" ]; then tail -c 65536 "$out/replay-$base.log" > "$stage/replay.log"; fi
             fi
+            if [ -f "$out/replay-control.log" ]; then tail -c 65536 "$out/replay-control.log" > "$stage/replay-control.log"; fi
             k=0
             for x in "$out"/TEST-*.xml; do
               if [ -f "$x" ]; then k=$((k + 1)); head -c 65536 "$x" > "$stage/junit-$k.xml"; fi
@@ -465,19 +526,25 @@ jobs:
             rm -rf -- "${stage:?}"
             files+=("finding-$n.tar.age")
           done
+          # Only the reproduce step's own true makes a finding; an empty or any other value is a run failure.
+          verdict="run failure"
+          artifact=fuzz-run-failure-$NAME
+          if [ "$REPRODUCED" = true ]; then verdict=finding; artifact=fuzz-finding-$NAME; fi
           # module is a jq keyword, so the key is quoted and the variable named mod.
-          jq -n --arg target "$NAME" --arg mod "$MODULE" --arg hash "$token" \
-            '{"target": $target, "module": $mod, "hash": $hash, "files": $ARGS.positional}' --args "${files[@]}" \
-            > "$sealed/manifest.json"
-          echo "$NAME: finding ${token:-without a DEDUP_TOKEN}; $n sealed"
+          jq -n --arg target "$NAME" --arg mod "$MODULE" --arg hash "$token" --arg rep "$REPRODUCED" \
+            '{"target": $target, "module": $mod, "hash": $hash, "reproduced": ($rep == "true"), "files": $ARGS.positional}' \
+            --args "${files[@]}" > "$sealed/manifest.json"
+          echo "$NAME: $verdict ${token:-without a DEDUP_TOKEN}; $n sealed"
           echo "dir=$sealed" >> "$GITHUB_OUTPUT"
-      # The armoured files and the manifest, kept 7 days: the advisory job's input, and the maintainer's fallback
-      # (CONTRIBUTING §6). The run has already failed (the fuzz step's exit status).
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+      # The armoured files and the manifest, kept 7 days: for a finding the advisory job's input and the maintainer's
+      # fallback, for a run failure the maintainer's only copy (CONTRIBUTING §6). The run has already failed (the fuzz
+      # step's exit status).
       - name: upload the sealed finding
         if: failure() && steps.seal.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: fuzz-finding-${{ matrix.target.name }}
+          name: ${{ steps.seal.outputs.artifact }}
           path: ${{ steps.seal.outputs.dir }}/
           if-no-files-found: error
           retention-days: 7
@@ -512,7 +579,8 @@ jobs:
   # A fresh runner that holds the advisory token and nothing of the fuzzed tree: no checkout of it, no Gradle, nothing
   # the fuzz job could have changed except the artifacts. It downloads the fuzz-finding-* artifacts, fetches only
   # fuzz_advisory.py at github.sha, and runs it under a clean environment with python3 -I. The script treats the
-  # artifacts as hostile data and files at most 8 private draft advisories, one per new DEDUP_TOKEN (CONTRIBUTING §6).
+  # artifacts as hostile data, skips a manifest not marked reproduced, and files at most 8 private draft advisories,
+  # one per new DEDUP_TOKEN (CONTRIBUTING §6). A run failure's fuzz-run-failure-* artifact is never downloaded here.
   # The token lives in the fuzz-advisory environment, whose deployment branches are limited to main, and the job runs
   # only for a run of main (the nightly or a dispatch): a workflow or script changed on another branch never gets it.
   advisory:
@@ -528,7 +596,8 @@ jobs:
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
-      # No match (a fuzz job that failed without a finding) downloads nothing; the script then has nothing to file.
+      # No match (a fuzz job that failed without a finding, or only with run failures) downloads nothing; the script
+      # then has nothing to file.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: fuzz-finding-*

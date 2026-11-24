@@ -18,10 +18,12 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.TaskProvider
+import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaLauncher
 import org.gradle.jvm.toolchain.JavaToolchainService
 import org.gradle.kotlin.dsl.getByType
+import org.gradle.kotlin.dsl.named
 import org.gradle.kotlin.dsl.register
 import org.gradle.kotlin.dsl.withType
 import org.gradle.process.CommandLineArgumentProvider
@@ -54,6 +56,9 @@ internal data class FuzzTarget(
 internal object FuzzTargets {
     /** Spec §9.1 harness: `-timeout=10` unless the target says otherwise. */
     const val DEFAULT_TIMEOUT = 10
+
+    /** Spec §9.1 harness: `-rss_limit_mb=2560`, ClusterFuzz's default (#321); fuzz.yml passes the same. */
+    const val RSS_LIMIT_MB = 2560
 
     private val packageLine = Regex("""^package\s+([A-Za-z0-9_.]+)""")
     private val classLine = Regex("""^(?:(?:public|internal|open|abstract|final)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)""")
@@ -177,7 +182,8 @@ internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
  * `fuzzMinimize` (fuzz.yml, #115): libFuzzer's `-minimize_crash=1` over one crash, timeout or oom input (it treats any
  * non-zero exit as the crash), so a finding fits a draft advisory. It runs Jazzer's standalone driver, which
  * re-launches the JVM for each minimisation step, on the target's static `fuzzerTestOneInput` with the jvmTest
- * classpath, in the §9.1 harness JVM (`-Xmx256m`, `-rss_limit_mb=1024`) on the tests' JDK. Properties:
+ * classpath, in the §9.1 harness JVM (`-Xmx256m`, `-rss_limit_mb=2560`, and jvmTest's system properties and JVM
+ * arguments) on the tests' JDK. Properties:
  * `revokt.fuzzClass`, `revokt.fuzzInput`, `revokt.fuzzOutput` (libFuzzer rewrites it with each smaller crashing input),
  * `revokt.fuzzTimeout` (the target's `-timeout`, default 10), `revokt.fuzzSeconds` (each step's search, default 10) and
  * `revokt.fuzzBudget` (the whole task, default 300 s: libFuzzer's loop has no bound of its own, so the task times out
@@ -190,6 +196,12 @@ internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
  * corpus directory), `revokt.fuzzMerged` (the fresh output directory, created empty if absent), `revokt.fuzzTimeout`,
  * `revokt.fuzzMaxLen` (the target's `-max_len`, unset for libFuzzer's default) and `revokt.fuzzBudget` (default
  * 1800 s). A unit that crashes or times out is left out by libFuzzer; fuzz.yml keeps a target's corpus unchanged then.
+ *
+ * `fuzzReplay` (fuzz.yml's reproduce step, #321): runs one input once, alone, through the same driver, classpath and
+ * harness JVM, and fails if the target fails on it. fuzz.yml files an advisory only for an input that fails again
+ * here while the empty input passes. Properties: `revokt.fuzzClass`, `revokt.fuzzInput`, `revokt.fuzzOutput` (where
+ * libFuzzer writes a failing input, `-exact_artifact_path`, so no file is named by the input's hash),
+ * `revokt.fuzzTimeout`, `revokt.fuzzMaxLen` (unset for libFuzzer's default) and `revokt.fuzzBudget` (default 300 s).
  */
 internal fun Project.registerFuzzDrivers() {
     val property = { name: String -> providers.gradleProperty("revokt.$name") }
@@ -199,7 +211,22 @@ internal fun Project.registerFuzzDrivers() {
     extensions.getByType<KotlinMultiplatformExtension>().targets.withType<KotlinJvmTarget>().matching { it.name == "jvm" }.configureEach {
         registerFuzzMinimizeTask(compilations.getByName("test"), property, launcher)
         registerFuzzMergeTask(compilations.getByName("test"), property, launcher)
+        registerFuzzReplayTask(compilations.getByName("test"), property, launcher)
     }
+}
+
+/**
+ * The jvmTest JVM's system properties, JVM arguments and argument providers (the clubcard corpus path, the native
+ * access flag), so the standalone driver runs a target in the JVM its `@FuzzTest` gets (#321: without the corpus path
+ * `StoreModelFuzzTest` failed on every input, the empty one too). The heap stays the harness's `-Xmx256m`, and Kover's
+ * coverage agent stays out: it is not part of the harness, and its report, an output, would let Gradle skip the task
+ * as up to date. jvmTest is read when this task is configured, after the module's build script has configured it.
+ */
+private fun JavaExec.likeJvmTest() {
+    val test = project.tasks.named<Test>("jvmTest").get()
+    systemProperties(test.systemProperties)
+    jvmArgs(test.jvmArgs.orEmpty())
+    jvmArgumentProviders.addAll(test.jvmArgumentProviders.filterNot { it.javaClass.name.startsWith("kotlinx.kover.") })
 }
 
 private fun Project.registerFuzzMinimizeTask(
@@ -214,6 +241,7 @@ private fun Project.registerFuzzMinimizeTask(
         mainClass.set("com.code_intelligence.jazzer.Jazzer")
         maxHeapSize = "256m"
         javaLauncher.set(launcher)
+        likeJvmTest()
         val cls = property("fuzzClass")
         val input = property("fuzzInput")
         val output = property("fuzzOutput")
@@ -228,7 +256,7 @@ private fun Project.registerFuzzMinimizeTask(
                     "-minimize_crash=1",
                     "-max_total_time=${seconds.get()}",
                     "-timeout=${perInput.get()}",
-                    "-rss_limit_mb=1024",
+                    "-rss_limit_mb=${FuzzTargets.RSS_LIMIT_MB}",
                     "-exact_artifact_path=${output.get()}",
                     input.get(),
                 )
@@ -249,6 +277,7 @@ private fun Project.registerFuzzMergeTask(
         mainClass.set("com.code_intelligence.jazzer.Jazzer")
         maxHeapSize = "256m"
         javaLauncher.set(launcher)
+        likeJvmTest()
         val cls = property("fuzzClass")
         val corpus = property("fuzzCorpus")
         val merged = property("fuzzMerged")
@@ -263,10 +292,46 @@ private fun Project.registerFuzzMergeTask(
                     "--instrumentation_includes=dev.revokt.**",
                     "-merge=1",
                     "-timeout=${perInput.get()}",
-                    "-rss_limit_mb=1024",
+                    "-rss_limit_mb=${FuzzTargets.RSS_LIMIT_MB}",
                     maxLen.orNull?.let { "-max_len=$it" },
                     merged.get(),
                     corpus.get(),
+                )
+            },
+        )
+    }
+}
+
+private fun Project.registerFuzzReplayTask(
+    test: KotlinCompilation<*>,
+    property: (String) -> Provider<String>,
+    launcher: Provider<JavaLauncher>,
+) {
+    tasks.register<JavaExec>("fuzzReplay") {
+        description = "Replays one Jazzer input alone and fails if the target fails on it (fuzz.yml, #321)."
+        group = "revokt"
+        classpath = files(test.output.allOutputs, test.runtimeDependencyFiles ?: files())
+        mainClass.set("com.code_intelligence.jazzer.Jazzer")
+        maxHeapSize = "256m"
+        javaLauncher.set(launcher)
+        likeJvmTest()
+        val cls = property("fuzzClass")
+        val input = property("fuzzInput")
+        val output = property("fuzzOutput")
+        val perInput = property("fuzzTimeout").orElse(FuzzTargets.DEFAULT_TIMEOUT.toString())
+        val maxLen = property("fuzzMaxLen")
+        timeout.set(property("fuzzBudget").orElse("300").map { Duration.ofSeconds(it.toLong()) })
+        argumentProviders.add(
+            CommandLineArgumentProvider {
+                // A file (not a directory) as the only input: libFuzzer runs it once and exits non-zero if it fails.
+                listOfNotNull(
+                    "--target_class=${cls.get()}",
+                    "--instrumentation_includes=dev.revokt.**",
+                    "-timeout=${perInput.get()}",
+                    "-rss_limit_mb=${FuzzTargets.RSS_LIMIT_MB}",
+                    maxLen.orNull?.let { "-max_len=$it" },
+                    "-exact_artifact_path=${output.get()}",
+                    input.get(),
                 )
             },
         )
