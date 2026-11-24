@@ -41,9 +41,9 @@ internal sealed class StrictUrlRead {
  * The strict URL grammar the x5u URL ([X5uUrl], spec §7.1 "The x5u URL grammar") is read by. It is deliberately
  * narrow, so no URL parser downstream can see another host than the one checked: `https://` (lowercase), an authority
  * with no userinfo that is a host and an optional port, then the rest. The host is a DNS host name ([isHostName]:
- * labels of ASCII letters, digits and `-`, no trailing dot, a last label that is not a number); never an IP literal, a
- * percent-encoded or a non-ASCII host. What is fetched is re-serialised by the caller from the parts, never the string
- * as given.
+ * LDH labels that start and end with a letter or digit, no trailing dot, a last label that starts with a letter);
+ * never an IP literal, a percent-encoded or a non-ASCII host. What is fetched is re-serialised by the caller from the
+ * parts, never the string as given.
  */
 internal object StrictUrl {
     private const val SCHEME = "https://"
@@ -94,9 +94,10 @@ internal object StrictUrl {
     }
 
     /**
-     * A DNS host name as this grammar reads one: LDH labels of 1 to 63 characters, ASCII case kept, separated by single
-     * dots, at most 253 characters, no trailing dot, and a last label that is not a number. `MozillaRemoteSettings`
-     * holds its x5u hosts and rewrites to the same rule at build (spec §4), so both accept exactly the same names.
+     * A DNS host name as this grammar reads one: labels of 1 to 63 ASCII letters, digits and `-` that start and end
+     * with a letter or digit (RFC 1123 §2.1), ASCII case kept, separated by single dots, at most 253 characters, no
+     * trailing dot, and a last label that starts with a letter. `MozillaRemoteSettings` holds its x5u hosts and
+     * rewrites to the same rule at build (spec §4), so both accept exactly the same names.
      */
     fun isHostName(host: String): Boolean {
         if (host.isEmpty() || host.length > MAX_HOST) return false
@@ -104,17 +105,20 @@ internal object StrictUrl {
         val names =
             labels.all { label ->
                 label.length in 1..MAX_LABEL &&
-                    label.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' }
+                    isLetterOrDigit(label.first()) &&
+                    isLetterOrDigit(label.last()) &&
+                    label.all { isLetterOrDigit(it) || it == '-' }
             }
-        // A last label that reads as a number makes the host an IPv4 address to WHATWG URL parsers (`1.2.3.4`,
-        // `0x7f.1`), so it is no DNS name here and "no IP literal" holds.
-        return names && !isNumeric(labels.last())
+        // `java.net.URI` reads a host only as RFC 2396 `hostname`, whose `toplabel` starts with a letter; any other
+        // authority is registry-based and `getHost()` is null (#322). A last label that starts with a letter is also
+        // never a number, which WHATWG URL parsers would read as an IPv4 address (`1.2.3.4`, `0x7f.1`), so "no IP
+        // literal" holds.
+        return names && isLetter(labels.last().first())
     }
 
-    private fun isNumeric(label: String): Boolean {
-        val hex = label.length > 1 && label[0] == '0' && (label[1] == 'x' || label[1] == 'X')
-        return if (hex) label.drop(2).all(::isHex) else label.all { it in '0'..'9' }
-    }
+    private fun isLetter(c: Char): Boolean = c in 'a'..'z' || c in 'A'..'Z'
+
+    private fun isLetterOrDigit(c: Char): Boolean = isLetter(c) || c in '0'..'9'
 
     private fun isHex(c: Char): Boolean = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
 }

@@ -148,8 +148,10 @@ class X5uUrlFuzzTest {
         fun jdkAgrees(fetched: String) {
             val uri = URI(fetched)
             check(uri.scheme == "https") { "URI scheme" }
-            // The JDK reads a host under the allowed domains: the one X5uUrl checked.
-            check(AllowedDomains.allows(uri.host, setOf(HOST, MIRROR))) { "URI host" }
+            // The JDK reads a host under the allowed domains: the one X5uUrl checked. A registry-based authority reads
+            // no host at all (#322).
+            val host = checkNotNull(uri.host) { "URI reads no host" }
+            check(AllowedDomains.allows(host, setOf(HOST, MIRROR))) { "URI host" }
             check(uri.port == -1 || uri.port == 443) { "URI port" }
             check(uri.rawUserInfo == null) { "URI userinfo" }
             check(uri.rawFragment == null) { "URI fragment" }

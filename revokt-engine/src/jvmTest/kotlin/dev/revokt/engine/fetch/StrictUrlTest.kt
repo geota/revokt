@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.fetch
 
+import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -22,6 +23,24 @@ class StrictUrlTest {
         val bare = assertIs<StrictUrlRead.Parsed>(StrictUrl.parse("https://a.example"))
         assertEquals(null, bare.port)
         assertEquals("", bare.rest)
+    }
+
+    @Test
+    fun `a host is one java net URI reads as a host`() {
+        // #322: java.net.URI's hostname grammar (RFC 2396 §3.2.2): a label starts and ends with a letter or digit,
+        // and the last label starts with a letter; anything else is a registry-based authority with a null host.
+        val refused = listOf("-.a.example", "-a.example", "a-.example", "a.-b", "a.b-", "x.1a", "x.0xg", "a.9")
+        val parsed = listOf("a.example", "1a.example", "a--b.example", "x.a1", "A-1.B2", "a")
+        for (host in refused + parsed) {
+            val url = "https://$host/"
+            val read = StrictUrl.parse(url)
+            if (host in refused) {
+                assertEquals(StrictUrlFailure.HOST, assertIs<StrictUrlRead.Refused>(read, url).failure)
+            } else {
+                assertEquals(host, assertIs<StrictUrlRead.Parsed>(read, url).host)
+            }
+            assertEquals(host in parsed, URI(url).host != null, url)
+        }
     }
 
     @Test
