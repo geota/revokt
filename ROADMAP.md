@@ -64,8 +64,6 @@ independent implementations before anything is built on them. Nothing in 0.1 che
   validation, so tampered data is refused whatever the transport.
 - **The CRLite updater in memory:** applies full filters and deltas with coverage checks and rollback protection.
 - **Seeds:** a bundled filter for the first launch, and the job that publishes the data artifacts.
-- **Cross-engine checks:** a CI-only engine over rustls/upki, compared with revokt's on the same queries.
-- **Benchmarks** for the per-handshake cost goal: p95 under 1 ms with a warm JIT and a cached path.
 
 ### Order
 
@@ -82,6 +80,10 @@ Next, #221 keeps public only what a caller of `evaluate` touches, before the res
 
 **Moved out of 0.2**, to be scheduled later: #114 (the filter and DER allocation budgets) and #118 (the in-process
 Panama oracle shim). Both refine test infrastructure that already works.
+
+**Moved to 0.3** (maintainer, 2026-11-23, #312), so that 0.2 finishes sooner: the CI-only upki engine and the
+cross-engine suite (#132, #142, #116), the per-handshake benchmarks (#146), and the JSON target's differential fuzzing
+(#100). The §9.1 walker fuzzer (#144) stays the 0.2 release gate.
 
 **Cut or replaced:**
 - ~~The C2SP mirror (#194) and its cross-engine leg (#148)~~: cut by #218, which removes the MIRROR and SYSTEM
