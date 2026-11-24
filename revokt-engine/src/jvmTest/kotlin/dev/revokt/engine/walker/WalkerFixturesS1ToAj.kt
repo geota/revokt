@@ -208,15 +208,22 @@ internal object WalkerFixturesS1ToAj {
     }
 
     /**
-     * The leaf's issuer as a TeletexString: the platform canonicaliser hex-encodes it, so the honest UTF8String-named
-     * intermediate is unrelated to the leaf by encoding, and the leaf's AKI (issuer-and-serial form) makes the test
-     * name-only. A custom delegate would chain them; revokt's walker never offers an unrelated certificate, so only
-     * the PKIX fallback (decide) reaches I.
+     * The honest intermediate's subject as a TeletexString, the leaf's issuer field the UTF8String name: the platform
+     * canonicaliser hex-encodes TeletexString, so I is unrelated to the leaf by encoding. The leaf's AKI is a
+     * keyIdentifier that matches no candidate, so the test is name-only. Both keep the leaf inside §9.2's keyability
+     * profile (K5, K8; revision 56, the maintainer's decision), so decide walks it. A custom delegate would chain them;
+     * revokt's walker never offers an unrelated certificate, so only the PKIX fallback (decide) reaches I.
      */
-    private fun teletex(w: FixtureWorld): Honest {
-        val leafIssuer = w.name("Intermediate", TELETEX_STRING)
-        return Honest(w, leafIssuer = leafIssuer, leafAki = FixtureWorld.akiIssuerAndSerial(w.name("Intermediate")))
-    }
+    private fun teletex(w: FixtureWorld): Honest =
+        Honest(
+            w,
+            leafIssuer = w.name("Intermediate"),
+            intermediateSubject = w.name("Intermediate", TELETEX_STRING),
+            leafAki = unmatchedKeyIdentifier,
+        )
+
+    /** An `AuthorityKeyIdentifier` with only a keyIdentifier, one no fixture certificate's SKI carries. */
+    private val unmatchedKeyIdentifier: ByteArray = TestDer.seq(TestDer.tlv(0x80, ByteArray(20) { 0x5a }))
 
     /**
      * (ac) The honest issuer unrelated by encoding, four unrelated junk ahead: no candidate, `NO_CANDIDATE`. The second
@@ -230,7 +237,7 @@ internal object WalkerFixturesS1ToAj {
             val junk = List(4) { w.cert("J$it", w.name("Junk $it"), w.name("Junk issuer $it")) }
             val sub =
                 if (decoy) {
-                    w.cert("S", w.name("Intermediate", TELETEX_STRING), h.root.subject, signer = h.root.key).also {
+                    w.cert("S", w.name("Intermediate"), h.root.subject, signer = h.root.key).also {
                         w.verifies(leaf, it.key)
                     }
                 } else {
@@ -258,7 +265,7 @@ internal object WalkerFixturesS1ToAj {
         val w = FixtureWorld()
         val h = teletex(w)
         val leaf = h.leaf
-        val name = w.name("Intermediate", TELETEX_STRING)
+        val name = w.name("Intermediate")
         val keys = List(6) { w.key() }
         val junk = keys.mapIndexed { n, k -> w.cert("J$n", name, name, k) }
         for ((n, j) in junk.withIndex()) {
