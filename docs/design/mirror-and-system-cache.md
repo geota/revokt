@@ -24,8 +24,8 @@ never does (§3). Every hop is a new request through the wrapped fetcher, so it 
 and the §8 host checks. **The hop grammar** (revision 58, the maintainer's decisions Q2 and Q3): every URL of the
 chain, the request's own included, is read by the one strict grammar the x5u URL is read by too (§7.1), with IP
 literals allowed: `https://` in lowercase, so `HTTPS://` is refused; an authority with no userinfo; a host that is a
-DNS host name (labels of ASCII letters, digits and `-` of 1 to 63 characters, at most 253, no trailing dot, a last
-label that is not a number), an IPv4 dotted quad with no leading zeros, or a bracketed IPv6 address with no zone
+DNS host name (labels of ASCII letters, digits and `-` of 1 to 63 characters that start and end with a letter or
+digit, at most 253, no trailing dot, a last label that starts with a letter; #322), an IPv4 dotted quad with no leading zeros, or a bracketed IPv6 address with no zone
 identifier and no `IPvFuture`, a dotted quad standing only for its last 32 bits (so `[1.2.3.4::]` is refused), never a
 percent-encoded or non-ASCII host; an optional port of 1 to 65535, and no other port rule; then a path and an optional
 query of RFC 3986 `pchar`s, `/` and `?`, every `%` followed by two hex digits; and any fragment, which must be one RFC
