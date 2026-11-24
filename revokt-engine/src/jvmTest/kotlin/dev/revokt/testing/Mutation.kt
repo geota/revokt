@@ -129,9 +129,9 @@ internal data class Recover(
 /**
  * `Recover(child)` under an end-entity certificate (#225): a fresh key that verifies an honest leaf or intermediate
  * ([child]), in a certificate that the anchor [certifiedBy] (modulo the snapshot) issued without basicConstraints `cA`.
- * It is named like the child's issuer, a related candidate, or with [unrelated] a fresh attacker name, so that only the
- * unrelated loop reaches it. Anyone can obtain an end-entity certificate under a real anchor, so the key is never a
- * leaf-issuer key: the result is unchanged.
+ * It is named like the child's issuer, a related candidate, or with [unrelated] a fresh attacker name, which no walker
+ * offers as a candidate (#226 removed the unrelated loop). Anyone can obtain an end-entity certificate under a real
+ * anchor, so the key is never a leaf-issuer key: the result is unchanged.
  */
 internal data class EndEntityIssuer(
     val child: Int = 0,

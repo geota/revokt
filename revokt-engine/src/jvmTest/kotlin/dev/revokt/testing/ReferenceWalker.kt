@@ -9,6 +9,7 @@ import dev.revokt.VerifyResult
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.ParsedCertificate
+import dev.revokt.engine.walker.isFatal
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.security.cert.CertificateException
@@ -48,13 +49,18 @@ import javax.security.auth.x500.X500Principal
  *   modelled: the generator writes none of those extensions, and `pathLenConstraint` and nameConstraints depend on
  *   the path below a certificate, which this distance computation does not track. Fixtures (ar) and (as) cover them.
  * - A link is verified only when [verifier] answers `VERIFIED`; a throw counts as not verified, as §5.1 treats a
- *   verifier throw as `INVALID` "for any verifier" (P7 runs a throwing verifier). It catches [Exception], never an
- *   [Error], and must match what the 0.2 walker treats as a verifier throw.
+ *   verifier throw as `INVALID` "for any verifier" (P7 runs a throwing verifier). It catches what the walker catches:
+ *   every throwable but a fatal one (§5.5, [isFatal]), so an [Error] such as `AssertionError` or
+ *   `StackOverflowError` is a failed link here too (#159).
  * - Exact-byte duplicates are one certificate. A certificate revokt's parser rejects is no candidate; an unparseable
  *   leaf has no keys. A leaf that is an anchor by bytes returns its own key (decision step 2).
  *
  * Key families (§5.1 `CandidateIndex.related()`) only order candidates, so they do not change the result and are not
  * modelled.
+ *
+ * [path] is one sound path the walk counts, for the fuzzer's fake `PathBuilderFallback` (§9.1: "a fake
+ * `PathBuilderFallback` equal to the reference"): a shortest one, ties broken by the issuer's SPKI hash, then its bytes
+ * hash, so it does not depend on the presented order either.
  *
  * [canonicalSubject] exists for relatedness tests only; the fuzzer runs both walkers with the platform canonicaliser
  * (§9.1).
@@ -77,19 +83,59 @@ internal class ReferenceWalker(
         if (presented.isEmpty()) return emptySet()
         val leaf = node(presented[0]) ?: return emptySet()
         if (leaf.bytesHash in anchors) return setOf(leaf.spkiHash.hex())
-        val others = LinkedHashMap<ByteString, Node>()
-        for (der in presented.drop(1)) {
-            val n = node(der) ?: continue
-            if (n.bytesHash != leaf.bytesHash) others.putIfAbsent(n.bytesHash, anchors[n.bytesHash] ?: n)
+        return Search(presented, leaf, byName).issuers.map { it.spkiHash.hex() }.toSet()
+    }
+
+    /**
+     * A shortest sound path of [presented] as DER, leaf (its presented bytes) first and an anchor last, or null when
+     * [walk] finds no key or the leaf is itself an anchor (decision step 2, which needs no path).
+     */
+    fun path(presented: List<ByteArray>): List<ByteArray>? {
+        if (presented.isEmpty()) return null
+        val leaf = node(presented[0]) ?: return null
+        if (leaf.bytesHash in anchors) return null
+        val search = Search(presented, leaf, byName = false)
+        var next = search.nearest(search.issuers) ?: return null
+        val path = arrayListOf(presented[0], next.der)
+        while (next.bytesHash !in anchors) {
+            val distance = search.distances.getValue(next.bytesHash)
+            val closer = search.graph.issuers(next).filter { search.distances[it.bytesHash] == distance - 1 }
+            next = checkNotNull(search.nearest(closer)) { "a node at distance $distance has no issuer one closer" }
+            path += next.der
         }
-        val graph = Graph(others.values.toList(), leaf, byName)
-        val maxDistance = RevoktLimits.MAX_DEPTH - 1 // [leaf, candidate, …, anchor] holds distance + 2 certificates
-        val issuers = graph.candidates(leaf).filter { graph.verified(leaf, it) }
-        val distances = graph.distances(issuers)
-        return issuers
-            .filter { (distances[it.bytesHash] ?: Int.MAX_VALUE) <= maxDistance }
-            .map { it.spkiHash.hex() }
-            .toSet()
+        return path
+    }
+
+    /** One walk of [presented] from [leaf]: its [graph], the leaf's [issuers] within the depth bound, and [distances]. */
+    private inner class Search(
+        presented: List<ByteArray>,
+        leaf: Node,
+        byName: Boolean,
+    ) {
+        val graph: Graph
+        val distances: Map<ByteString, Int>
+        val issuers: List<Node>
+
+        init {
+            val others = LinkedHashMap<ByteString, Node>()
+            for (der in presented.drop(1)) {
+                val n = node(der) ?: continue
+                if (n.bytesHash != leaf.bytesHash) others.putIfAbsent(n.bytesHash, anchors[n.bytesHash] ?: n)
+            }
+            graph = Graph(others.values.toList(), leaf, byName)
+            val maxDistance = RevoktLimits.MAX_DEPTH - 1 // [leaf, candidate, …, anchor] holds distance + 2 certificates
+            val verified = graph.candidates(leaf).filter { graph.verified(leaf, it) }
+            distances = graph.distances(verified)
+            issuers = verified.filter { (distances[it.bytesHash] ?: Int.MAX_VALUE) <= maxDistance }
+        }
+
+        /** The node of [nodes] nearest an anchor, ties by SPKI hash then bytes hash; null when [nodes] is empty. */
+        fun nearest(nodes: List<Node>): Node? =
+            nodes.minWithOrNull(
+                compareBy<Node> { distances.getValue(it.bytesHash) }
+                    .thenBy { it.spkiHash.hex() }
+                    .thenBy { it.bytesHash.hex() },
+            )
     }
 
     /**
@@ -114,6 +160,7 @@ internal class ReferenceWalker(
             }
         }
 
+        @Suppress("TooGenericExceptionCaught") // the walker's catch: every throwable but a fatal one (§5.5)
         fun verified(
             child: Node,
             candidate: Node,
@@ -122,12 +169,13 @@ internal class ReferenceWalker(
                 try {
                     verifier.verify(child.tbsSigAlg, candidate.spki, child.tbs, child.signature) ==
                         VerifyResult.VERIFIED
-                } catch (_: Exception) {
+                } catch (t: Throwable) {
+                    if (isFatal(t)) throw t
                     false
                 }
             }
 
-        private fun issuers(child: Node): List<Node> =
+        fun issuers(child: Node): List<Node> =
             edges.getOrPut(child.bytesHash) {
                 candidates(child).filter { verified(child, it) }
             }
@@ -173,7 +221,7 @@ internal class ReferenceWalker(
 
     /** One parsed certificate and the fields the walk reads, sliced by revokt's parser. */
     private class Node(
-        der: ByteArray,
+        val der: ByteArray,
         p: ParsedCertificate,
         canonical: (ByteArray) -> String?,
     ) {

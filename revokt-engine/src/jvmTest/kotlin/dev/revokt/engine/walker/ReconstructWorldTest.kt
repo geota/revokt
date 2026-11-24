@@ -78,7 +78,9 @@ class ReconstructWorldTest {
                 tally.found++
                 assertTrue(walk.leafKey.hex() in expected, "$at: Found leaf key not in $expected; $shown")
                 assertEquals(walk.path.certs[1].spkiHash, walk.leafKey, "$at: the leaf key is the path's; $shown")
-                assertSound(walk.path, certs[0], index, verifier, "$at; $shown")
+                WalkSoundness.assertSound(walk.path, certs[0], index, { child, issuer ->
+                    verifier.verify(child.tbsSigAlg, issuer.spki, child.tbs, child.sig) == VerifyResult.VERIFIED
+                }, "$at; $shown")
             }
 
             is Walk.NotFound -> {
@@ -94,28 +96,6 @@ class ReconstructWorldTest {
         assertTrue(walk.stats.verifications <= walk.stats.candidatesExplored, "$at: $shown")
         assertTrue(walk.stats.candidatesExplored <= RevoktLimits.MAX_EXPLORED, "$at: $shown")
         return walk
-    }
-
-    /** The §5.1 invariant: leaf first, every link `VERIFIED` under the next key, an anchor last, within `MAX_DEPTH`. */
-    private fun assertSound(
-        path: WalkPath,
-        leaf: Cert,
-        index: CandidateIndex,
-        verifier: SymVerifier,
-        at: String,
-    ) {
-        val certs = path.certs
-        assertTrue(certs.size in 2..RevoktLimits.MAX_DEPTH + 1, "$at: path size ${certs.size}")
-        assertEquals(leaf.bytesHash, certs[0].bytesHash, "$at: path starts at the leaf")
-        assertEquals(certs.size, certs.map { it.bytesHash }.toSet().size, "$at: a path repeats a certificate")
-        for ((child, issuer) in certs.zipWithNext()) {
-            assertEquals(
-                VerifyResult.VERIFIED,
-                verifier.verify(child.tbsSigAlg, issuer.spki, child.tbs, child.sig),
-                "$at: unverified link",
-            )
-        }
-        assertTrue(index.isAnchorBytes(certs.last()), "$at: the terminal is not an anchor")
     }
 
     @Test

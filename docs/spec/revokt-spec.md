@@ -1788,6 +1788,11 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      (`HonestCorpusWalkTest`); no root in the JDK 21 `cacerts` (118) or macOS `SystemRootCertificates` (158) carries
      nameConstraints; live Web PKI sub-CAs were not surveyed for directoryName or rfc822Name subtrees. On the bindings
      the platform validates the chain first (step 1).
+  16. **A long broken chain fails closed.** A chain of more than `FALLBACK_MAX_PRESENTED` (8) presented certificates
+     whose walk finds no path, because a certificate on the honest path has an unsupported signature or an
+     intermediate is missing, is `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)`, which `DEFAULT` rejects (§5.1 step 6; P8 in
+     test-plan.md §9.1). This is narrower than deployed behaviour: mozilla::pkix builds at most 6 intermediates
+     (`MAX_SUBCA_COUNT` in `pkixbuild.cpp`), so Firefox refuses every path longer than 8 certificates, broken or not.
 - Feed authenticity: every generation is verified against Mozilla's content-signature roots, from the feed or from a
   seed (§7.1); there is no unsigned source. The M2 denylist is project-attested and availability-only.
 - Rollback and freeze: a persisted non-decreasing watermark with no tolerance, floored at the live generation's

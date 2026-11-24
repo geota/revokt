@@ -441,14 +441,20 @@ walker's loop skip can cut a path whose repeated certificate was related to its 
 reference builds; over name-related links a repeat can always be cut out, so `refKeysByName` is exact); a CRLite stub mapping the honest key to `REVOKED` in half the runs and every other key to `NOT_ENROLLED` (so `rules` is predictable under `Recover(CertifiedBy)`); a fake
 `PathBuilderFallback` equal to the reference. Properties:
 - **P1 soundness**: every returned path's links are in `ok` and not unsupported; terminal bytes in the snapshot.
-- **P2 completeness**: `Found ⇒ |leafKeys| = 1 ∧ leafKeys ⊆ refKeys`; `NotFound ⇒ refKeysByName == ∅`; `Budget ⇒`
-  no leaf key (the walk stops at its first path).
+- **P2 completeness**: `Found ⇒ |leafKeys| = 1 ∧ leafKeys ⊆ refKeys`; `NotFound ⇒ refKeysByName == ∅`; a
+  `PATH_BUDGET_EXCEEDED` decision's `issuerSpkiSha256s` are empty or the fallback path's one key, which is in `refKeys`
+  (a `Budget` walk stops before its first path, so it carries no key).
 - **P3 never-improve** (attacker mutations only, under `DEFAULT`, with the CRLite stub always
-  holding data): honest `Rejected ⇒` mutated `Rejected` with `rule ∈ {REVOKED, PATH_BUDGET_EXCEEDED}`;
-  if no limit was hit, `(mutated is Rejected, mutated.rule) == (honest is Rejected, honest.rule)`. Not under
-  `Recover(leaf, CertifiedBy(anchor))`: an anchor-certified CA for a recovered key can win the first path and hide the
-  honest key, §10 residual 15 (such a key holder can mint a fresh leaf anyway); `Recover` of a deeper child leaves the
-  honest leaf key.
+  holding data; honest is the world with its world mutations only): honest `Rejected ⇒` mutated `Rejected` with
+  `rule ∈ {REVOKED, PATH_BUDGET_EXCEEDED}`; if no limit was hit, `(mutated is Rejected, mutated.rule) == (honest is
+  Rejected, honest.rule)`, where a limit is a `Budget` walk or a `PATH_BUDGET_EXCEEDED` decision of either world, of
+  either reason (`FALLBACK_LIMIT` included: attacker certificates can take a chain without a path past
+  `FALLBACK_MAX_PRESENTED`). Not under `Recover(leaf, CertifiedBy(anchor))`: an anchor-certified CA for a recovered key
+  can win the first path and hide the honest key, §10 residual 15 (such a key holder can mint a fresh leaf anyway);
+  `Recover` of a deeper child leaves the honest leaf key. Nor under `Recover(child, CertifiedBy(anchor))` of any child
+  when the honest walk is `NotFound`: the anchor-certified CA can supply the path a world mutation (`DropIntermediate`
+  or `UnsupportedOwnSig` above the child) removed, so the walk finds the honest key (P2) and the verdict follows its
+  CRLite answer, in either direction.
 - **P4 order-independence**: `PathStatus` invariant under `Permute` when neither order produced `Budget`, and
   `leafKeys` too except under `Recover(leaf, CertifiedBy)`, where two keys verify the leaf and terminate and the
   presented order picks one, as in Firefox; `Budget` in one order ⇒ `Budget` or `Found` in the other.
@@ -460,10 +466,14 @@ reference builds; over name-related links a repeat can always be cut out, so `re
   canonicaliser and a verifier that throws on a configurable candidate.
 - **P8 honest acceptance** (goal 3's core guarantee): an unmutated world, or one with only
   `NameEncoding`/`AlgMismatch`, ⇒ `Found` with `PathStatus.FOUND`, never `Budget`, and
-  `Rejected ⇔ the CRLite stub maps the honest key to REVOKED`; `UnsupportedOwnSig` on a non-anchor certificate ⇒
-  `NO_ISSUER(UNSUPPORTED_ALGORITHM)`, never `PATH_BUDGET_EXCEEDED` (an anchor's self-signature is never verified, so the mutation is applied to non-anchors only); `DropIntermediate` ⇒ `NO_ISSUER(NO_CANDIDATE)`
-  (a world mutation under P3: the platform's acceptance of such a chain is the §5.2 residual,
-  outside the fuzzer's model).
+  `Rejected ⇔ the CRLite stub maps the honest key to REVOKED`; `UnsupportedOwnSig` on a non-anchor certificate ⇒ a
+  `NotFound` walk, never `Budget`, with the OID in `unsupportedOids` (an anchor's self-signature is never verified, so
+  the mutation is applied to non-anchors only); `DropIntermediate` ⇒ a `NotFound` walk, never `Budget`, whose reason
+  is the leaf level's: `NO_CANDIDATE` when the leaf's own issuer was dropped, `UNANCHORED` when a higher intermediate
+  was (a world mutation under P3: the platform's acceptance of such a chain is the §5.2 residual, outside the
+  fuzzer's model). The decision is then `NO_ISSUER(UNSUPPORTED_ALGORITHM)`, or `NO_ISSUER` with the walker's reason,
+  for a chain of at most `FALLBACK_MAX_PRESENTED` certificates, and `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)` above it
+  (§5.1 step 6; §10 residual 16).
 Rounds 1–2 are `Recover` + P3; round 2's OID case is `UnsupportedOwnSig` + P1; round 3 is
 `SameKeyDecoy`/`CrossCertToNonAnchor` + `Permute` + P4; round 4 is `Recover(CertifiedBy)` + `Stuff` +
 P3. Run under Jazzer with the mutation list as the structured input, plus the committed corpus.
