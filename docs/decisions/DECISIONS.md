@@ -486,3 +486,22 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     the previous content signature is #308, and the smoke load against the oldest published minor is #309.
   - **Runner:** the JDK is a Temurin 21 tarball pinned by SHA-256, with Gradle's auto-detect off. Each job has
     harden-runner egress in block mode. The schedule is Monday 05:41 UTC, with concurrency per ref and no cancel.
+- 2026-11-24 (lead, #144, PR #316; independent review approved after one fix): the §9.1 walker fuzzer, the 0.2
+  release gate. Neither webpki nor mozilla::pkix fuzzes path building: their fuzz targets are parsers. Both
+  unit-test budget exhaustion and detect loops by subject plus SPKI.
+  - **§9.1 follows the code after #226:** P2's Budget clause is stated on the decision's keys. P3's limit hit is any
+    walk `Budget` or any `PATH_BUDGET_EXCEEDED`, `FALLBACK_LIMIT` included. P8's clauses hold at the decision level
+    only up to `FALLBACK_MAX_PRESENTED` (8) presented certificates. `DropIntermediate` gives `NO_CANDIDATE` only
+    when the leaf's own issuer is dropped, and `UNANCHORED` otherwise.
+  - **The certified bridge:** a mutation holding an anchor-certified CA key can complete a broken path. P3 excludes
+    that case only when the honest walk is `NotFound` and the mutated walk is `Found`, and then asserts that the
+    verdict follows the CRLite answer for the honest key, which P2 requires. Such a key holder can mint a fresh leaf
+    anyway (§10 residual 15).
+  - **Residual 16 (corrected by the review):** `FALLBACK_MAX_PRESENTED` counts presented certificates, while
+    mozilla::pkix's `MAX_SUBCA_COUNT` caps the path it builds. So a padded chain, with more than 8 presented and a
+    short real path the walker can't build, is accepted by Firefox and rejected under `DEFAULT`, even on a
+    trust-manager binding. Example causes are an unsupported algorithm, a missing intermediate that Firefox's preload
+    would supply, or a misclassified issuer. It follows from #226's limit, and the lead's first comparison, which
+    called revokt narrower, was wrong.
+  - **Tests only:** the stronger P6 (verifications equal depth + 1) and P2's issuer-identity clause stay out of the
+    spec. The gate record is the nightly fuzz batch after merge.
