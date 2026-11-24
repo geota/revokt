@@ -98,7 +98,11 @@ Agents read `AGENTS.md` first (it points back here). Governance is in `GOVERNANC
   with recorded oracle goldens (the native oracle job that regenerates goldens follows it) → DER/TBS parser
   with the §9.2 oracle → `Rule` model and golden fixture → `index.bin` reader/writer and `GenerationFiles`
   → `RevocationEngine` and the Kotlin engine → `SymVerifier`, generator and reference walker → JSON and
-  canonical JSON.
+  canonical JSON. The 0.2 critical path is the walker chain, #107 → #121 → #124 → #133 → #135 → #143 →
+  #147 → #150, and the other chains join it: the types (#104 → #120 → #122 and #123) at #133, the JSSE
+  binding (#110 → #127 → #139) at #143, and the data path (#108 → #125 and #126 → #137) at #147. The long
+  pole branches off at #133: #133 → #134 (the adversarial review of the walker and the `Rule` model) → #144
+  (the walker fuzzer, its P1–P8 gate run in #213's scheduled fuzzing) → #150.
 - **Bootstrap.** The first PR (build-logic, the module skeletons the milestone needs, the workflows, the
   gate configs, the repo files listed in GOVERNANCE.md) is exempt from the size rule, carries `Spec: none (bootstrap)`,
   and its Tests section says "build-logic TestKit tests only". Rulesets (Appendix B) are applied by a
