@@ -58,8 +58,8 @@ independent implementations before anything is built on them. Nothing in 0.1 che
   close. There is no durable store yet, and no readiness future or caches.
 - **The path walker:** finds and verifies the issuer of the certificate the platform accepted, within fixed budgets,
   so an attacker cannot make it do unbounded work; a chain that exceeds them is rejected. The platform's PKIX builder
-  is the fallback. The walker and the `Rule` model get a dedicated adversarial review before the walker is coded, and
-  a fuzzer then runs against it with eight properties as a release gate.
+  is the fallback. The walker and the `Rule` model get a dedicated adversarial review once both are implemented
+  (#134), before a fuzzer runs against them with eight properties as a release gate.
 - **Mozilla Remote Settings:** the feed protocol, with content-signature verification and x5u certificate-chain
   validation, so tampered data is refused whatever the transport.
 - **The CRLite updater in memory:** applies full filters and deltas with coverage checks and rollback protection.
