@@ -307,8 +307,8 @@ jobs:
           mkdir -p "$dest"
           cp -R -- "$src/." "$dest/"
           echo "$NAME: seeded with $(find "$dest" -type f | wc -l) units from the corpus repository"
-      # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set), -rss_limit_mb=2560, the
-      # target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
+      # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set, and build-logic then leaves
+      # Kover's coverage agent out), -rss_limit_mb=2560, the target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
       # configuration parameters, which reach the test JVM as system properties; they come after Jazzer's own
       # (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last.
       # Job logs are public and libFuzzer prints a crashing input, so the Gradle output stays in $RUNNER_TEMP/fuzz-out and

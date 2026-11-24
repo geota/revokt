@@ -3,6 +3,7 @@
 
 package dev.revokt.buildlogic
 
+import kotlinx.kover.gradle.plugin.dsl.KoverProjectExtension
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.Project
@@ -22,6 +23,7 @@ import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaLauncher
 import org.gradle.jvm.toolchain.JavaToolchainService
+import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.named
 import org.gradle.kotlin.dsl.register
@@ -335,5 +337,18 @@ private fun Project.registerFuzzReplayTask(
                 )
             },
         )
+    }
+}
+
+/**
+ * A fuzzing run (`JAZZER_FUZZ` set, as Jazzer reads it; fuzz.yml) gets no Kover coverage agent (#321): coverage is not
+ * part of the §9.1 harness, and its agent adds to the JVM's footprint under `-rss_limit_mb`. OSS-Fuzz, too, keeps its
+ * coverage builds apart from its fuzzing builds. The PR tier's replay of the committed inputs (`JAZZER_FUZZ` unset)
+ * keeps its coverage.
+ */
+internal fun Project.disableKoverWhileFuzzing() {
+    val jazzerFuzz = providers.environmentVariable("JAZZER_FUZZ").orNull?.lowercase()
+    if (jazzerFuzz == "1" || jazzerFuzz == "true" || jazzerFuzz == "yes") {
+        extensions.configure<KoverProjectExtension> { currentProject { instrumentation { disabledForAll.set(true) } } }
     }
 }

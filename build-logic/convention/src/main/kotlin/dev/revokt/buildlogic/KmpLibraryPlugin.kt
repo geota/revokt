@@ -117,6 +117,7 @@ class KmpLibraryPlugin : Plugin<Project> {
 
         configurePublishingPom()
         registerFuzzDrivers()
+        disableKoverWhileFuzzing()
 
         tasks.withType<Test>().configureEach {
             systemProperty("junit.jupiter.execution.parallel.enabled", "false")
