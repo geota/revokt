@@ -35,7 +35,6 @@ class CrliteQueryTest {
 
     @Test
     fun `fields are checked and every required one must be set`() {
-        fun message(block: () -> Any): String = assertFailsWith<IllegalArgumentException> { block() }.message!!
         assertTrue(
             "32 bytes" in
                 message {

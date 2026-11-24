@@ -15,7 +15,6 @@ import dev.revokt.RevoktLimits
 import dev.revokt.SignatureVerifier
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.api.ClubcardFormatException
-import dev.revokt.clubcard.port.Encoding
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.fetch.ChangesetVerification
 import dev.revokt.engine.fetch.CrliteRecord
@@ -28,6 +27,8 @@ import dev.revokt.engine.update.PlacedFilter
 import dev.revokt.engine.update.Placement
 import dev.revokt.engine.update.buildIndex
 import dev.revokt.engine.update.placeFilters
+import dev.revokt.engine.update.toFilterFormat
+import dev.revokt.engine.update.toFilterRecord
 import dev.revokt.engine.verify.ContentSignature
 import okio.ByteString
 
@@ -150,10 +151,7 @@ private fun placed(
             is RecordCheck.Passed -> check.records
             is RecordCheck.Rejected -> refuse("the records fail the schema: ${check.detail}")
         }
-    val records =
-        crlite.map {
-            FilterRecord(it.id, it.channel, it.incremental, it.effectiveTimestamp, it.attachment.filename)
-        }
+    val records = crlite.map { it.toFilterRecord() }
     val placed: List<PlacedFilter> =
         when (val placement = placeFilters(records, channel)) {
             is Placement.Placed -> placement.filters
@@ -201,7 +199,7 @@ private fun filterFormat(
                 } catch (e: ClubcardFormatException) {
                     refuse("${r.id} does not decode: ${e.message}")
                 }
-            r.id to format(encoding)
+            r.id to encoding.toFilterFormat()
         }
     signed.firstOrNull { encodings.getValue(it.id) !in formats }?.let {
         refuse("${it.id} is ${encodings.getValue(it.id)}, which the engine does not list ($formats)")
@@ -238,10 +236,4 @@ private fun caps(
         x5u.size > RevoktLimits.MAX_X5U_BYTES -> "x5u.pem is ${x5u.size} bytes, over MAX_X5U_BYTES"
         index.size > C2spIndex.MAX_BYTES -> "index.bin is ${index.size} bytes, over C2spIndex.MAX_BYTES"
         else -> null
-    }
-
-private fun format(encoding: Encoding): FilterFormat =
-    when (encoding) {
-        Encoding.V3 -> FilterFormat.V3
-        Encoding.V4 -> FilterFormat.V4
     }

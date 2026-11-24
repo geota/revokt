@@ -4,6 +4,7 @@
 package dev.revokt.engine.parse
 
 import dev.revokt.ParseReason
+import dev.revokt.engine.parse.producer.ProducerCorpus
 import okio.ByteString.Companion.decodeHex
 import okio.ByteString.Companion.toByteString
 import java.io.ByteArrayInputStream
@@ -24,27 +25,7 @@ import kotlin.test.fail
  */
 class CertificateParserJdkTest {
     private val fixtures: List<Pair<String, ByteArray>> =
-        listOf(
-            "github.com-1",
-            "github.com-2",
-            "github.com-3",
-            "letsencrypt.org-1",
-            "letsencrypt.org-2",
-            "letsencrypt.org-3",
-            "letsencrypt.org-4",
-            "www.google.com-1",
-            "www.google.com-2",
-            "www.google.com-3",
-            "www.mozilla.org-1",
-            "www.mozilla.org-2",
-            "www.mozilla.org-3",
-            "mozilla-content-signing-c0",
-            "mozilla-content-signing-c1",
-            "mozilla-content-signing-c2",
-        ).map { name ->
-            val stream = checkNotNull(javaClass.getResourceAsStream("certs/$name.der")) { "missing fixture $name" }
-            name to stream.use { it.readBytes() }
-        }
+        ProducerCorpus.fixtures.map { name -> name to ProducerCorpus.resource("certs/$name.der") }
 
     @Test
     fun `parser agrees with the JDK on every field of real certificates`() {

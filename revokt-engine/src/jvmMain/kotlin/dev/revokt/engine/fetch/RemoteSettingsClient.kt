@@ -17,11 +17,9 @@ import dev.revokt.RevoktTestingApi
 import dev.revokt.SyncFailure
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonArray
-import dev.revokt.engine.json.JsonInteger
 import dev.revokt.engine.json.JsonNull
 import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.json.JsonParseException
-import dev.revokt.engine.json.JsonString
 import dev.revokt.engine.json.JsonValue
 import dev.revokt.engine.verify.ContentSignature
 import kotlinx.coroutines.CoroutineDispatcher
@@ -135,13 +133,13 @@ internal class RemoteSettingsClient(
                 ?: return malformed(body, "monitor/changes is not a changeset")
         val listed =
             changes.items.filter {
-                it is JsonObject && string(it["bucket"]) == source.bucket && string(it["collection"]) == collection
+                it is JsonObject && stringOf(it["bucket"]) == source.bucket && stringOf(it["collection"]) == collection
             }
         if (listed.size != 1) {
             return malformed(body, "monitor/changes lists ${source.bucket}/$collection ${listed.size} times")
         }
         val expected =
-            count((listed.single() as JsonObject)["last_modified"])
+            countOf((listed.single() as JsonObject)["last_modified"])
                 ?: return malformed(body, "last_modified is not an integer ≥ 0")
         return ClientResult.Ok(expected, body.status, body.backoffMillis, body.size)
     }
@@ -180,7 +178,7 @@ internal class RemoteSettingsClient(
                     ?: return malformed(body, "a change is not an object")
             }
                 ?: return malformed(body, "changes is not an array")
-        val timestamp = count(root["timestamp"]) ?: return malformed(body, "timestamp is not an integer ≥ 0")
+        val timestamp = countOf(root["timestamp"]) ?: return malformed(body, "timestamp is not an integer ≥ 0")
         val signatures =
             ((root["metadata"] as? JsonObject)?.get("signatures") as? JsonArray)?.items.orEmpty().map(::signatureEntry)
         return ClientResult.Ok(Changeset(timestamp, changes, signatures), body.status, body.backoffMillis, body.size)
@@ -248,7 +246,7 @@ internal class RemoteSettingsClient(
         fun refused(detail: String): ClientResult.Failed = body.failed(SyncFailure.ATTACHMENT_BASE, "$url: $detail")
         val capabilities = envelope(body.bytes)?.get("capabilities") as? JsonObject
         val served =
-            string((capabilities?.get("attachments") as? JsonObject)?.get("base_url"))
+            stringOf((capabilities?.get("attachments") as? JsonObject)?.get("base_url"))
                 ?: return refused("no string capabilities.attachments.base_url")
         val base = AttachmentBase.check(served, source.allowedDomains) { return refused("base_url \"$served\": $it") }
         return ClientResult.Ok(base, body.status, body.backoffMillis, body.size)
@@ -406,22 +404,18 @@ internal class RemoteSettingsClient(
         detail: String,
     ): ClientResult.Failed = body.failed(SyncFailure.CHANGESET_MALFORMED, detail)
 
-    private fun string(value: JsonValue?): String? = (value as? JsonString)?.value
-
     /** One `metadata.signatures[]` element ([SignatureEntry]): null for a JSON `null`. */
     private fun signatureEntry(element: JsonValue): SignatureEntry? {
         if (element == JsonNull) return null
         val fields = element as? JsonObject ?: JsonObject.EMPTY
         val mode = fields["mode"]
         return SignatureEntry(
-            string(fields["signature"]),
-            string(fields["x5u"]),
-            string(mode),
+            stringOf(fields["signature"]),
+            stringOf(fields["x5u"]),
+            stringOf(mode),
             mode != null && mode != JsonNull,
         )
     }
-
-    private fun count(value: JsonValue?): Long? = (value as? JsonInteger)?.takeIf { !it.negative }?.toLongOrNull()
 }
 
 /**

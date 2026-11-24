@@ -34,6 +34,9 @@ internal object TestDer {
 
     fun bytes(vararg values: Int): ByteArray = ByteArray(values.size) { values[it].toByte() }
 
+    /** The bytes of an even-length hex string. */
+    fun hex(s: String): ByteArray = ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
+
     fun ascii(text: String): ByteArray = text.encodeToByteArray()
 
     /** OID content for a dotted string (test inputs only, arcs below 2^63). */

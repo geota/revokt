@@ -139,7 +139,4 @@ internal object X5uUrl {
             StrictUrlFailure.SCHEME -> X5uUrlFailure.SCHEME
             StrictUrlFailure.USERINFO -> X5uUrlFailure.USERINFO
         }
-
-    /** [StrictUrl.isHostName]: the allowed domains and the x5u rewrites are DNS host names (spec §4). */
-    internal fun isHostName(host: String): Boolean = StrictUrl.isHostName(host)
 }

@@ -8,12 +8,15 @@
 package dev.revokt.engine.update
 
 import dev.revokt.CrliteChannel
+import dev.revokt.FilterFormat
 import dev.revokt.SyncFailure
 import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.api.ClubcardFilters
 import dev.revokt.clubcard.api.ClubcardFormatException
+import dev.revokt.clubcard.port.Encoding
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.Window
+import dev.revokt.engine.fetch.CrliteRecord
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.StoreLayout
 import okio.ByteString
@@ -39,6 +42,18 @@ internal class FilterRecord(
     override fun toString(): String =
         "FilterRecord($id, $channel, ${if (incremental) "delta" else "full"}, $effectiveTimestamp, $filename)"
 }
+
+/** The [FilterRecord] of a schema-checked CRLite record, as the sync, the seed loader and the seed build place it. */
+internal fun CrliteRecord.toFilterRecord(): FilterRecord =
+    FilterRecord(id, channel, incremental, effectiveTimestamp, attachment.filename)
+
+/** The `meta.format` of a filter's decoded [Encoding] (spec §6.5). */
+@OptIn(dev.revokt.RevoktInternalApi::class, RevoktInternalApi::class)
+internal fun Encoding.toFilterFormat(): FilterFormat =
+    when (this) {
+        Encoding.V3 -> FilterFormat.V3
+        Encoding.V4 -> FilterFormat.V4
+    }
 
 /** A record [buildIndex] placed in the generation, under [name], its file's name there (spec §6.5). */
 internal class PlacedFilter(

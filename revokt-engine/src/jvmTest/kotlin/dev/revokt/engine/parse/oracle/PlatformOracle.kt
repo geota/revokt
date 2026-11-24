@@ -4,6 +4,9 @@
 package dev.revokt.engine.parse.oracle
 
 import dev.revokt.engine.parse.producer.ProducerCorpus
+import java.io.ByteArrayInputStream
+import java.security.cert.CertificateException
+import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 
 /**
@@ -59,7 +62,19 @@ internal interface PlatformOracle {
      */
     val ocspNoCheckEmpty: Boolean get() = false
 
-    fun run(b: ByteArray): Outcome
+    /** The `CertificateFactory` [run] parses with. */
+    val factory: CertificateFactory
+
+    /** [factory]'s parse of [b]: a `CertificateException` is `Reject`, any other exception a `Crash`. */
+    @Suppress("TooGenericExceptionCaught") // §9.2: every exception other than CertificateException is a Crash
+    fun run(b: ByteArray): Outcome =
+        try {
+            Outcome.Accept(factory.generateCertificate(ByteArrayInputStream(b)) as X509Certificate)
+        } catch (_: CertificateException) {
+            Outcome.Reject
+        } catch (e: Exception) {
+            Outcome.Crash(e)
+        }
 
     /** The bytes revokt reads for an accepted [certificate] as a replay input, or null when there are none. */
     fun read(

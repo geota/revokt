@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.update
 
+import dev.revokt.Dataset
 import dev.revokt.LogLevel
 import dev.revokt.PreparedGeneration
 import dev.revokt.RevocationEngine
@@ -132,6 +133,42 @@ internal fun install(
     updater: UpdaterRecord?,
     logger: RevoktLogger,
 ): InstallResult = Install(generation, engine, store, snapshot, publication, updater, logger).run()
+
+/** The directory of the CRLite generation this reference publishes live, or null when it publishes none. */
+internal fun SnapshotRef.liveDirectory(): String? {
+    val live = snapshot.datasets[Dataset.CRLITE] ?: return null
+    val id = live.generationId ?: return null
+    return live.sourceTimestampMillis?.let { GenerationNames.directory(it, id) }
+}
+
+/**
+ * Prunes the store to the directories the pointer names, after the install of [installed], for the sync and the seed
+ * loader; a failure calls [failed], a store failure, never the caller's. When the pointer does not read back as
+ * [installed] (a storage that breaks read-after-write), nothing is deleted: a store failure and a warning, never
+ * "delete everything".
+ */
+@Suppress("TooGenericExceptionCaught") // §6.5: the loader catches every throwable.
+internal fun StoreLayout.pruneAfter(
+    installed: String,
+    logger: RevoktLogger,
+    failed: () -> Unit,
+) {
+    try {
+        if ((pointer() as? StoreRead.Found)?.value?.live != installed) {
+            failed()
+            logger.safeLog(
+                LogLevel.WARN,
+                "$root: the pointer does not read back as $installed; not pruned",
+            )
+            return
+        }
+        prune()
+    } catch (t: Throwable) {
+        restoreInterrupt(t)
+        failed()
+        logger.safeLog(LogLevel.WARN, "pruning $root failed", t)
+    }
+}
 
 /** One install's steps, and what its failure path must undo. */
 @OptIn(RevoktInternalApi::class)

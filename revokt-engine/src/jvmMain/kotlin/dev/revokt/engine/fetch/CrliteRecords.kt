@@ -5,9 +5,7 @@ package dev.revokt.engine.fetch
 
 import dev.revokt.CrliteChannel
 import dev.revokt.engine.json.JsonBoolean
-import dev.revokt.engine.json.JsonInteger
 import dev.revokt.engine.json.JsonObject
-import dev.revokt.engine.json.JsonString
 import dev.revokt.engine.json.JsonValue
 import okio.ByteString
 import okio.ByteString.Companion.decodeHex
@@ -102,7 +100,7 @@ internal object CrliteSchema {
                 when (val read = read(json)) {
                     is Field.Bad -> return RecordCheck.Rejected(
                         i,
-                        "record $i (${string(json["id"]) ?: "no id"}): ${read.what}",
+                        "record $i (${stringOf(json["id"]) ?: "no id"}): ${read.what}",
                     )
 
                     is Field.Good -> read.value
@@ -127,16 +125,16 @@ internal object CrliteSchema {
     }
 
     private fun read(json: JsonObject): Field<CrliteRecord> {
-        val id = string(json["id"]) ?: return Field.Bad("id is not a string")
-        val channel = string(json["channel"]) ?: return Field.Bad("channel is not a string")
+        val id = stringOf(json["id"]) ?: return Field.Bad("id is not a string")
+        val channel = stringOf(json["channel"]) ?: return Field.Bad("channel is not a string")
         val incremental =
             (json["incremental"] as? JsonBoolean)?.value ?: return Field.Bad("incremental is not a boolean")
         val parentValue = json["parent"]
-        val parent = string(parentValue)
+        val parent = stringOf(parentValue)
         if (parentValue != null && parent == null) return Field.Bad("parent is not a string")
         if (incremental && parent == null) return Field.Bad("a delta without a parent")
         val effective =
-            count(json["effectiveTimestamp"]) ?: return Field.Bad("effectiveTimestamp is not an integer ≥ 0")
+            countOf(json["effectiveTimestamp"]) ?: return Field.Bad("effectiveTimestamp is not an integer ≥ 0")
         val attachment =
             when (val read = attachment(json["attachment"])) {
                 is Field.Bad -> return read
@@ -147,22 +145,17 @@ internal object CrliteSchema {
 
     private fun attachment(value: JsonValue?): Field<CrliteAttachment> {
         val a = value as? JsonObject ?: return Field.Bad("attachment is not an object")
-        val filename = string(a["filename"]) ?: return Field.Bad("attachment.filename is not a string")
+        val filename = stringOf(a["filename"]) ?: return Field.Bad("attachment.filename is not a string")
         if (!AttachmentName.isValid(filename)) return Field.Bad("attachment.filename \"$filename\" fails §6.3's rule")
         val hash =
-            string(a["hash"])?.takeIf(::isSha256Hex)
+            stringOf(a["hash"])?.takeIf(::isSha256Hex)
                 ?: return Field.Bad("attachment.hash is not 64 lowercase hex digits")
-        val size = count(a["size"]) ?: return Field.Bad("attachment.size is not an integer ≥ 0")
-        val location = string(a["location"])
+        val size = countOf(a["size"]) ?: return Field.Bad("attachment.size is not an integer ≥ 0")
+        val location = stringOf(a["location"])
         if (location.isNullOrEmpty()) return Field.Bad("attachment.location is not a non-empty string")
         return Field.Good(CrliteAttachment(filename, hash.decodeHex(), size, location))
     }
 
     private fun isSha256Hex(hash: String): Boolean =
         hash.length == SHA256_HEX && hash.all { it in '0'..'9' || it in 'a'..'f' }
-
-    private fun string(value: JsonValue?): String? = (value as? JsonString)?.value
-
-    /** An integer literal from 0 to `Long.MAX_VALUE`; a double such as `1.0` is not one. */
-    private fun count(value: JsonValue?): Long? = (value as? JsonInteger)?.takeIf { !it.negative }?.toLongOrNull()
 }

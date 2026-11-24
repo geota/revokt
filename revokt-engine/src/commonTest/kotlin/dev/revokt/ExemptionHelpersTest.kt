@@ -48,8 +48,6 @@ class ExemptionHelpersTest {
     private val no = Exemption { false }
     private val throws = Exemption { throw Boom() }
 
-    private fun rejects(block: () -> Any): String = assertFailsWith<IllegalArgumentException> { block() }.message!!
-
     @Test
     fun `hostIn compares host', ASCII lowercased with one trailing dot stripped`() {
         val exemption = Exemption.hostIn(listOf("Corp.Example.", "intranet"))
@@ -106,11 +104,11 @@ class ExemptionHelpersTest {
         for (entry in listOf(kelvin, "b\u00FCcher.example", "xn--bcher-kva.\u00E9xample")) {
             assertEquals(
                 "hostIn: \"$entry\" is not ASCII; pass the A-label",
-                rejects { Exemption.hostIn(listOf(entry)) },
+                message { Exemption.hostIn(listOf(entry)) },
             )
             assertEquals(
                 "hostSuffixIn: \"$entry\" is not ASCII; pass the A-label",
-                rejects { Exemption.hostSuffixIn(listOf("corp", entry)) },
+                message { Exemption.hostSuffixIn(listOf("corp", entry)) },
             )
         }
         assertTrue(Exemption.hostIn(listOf("xn--bcher-kva.example")).isExempt(context("XN--BCHER-KVA.example")))
@@ -121,11 +119,11 @@ class ExemptionHelpersTest {
         for (entry in listOf("", ".", ".corp", "..", "..corp.")) {
             assertEquals(
                 "hostIn: \"$entry\" is empty or starts with a dot",
-                rejects { Exemption.hostIn(listOf(entry)) },
+                message { Exemption.hostIn(listOf(entry)) },
             )
             assertEquals(
                 "hostSuffixIn: \"$entry\" is empty or starts with a dot",
-                rejects { Exemption.hostSuffixIn(listOf("corp", entry)) },
+                message { Exemption.hostSuffixIn(listOf("corp", entry)) },
             )
         }
         Exemption.hostIn(listOf("corp."))
@@ -137,11 +135,11 @@ class ExemptionHelpersTest {
         for (entry in listOf("*.corp", "a*.corp", "corp*", "*")) {
             assertEquals(
                 "hostIn: \"$entry\" holds a '*'; hostSuffixIn is the wildcard form",
-                rejects { Exemption.hostIn(listOf(entry)) },
+                message { Exemption.hostIn(listOf(entry)) },
             )
             assertEquals(
                 "hostSuffixIn: \"$entry\" holds a '*'; hostSuffixIn is the wildcard form",
-                rejects { Exemption.hostSuffixIn(listOf("corp", entry)) },
+                message { Exemption.hostSuffixIn(listOf("corp", entry)) },
             )
         }
     }

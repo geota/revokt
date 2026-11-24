@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.parse.oracle
 
+import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.parse.producer.ProducerCorpus
 
 /**
@@ -21,8 +22,8 @@ internal object Oracle3b {
         /** `canon(encoded)`: `SEQUENCE { tbs, tbsSignature, BIT STRING { 00, signature } }`, every new header minimal. */
         fun canon(): ByteArray {
             val bits = byteArrayOf(0) + Oracle3a.bytes(signature)
-            val content = Oracle3a.bytes(tbs) + Oracle3a.bytes(tbsSignature) + tlv(0x03, bits)
-            return tlv(0x30, content)
+            val content = Oracle3a.bytes(tbs) + Oracle3a.bytes(tbsSignature) + TestDer.tlv(0x03, bits)
+            return TestDer.tlv(0x30, content)
         }
     }
 
@@ -73,20 +74,5 @@ internal object Oracle3b {
             Oracle3a.extensions(f[9]),
             f[10].takeIf { it != "-" }?.toInt(16),
         )
-    }
-
-    private fun tlv(
-        tag: Int,
-        content: ByteArray,
-    ): ByteArray {
-        val n = content.size
-        val length =
-            when {
-                n < 0x80 -> byteArrayOf(n.toByte())
-                n < 0x100 -> byteArrayOf(0x81.toByte(), n.toByte())
-                n < 0x10000 -> byteArrayOf(0x82.toByte(), (n shr 8).toByte(), n.toByte())
-                else -> byteArrayOf(0x83.toByte(), (n shr 16).toByte(), (n shr 8).toByte(), n.toByte())
-            }
-        return byteArrayOf(tag.toByte()) + length + content
     }
 }

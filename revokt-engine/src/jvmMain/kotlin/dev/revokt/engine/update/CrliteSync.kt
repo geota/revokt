@@ -354,16 +354,7 @@ internal class CrliteSync(
             crlite: List<CrliteRecord>,
         ): SyncResult {
             val ts = verified.timestamp
-            val records =
-                crlite.map {
-                    FilterRecord(
-                        it.id,
-                        it.channel,
-                        it.incremental,
-                        it.effectiveTimestamp,
-                        it.attachment.filename,
-                    )
-                }
+            val records = crlite.map { it.toFilterRecord() }
             val placed =
                 when (val placement = placeFilters(records, channel)) {
                     is Placement.Placed -> placement.filters
@@ -467,7 +458,7 @@ internal class CrliteSync(
                         result(SyncOutcome.INSTALLED, null, emptyList(), mapOf(Dataset.CRLITE to result.generationId))
                     done = installed
                     // A heal is never pruned: the malformed pointer it replaced may have named any directory (#256).
-                    if (!result.healed) reads.prune(result.directory)
+                    if (!result.healed) store.pruneAfter(result.directory, logger) { storeFailures++ }
                     installed
                 }
 
@@ -583,7 +574,7 @@ internal class CrliteSync(
             fun open(): SyncResult? {
                 val pointerRead = stored { store.pointer() }
                 val pointer = (pointerRead as? StoreRead.Found)?.value
-                val live = reads.liveDirectory()
+                val live = snapshot.liveDirectory()
                 val holders = listOfNotNull(live, pointer?.live, pointer?.previous).distinct()
                 pointed = holders.filter { it != directory }
                 val metaRead = stored { store.readMeta(directory) }
@@ -659,7 +650,9 @@ internal class CrliteSync(
              * [buildIndex] decoded every placed filter, so each encoding is known.
              */
             fun unlisted(placed: List<PlacedFilter>): PlacedFilter? =
-                placed.firstOrNull { format(checkNotNull(encodings[it.record.id]) { "decoded" }) !in engine.formats }
+                placed.firstOrNull {
+                    checkNotNull(encodings[it.record.id]) { "decoded" }.toFilterFormat() !in engine.formats
+                }
 
             /**
              * The generation's `meta.format`: the full's encoding. A delta may be in another one the engine lists, and
@@ -667,13 +660,7 @@ internal class CrliteSync(
              * filter). Called after [buildIndex] decoded every placed filter.
              */
             fun format(placed: List<PlacedFilter>): FilterFormat =
-                format(checkNotNull(encodings[placed.first { it.full }.record.id]) { "decoded" })
-
-            private fun format(encoding: Encoding): FilterFormat =
-                when (encoding) {
-                    Encoding.V3 -> FilterFormat.V3
-                    Encoding.V4 -> FilterFormat.V4
-                }
+                checkNotNull(encodings[placed.first { it.full }.record.id]) { "decoded" }.toFilterFormat()
 
             private fun encoding(bytes: ByteArray): Encoding? =
                 try {
@@ -726,42 +713,12 @@ internal class CrliteSync(
                 return live.sourceTimestampMillis
             }
 
-            /** The directory of the generation the snapshot publishes live, or null. */
-            fun liveDirectory(): String? {
-                val live = snapshot.snapshot.datasets[Dataset.CRLITE] ?: return null
-                val id = live.generationId ?: return null
-                return live.sourceTimestampMillis?.let { GenerationNames.directory(it, id) }
-            }
-
             /**
-             * Whether the pointer names the live generation's directory ([liveDirectory]) as `live`. Asked only for an
-             * `UNCHANGED` decision, which needs a live generation, so [liveDirectory] is never null here.
+             * Whether the pointer names the live generation's directory ([SnapshotRef.liveDirectory]) as `live`. Asked
+             * only for an `UNCHANGED` decision, which needs a live generation, so that directory is never null here.
              */
-            fun pointed(): Boolean = (stored { store.pointer() } as? StoreRead.Found)?.value?.live == liveDirectory()
-
-            /**
-             * Prunes the store to the directories the pointer names, after the install of [installed]; a failure is a store
-             * failure, never the sync's. When the pointer does not read back as [installed] (a storage that breaks
-             * read-after-write), nothing is deleted: a store failure and a warning, never "delete everything".
-             */
-            @Suppress("TooGenericExceptionCaught") // §6.5: the loader catches every throwable.
-            fun prune(installed: String) {
-                try {
-                    if ((store.pointer() as? StoreRead.Found)?.value?.live != installed) {
-                        storeFailures++
-                        logger.safeLog(
-                            LogLevel.WARN,
-                            "${store.root}: the pointer does not read back as $installed; not pruned",
-                        )
-                        return
-                    }
-                    store.prune()
-                } catch (t: Throwable) {
-                    restoreInterrupt(t)
-                    storeFailures++
-                    logger.safeLog(LogLevel.WARN, "pruning ${store.root} failed", t)
-                }
-            }
+            fun pointed(): Boolean =
+                (stored { store.pointer() } as? StoreRead.Found)?.value?.live == snapshot.liveDirectory()
         }
 
         /** This sync's attachment base, read before its first attachment fetch ([RemoteSettingsClient.attachmentBase]). */

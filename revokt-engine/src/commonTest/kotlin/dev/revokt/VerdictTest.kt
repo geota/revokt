@@ -67,8 +67,6 @@ class VerdictTest {
             .generationEpoch(3)
             .build()
 
-    private fun message(block: () -> Any): String = assertFailsWith<IllegalArgumentException> { block() }.message!!
-
     @Test
     fun `rules iterate in precedence order whatever the insertion order`() {
         val given = linkedSetOf(Rule.STALE, Rule.NOT_ENROLLED, Rule.REVOKED, Rule.NO_DATA)

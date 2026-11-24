@@ -281,7 +281,6 @@ class FindingTest {
             "the leaf is index 0",
         )
 
-        fun message(block: () -> Any): String = assertFailsWith<IllegalArgumentException> { block() }.message!!
         assertEquals(
             "oid is not set",
             message {

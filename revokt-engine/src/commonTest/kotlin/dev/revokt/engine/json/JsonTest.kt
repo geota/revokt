@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.json
 
+import dev.revokt.engine.parse.TestDer.bytes
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -15,8 +16,6 @@ import kotlin.test.assertTrue
  */
 class JsonTest {
     private fun parse(text: String): JsonValue = Json.parse(text.encodeToByteArray())
-
-    private fun bytes(vararg b: Int): ByteArray = ByteArray(b.size) { b[it].toByte() }
 
     private fun rejects(
         error: JsonError,

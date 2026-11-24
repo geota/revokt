@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.verify
 
+import dev.revokt.engine.parse.TestDer.hex
 import dev.revokt.verify.JcaFixtures
 import java.math.BigInteger
 import java.security.Signature
@@ -21,8 +22,6 @@ import kotlin.test.assertTrue
  */
 class RawSignatureTest {
     private val url = Base64.getUrlEncoder().withoutPadding()
-
-    private fun hex(s: String): ByteArray = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     private fun half(
         first: Int,
@@ -150,7 +149,7 @@ class RawSignatureTest {
                         update(message)
                     }
                 assertTrue(jdk.verify(der), "$curve signature $n")
-                assertContentEquals(expected(raw), der, "$curve signature $n")
+                assertContentEquals(minimalDer(raw), der, "$curve signature $n")
                 assertContentEquals(raw, RawSignature.decode(url.encodeToString(raw)), "$curve signature $n text")
                 val h = size / 2
                 leadingZero = leadingZero || raw[0] == 0.toByte() || raw[h] == 0.toByte()
@@ -160,18 +159,21 @@ class RawSignatureTest {
             }
         }
     }
+}
 
-    /** The DER of [raw] by `BigInteger.toByteArray()`, which is the minimal two's-complement encoding. */
-    private fun expected(raw: ByteArray): ByteArray {
-        val r = BigInteger(1, raw.copyOfRange(0, raw.size / 2)).toByteArray()
-        val s = BigInteger(1, raw.copyOfRange(raw.size / 2, raw.size)).toByteArray()
-        val content = byteArrayOf(0x02, r.size.toByte()) + r + byteArrayOf(0x02, s.size.toByte()) + s
-        val length =
-            if (content.size < 0x80) {
-                byteArrayOf(content.size.toByte())
-            } else {
-                byteArrayOf(0x81.toByte(), content.size.toByte())
-            }
-        return byteArrayOf(0x30) + length + content
-    }
+/**
+ * The DER of [raw] by `BigInteger.toByteArray()`, which is the minimal two's-complement encoding: the conversion's
+ * expected output in this test and in [RawSignatureFuzzTest].
+ */
+internal fun minimalDer(raw: ByteArray): ByteArray {
+    val r = BigInteger(1, raw.copyOfRange(0, raw.size / 2)).toByteArray()
+    val s = BigInteger(1, raw.copyOfRange(raw.size / 2, raw.size)).toByteArray()
+    val content = byteArrayOf(0x02, r.size.toByte()) + r + byteArrayOf(0x02, s.size.toByte()) + s
+    val length =
+        if (content.size < 0x80) {
+            byteArrayOf(content.size.toByte())
+        } else {
+            byteArrayOf(0x81.toByte(), content.size.toByte())
+        }
+    return byteArrayOf(0x30) + length + content
 }

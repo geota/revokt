@@ -116,7 +116,6 @@ class AnchorSnapshotTest {
 
     @Test
     fun `the required fields must be set`() {
-        fun message(block: () -> Any): String = assertFailsWith<IllegalArgumentException> { block() }.message!!
         assertEquals(
             "id is not set",
             message {
