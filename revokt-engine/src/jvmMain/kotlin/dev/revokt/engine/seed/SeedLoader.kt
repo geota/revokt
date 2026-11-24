@@ -46,7 +46,6 @@ import dev.revokt.engine.store.SignedMeta
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
-import dev.revokt.engine.update.FilterRecord
 import dev.revokt.engine.update.IndexBuild
 import dev.revokt.engine.update.InstallResult
 import dev.revokt.engine.update.PendingGeneration
@@ -56,7 +55,11 @@ import dev.revokt.engine.update.Publication
 import dev.revokt.engine.update.SnapshotRef
 import dev.revokt.engine.update.buildIndex
 import dev.revokt.engine.update.install
+import dev.revokt.engine.update.liveDirectory
 import dev.revokt.engine.update.placeFilters
+import dev.revokt.engine.update.pruneAfter
+import dev.revokt.engine.update.toFilterFormat
+import dev.revokt.engine.update.toFilterRecord
 import dev.revokt.engine.verify.ContentSignature
 import dev.revokt.engine.verify.RawSignature
 import dev.revokt.engine.verify.X5uChainResult
@@ -420,10 +423,7 @@ internal class SeedLoader(
                     is RecordCheck.Passed -> check.records
                     is RecordCheck.Rejected -> fail("records.json fails the schema: ${check.detail}")
                 }
-            val records =
-                crlite.map {
-                    FilterRecord(it.id, it.channel, it.incremental, it.effectiveTimestamp, it.attachment.filename)
-                }
+            val records = crlite.map { it.toFilterRecord() }
             val placed =
                 when (val placement = placeFilters(records, channel)) {
                     is Placement.Placed -> placement.filters
@@ -682,16 +682,7 @@ internal class SeedLoader(
                     ) as? RecordCheck.Passed
                 )?.records
                     ?: return false
-            val filterRecords =
-                crlite.map {
-                    FilterRecord(
-                        it.id,
-                        it.channel,
-                        it.incremental,
-                        it.effectiveTimestamp,
-                        it.attachment.filename,
-                    )
-                }
+            val filterRecords = crlite.map { it.toFilterRecord() }
             val placed = (placeFilters(filterRecords, channel) as? Placement.Placed)?.filters ?: return false
             val files = generation.files
             if (files.names - StoreLayout.INDEX != placed.mapTo(HashSet()) { it.name }) return false
@@ -755,7 +746,7 @@ internal class SeedLoader(
         ): Boolean {
             val read = store.readMeta(directory)
             if (!stored.trusted) {
-                val live = directory == liveDirectory()
+                val live = directory == snapshot.liveDirectory()
                 if (read is StoreRead.Found) {
                     // A complete one that does not re-verify cannot be loaded as it stands; it is this generation by
                     // name, so it is completed again from the verified seed, only its rotted files re-staged (#235's
@@ -776,7 +767,7 @@ internal class SeedLoader(
                 return false
             }
             val pointer = checkNotNull(stored.pointer)
-            if (directory == liveDirectory() || directory == pointer.live || directory == pointer.previous) {
+            if (directory == snapshot.liveDirectory() || directory == pointer.live || directory == pointer.previous) {
                 if (read is StoreRead.Found) return true
                 val counted = directory == pointer.live || directory == pointer.previous
                 fault("$directory is live or pointed to, and its meta.json is not readable", counted)
@@ -784,12 +775,6 @@ internal class SeedLoader(
             if (read is StoreRead.Found) store.reopen(directory)
             staged = directory
             return false
-        }
-
-        private fun liveDirectory(): String? {
-            val live = snapshot.snapshot.datasets[Dataset.CRLITE] ?: return null
-            val id = live.generationId ?: return null
-            return live.sourceTimestampMillis?.let { GenerationNames.directory(it, id) }
         }
 
         /** The bodies of the generation in [directory] ([held] when the engine or the pointer holds it). */
@@ -849,17 +834,11 @@ internal class SeedLoader(
 
             /** The first of [placed] whose encoding the engine does not list (§3.2, as the sync checks), or null. */
             fun unlisted(placed: List<PlacedFilter>): PlacedFilter? =
-                placed.firstOrNull { format(checkNotNull(encodings[it.record.id])) !in engine.formats }
+                placed.firstOrNull { checkNotNull(encodings[it.record.id]).toFilterFormat() !in engine.formats }
 
             /** The full's encoding, `meta.format`. */
             fun format(placed: List<PlacedFilter>): FilterFormat =
-                format(checkNotNull(encodings[placed.first { it.full }.record.id]))
-
-            private fun format(encoding: Encoding): FilterFormat =
-                when (encoding) {
-                    Encoding.V3 -> FilterFormat.V3
-                    Encoding.V4 -> FilterFormat.V4
-                }
+                checkNotNull(encodings[placed.first { it.full }.record.id]).toFilterFormat()
         }
 
         private fun meta(
@@ -926,8 +905,8 @@ internal class SeedLoader(
             return when (result) {
                 is InstallResult.Installed -> {
                     // In a rule (b) load the flip heals the pointer and nothing is pruned: the next install over a
-                    // valid pointer prunes.
-                    if (prunable) prune(result.directory)
+                    // valid pointer prunes. The prune is the sync's, and a failure never fails the load.
+                    if (prunable) store.pruneAfter(result.directory, logger) { storeFailures++ }
                     SeedLoad.Installed(result.directory, result.generationId, result.generationEpoch, ts, storeFailures)
                 }
 
@@ -945,26 +924,6 @@ internal class SeedLoader(
                         )
                     }
                 }
-            }
-        }
-
-        /** Prunes to what the pointer names after the install of [installed], as the sync does; never fails the load. */
-        @Suppress("TooGenericExceptionCaught") // §6.5: the loader catches every throwable.
-        private fun prune(installed: String) {
-            try {
-                if ((store.pointer() as? StoreRead.Found)?.value?.live != installed) {
-                    storeFailures++
-                    logger.safeLog(
-                        LogLevel.WARN,
-                        "${store.root}: the pointer does not read back as $installed; not pruned",
-                    )
-                    return
-                }
-                store.prune()
-            } catch (t: Throwable) {
-                restoreInterrupt(t)
-                storeFailures++
-                logger.safeLog(LogLevel.WARN, "pruning ${store.root} failed", t)
             }
         }
     }

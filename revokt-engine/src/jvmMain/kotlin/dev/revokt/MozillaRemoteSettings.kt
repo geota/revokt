@@ -6,7 +6,7 @@
 package dev.revokt
 
 import dev.revokt.engine.fetch.AllowedDomains
-import dev.revokt.engine.fetch.X5uUrl
+import dev.revokt.engine.fetch.StrictUrl
 import okio.ByteString
 import okio.ByteString.Companion.decodeHex
 import okio.ByteString.Companion.toByteString
@@ -103,7 +103,8 @@ public class MozillaRemoteSettings private constructor(
         what: String,
         host: String,
     ) {
-        require(X5uUrl.isHostName(host)) {
+        // The allowed domains and the x5u rewrites are DNS host names (spec §4).
+        require(StrictUrl.isHostName(host)) {
             "$what \"$host\" is not a DNS host name: LDH labels of 1 to 63 characters separated by single dots, at " +
                 "most 253 characters, no trailing dot, and a last label that is not a number (spec §4, §7.1)"
         }

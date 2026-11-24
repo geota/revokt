@@ -6,6 +6,7 @@ package dev.revokt.engine.parse
 import dev.revokt.KeyabilityClause
 import dev.revokt.engine.parse.TestDer.ascii
 import dev.revokt.engine.parse.TestDer.bytes
+import dev.revokt.engine.parse.TestDer.hex
 import dev.revokt.engine.parse.TestDer.oid
 import dev.revokt.engine.parse.TestDer.seq
 import dev.revokt.engine.parse.TestDer.tlv
@@ -16,9 +17,6 @@ import kotlin.test.fail
 
 /** Spec §9.2 K1–K7 (revision 35) on both sides of each edge; K8 checks each listed extension's grammar. */
 class KeyabilityTest {
-    private fun hex(s: String): ByteArray =
-        ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
-
     private val p256X = hex("6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")
     private val p256Y = hex("4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5")
     private val p256 = oid("1.2.840.10045.3.1.7")

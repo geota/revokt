@@ -45,7 +45,7 @@ class RawSignatureFuzzTest {
 
             val raw = data.copyOf(data.size.coerceIn(2, RawSignature.MAX_RAW_BYTES) / 2 * 2)
             val der = RawSignature.toDer(raw)
-            check(der.contentEquals(expected(raw))) { "toDer differs from BigInteger's minimal INTEGERs" }
+            check(der.contentEquals(minimalDer(raw))) { "toDer differs from BigInteger's minimal INTEGERs" }
             val half = raw.size / 2
             val rs = BigInteger(1, raw.copyOfRange(0, half)) to BigInteger(1, raw.copyOfRange(half, raw.size))
             check(JcaAlgorithms.ecdsaSignature(der) == rs) { "the strict decoder differs on a converted signature" }
@@ -72,18 +72,5 @@ class RawSignatureFuzzTest {
             r: BigInteger,
             s: BigInteger,
         ): ByteArray = TestDer.seq(TestDer.tlv(0x02, r.toByteArray()), TestDer.tlv(0x02, s.toByteArray()))
-
-        private fun expected(raw: ByteArray): ByteArray {
-            val r = BigInteger(1, raw.copyOfRange(0, raw.size / 2)).toByteArray()
-            val s = BigInteger(1, raw.copyOfRange(raw.size / 2, raw.size)).toByteArray()
-            val content = byteArrayOf(0x02, r.size.toByte()) + r + byteArrayOf(0x02, s.size.toByte()) + s
-            val length =
-                if (content.size < 0x80) {
-                    byteArrayOf(content.size.toByte())
-                } else {
-                    byteArrayOf(0x81.toByte(), content.size.toByte())
-                }
-            return byteArrayOf(0x30) + length + content
-        }
     }
 }

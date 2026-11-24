@@ -50,7 +50,7 @@ class ReferenceWalkerTest {
     }
 
     @Test
-    fun `an unrelated end-entity issuer the unrelated loop reaches adds no key`() {
+    fun `an unrelated end-entity issuer, which no walk offers as a candidate, adds no key`() {
         for (seed in seeds) {
             val anchor = ChainGenerator.honest(seed, depth = 1).honestAnchor
             val m = listOf(DropIntermediate(0), EndEntityIssuer(0, certifiedBy = anchor, unrelated = true))

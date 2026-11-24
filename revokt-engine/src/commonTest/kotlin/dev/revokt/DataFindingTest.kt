@@ -28,8 +28,6 @@ class DataFindingTest {
         assertEquals(a.toString(), same.toString())
     }
 
-    private fun message(block: () -> Any): String = assertFailsWith<IllegalArgumentException> { block() }.message!!
-
     private fun crlite() =
         Finding.Crlite
             .Builder()

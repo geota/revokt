@@ -45,8 +45,6 @@ class RevoktPolicyTest {
             ).nowMillis(1_700_000_000_000)
             .build()
 
-    private fun message(block: () -> Any): String = assertFailsWith<IllegalArgumentException> { block() }.message!!
-
     @Test
     fun `the presets read the section 8 table`() {
         for ((policy, preset) in listOf(RevoktPolicy.DEFAULT to Preset.DEFAULT, RevoktPolicy.STRICT to Preset.STRICT)) {

@@ -8,6 +8,7 @@ import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.parse.TestDer.ascii
 import dev.revokt.engine.parse.TestDer.bytes
 import dev.revokt.engine.parse.TestDer.extension
+import dev.revokt.engine.parse.TestDer.hex
 import dev.revokt.engine.parse.TestDer.oid
 import dev.revokt.engine.parse.TestDer.seq
 import dev.revokt.engine.parse.TestDer.tlv
@@ -19,9 +20,6 @@ import dev.revokt.engine.parse.TestDer.tlvWithLength
  * The real-certificate entries (the unsigned-header forms) are in [ProducerCorpus].
  */
 internal object BoundaryCorpus {
-    private fun hex(s: String): ByteArray =
-        ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
-
     private val ecPublicKey = oid("1.2.840.10045.2.1")
 
     private fun ec(

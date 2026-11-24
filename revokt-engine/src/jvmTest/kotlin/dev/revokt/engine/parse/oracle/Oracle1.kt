@@ -7,8 +7,6 @@ import dev.revokt.ParseReason
 import dev.revokt.engine.parse.CertificateParse
 import dev.revokt.engine.parse.CertificateParser
 import dev.revokt.engine.parse.producer.ProducerCorpus
-import java.io.ByteArrayInputStream
-import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 
@@ -31,23 +29,13 @@ internal object Oracle1 : PlatformOracle {
     /** The suffix naming a platform-canon read. */
     const val PLATFORM_CANON = "(platform canon)"
 
-    private val factory = CertificateFactory.getInstance("X.509", "SUN")
+    override val factory: CertificateFactory = CertificateFactory.getInstance("X.509", "SUN")
 
     override val id = "1"
 
     override val version: String = Runtime.version().feature().toString()
 
     override val label: String = "oracle 1 (JDK ${System.getProperty("java.runtime.version")})"
-
-    @Suppress("TooGenericExceptionCaught") // §9.2: every exception other than CertificateException is a Crash
-    override fun run(b: ByteArray): PlatformOracle.Outcome =
-        try {
-            PlatformOracle.Outcome.Accept(factory.generateCertificate(ByteArrayInputStream(b)) as X509Certificate)
-        } catch (_: CertificateException) {
-            PlatformOracle.Outcome.Reject
-        } catch (e: Exception) {
-            PlatformOracle.Outcome.Crash(e)
-        }
 
     /**
      * The bytes revokt reads for an accepted certificate (spec §9.2 revision 39) as a replay input: `getEncoded()`, or

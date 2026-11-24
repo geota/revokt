@@ -3,6 +3,7 @@
 
 package dev.revokt.verify
 
+import dev.revokt.PkixPki
 import dev.revokt.VerifyResult
 import dev.revokt.VerifyResult.INVALID
 import dev.revokt.VerifyResult.UNSUPPORTED
@@ -15,10 +16,8 @@ import dev.revokt.engine.parse.TestDer
 import dev.revokt.engine.walker.Cert
 import dev.revokt.verify.JcaFixtures.algId
 import dev.revokt.verify.JcaFixtures.generate
-import java.io.ByteArrayInputStream
 import java.security.KeyPair
 import java.security.Security
-import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.AlgorithmParameterSpec
 import kotlin.test.Test
@@ -39,9 +38,6 @@ class JcaVerifierChainTest {
             is CertificateParse.Failed -> error("unparseable: ${r.reason} ${r.detail}")
         }
 
-    private fun x509(der: ByteArray): X509Certificate =
-        CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(der)) as X509Certificate
-
     private fun JcaSignatureVerifier.link(
         child: Cert,
         issuer: Cert,
@@ -50,7 +46,7 @@ class JcaVerifierChainTest {
     private fun jdkLink(
         child: ByteArray,
         issuer: ByteArray,
-    ): Boolean = runCatching { x509(child).verify(x509(issuer).publicKey) }.isSuccess
+    ): Boolean = runCatching { PkixPki.x509(child).verify(PkixPki.x509(issuer).publicKey) }.isSuccess
 
     private val chains =
         mapOf(

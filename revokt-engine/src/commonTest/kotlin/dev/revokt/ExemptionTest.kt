@@ -49,8 +49,6 @@ class ExemptionTest {
             .dataStates(mapOf(Dataset.CRLITE to dataState(setOf(Rule.NO_DATA))))
             .build()
 
-    private fun message(block: () -> Any): String = assertFailsWith<IllegalArgumentException> { block() }.message!!
-
     @Test
     fun `a context built from equal inputs is equal, and newBuilder round-trips`() {
         for (same in listOf(context(), context().newBuilder().build())) {

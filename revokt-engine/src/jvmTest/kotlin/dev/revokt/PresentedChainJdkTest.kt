@@ -6,7 +6,6 @@ package dev.revokt
 import dev.revokt.engine.parse.producer.ProducerCorpus
 import java.math.BigInteger
 import java.security.MessageDigest
-import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -29,9 +28,6 @@ class PresentedChainJdkTest {
         ).map { (host, n) -> host to (1..n).map { "certs/$host-$it.der" } } +
             ("mozilla-content-signing" to (0..2).map { "certs/mozilla-content-signing-c$it.der" })
 
-    private fun x509(der: ByteArray): X509Certificate =
-        CertificateFactory.getInstance("X.509").generateCertificate(der.inputStream()) as X509Certificate
-
     private fun jdkDnsNames(x: X509Certificate): List<String> =
         x.subjectAlternativeNames
             .orEmpty()
@@ -50,7 +46,7 @@ class PresentedChainJdkTest {
                     .build()
             assertEquals(ders.size, chain.size, name)
             for ((i, der) in ders.withIndex()) {
-                val x = x509(der)
+                val x = PkixPki.x509(der)
                 val at = "$name[$i]"
                 assertTrue(chain.parsed(i), at)
                 assertEquals(jdkDnsNames(x), chain.dnsNames(i), at)

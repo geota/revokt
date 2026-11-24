@@ -20,9 +20,6 @@ internal object LengthMutants {
     private class Node(
         val path: String,
         val offset: Int,
-        val tag: Int,
-        val contentStart: Int,
-        val contentEnd: Int,
         val parent: Node?,
     )
 
@@ -88,7 +85,7 @@ internal object LengthMutants {
         for ((idx, kid) in kids.withIndex()) {
             val (offset, h, end) = kid
             val p = "$path/$idx:${h.tag.toString(16).padStart(2, '0')}"
-            val node = Node(p, offset, h.tag, h.contentStart, end, parent)
+            val node = Node(p, offset, parent)
             out.add(node)
             when {
                 h.tag and 0x20 != 0 -> {

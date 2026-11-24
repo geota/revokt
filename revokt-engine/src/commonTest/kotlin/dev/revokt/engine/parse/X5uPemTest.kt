@@ -4,6 +4,7 @@
 package dev.revokt.engine.parse
 
 import dev.revokt.RevoktLimits
+import dev.revokt.engine.parse.TestDer.bytes
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -233,8 +234,6 @@ class X5uPemTest {
             assertEquals(X5uPemFailure.BASE64, failure(block(bad)), bad)
         }
     }
-
-    private fun bytes(vararg values: Int) = ByteArray(values.size) { values[it].toByte() }
 
     @Test
     fun `a body over the cap is rejected before decoding`() {

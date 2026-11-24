@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.parse.producer
 
+import dev.revokt.engine.parse.TestDer
 import java.io.ByteArrayOutputStream
 
 /**
@@ -31,11 +32,11 @@ internal object Canon {
             require(algorithm.end + 1 < der.size && der[algorithm.end + 1].toInt() and 0xff != 0x80)
             val signature = element(der, algorithm.end, der.size)
             require(tbs.tag == 0x30 && algorithm.tag == 0x30 && signature.tag == 0x03 && signature.end == der.size)
-            val tbsTlv = tlv(0x30, tbs.content)
-            tlv(
+            val tbsTlv = TestDer.tlv(0x30, tbs.content)
+            TestDer.tlv(
                 0x30,
                 tbsTlv + signatureAlgorithm(tbsTlv) +
-                    tlv(0x03, byteArrayOf(0) + signature.content.drop(1).toByteArray()),
+                    TestDer.tlv(0x03, byteArrayOf(0) + signature.content.drop(1).toByteArray()),
             )
         }.getOrNull()
 
@@ -85,7 +86,7 @@ internal object Canon {
             val lengthOctet = b[q + 1].toInt() and 0xff
             if (lengthOctet == 0x80) {
                 val (inner, end) = indefiniteContent(b, q + 2, limit)
-                out.write(tlv(b[q].toInt() and 0xff, inner))
+                out.write(TestDer.tlv(b[q].toInt() and 0xff, inner))
                 q = end
             } else {
                 require(lengthOctet < 0x80 || lengthOctet in 0x81..0x84)
@@ -106,20 +107,5 @@ internal object Canon {
         p = definite(tbs, p, tbs.size).end
         val algorithm = definite(tbs, p, tbs.size)
         return tbs.copyOfRange(p, algorithm.end)
-    }
-
-    private fun tlv(
-        tag: Int,
-        content: ByteArray,
-    ): ByteArray {
-        val n = content.size
-        val length =
-            when {
-                n < 0x80 -> byteArrayOf(n.toByte())
-                n < 0x100 -> byteArrayOf(0x81.toByte(), n.toByte())
-                n < 0x10000 -> byteArrayOf(0x82.toByte(), (n shr 8).toByte(), n.toByte())
-                else -> byteArrayOf(0x83.toByte(), (n shr 16).toByte(), (n shr 8).toByte(), n.toByte())
-            }
-        return byteArrayOf(tag.toByte()) + length + content
     }
 }

@@ -131,7 +131,10 @@ internal object WalkerFixturesS1ToAj {
         )
     }
 
-    /** leaf → I1 → I2 → R, with [junk] certificates named [junkName] presented between I1 and I2. */
+    /**
+     * leaf → I1 → I2 → R, with [junk] certificates named like R when [junkIsRoot], else like I2, presented between I1
+     * and I2.
+     */
     private fun twoLevel(
         id: String,
         variant: String,
