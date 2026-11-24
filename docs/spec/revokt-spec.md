@@ -1788,11 +1788,18 @@ The test plan, with the §9 fixture rows, §9.1 (fuzzing) and §9.2 (the differe
      (`HonestCorpusWalkTest`); no root in the JDK 21 `cacerts` (118) or macOS `SystemRootCertificates` (158) carries
      nameConstraints; live Web PKI sub-CAs were not surveyed for directoryName or rfc822Name subtrees. On the bindings
      the platform validates the chain first (step 1).
-  16. **A long broken chain fails closed.** A chain of more than `FALLBACK_MAX_PRESENTED` (8) presented certificates
-     whose walk finds no path, because a certificate on the honest path has an unsupported signature or an
-     intermediate is missing, is `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)`, which `DEFAULT` rejects (§5.1 step 6; P8 in
-     test-plan.md §9.1). This is narrower than deployed behaviour: mozilla::pkix builds at most 6 intermediates
-     (`MAX_SUBCA_COUNT` in `pkixbuild.cpp`), so Firefox refuses every path longer than 8 certificates, broken or not.
+  16. **A long chain the walker cannot build fails closed.** `FALLBACK_MAX_PRESENTED` (8) counts the presented
+     certificates, and a walk without a path over more than 8 of them is `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)`, which
+     `DEFAULT` rejects (§5.1 step 6; P8 in test-plan.md §9.1). This follows from #226's `FALLBACK_MAX_PRESENTED`. It is
+     not narrower than Firefox: mozilla::pkix caps the path it builds, at 6 intermediates (`MAX_SUBCA_COUNT` in
+     `pkixbuild.cpp`), not the count presented. So a padded chain whose short path the walker cannot build, for
+     example a leaf, an intermediate and a root sent with 6 extra certificates (old cross-signs), is accepted by Firefox
+     and rejected here. Causes include an unsupported signature algorithm on the path, a missing intermediate that
+     Firefox's preload would supply (M1 has no preload), and a misclassified honest issuer (residual 1, #226). On a
+     trust-manager binding the platform has accepted the chain, but the 8-certificate check runs before the
+     `PLATFORM_ONLY` promotion, so that does not help either. The holder of an anchor-certified CA key can supply the
+     missing path and turn that rejection into an accept, as P3's certified bridge shows; such a key holder can mint a
+     fresh leaf anyway (residual 15).
 - Feed authenticity: every generation is verified against Mozilla's content-signature roots, from the feed or from a
   seed (§7.1); there is no unsigned source. The M2 denylist is project-attested and availability-only.
 - Rollback and freeze: a persisted non-decreasing watermark with no tolerance, floored at the live generation's

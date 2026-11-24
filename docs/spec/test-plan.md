@@ -451,10 +451,11 @@ reference builds; over name-related links a repeat can always be cut out, so `re
   either reason (`FALLBACK_LIMIT` included: attacker certificates can take a chain without a path past
   `FALLBACK_MAX_PRESENTED`). Not under `Recover(leaf, CertifiedBy(anchor))`: an anchor-certified CA for a recovered key
   can win the first path and hide the honest key, §10 residual 15 (such a key holder can mint a fresh leaf anyway);
-  `Recover` of a deeper child leaves the honest leaf key. Nor under `Recover(child, CertifiedBy(anchor))` of any child
-  when the honest walk is `NotFound`: the anchor-certified CA can supply the path a world mutation (`DropIntermediate`
-  or `UnsupportedOwnSig` above the child) removed, so the walk finds the honest key (P2) and the verdict follows its
-  CRLite answer, in either direction.
+  `Recover` of a deeper child leaves the honest leaf key. When the honest walk is `NotFound` and the mutated walk is
+  `Found` under a `Recover(child, CertifiedBy(anchor))`, the anchor-certified CA supplied the path a world mutation
+  (`DropIntermediate` or `UnsupportedOwnSig` above the child) removed: the walk finds the honest key (P2), and in
+  place of both clauses the verdict follows that key's CRLite answer (`Rejected(REVOKED)` exactly when the stub
+  revokes it), in either direction from the honest world's (§10 residual 16).
 - **P4 order-independence**: `PathStatus` invariant under `Permute` when neither order produced `Budget`, and
   `leafKeys` too except under `Recover(leaf, CertifiedBy)`, where two keys verify the leaf and terminate and the
   presented order picks one, as in Firefox; `Budget` in one order ⇒ `Budget` or `Found` in the other.
@@ -471,7 +472,7 @@ reference builds; over name-related links a repeat can always be cut out, so `re
   the mutation is applied to non-anchors only); `DropIntermediate` ⇒ a `NotFound` walk, never `Budget`, whose reason
   is the leaf level's: `NO_CANDIDATE` when the leaf's own issuer was dropped, `UNANCHORED` when a higher intermediate
   was (a world mutation under P3: the platform's acceptance of such a chain is the §5.2 residual, outside the
-  fuzzer's model). The decision is then `NO_ISSUER(UNSUPPORTED_ALGORITHM)`, or `NO_ISSUER` with the walker's reason,
+  fuzzer's model); with both, a `NotFound` walk, never `Budget`. The decision is then `NO_ISSUER(UNSUPPORTED_ALGORITHM)`, or `NO_ISSUER` with the walker's reason,
   for a chain of at most `FALLBACK_MAX_PRESENTED` certificates, and `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)` above it
   (§5.1 step 6; §10 residual 16).
 Rounds 1–2 are `Recover` + P3; round 2's OID case is `UnsupportedOwnSig` + P1; round 3 is

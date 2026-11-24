@@ -86,8 +86,9 @@ class WalkerFuzzCorpusTest {
                 // #134 F1: a dead branch's candidates change the NO_ISSUER label, never the rule (P3).
                 "f1-dropped-plus-candidates" to
                     input(9, 3, 8, DropIntermediate(1), Stuff(5, true, 0), SelfSignedNonAnchor(0), revoked = false),
-                // #134 F2: a cross-certified honest root (seed 17 presents one) in a second order, P4's anchor.
-                "f2-cross-cert-root-order" to input(17, 2, 10, Permute(3), permuteSeed = 77),
+                // #134 F2: a cross-certified honest root (seed 17 presents one). Unmutated, so P6 sees a presented
+                // candidate tried before the store's anchor; permuteSeed gives P4 its second order.
+                "f2-cross-cert-root-order" to input(17, 2, 10, permuteSeed = 77),
                 // #134 F6 and the P7 throw kinds, on the leaf issuer's key: a NotFound, never an ENGINE_ERROR.
                 "f6-interrupted-verifier" to
                     input(11, 2, 6, throwKind = ThrowKind.INTERRUPTED, throwSelector = LEAF_ISSUER_KEY),
@@ -101,12 +102,17 @@ class WalkerFuzzCorpusTest {
                     input(11, 2, 6, SameKeyDecoy(0), throwKind = ThrowKind.RUNTIME, throwSelector = TOP_KEY),
                 // A1: an anchor-certified CA bridges the dropped intermediate above intermediate 1 (P3 excluded, P2 kept).
                 "a1-certified-bridge" to input(12, 3, 1, DropIntermediate(1), Recover(1, certifiedBy = 0)),
+                // A1 the other way: the honest 9-certificate world is Rejected(FALLBACK_LIMIT), the bridged one Accepted.
+                "a1-deep-certified-bridge" to
+                    input(20, 9, 1, DropIntermediate(5), Recover(2, certifiedBy = 0), revoked = false),
                 // A2: above FALLBACK_MAX_PRESENTED a walk without a path is PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT).
                 "a2-deep-unsupported-own-sig" to input(13, 9, 4, UnsupportedOwnSig(3)),
                 "a2-deep-drop-intermediate" to input(14, 9, 4, DropIntermediate(4)),
                 // A3: the reason is the leaf level's.
                 "a3-drop-leaf-issuer" to input(15, 2, 4, DropIntermediate(0)),
                 "a3-drop-higher-intermediate" to input(16, 4, 4, DropIntermediate(2)),
+                // P8 with both: a NotFound walk, never Budget.
+                "p8-unsupported-and-dropped" to input(19, 3, 4, UnsupportedOwnSig(2), DropIntermediate(0)),
                 // Dead ends: a pad past MAX_DEPTH, a loop, a duplicate and refused end-entity issuers.
                 "dead-ends" to
                     input(

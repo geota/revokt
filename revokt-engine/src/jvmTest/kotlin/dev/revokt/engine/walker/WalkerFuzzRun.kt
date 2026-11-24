@@ -30,6 +30,7 @@ import dev.revokt.testing.NameEncoding
 import dev.revokt.testing.Recover
 import dev.revokt.testing.ReferenceWalker
 import dev.revokt.testing.SplitMix64
+import dev.revokt.testing.SymOids
 import dev.revokt.testing.SymVerifier
 import dev.revokt.testing.UnsupportedOwnSig
 import dev.revokt.testing.World
@@ -42,7 +43,10 @@ import java.io.IOException
  * cross-call memo cleared. The decision runs through `decideWalkerHarness` (no step-3 `MAX_PRESENTED` cut, so a spent
  * walk reaches steps 6 to 8) inside `evaluate`, under `DEFAULT`, with a CRLite stub that maps the honest key to
  * `REVOKED` when [WalkerFuzzInput.revoked] (else `NOT_REVOKED`) and every other key to `NOT_ENROLLED`, and a fake
- * fallback that returns the reference walker's shortest path. With a [ThrowKind] the verifier throws on every link
+ * fallback that returns the reference walker's shortest path. That fallback never supplies a path in a generated world: a
+ * `Budget` walk needs more than `FALLBACK_MAX_PRESENTED` certificates, where it is skipped, and the generator writes no
+ * SKI-only link, so P2's fallback-key branch cannot fail here (#316 review N4); only its call count (P5) is exercised.
+ * With a [ThrowKind] the verifier throws on every link
  * under one key of the world; P3, P6 and P8 are then not checked (the honest link may throw).
  *
  * Beyond §9.1, these hold in the code and are asserted too (tests only, as decided on #144): P1's path
@@ -67,27 +71,34 @@ internal class WalkerFuzzRun(
         } else {
             world.specs[input.throwSelector.mod(world.specs.size)].key.spki
         }
+
+    /** The walker's throws so far: only [verifier] counts, so P7's interrupt expectation reads the walker's alone. */
     private var throws = 0
 
-    private val verifier =
-        object : SignatureVerifier {
-            override fun verify(
-                sigAlg: ByteArray,
-                spki: ByteArray,
-                message: ByteArray,
-                signature: ByteArray,
-            ): VerifyResult {
-                if (throwing != null && spki.contentEquals(throwing)) {
-                    throws++
-                    throw throwable(input.throwKind)
-                }
-                return sym.verify(sigAlg, spki, message, signature)
+    /** The fuzzer's verifier: [sym], throwing on [throwing]'s links; [counted] for the walker's, not the reference's. */
+    private inner class Throwing(
+        private val counted: Boolean,
+    ) : SignatureVerifier {
+        override fun verify(
+            sigAlg: ByteArray,
+            spki: ByteArray,
+            message: ByteArray,
+            signature: ByteArray,
+        ): VerifyResult {
+            if (throwing != null && spki.contentEquals(throwing)) {
+                if (counted) throws++
+                throw throwable(input.throwKind)
             }
-
-            override fun unsupportedOids(): Set<String> = sym.unsupportedOids()
+            return sym.verify(sigAlg, spki, message, signature)
         }
 
-    private val reference = ReferenceWalker(world.anchors, verifier)
+        override fun unsupportedOids(): Set<String> = sym.unsupportedOids()
+    }
+
+    private val verifier: SignatureVerifier = Throwing(counted = true)
+
+    /** The reference and the fake fallback built on it, with their own verifier, which never sets the flag back. */
+    private val reference = ReferenceWalker(world.anchors, Throwing(counted = false))
 
     /** Recover with an anchor-certified key on any child, and on the leaf. */
     private val certified = world.mutations.filterIsInstance<Recover>().filter { it.certifiedBy != null }
@@ -130,14 +141,26 @@ internal class WalkerFuzzRun(
                 val parsed = CertificateParser.parse(it) as? CertificateParse.Parsed ?: fail("a generated cert fails")
                 index.cert(parsed.certificate)
             }
+        return interruptChecked("the walk") {
+            reconstruct(certs, index, v, v.unsupportedOids(), lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES))
+        }
+    }
+
+    /**
+     * P7, #134 F6: [block] with the interrupt flag cleared first; afterwards the flag is set exactly when the walker's
+     * verifier threw an `InterruptedException` during it, which the walker caught and set the flag again for.
+     */
+    private fun <T> interruptChecked(
+        what: String,
+        block: () -> T,
+    ): T {
         Thread.interrupted()
         val before = throws
-        val walk = reconstruct(certs, index, v, v.unsupportedOids(), lruMap(RevoktLimits.CROSS_CALL_MEMO_ENTRIES))
+        val result = block()
         val interrupted = Thread.interrupted()
-        // P7, #134 F6: a caught InterruptedException sets the flag again, and nothing else sets it.
         val expected = input.throwKind == ThrowKind.INTERRUPTED && throws > before
-        ensure(interrupted == expected) { "P7: interrupt flag $interrupted after ${throws - before} throws" }
-        return walk
+        ensure(interrupted == expected) { "P7: interrupt flag $interrupted after $what, ${throws - before} throws" }
+        return result
     }
 
     /** P1: the found path is sound under the fuzzer's verifier, a throwing link never verified. */
@@ -209,8 +232,7 @@ internal class WalkerFuzzRun(
                 val context = DecideContext(v, v.unsupportedOids(), memo(), fallback, now, platformOnly = false)
                 decideWalkerHarness(w.presented, index, snapshot, context)
             }
-        val evaluated = run.evaluate()
-        Thread.interrupted()
+        val evaluated = interruptChecked("evaluate") { run.evaluate() }
         val decision = evaluated.decision ?: fail("no decision: ${evaluated.verdict}")
         return Decided(evaluated.verdict, decision, fallback.calls)
     }
@@ -252,8 +274,7 @@ internal class WalkerFuzzRun(
         val fallback = FakeFallback { reference.path(it) }
         val context =
             DecideContext(verifier, verifier.unsupportedOids(), memo(), fallback, WalkerHarness.NOW, false)
-        val prod = decide(world.presented, index, snapshot, context)
-        Thread.interrupted()
+        val prod = interruptChecked("the production decide") { decide(world.presented, index, snapshot, context) }
         val within =
             world.presented.size <= RevoktLimits.MAX_PRESENTED &&
                 world.presented.sumOf { it.size.toLong() } <= RevoktLimits.MAX_PRESENTED_BYTES
@@ -329,14 +350,13 @@ internal class WalkerFuzzRun(
         val unsupported = applied.any { it is UnsupportedOwnSig }
         when {
             applied.all { it is NameEncoding || it is AlgMismatch } -> {
-                ensure(walk is Walk.Found && walk.leafKey.hex() == world.honestKey) { "P8: honest world $walk" }
-                ensure(path.status == PathStatus.FOUND) { "P8: honest world decided ${path.status}" }
-                ensure((d.verdict is Verdict.Rejected) == input.revoked) { "P8: verdict ${d.verdict}" }
-                if (d.verdict is Verdict.Rejected) ensure(d.verdict.rule == Rule.REVOKED) { "P8: ${d.verdict.rule}" }
+                honestAccepted(walk, d)
             }
 
             unsupported && dropped.isEmpty() -> {
-                ensure(walk is Walk.NotFound && walk.unsupportedOids.isNotEmpty()) { "P8: UnsupportedOwnSig $walk" }
+                ensure(walk is Walk.NotFound && SymOids.UNSUPPORTED_SIGNATURE in walk.unsupportedOids) {
+                    "P8: UnsupportedOwnSig $walk"
+                }
                 notFound(path, small, PathReason.UNSUPPORTED_ALGORITHM)
             }
 
@@ -347,7 +367,27 @@ internal class WalkerFuzzRun(
                 ensure(walk is Walk.NotFound && walk.reason == reason) { "P8: DropIntermediate $walk, want $reason" }
                 notFound(path, small, noIssuerReason(reason))
             }
+
+            // Both: the reason depends on which of them the leaf level meets first; the walk still ends without a path.
+            else -> {
+                ensure(walk is Walk.NotFound) { "P8: UnsupportedOwnSig and DropIntermediate $walk" }
+                ensure(
+                    if (small) path.status == PathStatus.NO_ISSUER else path.reason == PathReason.FALLBACK_LIMIT,
+                ) { "P8: UnsupportedOwnSig and DropIntermediate decided ${path.status}(${path.reason})" }
+            }
         }
+    }
+
+    /** P8's first clause: an honest world is `Found` with the honest key, and rejected exactly when it is revoked. */
+    private fun honestAccepted(
+        walk: Walk,
+        d: Decided,
+    ) {
+        val path = d.decision.path
+        ensure(walk is Walk.Found && walk.leafKey.hex() == world.honestKey) { "P8: honest world $walk" }
+        ensure(path.status == PathStatus.FOUND) { "P8: honest world decided ${path.status}" }
+        ensure((d.verdict is Verdict.Rejected) == input.revoked) { "P8: verdict ${d.verdict}" }
+        if (d.verdict is Verdict.Rejected) ensure(d.verdict.rule == Rule.REVOKED) { "P8: ${d.verdict.rule}" }
     }
 
     /** A2: `NO_ISSUER(reason)` within `FALLBACK_MAX_PRESENTED`, `PATH_BUDGET_EXCEEDED(FALLBACK_LIMIT)` above it. */
@@ -380,9 +420,15 @@ internal class WalkerFuzzRun(
         ensure(honest.anchors.map { it.toList() } == world.anchors.map { it.toList() }) { "P3: other anchors" }
         val honestSym = SymVerifier(honest.ok, honest.unsupported)
         val honestWalk = walk(honest.presented, honestSym)
-        // A1: an anchor-certified CA can supply the path a world mutation removed; the walk then finds the honest key
-        // (P2) and the verdict follows its CRLite answer.
-        if (certified.isNotEmpty() && honestWalk is Walk.NotFound) return
+        // A1: an anchor-certified CA supplied the path a world mutation removed. The walk found the honest key (P2), so
+        // the verdict follows its CRLite answer, whatever the honest world's was.
+        if (certified.isNotEmpty() && honestWalk is Walk.NotFound && walk is Walk.Found) {
+            val bv = d.verdict
+            ensure((bv is Verdict.Rejected) == input.revoked && (bv !is Verdict.Rejected || bv.rule == Rule.REVOKED)) {
+                "P3: the certified bridge decided $bv"
+            }
+            return
+        }
         val h = evaluate(honest, honestSym, ReferenceWalker(honest.anchors, honestSym))
         val hv = h.verdict
         val mv = d.verdict
