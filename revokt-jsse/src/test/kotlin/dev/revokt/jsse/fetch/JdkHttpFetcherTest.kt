@@ -244,17 +244,11 @@ class JdkHttpFetcherTest {
             assertNull(server)
             assertEquals(emptyList(), asked)
             val proxy = ask(Authenticator.RequestorType.PROXY)
-            assertEquals("proxy-user", proxy?.userName)
+            assertEquals(PROXY_USER, proxy?.userName)
             assertEquals(listOf(Authenticator.RequestorType.PROXY), asked)
         }
         // With no default authenticator a proxy challenge goes unanswered.
-        val previous = Authenticator.getDefault()
-        Authenticator.setDefault(null)
-        try {
-            assertNull(ask(Authenticator.RequestorType.PROXY))
-        } finally {
-            Authenticator.setDefault(previous)
-        }
+        withoutDefaultAuthenticator { assertNull(ask(Authenticator.RequestorType.PROXY)) }
     }
 
     @Test
@@ -573,23 +567,4 @@ class JdkHttpFetcherTest {
             null,
             type,
         )
-
-    /** Runs [block] with a recording default Authenticator that answers every challenge, then restores the old one. */
-    private fun withDefaultAuthenticator(block: (asked: List<Authenticator.RequestorType>) -> Unit) {
-        val asked = Collections.synchronizedList(ArrayList<Authenticator.RequestorType>())
-        val previous = Authenticator.getDefault()
-        Authenticator.setDefault(
-            object : Authenticator() {
-                override fun getPasswordAuthentication(): PasswordAuthentication {
-                    asked.add(requestorType)
-                    return PasswordAuthentication("proxy-user", "secret".toCharArray())
-                }
-            },
-        )
-        try {
-            block(asked)
-        } finally {
-            Authenticator.setDefault(previous)
-        }
-    }
 }
