@@ -47,11 +47,11 @@ internal class X5uUrlCheck private constructor(
  * too"), with the #177 review's contract for the rewrite.
  *
  * The URL is read by [StrictUrl]'s narrow grammar, so no URL parser downstream can see another host than the one
- * checked: `https://` (lowercase), an authority that is a DNS host name (labels of ASCII letters, digits and `-`,
- * separated by single dots, no trailing dot) and an optional port, then a path starting with `/` whose characters are
- * RFC 3986 `pchar`s, `/` and `?`, with every `%` followed by two hex digits. No fragment, no IP literal (nor a host
- * whose last label is a number), no percent-encoded or non-ASCII host (`java.net.URI.getHost()` would be null for the
- * latter). What is fetched is re-serialised from the parts: `https://`, the checked host, the path; an explicit `:443`
+ * checked: `https://` (lowercase), an authority that is a DNS host name (labels of ASCII letters, digits and `-` that
+ * start and end with a letter or digit, separated by single dots, no trailing dot, a last label that starts with a
+ * letter, #322) and an optional port, then a path starting with `/` whose characters are RFC 3986 `pchar`s, `/` and
+ * `?`, with every `%` followed by two hex digits. No fragment, no IP literal, no percent-encoded or non-ASCII host
+ * (`java.net.URI.getHost()` would be null for the latter, as for a host outside this rule). What is fetched is re-serialised from the parts: `https://`, the checked host, the path; an explicit `:443`
  * is dropped.
  *
  * Hosts are compared exactly, ASCII case included, against [x5uHostRewrites][dev.revokt.MozillaRemoteSettings.x5uHostRewrites]

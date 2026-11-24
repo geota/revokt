@@ -104,6 +104,15 @@ class MozillaRemoteSettingsTest {
                 "0x7f.1",
                 "mirror.0x",
                 "mirror.443",
+                // #322: labels start and end with a letter or digit, and the last starts with a letter, as
+                // java.net.URI reads a host.
+                "-.mirror.example",
+                "-mirror.example",
+                "mirror-.example",
+                "mirror.-example",
+                "mirror.example-",
+                "x.0xg",
+                "1a.2b.3c",
             )
         // Each builder against the reason build() reports first: the allowedDomains entries are checked before the
         // rewrites.
@@ -130,8 +139,9 @@ class MozillaRemoteSettingsTest {
         assertEquals(MozillaRemoteSettings.DEFAULT, MozillaRemoteSettings.DEFAULT.newBuilder().build())
         assertEquals(MozillaRemoteSettings.DEFAULT, MozillaRemoteSettings.Builder().build())
         // At the edges of the grammar: upper case (hosts are compared exactly), a 63-character label, a 253-character
-        // name, and numeric labels that are not last. A single label is a host name too, but not a domain to allow.
-        val domains = setOf("Mirror.Example", "$label63.example", name253, "1a.2b.3c", "x.0xg", "1.2.3.a-b")
+        // name, numeric labels that are not last, a last label with digits after its first letter, and hyphens inside
+        // a label. A single label is a host name too, but not a domain to allow.
+        val domains = setOf("Mirror.Example", "$label63.example", name253, "1a.2b.c3", "1.2.3.a-b", "a--b.x0g")
         val built =
             MozillaRemoteSettings
                 .Builder()

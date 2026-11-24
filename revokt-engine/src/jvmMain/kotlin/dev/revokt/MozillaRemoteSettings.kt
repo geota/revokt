@@ -105,8 +105,9 @@ public class MozillaRemoteSettings private constructor(
     ) {
         // The allowed domains and the x5u rewrites are DNS host names (spec §4).
         require(StrictUrl.isHostName(host)) {
-            "$what \"$host\" is not a DNS host name: LDH labels of 1 to 63 characters separated by single dots, at " +
-                "most 253 characters, no trailing dot, and a last label that is not a number (spec §4, §7.1)"
+            "$what \"$host\" is not a DNS host name: LDH labels of 1 to 63 characters that start and end with a " +
+                "letter or digit, separated by single dots, at most 253 characters, no trailing dot, and a last " +
+                "label that starts with a letter (spec §4, §7.1)"
         }
     }
 
@@ -161,8 +162,9 @@ public class MozillaRemoteSettings private constructor(
      * Builds a [MozillaRemoteSettings], starting from [DEFAULT]'s values, so a mirror configuration keeps Mozilla's pin.
      * [build] throws [IllegalArgumentException] in two cases (spec §4): an [x5uHostRewrite] target that [allowedDomains]
      * does not allow, and an [allowedDomains] entry or either side of an [x5uHostRewrite] that is not a DNS host name as the x5u
-     * URL grammar reads one (spec §7.1): LDH labels of 1 to 63 characters separated by single dots, at most 253
-     * characters, no trailing dot, and a last label that is not a number, so no port, userinfo, path or IP literal.
+     * URL grammar reads one (spec §7.1): LDH labels of 1 to 63 characters that start and end with a letter or digit,
+     * separated by single dots, at most 253 characters, no trailing dot, and a last label that starts with a letter,
+     * so no port, userinfo, path or IP literal.
      * ASCII upper case is allowed, since hosts are compared exactly. The fetch-time check accepts exactly these names.
      */
     public class Builder {

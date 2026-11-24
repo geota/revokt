@@ -123,13 +123,18 @@ class X5uFetchTest {
         for (numeric in listOf("1.2.3.4", "127.1", "2130706433", "0x7f.0.0.1", "a.0x7F", "a.0x", "cdn.mozilla.443")) {
             refused("https://$numeric$path", X5uUrlFailure.SYNTAX)
         }
+        // A last label that starts with a digit, or a label that starts or ends with `-`, gives java.net.URI no host
+        // (#322).
+        for (noUriHost in listOf("1a.2b.3c", "x.0xg", "-.a.net", "a-.net", "a.-b", "a.b-")) {
+            refused("https://$noUriHost$path", X5uUrlFailure.SYNTAX)
+        }
         val numericLabels =
             MozillaRemoteSettings.DEFAULT
                 .newBuilder()
-                .allowedDomains(setOf("1a.2b.3c", "x.0xg"))
+                .allowedDomains(setOf("1a.2b.c3", "x.x0g"))
                 .build()
-        assertEquals("https://1a.2b.3c$path", fetched("https://1a.2b.3c$path", numericLabels))
-        assertEquals("https://x.0xg$path", fetched("https://x.0xg$path", numericLabels))
+        assertEquals("https://1a.2b.c3$path", fetched("https://1a.2b.c3$path", numericLabels))
+        assertEquals("https://x.x0g$path", fetched("https://x.x0g$path", numericLabels))
     }
 
     @Test
