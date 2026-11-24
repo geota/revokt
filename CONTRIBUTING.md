@@ -479,13 +479,22 @@ each, rewrite it while the news holds, close it once the pins are current, and s
   a target), on GitHub-hosted runners, one job per target that `./gradlew fuzzTargets` lists. The fuzz job holds no
   secret. GitHub disables a public repository's scheduled workflows after 60 days with no repository activity; a
   maintainer re-enables the nightly from the Actions tab if that happens.
-  - On a finding, it minimises each input (libFuzzer's `-minimize_crash=1`). It then seals one file per finding: a
-    gzipped tar of the input, the minimised input, the JUnit XML and the fuzzer and minimiser logs (which can quote the
-    input), encrypted with `age -a` to the `FUZZ_AGE_RECIPIENT` repository variable (an `age1…` public key; the job
-    fails without one).
-  - It uploads the sealed files and a manifest (target, module, Jazzer's `DEDUP_TOKEN`) as the 7-day artifact
-    `fuzz-finding-<target>`, and fails. Its log shows the target and the `DEDUP_TOKEN` (a hash of the finding's stack
-    frames), never the input.
+  - When the target fails once fuzzing has started, the job replays a control, the empty input, then each saved crash,
+    timeout or oom input alone under the same harness (the module's `fuzzReplay`, §9.1). The failure is a **finding**
+    only if an input fails again and the control passes (#321); ClusterFuzz likewise re-runs a crash to check that it
+    reproduces. Each input gets one attempt, and any non-zero exit counts as failing again; the control guards against
+    a failure that is systematic (the harness, the build, the runner). Jazzer's Java reproducers (`Crash_<sha1>.java`,
+    which hold the input) go under the job's temporary directory, never the checkout.
+    Anything else (no saved input, a control that fails too, or no input that fails again) is a **run failure**: the
+    job fails with a fixed error and no advisory is filed.
+  - On a finding, it minimises each input (libFuzzer's `-minimize_crash=1`). It then seals one file per saved input: a
+    gzipped tar of the input, the minimised input, the JUnit XML and the fuzzer, minimiser and replay logs (which can
+    quote the input), encrypted with `age -a` to the `FUZZ_AGE_RECIPIENT` repository variable (an `age1…` public key;
+    the job fails without one). A run failure is sealed the same way, without minimising.
+  - It uploads the sealed files and a manifest (target, module, Jazzer's `DEDUP_TOKEN`, whether it reproduced) as the
+    7-day artifact `fuzz-finding-<target>` for a finding, or `fuzz-run-failure-<target>` for a run failure, and fails.
+    Its log shows the target, the verdict and the `DEDUP_TOKEN` (a hash of the finding's stack frames), never the
+    input.
   - Each target's generated corpus goes up, from a run without a finding, as the 1-day artifact
     `fuzz-corpus-<target>`; an upload the account's storage quota refuses does not fail the run. The corpus job, on a
     fresh runner that never checks out or runs anything of the repository, for `main` only, checks the artifacts as
@@ -531,14 +540,15 @@ each, rewrite it while the news holds, close it once the pins are current, and s
       units of any target, though never add one; the corpus repository's history restores them.
   - **The corpus is not treated as secret.** The committed seed inputs are public, and while the 1-day artifact lasts
     any signed-in GitHub user can download a night's corpus; the corpus repository is private for its size, not its
-    content. Findings are different: a target with a finding uploads no corpus, and its inputs and logs leave the job
+    content. Findings are different: a target that fails uploads no corpus, and its inputs and logs leave the job
     only sealed with `age`.
   - The advisory job then runs on a fresh runner, only for a run of `main`, with the `FUZZ_ADVISORY_TOKEN` secret
     of the `fuzz-advisory` environment, whose deployment branches are limited to `main`. The token is a fine-grained
     personal access token of an administrator, for this repository only, with "Repository security advisories: Read
     and write"; renew it before it expires. The job never checks out the tree or runs Gradle: it fetches only
-    `.github/scripts/fuzz_advisory.py` at the run's commit. The script checks the artifact as hostile data, and files
-    one private **draft security advisory** per new `DEDUP_TOKEN` (`fuzz: <target> <token>`), at most 8 per run, with
+    `.github/scripts/fuzz_advisory.py` at the run's commit. It downloads only the `fuzz-finding-*` artifacts. The script
+    checks them as hostile data, skips a manifest not marked reproduced, and files one private **draft security
+    advisory** per new `DEDUP_TOKEN` (`fuzz: <target> <token>`), at most 8 per run, with
     each sealed file inline.
 
   To triage a finding:
@@ -547,7 +557,9 @@ each, rewrite it while the news holds, close it once the pins are current, and s
      `tar -xzf finding.bin` for the input, the minimised input and the logs.
   2. If the advisory job failed or was skipped (a dispatch of another branch files no advisory), or a file was too
      large to inline, use the run's `fuzz-finding-<target>` artifact instead (within its 7 days):
-     `gh run download <run-id> -n fuzz-finding-<target>`, then decrypt each `finding-<n>.tar.age` the same way.
+     `gh run download <run-id> -n fuzz-finding-<target>`, then decrypt each `finding-<n>.tar.age` the same way. A run
+     failure files no advisory; its `fuzz-run-failure-<target>` artifact decrypts the same way, and is usually the
+     harness or the runner, not an input.
   3. Reproduce it: save the input under the target's `src/jvmTest/resources/<package>/<Class>Inputs/`, or pass it to the
      target. Triage follows SECURITY.md, and the fix CONTRIBUTING §8.
   4. Delete the decrypted files once the advisory holds what triage needs.

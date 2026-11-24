@@ -8,14 +8,19 @@ themselves (its name is then lost, and the target is the manifest's). That job r
 fuzzed tree's code, which could have written or replaced any of it, so it is hostile data and is checked before use:
 - an artifact directory: named fuzz-finding-<target>; regular files only (no link, no subdirectory); exactly
   manifest.json and the finding files it lists; each file within its cap, and the run within the total cap;
-- manifest.json: a JSON object with exactly `target`, `module`, `hash` and `files`. `target` and `module` hold only
-  [A-Za-z0-9._/-], and `target` is the artifact's. `hash` is empty or 8 to 64 lowercase hex digits (Jazzer's
-  DEDUP_TOKEN). `files` is 1 to 8 distinct names finding-<n>.tar.age;
+- manifest.json: a JSON object with exactly `target`, `module`, `hash`, `reproduced` and `files`. `target` and
+  `module` hold only [A-Za-z0-9._/-], and `target` is the artifact's. `hash` is empty or 8 to 64 lowercase hex digits
+  (Jazzer's DEDUP_TOKEN). `reproduced` is a boolean. `files` is 1 to 8 distinct names finding-<n>.tar.age;
 - a finding file: ASCII age armour and nothing else. The BEGIN line, base64 lines of exactly 64 characters but the
   last, then the END line;
 - at most 8 findings in one run; an artifact that would go past that is rejected.
 A rejected artifact is reported by its name alone, or not at all if the name itself is unexpected, and makes the job
 fail; the other artifacts are still filed. Nothing from an artifact is printed.
+
+Only a finding that reproduces is filed (#321; ClusterFuzz likewise re-runs a crash to check that it reproduces):
+fuzz.yml's reproduce step replayed a saved input alone, it failed again, and the empty input passed. A well-formed manifest whose
+`reproduced` is not true is skipped, counted but not filed and not held against the caps; fuzz.yml uploads such a run
+failure under another artifact name, so one here is not what the fuzz job writes, and nothing of it is filed.
 
 Dedup: an advisory's summary is `fuzz: <target> <hash>`, and an existing advisory (any state) with that summary is
 the same finding. A finding without a hash is filed as `fuzz: <target> run <run id>` and never deduplicated.
@@ -45,7 +50,7 @@ BODY_LINE = re.compile(rb"[A-Za-z0-9+/]{1,64}={0,2}")
 BEGIN = b"-----BEGIN AGE ENCRYPTED FILE-----"
 END = b"-----END AGE ENCRYPTED FILE-----"
 MANIFEST = "manifest.json"
-MANIFEST_KEYS = {"target", "module", "hash", "files"}
+MANIFEST_KEYS = {"target", "module", "hash", "reproduced", "files"}
 MAX_MANIFEST = 4 * 1024
 MAX_FILE = 256 * 1024
 MAX_TOTAL = 1024 * 1024
@@ -62,6 +67,7 @@ class Finding:
     target: str
     module: str
     hash: str
+    reproduced: bool
     files: list[tuple[str, str]]  # (file name, armour)
 
 
@@ -101,13 +107,13 @@ def check_armour(data: bytes) -> str:
     return data.decode("ascii")
 
 
-def check_manifest(data: bytes, target: str | None) -> tuple[str, str, str, list[str]]:
+def check_manifest(data: bytes, target: str | None) -> tuple[str, str, str, bool, list[str]]:
     try:
         manifest = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise Rejected("a manifest that is not JSON") from None
     if not isinstance(manifest, dict) or set(manifest) != MANIFEST_KEYS:
-        raise Rejected("a manifest without exactly target, module, hash and files")
+        raise Rejected("a manifest without exactly target, module, hash, reproduced and files")
     for key in ("target", "module"):
         if not isinstance(manifest[key], str) or not FIELD.fullmatch(manifest[key]):
             raise Rejected(f"a manifest {key} outside [A-Za-z0-9._/-]")
@@ -115,11 +121,13 @@ def check_manifest(data: bytes, target: str | None) -> tuple[str, str, str, list
         raise Rejected("a manifest target that is not the artifact's")
     if not isinstance(manifest["hash"], str) or (manifest["hash"] and not HASH.fullmatch(manifest["hash"])):
         raise Rejected("a manifest hash that is not empty or 8 to 64 lowercase hex digits")
+    if not isinstance(manifest["reproduced"], bool):
+        raise Rejected("a manifest reproduced that is not true or false")
     files = manifest["files"]
     if (not isinstance(files, list) or not 1 <= len(files) <= MAX_FINDINGS or len(set(map(str, files))) != len(files)
             or not all(isinstance(f, str) and FINDING_FILE.fullmatch(f) for f in files)):
         raise Rejected(f"a manifest files list that is not 1 to {MAX_FINDINGS} distinct finding-<n>.tar.age names")
-    return manifest["target"], manifest["module"], manifest["hash"], files
+    return manifest["target"], manifest["module"], manifest["hash"], manifest["reproduced"], files
 
 
 def check_artifact(directory: Path, target: str | None) -> Finding:
@@ -132,17 +140,19 @@ def check_artifact(directory: Path, target: str | None) -> Finding:
             entries[entry.name] = Path(entry.path)
     if MANIFEST not in entries:
         raise Rejected("no manifest.json")
-    target, module, hash_, files = check_manifest(read_capped(entries[MANIFEST], MAX_MANIFEST), target)
+    target, module, hash_, reproduced, files = check_manifest(read_capped(entries[MANIFEST], MAX_MANIFEST), target)
     if set(entries) != {MANIFEST, *files}:
         raise Rejected("files other than manifest.json and the finding files it lists")
     armoured = [(name, check_armour(read_capped(entries[name], MAX_FILE))) for name in sorted(files)]
-    return Finding(target, module, hash_, armoured)
+    return Finding(target, module, hash_, reproduced, armoured)
 
 
-def collect(findings_dir: Path) -> tuple[list[Finding], list[str]]:
-    """The checked findings, and a line for each rejected artifact (by name only when the name is safe)."""
+def collect(findings_dir: Path) -> tuple[list[Finding], list[str], int]:
+    """The checked findings that reproduced, a line for each rejected artifact (by name only when the name is safe), and
+    the number of well-formed artifacts skipped as not reproduced."""
     accepted: list[Finding] = []
     rejected: list[str] = []
+    skipped = 0
     count = total = 0
     with os.scandir(findings_dir) as it:
         entries = sorted(it, key=lambda e: e.name)
@@ -161,6 +171,9 @@ def collect(findings_dir: Path) -> tuple[list[Finding], list[str]]:
     for directory, target, label in artifacts:
         try:
             finding = check_artifact(directory, target)
+            if not finding.reproduced:
+                skipped += 1
+                continue
             size = sum(len(a) for _, a in finding.files)
             if count + len(finding.files) > MAX_FINDINGS:
                 raise Rejected(f"more than {MAX_FINDINGS} findings in this run")
@@ -172,7 +185,7 @@ def collect(findings_dir: Path) -> tuple[list[Finding], list[str]]:
         except (Rejected, OSError) as e:
             reason = str(e) if isinstance(e, Rejected) else "an unreadable file"
             rejected.append(f"{label}: {reason}")
-    return accepted, rejected
+    return accepted, rejected, skipped
 
 
 def summary(finding: Finding, run_id: str) -> str:
@@ -184,8 +197,9 @@ def description(finding: Finding, run_url: str) -> str:
         f"`{finding.target}` failed under Jazzer (spec §9.1 Findings), found by {run_url}.",
         "",
         f"- Jazzer DEDUP_TOKEN: {finding.hash or 'none'}",
-        "- Each block below is one finding: a gzipped tar of the input, the minimised input, the JUnit XML and the"
-        " fuzzer and minimiser logs, encrypted with age to the maintainer's key (FUZZ_AGE_RECIPIENT).",
+        "- Reproduced: a saved input, replayed alone under the same harness, failed again, and the empty input passed.",
+        "- Each block below is one saved input: a gzipped tar of the input, the minimised input, the JUnit XML and the"
+        " fuzzer, minimiser and replay logs, encrypted with age to the maintainer's key (FUZZ_AGE_RECIPIENT).",
         "",
         "Decrypt (CONTRIBUTING §6): copy a block into `finding.age`, then run"
         " `rage -d -i <identity-file> finding.age > finding.bin` (`age -d -i` works too), and"
@@ -233,7 +247,7 @@ def main() -> int:
         # The fuzz job failed without a finding (a build error, say): nothing to file.
         print("no finding artifacts in this run")
         return 0
-    accepted, rejected = collect(findings_dir)
+    accepted, rejected, skipped = collect(findings_dir)
     for line in rejected:
         print(f"::error::rejected {line}")
     filed = duplicates = 0
@@ -252,7 +266,8 @@ def main() -> int:
             known.add(title)
             filed += 1
     # Nothing about the advisories in this public log beyond the counts.
-    print(f"filed {filed} draft advisories; {duplicates} already filed; {len(rejected)} artifacts rejected")
+    print(f"filed {filed} draft advisories; {duplicates} already filed; {skipped} not reproduced, skipped;"
+          f" {len(rejected)} artifacts rejected")
     return 1 if rejected else 0
 
 
