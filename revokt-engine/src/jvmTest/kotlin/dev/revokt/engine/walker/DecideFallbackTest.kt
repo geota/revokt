@@ -471,10 +471,8 @@ class DecideFallbackTest {
 
     /**
      * (ad)'s shape for decide: the honest I unrelated to the leaf by encoding, six same-name, mutually cross-signing
-     * junk ahead, `Budget`. The harness row (ad) puts the TeletexString on the leaf's issuer and an issuer-and-serial
-     * AKI on the leaf, which §9.2's K5 and K8 put outside the keyability profile, so through decide that leaf is
-     * `PARSE_FAILED(PRODUCER_UNKEYABLE)`. Here the TeletexString is I's subject and the leaf has no AKI, which keeps
-     * the leaf keyable and the relation test name-only.
+     * junk ahead, `Budget`. The TeletexString is I's subject, as in the harness row (ad), and the leaf has no AKI,
+     * which keeps the leaf keyable and the relation test name-only.
      */
     private fun adShape(): Pair<WalkerFixture, Honest> {
         val w = FixtureWorld()
@@ -521,12 +519,12 @@ class DecideFallbackTest {
     }
 
     @Test
-    fun `harness rows with a TeletexString leaf issuer and an issuer-and-serial AKI are unkeyable in decide`() {
-        // Pins the reason adShape exists: on every path through decide, (ac) and (ad) as the harness writes them stop
-        // at step 3.
+    fun `harness rows (ac) and (ad) keep the leaf inside the keyability profile, so decide walks them`() {
+        // Revision 56 (the maintainer's decision): the TeletexString is on I's subject, not the leaf's issuer field
+        // (K5), and the leaf's AKI is a keyIdentifier, not the issuer-and-serial form (K8).
         for (f in WalkerFixturesS1ToAj.ac() + WalkerFixturesS1ToAj.ad()) {
-            val d = WalkerHarness.decide(f, null)
-            assertEquals(PathReason.PRODUCER_UNKEYABLE, d.path.reason, f.toString())
+            assertEquals(null, WalkerCerts.cert(f.presented[0]).keyabilityClause, f.toString())
+            assertTrue(WalkerHarness.decide(f, null).path.status != PathStatus.PARSE_FAILED, f.toString())
         }
     }
 
