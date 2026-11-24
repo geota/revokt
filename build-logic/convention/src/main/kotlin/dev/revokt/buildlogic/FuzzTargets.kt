@@ -59,7 +59,10 @@ internal object FuzzTargets {
     /** Spec §9.1 harness: `-timeout=10` unless the target says otherwise. */
     const val DEFAULT_TIMEOUT = 10
 
-    /** Spec §9.1 harness: `-rss_limit_mb=2560`, ClusterFuzz's default (#321); fuzz.yml passes the same. */
+    /**
+     * Spec §9.1 harness: `-rss_limit_mb=2560` (#321), ClusterFuzz's libFuzzer default (`DEFAULT_RSS_LIMIT_MB`, OSS-Fuzz's
+     * 2.5 GB per-input limit), which Jazzer targets run under; fuzz.yml passes the same.
+     */
     const val RSS_LIMIT_MB = 2560
 
     private val packageLine = Regex("""^package\s+([A-Za-z0-9_.]+)""")
@@ -201,9 +204,14 @@ internal fun Project.registerFuzzTargets(): TaskProvider<FuzzTargetsTask> =
  *
  * `fuzzReplay` (fuzz.yml's reproduce step, #321): runs one input once, alone, through the same driver, classpath and
  * harness JVM, and fails if the target fails on it. fuzz.yml files an advisory only for an input that fails again
- * here while the empty input passes. Properties: `revokt.fuzzClass`, `revokt.fuzzInput`, `revokt.fuzzOutput` (where
- * libFuzzer writes a failing input, `-exact_artifact_path`, so no file is named by the input's hash),
- * `revokt.fuzzTimeout`, `revokt.fuzzMaxLen` (unset for libFuzzer's default) and `revokt.fuzzBudget` (default 300 s).
+ * here while the empty input passes. Gradle never treats it as up to date. Properties: `revokt.fuzzClass`,
+ * `revokt.fuzzInput`, `revokt.fuzzTimeout`, `revokt.fuzzMaxLen` (unset for libFuzzer's default) and `revokt.fuzzBudget`
+ * (default 300 s).
+ *
+ * All three take `revokt.fuzzReproducers`: the directory Jazzer writes its Java reproducer to (`--reproducer_path`,
+ * default `build/fuzz/reproducers`). A reproducer is named `Crash_<sha1>.java`, after the input's hash, and holds the
+ * input, so it never lands in the module directory; fuzz.yml points it into `$RUNNER_TEMP/fuzz-out`, which nothing
+ * uploads.
  */
 internal fun Project.registerFuzzDrivers() {
     val property = { name: String -> providers.gradleProperty("revokt.$name") }
@@ -231,6 +239,14 @@ private fun JavaExec.likeJvmTest() {
     jvmArgumentProviders.addAll(test.jvmArgumentProviders.filterNot { it.javaClass.name.startsWith("kotlinx.kover.") })
 }
 
+/** `--reproducer_path=<revokt.fuzzReproducers, or build/fuzz/reproducers>`, the directory created before the run. */
+private fun JavaExec.reproducerPath(property: (String) -> Provider<String>): Provider<String> {
+    val fallback = project.layout.buildDirectory.dir("fuzz/reproducers").map { it.asFile.path }
+    val dir = property("fuzzReproducers").orElse(fallback)
+    doFirst { File(dir.get()).mkdirs() }
+    return dir.map { "--reproducer_path=$it" }
+}
+
 private fun Project.registerFuzzMinimizeTask(
     test: KotlinCompilation<*>,
     property: (String) -> Provider<String>,
@@ -247,6 +263,7 @@ private fun Project.registerFuzzMinimizeTask(
         val cls = property("fuzzClass")
         val input = property("fuzzInput")
         val output = property("fuzzOutput")
+        val reproducers = reproducerPath(property)
         val perInput = property("fuzzTimeout").orElse(FuzzTargets.DEFAULT_TIMEOUT.toString())
         val seconds = property("fuzzSeconds").orElse("10")
         timeout.set(property("fuzzBudget").orElse("300").map { Duration.ofSeconds(it.toLong()) })
@@ -255,6 +272,7 @@ private fun Project.registerFuzzMinimizeTask(
                 listOf(
                     "--target_class=${cls.get()}",
                     "--instrumentation_includes=dev.revokt.**",
+                    reproducers.get(),
                     "-minimize_crash=1",
                     "-max_total_time=${seconds.get()}",
                     "-timeout=${perInput.get()}",
@@ -283,6 +301,7 @@ private fun Project.registerFuzzMergeTask(
         val cls = property("fuzzClass")
         val corpus = property("fuzzCorpus")
         val merged = property("fuzzMerged")
+        val reproducers = reproducerPath(property)
         val perInput = property("fuzzTimeout").orElse(FuzzTargets.DEFAULT_TIMEOUT.toString())
         val maxLen = property("fuzzMaxLen")
         timeout.set(property("fuzzBudget").orElse("1800").map { Duration.ofSeconds(it.toLong()) })
@@ -292,6 +311,7 @@ private fun Project.registerFuzzMergeTask(
                 listOfNotNull(
                     "--target_class=${cls.get()}",
                     "--instrumentation_includes=dev.revokt.**",
+                    reproducers.get(),
                     "-merge=1",
                     "-timeout=${perInput.get()}",
                     "-rss_limit_mb=${FuzzTargets.RSS_LIMIT_MB}",
@@ -319,20 +339,24 @@ private fun Project.registerFuzzReplayTask(
         likeJvmTest()
         val cls = property("fuzzClass")
         val input = property("fuzzInput")
-        val output = property("fuzzOutput")
+        val reproducers = reproducerPath(property)
         val perInput = property("fuzzTimeout").orElse(FuzzTargets.DEFAULT_TIMEOUT.toString())
         val maxLen = property("fuzzMaxLen")
         timeout.set(property("fuzzBudget").orElse("300").map { Duration.ofSeconds(it.toLong()) })
+        // Each replay is a fresh run of its input: never up to date, never from the cache, whatever outputs jvmTest's
+        // argument providers come to declare.
+        doNotTrackState("each fuzzReplay is a fresh run of its input")
         argumentProviders.add(
             CommandLineArgumentProvider {
-                // A file (not a directory) as the only input: libFuzzer runs it once and exits non-zero if it fails.
+                // A file (not a directory) as the only input: libFuzzer runs it once, saves no artifact, and exits
+                // non-zero if it fails.
                 listOfNotNull(
                     "--target_class=${cls.get()}",
                     "--instrumentation_includes=dev.revokt.**",
+                    reproducers.get(),
                     "-timeout=${perInput.get()}",
                     "-rss_limit_mb=${FuzzTargets.RSS_LIMIT_MB}",
                     maxLen.orNull?.let { "-max_len=$it" },
-                    "-exact_artifact_path=${output.get()}",
                     input.get(),
                 )
             },

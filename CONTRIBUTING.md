@@ -481,7 +481,10 @@ each, rewrite it while the news holds, close it once the pins are current, and s
   maintainer re-enables the nightly from the Actions tab if that happens.
   - When the target fails once fuzzing has started, the job replays a control, the empty input, then each saved crash,
     timeout or oom input alone under the same harness (the module's `fuzzReplay`, §9.1). The failure is a **finding**
-    only if an input fails again and the control passes (#321), as ClusterFuzz files only reproducible crashes.
+    only if an input fails again and the control passes (#321); ClusterFuzz likewise re-runs a crash to check that it
+    reproduces. Each input gets one attempt, and any non-zero exit counts as failing again; the control guards against
+    a failure that is systematic (the harness, the build, the runner). Jazzer's Java reproducers (`Crash_<sha1>.java`,
+    which hold the input) go under the job's temporary directory, never the checkout.
     Anything else (no saved input, a control that fails too, or no input that fails again) is a **run failure**: the
     job fails with a fixed error and no advisory is filed.
   - On a finding, it minimises each input (libFuzzer's `-minimize_crash=1`). It then seals one file per saved input: a

@@ -417,7 +417,8 @@ replay as unit tests, JDK only; nightly = `fuzz.yml`, every target for 300 s, on
 which keeps each night's new corpus units and is merged weekly with `-merge=1` (CONTRIBUTING §6); OSS-Fuzz once the project has users. **Findings**: any exception other than the declared result, any
 allocation above budget, any timeout, any difference between implementations outside a declared
 equivalence class, any non-idempotent round trip; a nightly failure is a finding only when its saved input, replayed alone
-under the harness, fails again and the empty input passes (as ClusterFuzz files only reproducible crashes; CONTRIBUTING §6). **Acceptance**: no open continuous-tier crash at
+under the harness, fails again (one attempt; any non-zero exit counts) while the empty input, a control against systematic failures,
+passes (CONTRIBUTING §6). **Acceptance**: no open continuous-tier crash at
 release; Kover branch coverage of each parser package not regressed, 90 % as the target; committed
 corpus capped at a few MB, overflow in a corpus repository.
 

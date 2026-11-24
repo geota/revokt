@@ -17,8 +17,8 @@ fuzzed tree's code, which could have written or replaced any of it, so it is hos
 A rejected artifact is reported by its name alone, or not at all if the name itself is unexpected, and makes the job
 fail; the other artifacts are still filed. Nothing from an artifact is printed.
 
-Only a finding that reproduces is filed (#321, as ClusterFuzz files only reproducible crashes): fuzz.yml's reproduce
-step replayed a saved input alone, it failed again, and the empty input passed. A well-formed manifest whose
+Only a finding that reproduces is filed (#321; ClusterFuzz likewise re-runs a crash to check that it reproduces):
+fuzz.yml's reproduce step replayed a saved input alone, it failed again, and the empty input passed. A well-formed manifest whose
 `reproduced` is not true is skipped, counted but not filed and not held against the caps; fuzz.yml uploads such a run
 failure under another artifact name, so one here is not what the fuzz job writes, and nothing of it is filed.
 

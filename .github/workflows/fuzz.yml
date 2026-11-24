@@ -308,9 +308,10 @@ jobs:
           cp -R -- "$src/." "$dest/"
           echo "$NAME: seeded with $(find "$dest" -type f | wc -l) units from the corpus repository"
       # The §9.1 harness: -Xmx256m (the module's jvmTest sets it when JAZZER_FUZZ is set, and build-logic then leaves
-      # Kover's coverage agent out), -rss_limit_mb=2560, the target's -timeout and -max_len. Jazzer's JUnit mode reads libFuzzer flags from the jazzer.internal.arg.<n>
-      # configuration parameters, which reach the test JVM as system properties; they come after Jazzer's own
-      # (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer keeps the last.
+      # Kover's coverage agent out), -rss_limit_mb=2560, the target's -timeout and -max_len. Jazzer's JUnit mode reads
+      # libFuzzer flags from the jazzer.internal.arg.<n> configuration parameters, which reach the test JVM as system
+      # properties; they come after Jazzer's own (-rss_limit_mb=0, -max_total_time from maxDuration), and libFuzzer
+      # keeps the last.
       # Job logs are public and libFuzzer prints a crashing input, so the Gradle output stays in $RUNNER_TEMP/fuzz-out and
       # the public log fails closed: only the lines before `> Task <project>:jvmTest` are printed, with workflow commands
       # stopped, nothing once the test-results XML exists or if those lines hold a fuzzer line, and the run counts.
@@ -357,8 +358,9 @@ jobs:
           # targets keep their inputs under src/jvmTest/resources and not src/test/resources. libFuzzer names it by the
           # input's SHA-1, which gives a short input away, and harden-runner records process arguments. So each one is
           # copied to a numbered name, input-<n>-<kind>, through a redirection (no command sees the old name), and the
-          # originals are removed by find, whose arguments hold only the patterns. From here on, no argument, log or
-          # file name holds the hash.
+          # originals are removed by find, whose arguments hold only the patterns, with any Java reproducer
+          # (Crash_<sha1>.java, which holds the input). The standalone driver runs below write theirs into fuzz-out
+          # (revokt.fuzzReproducers). From here on, no argument, log or file name outside fuzz-out holds the hash.
           n=0
           for f in "$MODULE"/crash-* "$MODULE"/timeout-* "$MODULE"/oom-* "$MODULE"/leak-* "$MODULE"/slow-unit-*; do
             [ -f "$f" ] || continue
@@ -368,7 +370,7 @@ jobs:
             cat < "$f" > "$out/input-$n-$kind"
           done
           find "$MODULE" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' -o -name 'oom-*' -o -name 'leak-*' \
-            -o -name 'slow-unit-*' \) -delete
+            -o -name 'slow-unit-*' -o -name 'Crash_*.java' \) -delete
           cp "$MODULE/build/test-results/jvmTest/"*.xml "$out/" 2> /dev/null || true
           # The test task may have started (and with it the fuzzer) once its header is printed or its XML exists.
           started=0
@@ -395,13 +397,15 @@ jobs:
             echo "::error file=$SOURCE::$NAME: the build failed before fuzzing started"
           fi
           exit "$status"
-      # Spec §9.1 Findings (#321), as ClusterFuzz files only reproducible crashes: the failure is a finding only if one
-      # of its saved crash, timeout or oom inputs, replayed alone under the same harness (the module's fuzzReplay: the
-      # standalone driver on the target's fuzzerTestOneInput, -Xmx256m, -rss_limit_mb=2560, the target's -timeout and
-      # -max_len), fails again, and a control replay of the empty input passes. Anything else (no such input, a control
-      # that fails too, or no input that fails again) is a run failure: the job stays red with a fixed error, the logs
+      # Spec §9.1 Findings (#321; ClusterFuzz likewise re-runs a crash to check that it reproduces): the failure is a
+      # finding only if one of its saved crash, timeout or oom inputs, replayed alone under the same harness (the
+      # module's fuzzReplay: the standalone driver on the target's fuzzerTestOneInput, -Xmx256m, -rss_limit_mb=2560,
+      # the target's -timeout and -max_len), fails again, and a control replay of the empty input passes. Each input
+      # gets one attempt, and any non-zero exit counts as failing again; the control guards against a failure that is
+      # systematic (the harness, the build, the runner). Anything else (no such input, a control that fails too, or no
+      # input that fails again) is a run failure: the job stays red with a fixed error, the logs
       # are sealed for the maintainer under another artifact name, and no advisory is filed. The replays' output stays
-      # in $RUNNER_TEMP/fuzz-out, and the log shows only the verdict. The fuzz step has already failed the job; if this
+      # in $RUNNER_TEMP/fuzz-out, Jazzer's Java reproducers in its reproducers/, and the log shows only the verdict. The fuzz step has already failed the job; if this
       # step fails before it writes reproduced=true, the seal step treats the failure as a run failure.
       - name: reproduce
         id: reproduce
@@ -421,7 +425,7 @@ jobs:
           # One input, once, in a fresh JVM; its status is the replay's.
           replay() {
             ./gradlew "$PROJECT:fuzzReplay" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
-              "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzInput=$1" "-Prevokt.fuzzOutput=$out/replayed-$2" \
+              "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzInput=$1" "-Prevokt.fuzzReproducers=$out/reproducers" \
               "-Prevokt.fuzzTimeout=$TIMEOUT" "${maxlen[@]}" --no-daemon < /dev/null > "$out/replay-$2.log" 2>&1
           }
           inputs=()
@@ -468,7 +472,8 @@ jobs:
             inputs=$((inputs + 1))
             ./gradlew "$PROJECT:fuzzMinimize" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
               "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzInput=$f" "-Prevokt.fuzzOutput=$out/min-$base" \
-              "-Prevokt.fuzzTimeout=$TIMEOUT" --no-daemon < /dev/null > "$out/minimise-$base.log" 2>&1
+              "-Prevokt.fuzzTimeout=$TIMEOUT" "-Prevokt.fuzzReproducers=$out/reproducers" --no-daemon < /dev/null \
+              > "$out/minimise-$base.log" 2>&1
             if [ -s "$out/min-$base" ]; then minimised=$((minimised + 1)); fi
           done
           echo "minimised $minimised of $inputs finding inputs"
@@ -802,7 +807,8 @@ jobs:
           status=0
           ./gradlew "$PROJECT:fuzzMerge" -Prevokt.testJdk=25 -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64 \
             "-Prevokt.fuzzClass=$CLASS" "-Prevokt.fuzzCorpus=$src" "-Prevokt.fuzzMerged=$merged" \
-            "-Prevokt.fuzzTimeout=$TIMEOUT" -Prevokt.fuzzBudget=3600 "${maxlen[@]}" --no-daemon < /dev/null > "$out/gradle.log" 2>&1 || status=$?
+            "-Prevokt.fuzzTimeout=$TIMEOUT" -Prevokt.fuzzBudget=3600 "${maxlen[@]}" "-Prevokt.fuzzReproducers=$out/reproducers" \
+            --no-daemon < /dev/null > "$out/gradle.log" 2>&1 || status=$?
           pkill -KILL -u "$(id -un)" java || true
           awk -v t="> Task $PROJECT:fuzzMerge" '$0 == t || index($0, t " ") == 1 { exit } { print }' "$out/gradle.log" > "$out/before.log"
           if grep -qE 'Base64:|INFO: Seed:|^#[0-9]+[[:space:]]|==[0-9]+==|MERGE-' "$out/before.log"; then

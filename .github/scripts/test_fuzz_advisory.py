@@ -244,6 +244,16 @@ class NotReproduced(Case):
         accepted, rejected, skipped = fa.collect(self.root)
         self.assertEqual(([f.target for f in accepted], rejected, skipped), (["B.b"], [], 1))
 
+    def test_skipped_are_left_out_before_the_cap_is_checked(self):
+        # A reproduced finding first, so the count is 1 when the 8-file unreproduced one comes: skipped after the cap
+        # check, it would be rejected (1 + 8 > 8) instead of skipped.
+        self.artifact(target="A.a")
+        files = {f"finding-{i}.tar.age": armour() for i in range(1, 9)}
+        m = {"target": "B.b", "module": "revokt-engine", "hash": "", "reproduced": False, "files": sorted(files)}
+        self.artifact(target="B.b", files=dict(files), manifest=m)
+        accepted, rejected, skipped = fa.collect(self.root)
+        self.assertEqual(([f.target for f in accepted], rejected, skipped), (["A.a"], [], 1))
+
     def test_a_malformed_unreproduced_artifact_is_still_rejected(self):
         d = self.unreproduced("Run.failure")
         (d / "finding-1.tar.age").write_bytes(b"not armour\n")
