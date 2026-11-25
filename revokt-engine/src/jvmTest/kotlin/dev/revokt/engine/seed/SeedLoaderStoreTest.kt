@@ -97,6 +97,17 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
+    fun `a current with a flipped hex digit is counted once, and the seed's install heals it`() {
+        val own = installedAt(ts)
+        flipLiveHex(own)
+        assertIs<StoreRead.Found<*>>(store.pointer(), "the pointer still parses")
+        reset(keepStore = true)
+        val load = installed(load(Seed()))
+        assertEquals(1, load.storeFailures, "the live the pointer names, which is no stored file")
+        assertEquals(Pointer(own, null), (store.pointer() as StoreRead.Found).value)
+    }
+
+    @Test
     fun `beside a malformed pointer the seed's own rotted blob is rewritten from the seed, counted`() {
         val own = installedAt(ts)
         val blob = "$root/blobs/" + stored(own).blobNames.last()

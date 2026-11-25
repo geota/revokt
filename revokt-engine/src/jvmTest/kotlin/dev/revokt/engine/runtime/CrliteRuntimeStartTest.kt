@@ -172,6 +172,21 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
     }
 
     @Test
+    fun `a current with a flipped hex digit at start warns nothing of an unreadable store, and the start heals it`() {
+        val own = installedAt(ts)
+        flipLiveHex(own)
+        reset(keepStore = true)
+        recording.messages.clear()
+        val runtime = runtime(source(Seed()))
+        start(runtime)
+        assertEquals(own, runtime.crlite().generationFile)
+        assertEquals(Pointer(own, null), (store.pointer() as StoreRead.Found).value, "healed")
+        assertFalse(runtime.storeReadUnresolved)
+        // spec §5.1: a damaged pointer is a counted store failure only; STORE_UNREADABLE means the in-memory fallback.
+        assertEquals(emptyList(), recording.messages.filter { "STORE_UNREADABLE" in it.second || "SEED_" in it.second })
+    }
+
+    @Test
     fun `the sole-seed check finds a stored live on the calling thread, so the seed is not decoded there`() {
         installedAt(ts)
         reset(keepStore = true)
