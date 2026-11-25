@@ -524,3 +524,36 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     a crash to check that it reproduces. Anything else is a run failure: a red job and sealed logs, no advisory.
   - **Gate record:** the 0.2 walker-fuzzer gate (#144) passed in the nightly runs of 2026-11-24 (45412705975) and
     2026-11-25 (45624833898) on 4714c68, all 17 targets clean, `WalkerFuzzTest.walk` included.
+- 2026-11-25 (lead, #287, the implementation of the #229 design; spec PR first, per CONTRIBUTING §1.2): the store
+  becomes content-addressed: blobs named by their signed SHA-256, one generation file named by its own SHA-256, and
+  `current` as the one write that makes a generation live (§6.5; DIVERGENCES T1, T2). Q1 to Q3 stand as recorded for
+  #229 above.
+  - **Moot:** #200 (a same-`<ts>` re-sign reused): a re-signed collection is another file. #205 and its rounds 3 and 4
+    (an orphan completed afresh; `reopen` failing closed): nothing is reopened. #236 and #242 (directories held beside
+    a malformed pointer): nothing is rewritten, and prune deletes nothing there.
+  - **Widened:** #201's re-hash before reuse covers every blob, deltas included. **Restated:** #235 (the adopt scan,
+    now over generation files; "a (b) load never prunes or deletes", now every seed load at `start()`). **Kept:** #249
+    (the served generation is the first `previous` candidate), #256 (no prune after a heal flip), #209 and #224.
+  - **Prune beside an unreadable pre-install pointer (B2):** a sync install whose pointer read `Found` before it, but
+    named a generation that fails Load's steps 1 and 2, does not prune; the next install over a pointer that loads
+    does. This diverges on purpose from upki, which reads the old manifest with `.ok()` (`fetch.rs:64` at `9821cce`),
+    and from Firefox, which clears local data that fails verification (`RemoteSettingsClient.sys.mjs:1286-1291` at
+    `cac25a6`), under the fail-closed rule (#230). A newer generation file is kept when it passes steps 1 and 2 (B3).
+  - **Start (B4, B5):** the recovery chain decides on each candidate's `<ts>` against the seed's and loads only the
+    winner in full, as Firefox compares its local timestamp with the dump's before importing (RSC:460-461, 520-546).
+    Residual: a stored generation older than the seed is not decoded at `start()`. The sole-seed `ENFORCE` check reads
+    the pointer and its `live` file through steps 1 and 2 on the calling thread, as Firefox's `hasLocalData` reads only
+    a timestamp.
+  - **The generation file (B6, B8):** an optional hashed `seedFormat`, present exactly for a seed's generation, so
+    `DataState.seedFormat` survives a restart. A file over `maxJsonBytes` + 64 KiB is `FAILED` with `STORE_FAILED`,
+    counted, with a `WARN` naming the cap; the cap at read is the reading process's. Neither reference caps local state.
+  - **Install and sync (B7, B9):** the load-back re-reads and re-hashes the file and every blob and keeps the index
+    built from the same bytes, so an install still decodes its filters once beside the index build (Firefox's
+    cert_storage loads a filter back once after writing it, `cert_storage/src/lib.rs:513-517`). The delta base is the
+    served generation's file, re-read at each sync, as Firefox merges over what it serves (RSC:740-748).
+  - **Kept as §8 states (B10):** a `SKIPPED`/`BACKOFF` sync is an attempt and opens the seed's `STALE` gate. Firefox's
+    backoff records no check (`remote-settings.sys.mjs:381-396`), but opening the gate only lets `STALE` fire.
+  - **Deferred to #330 (B11 to B13):** `JvmStorage` (directory fsync at open and on create, the temp sweep, the lock,
+    `store.version`) and the in-memory entry points; #287 writes the §3 and §4 text only. `RevoktState.readOnly`,
+    `READONLY_POLL_INTERVAL` and the `STORE_LOCKED` sync result go. §6.4's `MAX_CHANGESET_RECORDS` reads 1,024, and
+    §6.3's reserved attachment names stay.

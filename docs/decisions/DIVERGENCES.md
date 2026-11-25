@@ -264,8 +264,8 @@ audit. Rows with a follow-up issue change when that issue lands.
 
 | # | revokt | upki / webpki | Firefox | Dir | Why | Decided by | Status |
 |---|---|---|---|---|---|---|---|
-| T1 | Immutable generation directories, a pointer flip with `previous`, content-addressed blobs | One directory, files replaced in place, index then manifest (`fetch.rs:214-223, 304-306`) | One directory; old files deleted before the new full is written | different | Neither reference is atomic across files | spec §6.5 | kept |
-| T2 | Store recovery heals, never bricks, never deletes: a malformed `updater.json` reads as absent; a read that throws writes nothing (#209); beside a malformed pointer a directory whose `meta.json` is present is held (#236) | none (no pointer or updater record; it fetches again) | none (it fetches again) | different | Neither reference has the files that can be damaged | lead 2026-11-16 (#236, #242) | kept |
+| T1 | Content-addressed keys: every attachment a blob named by its signed SHA-256, one generation file (the verified records and their signature) named by its own SHA-256, and the pointer `current` as the one write that makes a generation live; `index.bin` rebuilt at every load, never stored | One directory: filters replaced under their file names, then `index.bin` and `manifest.json` (`fetch.rs:202-231, 337-390` at `9821cce`), each by temp file and rename with no fsync (`fetch.rs:430-447`) | Records, timestamp and signature commit in one IndexedDB transaction (`Database.sys.mjs:105-187` at `cac25a6`); cert_storage deletes the old filters before writing the new full (`cert_storage/src/lib.rs:494-514`) | different | Neither reference is atomic across files; a hash name cannot hold another generation | spec §6.5; #229 design, #287 | kept |
+| T2 | Store recovery heals, never bricks, never deletes what it cannot read: a malformed `updater.json` reads as absent; a read that throws writes nothing (#209); a failed install deletes nothing; prune deletes nothing beside a pointer that does not read, or one that names a generation failing Load's steps 1 and 2, before or after the install, and never after a seed load at `start()` or a heal flip | upki reads the old manifest with `.ok()` (`fetch.rs:64`), so an unreadable one protects nothing, and deletes every filter and delta outside the new and old manifests (`fetch.rs:178-231`) | Clears a local database that fails verification (`RemoteSettingsClient.sys.mjs:1286-1291`); prunes attachments by record id after a successful timer sync (`:849-860`) | different | The house fail-closed rule (#230): on any store read that is not `Found`, never delete | lead 2026-11-16 (#236, #242); coordinator 2026-11-25 (#287) | kept |
 
 ### C2SP mirror (cut, #218)
 
@@ -282,6 +282,11 @@ audit. Rows with a follow-up issue change when that issue lands.
 | R2 | `ENGINE_ERROR` allows in `DEFAULT` | Hard fail (`rustls-upki/src/lib.rs:132-136`) | `FATAL_ERROR_LIBRARY_FAILURE` (NSSTD:716-720) | looser than both | ADR-0001; see Q21 | ADR-0001, spec §8 | kept |
 
 ## Log
+- 2026-11-25 (#287): T1 restated for the content-addressed store (blobs, generation files, the pointer). T2 widened:
+  a failed install deletes nothing, and prune deletes nothing beside a pointer, or a pointed generation, that does
+  not read, before or after the install. Checked against upki at 9821cce (`fetch.rs:64, 178-231, 337-390, 430-447`)
+  and Firefox at cac25a6 (`RemoteSettingsClient.sys.mjs:849-860, 1286-1291`, `Database.sys.mjs:105-187`,
+  `cert_storage/src/lib.rs:494-514`).
 - 2026-11-19 (#224): S5, S10, S11 and S13 aligned with Firefox (no rollback window or coverage rule, no metered
   deferral, no clock rule on signed data, the watermark set to an install's `<ts>` with no generation loaded); S4
   extended and marked stricter (a loaded generation counts as verified; a read that threw is never no data); S6
