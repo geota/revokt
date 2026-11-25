@@ -246,7 +246,7 @@ internal class SeedLoader(
      * 7. Each attachment inflated under `min(signed size, MAX_FILTER_BYTES)`, checked against its signed size and
      *    SHA-256, and written as the sync writes it: a full as its blob, a delta staged in the generation directory.
      * 8. `index.bin` rebuilt ([buildIndex]) and byte-compared with the archive's; every placed filter's encoding listed
-     *    by the engine.
+     *    by the engine, and `seed.json`'s `filterFormat` the full filter's decoded encoding.
      * 9. The install ([install]): `SIGNED`, `fromSeed`, [Freshness.SEED_SIGNED_TIME], generation id `"<ts>/<last placed
      *    record id>"`, `updater.json` with `seedInstalledAtMillis` = now and the watermark at `max(watermark, <ts>)`, or
      *    at `<ts>` when no generation loaded (§7.1);
@@ -259,11 +259,11 @@ internal class SeedLoader(
      */
     fun load(nowMillis: Long): SeedLoad = Attempt(nowMillis).run()
 
-    /** What the header read gave: the archive and its header, or the load's end. */
+    /** What the header read gave: the archive and its header's `filterFormat`, or the load's end. */
     private sealed interface HeaderRead {
         class Read(
             val archive: SeedArchive,
-            val header: SeedHeader,
+            val filterFormat: FilterFormat,
         ) : HeaderRead
 
         class Ended(
@@ -292,7 +292,7 @@ internal class SeedLoader(
                 SeedLoad.ChannelMismatch(header.channel, listOf(warning(WarningCode.SEED_CHANNEL_MISMATCH, message))),
             )
         }
-        return HeaderRead.Read(archive, header)
+        return HeaderRead.Read(archive, format)
     }
 
     /** A store state the load does not write over: it ends as [SeedLoad.Failed] at `STORE`, nothing written. */
@@ -411,11 +411,12 @@ internal class SeedLoader(
         }
 
         private fun steps(): SeedLoad {
-            val archive =
+            val opened =
                 when (val read = header()) {
                     is HeaderRead.Ended -> return read.load
-                    is HeaderRead.Read -> read.archive
+                    is HeaderRead.Read -> read
                 }
+            val archive = opened.archive
             val verified = verify(archive)
             val ts = verified.timestamp
             val crlite =
@@ -451,7 +452,7 @@ internal class SeedLoader(
                 }
             if (!built.index.contentEquals(verified.index)) fail("the shipped index.bin differs from the rebuilt one")
             bodies.unlisted(placed)?.let { fail("${it.record.id} is in an encoding the engine does not list") }
-            val meta = meta(verified, generationId, bodies.format(placed), bodies.blobs)
+            val meta = meta(verified, generationId, bodies.format(placed, opened.filterFormat), bodies.blobs)
             val pending = PendingGeneration(meta, built.index, bodies.deltas, verified.recordsJson)
             // §7.1: a seed that installs because no generation loaded (no trusted pointer, nothing live in the engine)
             // sets the watermark to its <ts>, as the sync's install does; beside a loaded generation it keeps the max.
@@ -792,9 +793,17 @@ internal class SeedLoader(
             fun unlisted(placed: List<PlacedFilter>): PlacedFilter? =
                 placed.firstOrNull { checkNotNull(encodings[it.record.id]).toFilterFormat() !in engine.formats }
 
-            /** The full's encoding, `meta.format`. */
-            fun format(placed: List<PlacedFilter>): FilterFormat =
-                checkNotNull(encodings[placed.first { it.full }.record.id]).toFilterFormat()
+            /** The full's encoding, `meta.format`, which `seed.json`'s [filterFormat] must name (§6.5). */
+            fun format(
+                placed: List<PlacedFilter>,
+                filterFormat: FilterFormat,
+            ): FilterFormat {
+                val format = checkNotNull(encodings[placed.first { it.full }.record.id]).toFilterFormat()
+                if (format != filterFormat) {
+                    fail("filterFormat $filterFormat is not the full filter's encoding, $format")
+                }
+                return format
+            }
         }
 
         private fun meta(
