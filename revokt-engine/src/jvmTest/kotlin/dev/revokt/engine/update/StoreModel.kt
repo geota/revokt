@@ -129,7 +129,8 @@ internal class ModelViolation(
  * - **I6** every write under `blobs/` or `generations/` writes bytes whose SHA-256 is the key's name;
  * - **I7** after a clean `INSTALLED` sync over a pointer that read, every generation it named reading, the store holds
  *   exactly `current`, `updater.json`, the generation files the pointer names, every newer one that passes Load's steps
- *   1 and 2, and their blobs;
+ *   1 and 2, and their blobs; a re-flip (§6.5: `INSTALLED` with no publish) is a heal flip that prunes nothing, which
+ *   I2 judges;
  * - **I8** a generation file on disk that reads names only blobs on disk, unless damage or a lost delete hit them;
  * - **I9** whatever the engine is given to `prepare` is the publication's own filters, byte for byte, under their derived
  *   names, with the index [buildIndex] builds from them: damaged bytes make the load fail, never yield something else;
@@ -520,6 +521,7 @@ internal class StoreModel : SeedFixture() {
             val floor = rollbackFloor()
             val prunable = mayPrune()
             val readable = readableGenerations()
+            val epoch = snapshot.snapshot.generationEpoch
             storage.arm(throwAt, stopAt, deletes = prunable)
             this.prepareThrows = prepareThrows
             val fetchesBefore = server.attachmentRequests().size
@@ -546,7 +548,9 @@ internal class StoreModel : SeedFixture() {
             afterSync(run.result, servedAtStart, stopped, pointerWritten)
             rollback(run.result, floor, stopped)
             val clean = throwAt < 0 && stopAt < 0 && !prepareThrows
-            if (clean && prunable && run.result.outcome == SyncOutcome.INSTALLED) checkBoundedGarbage(readable)
+            // A re-flip publishes nothing, and never prunes (spec §6.5): I7 is an install's.
+            val installed = run.result.outcome == SyncOutcome.INSTALLED && snapshot.snapshot.generationEpoch != epoch
+            if (clean && prunable && installed) checkBoundedGarbage(readable)
             now += 7 * hour
             if (stopped) restart()
             last =
