@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: 2026 revokt contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Tests of the seed job's scripts (release-seed.yml): seed_predicate.sh and seed_floor.sh.
+"""Tests of the seed job's scripts (release-seed.yml): seed_predicate.sh, seed_floor.sh and seed_verify.sh.
 
 The jars are built here with zipfile in the seed jar's layout; `gh` is a fake on PATH that serves canned releases,
 assets and verified attestations from a directory, and fails unless called with the signer workflow and source ref the
-floor check must pass. Nothing reaches the network.
+floor check must pass. SEED_VERIFY is a fake that prints the jar's records.json <ts> unless told otherwise, and
+seed_verify.sh runs over a fake gradlew. Nothing reaches the network and no Gradle runs.
 """
 
 import hashlib
@@ -21,6 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PREDICATE = HERE / "seed_predicate.sh"
 FLOOR = HERE / "seed_floor.sh"
+VERIFY = HERE / "seed_verify.sh"
 REPO = "geota/revokt"
 SIGNER = f"{REPO}/.github/workflows/release-seed.yml"
 PREDICATE_TYPE = "https://github.com/geota/revokt/blob/main/docs/attestation/seed-v1.md"
@@ -59,6 +61,36 @@ case "$1 ${2:-}" in
     fi ;;
   *) echo "fake gh: unexpected $*" >&2; exit 3 ;;
 esac
+"""
+
+FAKE_VERIFY = r"""#!/usr/bin/env bash
+# A fake SEED_VERIFY for test_seed_scripts.py: logs each call to $FAKE_VERIFY_DIR/calls, then fails, prints the
+# file $FAKE_VERIFY_DIR/prints, or prints the jar's records.json <ts>.
+set -euo pipefail
+d=${FAKE_VERIFY_DIR:?}
+[ $# -eq 2 ] || exit 3
+echo "$1 $(basename "$2")" >>"$d/calls"
+[ ! -e "$d/fails" ] || { echo "not verified" >&2; exit 1; }
+if [ -f "$d/prints" ]; then cat "$d/prints"; exit 0; fi
+tmp=$(mktemp)
+trap 'rm -f -- "$tmp"' EXIT
+unzip -p "$2" "revokt/seed-$1.zip" >|"$tmp"
+unzip -p "$tmp" records.json | jq -r .last_modified
+"""
+
+FAKE_GRADLEW = r"""#!/usr/bin/env bash
+# A fake gradlew for test_seed_scripts.py: logs its arguments, fails when GH_TOKEN or GITHUB_TOKEN reaches it, prints
+# Gradle-like noise, and writes $FAKE_TS (when set) to the -Prevokt.seedTimestampOut file; fails when $FAKE_GRADLE_FAILS
+# is set.
+set -euo pipefail
+printf '%s\n' "$@" >|"${FAKE_GRADLE_LOG:?}"
+if [ -n "${GH_TOKEN+x}" ] || [ -n "${GITHUB_TOKEN+x}" ]; then echo "a token reached Gradle" >&2; exit 4; fi
+echo "BUILD SUCCESSFUL in 1s"
+[ -z "${FAKE_GRADLE_FAILS:-}" ] || exit 1
+for a in "$@"; do
+  case $a in -Prevokt.seedTimestampOut=*) out=${a#-Prevokt.seedTimestampOut=} ;; esac
+done
+[ -z "${FAKE_TS+x}" ] || printf '%b' "$FAKE_TS" >|"$out"
 """
 
 
@@ -116,9 +148,11 @@ class Base(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def run_script(self, *args, env=None):
+    def run_script(self, *args, env=None, drop=()):
         full = dict(os.environ)
-        full.update(env or {})
+        full.update({k: v for k, v in (env or {}).items() if v is not None})
+        for name in drop:
+            full.pop(name, None)
         return subprocess.run(["bash", *map(str, args)], capture_output=True, text=True, env=full, check=False)
 
 
@@ -228,6 +262,9 @@ class FloorTest(Base):
         self.output = self.tmp / "github_output"
         self.output.write_text("")
         self.releases([])
+        self.verify = self.tmp / "verify"
+        self.verify.mkdir()
+        (self.verify / "seed_verify.sh").write_text(FAKE_VERIFY)
 
     def releases(self, entries):
         (self.gh / "releases.json").write_text(json.dumps(entries))
@@ -257,7 +294,7 @@ class FloorTest(Base):
                 json.dumps([{"verificationResult": {"statement": {"predicate": q}}} for q in listed]))
         return tag
 
-    def floor(self):
+    def floor(self, **overrides):
         env = {
             "PATH": f"{self.gh / 'bin'}{os.pathsep}{os.environ['PATH']}",
             "FAKE_GH_DIR": str(self.gh),
@@ -269,8 +306,15 @@ class FloorTest(Base):
             "GITHUB_OUTPUT": str(self.output),
             "PREDICATE_TYPE": PREDICATE_TYPE,
             "SIGNER_WORKFLOW": SIGNER,
+            "SEED_VERIFY": str(self.verify / "seed_verify.sh"),
+            "FAKE_VERIFY_DIR": str(self.verify),
         }
-        return self.run_script(FLOOR, self.NEW, self.new, env=env)
+        env.update(overrides)
+        return self.run_script(FLOOR, self.NEW, self.new, env=env, drop=[k for k, v in overrides.items() if v is None])
+
+    def verified(self):
+        calls = self.verify / "calls"
+        return calls.read_text().splitlines() if calls.exists() else []
 
     def published(self):
         return self.output.read_text()
@@ -282,6 +326,7 @@ class FloorTest(Base):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("no earlier seed release or tag", out.stdout)
         self.assertEqual(self.published(), "publish=true\n")
+        self.assertEqual(self.verified(), [], "nothing to re-verify without a previous release")
 
     def test_newer_seed_publishes(self):
         self.new_jars(2000)
@@ -289,6 +334,8 @@ class FloorTest(Base):
         out = self.floor()
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(self.published(), "publish=true\n")
+        self.assertEqual(self.verified(), [f"compat revokt-seed-compat-{self.PREV}.jar",
+                                           f"default revokt-seed-default-{self.PREV}.jar"])
 
     def test_equal_seed_skips_publishing(self):
         self.new_jars(1000)
@@ -374,6 +421,62 @@ class FloorTest(Base):
         self.assertEqual(out.returncode, 1)
         self.assertIn("has no seed-v1 attestation from", out.stderr)
 
+    def test_a_previous_release_whose_content_signature_does_not_verify_fails_closed(self):
+        self.new_jars(2000)
+        self.releases([{"tag_name": self.prev_release(1000), "draft": False}])
+        (self.verify / "fails").write_text("")
+        out = self.floor()
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("revokt-seed-compat-2026.11.23.jar does not verify under Mozilla's pins", out.stderr)
+        self.assertEqual(self.published(), "")
+
+    def test_a_verification_that_prints_no_single_timestamp_fails_closed(self):
+        for printed in ("", "garbage\n", "1000\n1000\n", "10 00\n", "-1000\n", "12345678901234567\n"):
+            with self.subTest(printed=printed):
+                self.new_jars(2000)
+                self.releases([{"tag_name": self.prev_release(1000), "draft": False}])
+                (self.verify / "prints").write_text(printed)
+                self.output.write_text("")
+                out = self.floor()
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("printed no single <ts>", out.stderr)
+                self.assertEqual(self.published(), "")
+
+    def test_a_verified_timestamp_other_than_the_attested_one_fails(self):
+        # The attestation and records.json agree on 1000; the content signature verifies another <ts>.
+        self.new_jars(2000)
+        self.releases([{"tag_name": self.prev_release(1000), "draft": False}])
+        (self.verify / "prints").write_text("1001\n")
+        out = self.floor()
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("verifies at <ts> 1001, its attestation 1000", out.stderr)
+        self.assertEqual(self.published(), "")
+
+    def test_an_older_new_seed_fails_on_the_verified_floor(self):
+        self.new_jars(999)
+        self.releases([{"tag_name": self.prev_release(1000), "draft": False}])
+        out = self.floor()
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("refusing an older seed", out.stderr)
+        self.assertEqual(len(self.verified()), 1, "the floor is verified before it is compared")
+
+    def test_no_seed_verify_fails_closed(self):
+        for releases in ([], ["prev"]):
+            for verify in (None, "", str(self.tmp / "absent.sh")):
+                with self.subTest(releases=releases, verify=verify):
+                    self.new_jars(2000)
+                    self.releases([{"tag_name": self.prev_release(1000), "draft": False}] if releases else [])
+                    self.output.write_text("")
+                    out = self.floor(SEED_VERIFY=verify)
+                    if verify == str(self.tmp / "absent.sh") and not releases:
+                        # A path is set; with no previous release there is nothing to verify (the first release).
+                        self.assertEqual(out.returncode, 0, out.stderr)
+                        continue
+                    self.assertNotEqual(out.returncode, 0)
+                    self.assertEqual(self.published(), "")
+                    if verify is None or verify == "":
+                        self.assertIn("SEED_VERIFY", out.stderr)
+
     def test_a_failing_release_listing_fails(self):
         self.new_jars(2000)
         (self.gh / "api-fails").write_text("")
@@ -407,6 +510,87 @@ class FloorTest(Base):
         out = self.floor()
         self.assertEqual(out.returncode, 1)
         self.assertIn("is not older than", out.stderr)
+
+
+class VerifyTest(Base):
+    """seed_verify.sh over a fake gradlew at the root of a copied tree, as $root/gradlew sits beside .github."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = self.tmp.resolve()  # the script's paths are physical (cd && pwd under macOS's /private)
+        self.root = self.tmp / "repo"
+        (self.root / ".github" / "scripts").mkdir(parents=True)
+        self.script = self.root / ".github" / "scripts" / "seed_verify.sh"
+        shutil.copy(VERIFY, self.script)
+        gradlew = self.root / "gradlew"
+        gradlew.write_text(FAKE_GRADLEW)
+        gradlew.chmod(0o755)
+        self.log = self.tmp / "gradle.log"
+        self.jar = self.tmp / "jars" / "revokt-seed-compat-2026.11.23.jar"
+        self.jar.parent.mkdir()
+        self.jar.write_bytes(b"jar")
+
+    def run_verify(self, *args, ts="1792587631204\n", **env):
+        base = {"JAVA_HOME": "/opt/temurin-21", "FAKE_GRADLE_LOG": str(self.log), "FAKE_TS": ts}
+        base.update(env)
+        return self.run_script(self.script, *args, env=base, drop=[k for k, v in base.items() if v is None])
+
+    def gradle_args(self):
+        return self.log.read_text().splitlines()
+
+    def test_runs_the_channel_s_task_on_the_pinned_jdk_and_prints_the_ts_alone(self):
+        for channel, task in (("compat", "seedTimestampCompat"), ("default", "seedTimestampDefault")):
+            with self.subTest(channel=channel):
+                out = self.run_verify(channel, self.jar)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(out.stdout, "1792587631204\n")
+                self.assertIn("BUILD SUCCESSFUL", out.stderr)
+                args = self.gradle_args()
+                self.assertEqual(args[:3], ["-p", str(self.root.resolve()), f":revokt-seed:{task}"])
+                self.assertIn(f"-Prevokt.seedJar={self.jar.resolve()}", args)
+                self.assertIn("-Porg.gradle.java.installations.auto-detect=false", args)
+                self.assertIn("-Porg.gradle.java.installations.paths=/opt/temurin-21", args)
+                for flag in ("--no-daemon", "--no-build-cache", "--no-configuration-cache"):
+                    self.assertIn(flag, args)
+
+    def test_the_job_s_tokens_never_reach_gradle(self):
+        for tokens in ({"GH_TOKEN": "gh-secret"}, {"GITHUB_TOKEN": "github-secret"},
+                       {"GH_TOKEN": "", "GITHUB_TOKEN": ""}):
+            with self.subTest(tokens=tokens):
+                out = self.run_verify("compat", self.jar, **tokens)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(out.stdout, "1792587631204\n")
+
+    def test_a_relative_jar_is_passed_as_an_absolute_path(self):
+        full = dict(os.environ, JAVA_HOME="/opt/temurin-21", FAKE_GRADLE_LOG=str(self.log), FAKE_TS="5\n")
+        out = subprocess.run(["bash", str(self.script), "compat", self.jar.name], capture_output=True, text=True,
+                             env=full, cwd=self.jar.parent, check=False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn(f"-Prevokt.seedJar={self.jar.resolve()}", self.gradle_args())
+
+    def test_a_failing_task_fails(self):
+        out = self.run_verify("compat", self.jar, FAKE_GRADLE_FAILS="1")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("does not verify as a compat seed", out.stderr)
+        self.assertEqual(out.stdout, "")
+
+    def test_no_single_ts_fails(self):
+        for ts in (None, "", "garbage\n", "1\n2\n", "12345678901234567\n"):
+            with self.subTest(ts=ts):
+                out = self.run_verify("compat", self.jar, ts=ts)
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertEqual(out.stdout, "")
+
+    def test_usage_and_missing_inputs_fail(self):
+        self.assertEqual(self.run_verify("COMPAT", self.jar).returncode, 2)
+        self.assertEqual(self.run_verify("compat").returncode, 2)
+        missing = self.run_verify("compat", self.tmp / "absent.jar")
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("no file", missing.stderr)
+        no_jdk = self.run_verify("compat", self.jar, JAVA_HOME=None)
+        self.assertNotEqual(no_jdk.returncode, 0)
+        self.assertIn("JAVA_HOME", no_jdk.stderr)
+        self.assertFalse(self.log.exists(), "Gradle ran on a refused call")
 
 
 if __name__ == "__main__":

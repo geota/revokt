@@ -61,8 +61,19 @@ dispatch. It runs both channels' `smokeLoadSeed<Channel>` with the run's UTC dat
 oldest supported engine minor, which is the run's own commit until a minor is released.
 
 The job then refuses a seed whose signed `<ts>` is older than the last seed release's for that channel. That release's
-jar must verify by its attestation, and its own `<ts>` must equal the attested one. When every channel's `<ts>` equals
-the last release's, nothing is published. A `seed-*` tag with no published seed release fails the run.
+jar must verify by its attestation, and again by Mozilla's content signature. `seedTimestamp<Channel>` checks only what
+does not depend on the seed format, as Firefox re-verifies its local data: `seed.json`'s channel, the x5u chain inside
+the archive to Mozilla's pins, the signature over `records.json`, the canonical payload, and the x5u validity at its
+signed `<ts>`. It needs no network and writes that `<ts>`. The verified `<ts>`, the jar's `records.json` `<ts>` and the
+attested one must be equal. When every channel's `<ts>` equals the last release's, nothing is published. A `seed-*` tag
+with no published seed release fails the run.
+
+To run the re-verification by hand, give the jar's absolute path. The `<ts>` lands in
+`build/seed-timestamp/revokt-seed-compat.ts`, or in `-Prevokt.seedTimestampOut=<file>`:
+
+```
+./gradlew :revokt-seed:seedTimestampCompat -Prevokt.seedJar=/abs/path/revokt-seed-compat-YYYY.MM.DD.jar
+```
 
 With publishing on (the `SEED_PUBLISH_ENABLED` repository variable and the `seed-publish` environment), the job then:
 1. attests each jar: SLSA provenance and the seed predicate, [seed-v1](../../docs/attestation/seed-v1.md). The
@@ -72,7 +83,8 @@ With publishing on (the `SEED_PUBLISH_ENABLED` repository variable and the `seed
 3. reads the assets back and checks them: their SHA-256, and the attestations from the API and from the bundles;
 4. publishes the release and checks that its tag names the run's commit.
 
-The scripts it runs are `.github/scripts/seed_predicate.sh` and `seed_floor.sh`, which `test_seed_scripts.py` tests.
+The scripts it runs are `.github/scripts/seed_predicate.sh`, `seed_floor.sh` and `seed_verify.sh`, which
+`test_seed_scripts.py` tests.
 
 **Using a seed.** Download the jar of your channel from the newest `seed-*` release, verify it, and bundle it. `SeedSource.bundled()`
 then finds `/revokt/seed-<channel>.zip` on the class path:

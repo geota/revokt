@@ -5,18 +5,23 @@
 # The seed job's monotonic freshness check (spec §7.2, CONTRIBUTING §9). A seed is never older than the last released
 # seed of its channel. The last release is the highest published seed-YYYY.MM.DD release; drafts don't count. For each
 # channel, that release's jar must pass `gh attestation verify` twice, as this workflow's work on main: once for
-# provenance, once for the seed-v1 predicate. Its records.json <ts> must equal the attested recordsLastModified. The
-# new jar's signed <ts> is then compared with it:
+# provenance, once for the seed-v1 predicate. Its content signature is then verified again (SEED_VERIFY:
+# seed_verify.sh, the engine's format-independent verifySeedSignature under Mozilla's pins, x5u validity at the signed
+# <ts>), and the <ts> that verifies, its records.json <ts> and the attested recordsLastModified must be one value.
+# Firefox's client does the same before it ignores an older changeset (RemoteSettingsClient.sys.mjs, _importChanges),
+# but where its local data does not verify it imports the older changeset; here a release that does not verify fails
+# the run. The new jar's signed <ts> is then compared with it:
 # - older: the run fails;
 # - equal on every channel: nothing new, so publishing is skipped and the run stays green;
 # - otherwise: publish.
 # The first seed release has no floor; a seed-* tag with no published seed release fails the run, so deleting the
-# releases does not reset the floor. A previous release that is missing a channel's jar, or whose attestation does not
-# verify, fails the run: the maintainer repairs it by hand.
+# releases does not reset the floor. A previous release that is missing a channel's jar, or whose attestation or content
+# signature does not verify, fails the run: the maintainer repairs it by hand.
 #
 #   seed_floor.sh <version> <dir>   <dir> holds revokt-seed-<channel>-<version>.jar for both channels; writes
 #                                   publish=true|false to $GITHUB_OUTPUT
-# Needs GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT, PREDICATE_TYPE and SIGNER_WORKFLOW.
+# Needs GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT, PREDICATE_TYPE, SIGNER_WORKFLOW and SEED_VERIFY (a bash script run
+# as `SEED_VERIFY <channel> <jar>`, printing the jar's verified <ts> alone, failing when it does not verify).
 set -euo pipefail
 
 fail() {
@@ -26,7 +31,7 @@ fail() {
 
 [ $# -eq 2 ] || { echo "usage: seed_floor.sh <version> <dir>" >&2; exit 2; }
 version=$1 dir=$2
-: "${GITHUB_REPOSITORY:?}" "${GITHUB_OUTPUT:?}" "${PREDICATE_TYPE:?}" "${SIGNER_WORKFLOW:?}"
+: "${GITHUB_REPOSITORY:?}" "${GITHUB_OUTPUT:?}" "${PREDICATE_TYPE:?}" "${SIGNER_WORKFLOW:?}" "${SEED_VERIFY:?}"
 printf '%s' "$version" | grep -Eqx '[0-9]{4}\.[0-9]{2}\.[0-9]{2}' || fail "not a version: $version"
 repo=$GITHUB_REPOSITORY
 here=$(cd "$(dirname "$0")" && pwd)
@@ -73,6 +78,10 @@ for channel in $channels; do
   old_ts=$(bash "$here/seed_predicate.sh" ts "$work/$name" "$channel" "$prev_version") ||
     fail "cannot read $prev's $name"
   [ "$old_ts" = "$attested" ] || fail "$prev's $name holds <ts> $old_ts, its attestation $attested"
+  verified=$(bash "$SEED_VERIFY" "$channel" "$work/$name") ||
+    fail "$prev's $name does not verify under Mozilla's pins: repair or delete that release by hand"
+  [[ $verified =~ ^[0-9]{1,16}$ ]] || fail "the verification of $prev's $name printed no single <ts>"
+  [ "$verified" = "$attested" ] || fail "$prev's $name verifies at <ts> $verified, its attestation $attested"
 
   if [ "$new_ts" -lt "$old_ts" ]; then
     fail "refusing an older seed: the $channel <ts> $new_ts is older than $prev's $old_ts"

@@ -744,8 +744,10 @@ PGP fingerprint, a Gradle `trusted-key` snippet, `gh attestation verify`).
     - it smoke-loads each jar through the public API with the oldest supported engine minor. Until a minor is
       released, that is the run's own commit, as only the latest `0.x` minor is supported;
     - it refuses a seed whose signed `<ts>` is older than the last seed release's for that channel (§7.2). That
-      release's jar must verify by its attestation, as this workflow's on `main`, and its `records.json` `<ts>` must
-      equal the attested one. A seed equal on every channel publishes nothing. The first seed release has no floor,
+      release's jar must verify by its attestation, as this workflow's on `main`, and again by Mozilla's content
+      signature (`seed_verify.sh`, `:revokt-seed:seedTimestamp<Channel>`: the engine's format-independent
+      `verifySeedSignature`, no network, so a seed format change never strands the job). The `<ts>` that verifies,
+      its `records.json` `<ts>` and the attested one must be equal. A seed equal on every channel publishes nothing. The first seed release has no floor,
       but a `seed-*` tag with no published seed release fails the run, so deleting releases does not reset it.
   - **The `publish` job** runs on `main` only, in the `seed-publish` environment, and only when the repository
     variable `SEED_PUBLISH_ENABLED` is `true` and the dispatch is not a `dry-run`. It holds `contents: write`,

@@ -14,9 +14,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * TestKit (CONTRIBUTING §3; #145): `data-artifact` keeps its network tasks out of `check` and publishes nothing to a
- * Maven repository (0.2 seeds are GitHub release assets), and [VerifySeedJarTask] holds the seed jar's layout: the
- * manifest and the licence entry carrying the data licence text, and the stored archive.
+ * TestKit (CONTRIBUTING §3; #145): `data-artifact` keeps its network tasks and the floor check's
+ * `seedTimestamp<Channel>` out of `check` and publishes nothing to a Maven repository (0.2 seeds are GitHub release
+ * assets), and [VerifySeedJarTask] holds the seed jar's layout: the manifest and the licence entry carrying the data
+ * licence text, and the stored archive.
  */
 class DataArtifactPluginFunctionalTest {
     private fun runner(
@@ -54,7 +55,7 @@ class DataArtifactPluginFunctionalTest {
             for (task in listOf("writeTestSeed", "writeDataLicense", "testSeedJar", "verifyTestSeedJar", "smokeLoadTestSeed")) {
                 assertTrue(":revokt-seed:$task SKIPPED" in dry, "check does not run $task:\n$dry")
             }
-            for (task in listOf("writeSeedCompat", "writeSeedDefault", "smokeLoadSeedCompat", "seedJarDefault")) {
+            for (task in listOf("writeSeedCompat", "writeSeedDefault", "smokeLoadSeedCompat", "seedJarDefault", "seedTimestampCompat", "seedTimestampDefault")) {
                 assertTrue(":revokt-seed:$task " !in dry, "check runs the network task $task:\n$dry")
             }
             val tasks = runner(dir, ":revokt-seed:tasks", "--all").build().output

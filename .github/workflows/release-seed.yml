@@ -12,7 +12,8 @@
 #   packs the jar and smoke-loads it through the public API (`smokeLoadSeed<Channel>`). In 0.2 the oldest supported
 #   engine minor is this commit's, since only the latest 0.x minor is supported and none is released yet;
 # - it reads the attestation facts out of each jar (seed_predicate.sh);
-# - it runs the monotonic freshness check against the last seed release (seed_floor.sh).
+# - it runs the monotonic freshness check against the last seed release (seed_floor.sh), whose jars it verifies again
+#   by their attestations and by Mozilla's content signature (seed_verify.sh, the engine's seed load; no network).
 # The publish job runs on main only, in the seed-publish environment, and only when publishing is on, this is not a
 # dry run, and the seed is newer than the last release. It holds the only write permissions:
 # - it attests the jars: SLSA provenance and the seed-v1 predicate (docs/attestation/seed-v1.md);
@@ -179,6 +180,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
           SIGNER_WORKFLOW: ${{ github.repository }}/.github/workflows/release-seed.yml
+          # The last release's content signature, verified by :revokt-seed:seedTimestamp<Channel> on the pinned JDK.
+          SEED_VERIFY: .github/scripts/seed_verify.sh
         run: bash .github/scripts/seed_floor.sh "$VERSION" "$RUNNER_TEMP/seed"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
