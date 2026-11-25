@@ -414,7 +414,9 @@ yield. **Targets**: v3/v4 filter decoders (differential against `clubcard-crlite
 round trip; JSON and canonical JSON (differential against `canonical_json`); the TBS/DER parser and
 SCT list (§9.2); DER ECDSA conversion and `AlgorithmIdentifier`/PSS parameters; seed archive and x5u
 PEM; the nameConstraints and subjectAltName readers of the walker's issuer rules, with the directoryName comparison,
-the mailbox grammar, and the subject's emailAddress and CN-ID reader (`NameConstraintsFuzzTest`, #237);
+the mailbox grammar, and the subject's emailAddress and CN-ID reader (`NameConstraintsFuzzTest`, #237); the store
+readers of what a disk can rot: `current`, `updater.json` and the generation file, size cap and re-hash included
+(`StoreJsonFuzzTest`, `GenerationFileFuzzTest`);
 the path walker (below); [M2] CRX3, zip, `crl-set`, OneCRL, preload DER; [M3] precert TBS, log
 list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput` wrapper;
 `-Xmx256m -rss_limit_mb=2560 -timeout=10` (the §9.2 parser target overrides with `-timeout=1`); `-max_len` = each target's cap + 1 (filters:
