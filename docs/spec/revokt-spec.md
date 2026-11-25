@@ -832,7 +832,7 @@ a failure throws `IllegalStateException` before any registry entry or store lock
 `STORE_MIGRATED`, higher → `STORE_NEWER_LAYOUT`, §6.5), the
 pointer and its `live` generation file through §6.5 Load's steps 1 and 2 (a failure → treated as no stored generation,
 `storeFailures++` and no warning: the next install heals it, and `STORE_UNREADABLE` means only that the instance runs
-in memory, §3), and the `seed.json` header (`SEED_CHANNEL_MISMATCH` →
+in memory, §3; test-plan.md (e), `CrliteRuntimeStartTest`), and the `seed.json` header (`SEED_CHANNEL_MISMATCH` →
 `IllegalStateException`). **When the sole-seed `ENFORCE` configuration finds no pointer and `live` that pass Load's
 steps 1 and 2** (§4 S bullet) the factory lock is now released, the seed is verified, rebuilt, prepared
 and activated on the calling thread (150–300 ms interpreted on the default channel, §6.4),
@@ -854,7 +854,7 @@ and throws the same exception; the written generation stays on disk and `close()
 reference and runs `engine.close()` in its usual order; (iii) no `close()` raced: a `start()` that
 throws **after** `activate` (a gap trust manager's snapshot build fails) leaves the live engine
 generation, the written seed generation and the flipped pointer in place and the lifecycle unchanged
-(`CREATED`, or `CLOSED` when `close()` raced); the retry finds a complete stored generation and loads
+(`CREATED`, or `CLOSED` when `close()` raced); the retry finds a pointer and `live` that pass Load's steps 1 and 2 and loads
 it on the loader without a second seed verification. The decoding thread is recorded: a `start()` or
 `close()` from it (consumer code inside an injected engine's `prepare`, a `SeedOpener` or a verifier)
 throws `IllegalStateException("re-entrant start()/close() from the start() thread")` instead of
@@ -1252,7 +1252,7 @@ names; persisted enum values are names, never ordinals:
 - `<dataset>/<channel>/blobs/<sha256>` (64 lowercase hex): every attachment, full or delta, under the SHA-256 its
   signed record gives, re-hashed against its key on every read. An install reuses a stored blob that re-hashes and
   rewrites one that does not with the verified bytes (`storeFailures++`), so a daily delta install writes only its new
-  deltas and a bit-rotted blob is never decoded.
+  deltas and a bit-rotted blob is never decoded (`StoreLayoutTest`, `CrliteDeltaSyncTest`, `StoreModelTest`'s I6).
 - `<dataset>/<channel>/generations/<sha256>` (64 lowercase hex): the **generation file**, one per generation, named by
   the SHA-256 of its own bytes and re-hashed against its name on every read (`GenerationFileTest`,
   `GenerationFileFuzzTest`). It is a JSON object in the engine's canonical encoding, read strictly, and only when its
@@ -1286,7 +1286,8 @@ names; persisted enum values are names, never ordinals:
   than the new `live` that passes of: the generation the engine served before the install, then the old `live`, then
   the old `previous`**, each read once. Served first, so a flip that failed after activation, which left the engine
   serving a generation `current` does not name, never loses it to the next prune. When an install flips beside a
-  malformed pointer, its only candidate is the generation the engine served; a fresh loader has no `previous`.
+  malformed pointer, its only candidate is the generation the engine served; a fresh loader has no `previous`
+  (`InstallTest`, `CrliteDeltaBaseTest`, `StoreModelTest`'s I1 and I2).
 - `<dataset>/<channel>/updater.json`: **the rollback watermark is per dataset and channel, stored once outside the per-source map** (while a generation is live the floor is the higher of the watermark and the live generation's timestamp, §7.1, so a malformed file, whose dataset-level members are read as absent and count a store failure, reopens no rollback; with no generation loaded, none stored or every stored one absent or malformed and never a read that threw, the watermark is not read, and the install sets it to its `<ts>`) together with `seedInstalledAtMillis` (written with the watermark when the seed install flips the pointer) and a dataset-level `datasetLastAttemptAtMillis` (written at the end of every sync whatever its outcome, except a sync whose read of
   `updater.json` threw, which writes nothing; the §8 `STALE` gate; the loader evaluates the gate when it writes this file and carries the boolean in the published `DataState`, internal field, so handshakes read the snapshot only, never the store) (while a generation is live, a changeset installs only if its timestamp passes the dataset watermark, whichever source delivered it, so a relabelled `sourceId` on a private mirror cannot start a fresh watermark and roll back); the per-source map is keyed by a **stable source id** (not the URL, so overriding a
   base URL keeps the cursor): `lastVerifiedLastModified` (the `_since` cursor),
@@ -1334,11 +1335,17 @@ activated, `storeFailures++`, and the engine and the published snapshot are unto
 each engine's answers in CI instead) → `engine.activate(prepared)` → publish the generation snapshot with that id
 (`generationEpoch++`; the window between `activate` and publish, i.e. between install and publish is stated: a verdict
 in it carries the new answer under the old epoch for at most the verdict-cache TTL) → flip the pointer → write
-`updater.json` → prune (below). **A failed install deletes nothing**: its blobs, and its generation file when written,
+`updater.json` → prune (below) (`InstallTest`, its order trace). **A failed install deletes nothing**: its blobs, and its generation file when written,
 are named by no pointer, so the next attempt reuses them by name (a changeset retried under backoff is the common
-case) and the next prune deletes what stays unnamed. The loader keeps the name of the generation the engine serves
-beside the snapshot, so the retry of a flip that failed after activation finds the generation file and every blob
-stored, and flips. A sync-time `prepare()`/`activate()` throw increments `storeFailures` and is `SyncOutcome.FAILED`
+case) and the next prune deletes what stays unnamed (`InstallTest`, `StoreCrashTest`). The loader keeps the name of
+the generation the engine serves beside the snapshot. **The re-flip**: a sync whose verified `<ts>` is the served
+generation's (`UNCHANGED`) while `current` does not name that generation as `live` (a flip that failed after
+activation, or a pointer that does not read) flips `current` to `{live: the served file, previous: per the candidate
+rule above}`, once the served file and its blobs pass Load's steps 1 to 3, with no fetch, no `prepare` and no publish;
+when they do not, it installs the collection as served, every stored blob and file that re-hashes reused. It writes
+`updater.json` as the install of that `<ts>` does (the cursor, `lastVerified*` and the watermark at `<ts>`, the
+repair of a crash between a flip and its `updater.json`), the sync is `INSTALLED`, and it is a heal flip: no prune
+follows (`CrliteSyncFailureTest`, `CrliteDeltaBaseTest`, `StoreModelTest`'s I2). A sync-time `prepare()`/`activate()` throw increments `storeFailures` and is `SyncOutcome.FAILED`
 with `ENGINE_FAILED` (cursor and watermark do not advance, so the same changeset is retried under backoff); a store
 write or pointer-flip failure during an install is `FAILED` with `STORE_FAILED` (`storeFailures++`). Decision step 7
 never queries an engine for a dataset whose snapshot has no generation; `CrliteQueryResult.NO_DATA` from an engine
@@ -1572,7 +1579,7 @@ a high-water mark (the watermark) on the signed `last_modified` (`<ts>`, the val
 from, §7.1: a live sync's envelope `timestamp`, a seed's `records.json` value; never `monitor/changes`' unsigned
 `last_modified`), persisted per dataset and channel in `updater.json` (§6.5) and raised by every install to the
 higher of it and `<ts>` in the same write as the install. A verified changeset whose `<ts>` equals the live generation's `sourceTimestampMillis` is
-`UNCHANGED`, updating the attempt fields only. While a generation is live (stored or seed), the **floor** is the
+`UNCHANGED`, updating the attempt fields only, and §6.5's re-flip when the pointer does not name it. While a generation is live (stored or seed), the **floor** is the
 higher of the stored watermark and the live `sourceTimestampMillis`, so a malformed or absent `updater.json`
 beside a live generation cannot reopen a rollback to anything older than what is installed; a changeset older
 than the floor is `SKIPPED` with `ROLLBACK_REFUSED`, decided before any body is fetched, and one equal to it installs. With no
