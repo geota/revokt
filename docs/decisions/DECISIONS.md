@@ -524,7 +524,33 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     a crash to check that it reproduces. Anything else is a run failure: a red job and sealed logs, no advisory.
   - **Gate record:** the 0.2 walker-fuzzer gate (#144) passed in the nightly runs of 2026-11-24 (45412705975) and
     2026-11-25 (45624833898) on 4714c68, all 17 targets clean, `WalkerFuzzTest.walk` included.
-<<<<<<< HEAD
+- 2026-11-25 (lead, #305, PR #326; independent review approved, two nits applied): a seed's `seed.json`
+  `filterFormat` must name the decoded full filter's encoding, else `SEED_UNREADABLE`, like every other header check.
+  A delta may still be in another listed encoding (#137). The check runs only on a seed that installs, as the existing
+  listed-encoding rule does. The writer derives the field from the same full, so the seeds we write are unchanged.
+- 2026-11-25 (lead, #296, PR #327; lead review): three fail-closed checks on the PKIX fallback's output. The anchor
+  memo is keyed on the snapshot's id and `sha256`, so a hand-built snapshot that reuses an id is parsed again. The
+  JDK's empty path for a target that is itself an anchor is no path. Each element's issuer must equal the next
+  element's subject under `X500Principal` equality. webpki and mozilla::pkix build linked paths by name; the last
+  check holds the JDK's builder to the same shape.
+- 2026-11-25 (lead, #308, PR #328; independent review should-fix, then approved): the weekly seed job re-verifies
+  the previous seed release before it trusts its `<ts>` as the floor, as Firefox's `RemoteSettingsClient`
+  `_importChanges` re-verifies its local data (`verifySignatureLocalData`) before it ignores an older changeset.
+  - **What it checks:** only what does not depend on the format, so a `seedFormat`, schema or `filterFormat` change
+    cannot strand the job. That is `seed.json`'s `channel` alone, the content signature with the archived x5u
+    validated to the pins, validity at the signed `<ts>`, and the canonical payload, through the engine's own
+    functions (`verifySignedRecords`, shared with the seed loader). The review found that the first version's full
+    seed load would have made every earlier release unreadable after such a change.
+  - **Divergences from Firefox:** a previous release that does not verify fails the run, where Firefox imports the
+    older data ("we prefer stale data over corrupt/tempered"). Validity is checked at the signed `<ts>` against the
+    archived x5u, where Firefox checks at `Now()` against an x5u it fetches.
+  - **Signer scope:** the content signature names no collection, since one signer serves every security-state
+    collection, and Firefox binds the collection only by the URL it fetched. The floor adds no schema check. The
+    attestation binds the jar to the job that fetched `cert-revocations` and schema-checked it in its full
+    self-load, and a compromised publisher could only raise the floor, which stops publishing.
+  - **Also:** the job's `GH_TOKEN` is kept out of Gradle. A pin rotation makes the previous release unverifiable,
+    and recovery is then the maintainer's.
+
 - 2026-11-25 (lead, #287, the implementation of the #229 design; spec PR first, per CONTRIBUTING §1.2): the store
   becomes content-addressed: blobs named by their signed SHA-256, one generation file named by its own SHA-256, and
   `current` as the one write that makes a generation live (§6.5; DIVERGENCES T1, T2). Q1 to Q3 stand as recorded for
@@ -561,32 +587,3 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
 
 ||||||| 6f9706c
 
-=======
-- 2026-11-25 (lead, #305, PR #326; independent review approved, two nits applied): a seed's `seed.json`
-  `filterFormat` must name the decoded full filter's encoding, else `SEED_UNREADABLE`, like every other header check.
-  A delta may still be in another listed encoding (#137). The check runs only on a seed that installs, as the existing
-  listed-encoding rule does. The writer derives the field from the same full, so the seeds we write are unchanged.
-- 2026-11-25 (lead, #296, PR #327; lead review): three fail-closed checks on the PKIX fallback's output. The anchor
-  memo is keyed on the snapshot's id and `sha256`, so a hand-built snapshot that reuses an id is parsed again. The
-  JDK's empty path for a target that is itself an anchor is no path. Each element's issuer must equal the next
-  element's subject under `X500Principal` equality. webpki and mozilla::pkix build linked paths by name; the last
-  check holds the JDK's builder to the same shape.
-- 2026-11-25 (lead, #308, PR #328; independent review should-fix, then approved): the weekly seed job re-verifies
-  the previous seed release before it trusts its `<ts>` as the floor, as Firefox's `RemoteSettingsClient`
-  `_importChanges` re-verifies its local data (`verifySignatureLocalData`) before it ignores an older changeset.
-  - **What it checks:** only what does not depend on the format, so a `seedFormat`, schema or `filterFormat` change
-    cannot strand the job. That is `seed.json`'s `channel` alone, the content signature with the archived x5u
-    validated to the pins, validity at the signed `<ts>`, and the canonical payload, through the engine's own
-    functions (`verifySignedRecords`, shared with the seed loader). The review found that the first version's full
-    seed load would have made every earlier release unreadable after such a change.
-  - **Divergences from Firefox:** a previous release that does not verify fails the run, where Firefox imports the
-    older data ("we prefer stale data over corrupt/tempered"). Validity is checked at the signed `<ts>` against the
-    archived x5u, where Firefox checks at `Now()` against an x5u it fetches.
-  - **Signer scope:** the content signature names no collection, since one signer serves every security-state
-    collection, and Firefox binds the collection only by the URL it fetched. The floor adds no schema check. The
-    attestation binds the jar to the job that fetched `cert-revocations` and schema-checked it in its full
-    self-load, and a compromised publisher could only raise the floor, which stops publishing.
-  - **Also:** the job's `GH_TOKEN` is kept out of Gradle. A pin rotation makes the previous release unverifiable,
-    and recovery is then the maintainer's.
-
->>>>>>> origin/main
