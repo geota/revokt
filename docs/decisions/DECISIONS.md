@@ -550,7 +550,6 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     self-load, and a compromised publisher could only raise the floor, which stops publishing.
   - **Also:** the job's `GH_TOKEN` is kept out of Gradle. A pin rotation makes the previous release unverifiable,
     and recovery is then the maintainer's.
-
 - 2026-11-25 (lead, #287, the implementation of the #229 design; spec PR first, per CONTRIBUTING §1.2): the store
   becomes content-addressed: blobs named by their signed SHA-256, one generation file named by its own SHA-256, and
   `current` as the one write that makes a generation live (§6.5; DIVERGENCES T1, T2). Q1 to Q3 stand as recorded for
@@ -583,7 +582,12 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   - **Deferred to #330 (B11 to B13):** `JvmStorage` (directory fsync at open and on create, the temp sweep, the lock,
     `store.version`) and the in-memory entry points; #287 writes the §3 and §4 text only. `RevoktState.readOnly`,
     `READONLY_POLL_INTERVAL` and the `STORE_LOCKED` sync result go. §6.4's `MAX_CHANGESET_RECORDS` reads 1,024, and
-    §6.3's reserved attachment names stay.
-
-||||||| 6f9706c
-
+    §6.3's reserved attachment names stay (B14).
+  - **Process (B1, B15):** the spec lands first, as its own PR (CONTRIBUTING §1.2; the issue had it in the code PR), then
+    the codec, the store switch and the `start()` recovery chain, each on `main`. The air-gapped `sync()` of a replaced
+    seed prunes as a sync install does, which is spec text only until that path is built.
+  - **From the independent review of the spec PR:** a damaged pointer counts `storeFailures` and raises no warning, and
+    `STORE_UNREADABLE` means only that the instance runs in memory (the lead's option (a); neither reference warns
+    there). Any read prune makes that throws stops it with nothing deleted. A start counts each fault once: the adopt
+    scan passes over a generation the chain already failed to load. A generation file reads only as its own canonical
+    bytes, so a change to the canonical encoder's output is a `store.version` change.

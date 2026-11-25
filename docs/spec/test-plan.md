@@ -124,6 +124,8 @@ tests; **live checks** are informational.
   before `updater.json` → `start()` loads the new generation and the next `UNCHANGED` rewrites `updater.json`;
   prune deletes generation files before blobs, and a stop that loses a generation file's delete but keeps its blob's →
   `start()` loads the new `live`, and the adopt scan beside a deleted `current` counts one failure and adopts nothing;
+  [0.3] `JvmStorage` fsyncs every store directory at open and the parent of each directory it creates, and deletes its
+  temp files at open;
   prune keeps a newer generation file that passes Load's steps 1 and 2 and the blobs it names; no prune after a seed
   load at `start()`, rule (a) or (b), or after a heal flip (`StoreCrashTest`, `StoreModelTest` I1–I10); a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → stays in memory until its process restarts, `storageFallback = true`, nothing written; an empty
   directory → `storeFailures = 0`; a generation file without its signed members, with an unknown or a duplicate member, of the
@@ -141,7 +143,7 @@ tests; **live checks** are informational.
   starts as owner; a directory owned by another uid or group-writable on POSIX → `STORE_UNREADABLE`
   and no file written for the session; two consecutive syncs whose `engine.prepare()` throws → `live`
   and `previous` still load, `storeFailures = 2` (sync-time `prepare()` throws count), both syncs `FAILED` with `ENGINE_FAILED`, nothing deleted, and a third, clean sync reuses every blob the two wrote; stored
-  generation equal to the seed → no verification, `names()` unchanged; a changeset of 257 records after channel filtering or a 17 MiB declared filter → rejected before any
+  generation equal to the seed → no verification, `names()` unchanged; a changeset of 1,025 records after channel filtering or a 17 MiB declared filter → rejected before any
   body fetch; a channel whose
   coverage would make the built `index.bin` over 1 MiB → `FAILED` with `INDEX_INCONSISTENT`, no
   generation file written (a built index is always an even size, so not 1 MiB + 1 byte); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
