@@ -9,6 +9,7 @@ import dev.revokt.CrliteChannel
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.SeedSource
 import dev.revokt.engine.seed.parse.SeedArchive
+import dev.revokt.engine.seed.parse.TestZip
 import java.io.ByteArrayInputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -113,4 +114,57 @@ internal class SeedSignatureTest : SeedFixture() {
         assertIs<SeedSignature.Refused>(check(bytes.copyOf(bytes.size - 1)))
         assertIs<SeedSignature.Refused>(check(bytes.copyOf(bytes.size / 2)))
     }
+
+    @Test
+    fun `only seed json's channel is read, and it must name the channel`() {
+        val bare = Seed().apply { header = mapOf("channel" to "COMPAT") }
+        assertEquals(ts, verified(check(bare)), "no other member is read")
+        for (channel in listOf("compat", "X", "")) {
+            refused(check(Seed().apply { header = mapOf("channel" to channel) }), "is not a channel")
+        }
+        refused(check(Seed().apply { header = mapOf("channel" to 1) }), "has no string channel")
+        refused(check(Seed().apply { header = emptyMap() }), "has no string channel")
+        val notObject =
+            Seed().apply {
+                configure =
+                    { entries[0] = TestZip.Entry(SeedArchive.SEED_JSON, "[]".encodeToByteArray(), TestZip.STORED) }
+            }
+        refused(check(notObject), "has no string channel")
+        val notJson =
+            Seed().apply {
+                configure =
+                    { entries[0] = TestZip.Entry(SeedArchive.SEED_JSON, "{".encodeToByteArray(), TestZip.STORED) }
+            }
+        refused(check(notJson), "seed.json is not JSON")
+    }
+
+    @Test
+    fun `a throw that is not a format fault is refused too, the interrupt kept`() {
+        val bytes = Seed().bytes()
+
+        fun check(opener: () -> ByteArrayInputStream): SeedSignature =
+            verifySeedSignature(SeedSource.of { opener() }, CrliteChannel.COMPAT, source, verifier)
+
+        for (thrown in listOf(IllegalStateException("boom"), OutOfMemoryError("test"), ArithmeticException())) {
+            var opens = 0
+            // The first open reads the central directory; the second, the entries, throws.
+            refused(
+                check {
+                    if (++opens ==
+                        2
+                    ) {
+                        raise(thrown)
+                    } else {
+                        ByteArrayInputStream(bytes)
+                    }
+                },
+                "the check threw: $thrown",
+            )
+            refused(check { raise(thrown) }, "threw")
+        }
+        refused(check { raise(InterruptedException()) }, "threw")
+        assertTrue(Thread.interrupted(), "the interrupt is kept")
+    }
+
+    private fun raise(t: Throwable): Nothing = throw t
 }

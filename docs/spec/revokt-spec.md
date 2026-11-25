@@ -1555,11 +1555,13 @@ in the same sync, on any network: neither Firefox nor upki defers a download on 
 after that day, nor more than the default CRLite `staleAfter` of 3 days before it; `SeedWriterTest`), never older than the
 last released seed of its channel (the weekly job verifies that release's content signature again, only the parts
 that do not depend on the seed format: `seed.json`'s channel, the x5u chain inside the archive to Mozilla's pins, the
-raw signature over `records.json`, the canonical payload, and the x5u validity at its signed `<ts>`; it requires that
-`<ts>` to equal the attested one, refuses a signed `<ts>` older than it, and releases nothing when every channel's
-equals it, as Firefox ignores a changeset older than its local data once that data verifies; a previous release that
-does not verify fails the job, where Firefox imports the older changeset; `SeedSignatureTest`,
-`SeedTimestampTest`, `test_seed_scripts.py` `FloorTest`),
+raw signature over `records.json`, the canonical payload, and the x5u validity at its signed `<ts>`, and no schema,
+since the content signature names no collection: the attestation binds the jar to the job that fetched
+`cert-revocations` and schema-checked it in its full self-load; it requires that `<ts>` to equal the attested one,
+refuses a signed `<ts>` older than it, and releases nothing when every channel's equals it, as Firefox ignores a
+changeset older than its local data once that data verifies; a previous release that does not verify fails the job,
+where Firefox imports the older changeset; `SeedSignatureTest`, `SeedTimestampTest`, `test_seed_scripts.py`
+`FloorTest`),
 weekly, attested, not in the BOM, no build-time plugin for a consumer (`data-artifact` is
 revokt's own build's): a jar holding only the manifest, `META-INF/LICENSE-DATA` and the stored
 `/revokt/seed-<channel>.zip` (`DataArtifactPluginFunctionalTest`). **In 0.2 a seed is a GitHub release asset with
