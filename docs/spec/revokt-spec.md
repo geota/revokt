@@ -1039,12 +1039,13 @@ The pseudocode of `reconstruct` is explanatory, not normative: [docs/design/walk
   `UnsupportedAlgorithm(oid, PATH, outcomeDepended)` is emitted once per OID in `Walk.unsupportedOids`
   on **every** outcome, with `outcomeDepended = (reason == UNSUPPORTED_ALGORITHM)`; fixture (n) asserts the
   `false` case on a `Found`.
-- **PKIX fallback contract** (`PathBuilderFallback`; the fallback re-parses the snapshot's anchors' `getEncoded()` with `CertificateFactory` once per `AnchorSnapshot.id`, memoised, and its `CollectionCertStore` holds every presented certificate the factory reads): result lists the presented leaf's exact bytes first, each
+- **PKIX fallback contract** (`PathBuilderFallback`; the fallback re-parses the snapshot's anchors' `getEncoded()` with `CertificateFactory` once per `AnchorSnapshot.id`, memoised with the snapshot's `sha256`, a reused id with another `sha256` being a miss, and its `CollectionCertStore` holds every presented certificate the factory reads): result lists the presented leaf's exact bytes first, each
   intermediate as the bytes presented for it (its `getEncoded()` only for one the builder found elsewhere, through AIA,
   §10 item 13), and **appends the trust anchor's certificate** as the snapshot's bytes read for it
   (`AnchorSnapshot.anchors`), which step 6 matches by exact bytes; the leaf must be in the `CollectionCertStore`, and a
-  leaf the factory rejects, an anchor set none of which it reads, and no path (`CertPathBuilderException`) are null,
-  while a presented intermediate or an anchor it rejects is left out, as webpki and mozilla::pkix skip a candidate that
+  leaf the factory rejects, an anchor set none of which it reads, no path (`CertPathBuilderException`), the JDK's
+  empty path for a leaf that is itself an anchor, and a result in which an element's issuer is not the next element's
+  subject under `X500Principal` equality are null, while a presented intermediate or an anchor it rejects is left out, as webpki and mozilla::pkix skip a candidate that
   does not parse; one base
   `PKIXBuilderParameters` per snapshot, `clone()` per call; `CertPathBuilder.getInstance("PKIX")` per
   call; `setRevocationEnabled(false)`, `setPolicyQualifiersRejected(false)`, `setDate(now)`, every other parameter the
