@@ -198,4 +198,55 @@ class JvmGenerationFilesTest {
             root.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun `toDirectory writes the image fromDirectory reads back, byte for byte`() {
+        val index = resource("upki-index.bin")
+        val original = withImage(index, filters, ::read)
+        val root = Files.createTempDirectory("c2sp-out")
+        try {
+            val out = root.resolve("image")
+            JvmGenerationFiles.toDirectory(original, out)
+            Files.setLastModifiedTime(out.resolve("index.bin"), FileTime.fromMillis(mtime))
+            assertEquals(original.names, Files.list(out).use { s -> s.map { it.fileName.toString() }.toList().toSet() })
+            assertEquals(original, read(out))
+            for (name in original.names) {
+                assertContentEquals(
+                    original.bytes(name),
+                    Files.readAllBytes(out.resolve(name)),
+                )
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `toDirectory never overwrites a file or follows a link already there`() {
+        val original = withImage(resource("upki-index.bin"), filters, ::read)
+        val root = Files.createTempDirectory("c2sp-out")
+        try {
+            val outside = Files.write(root.resolve("outside"), byteArrayOf(7))
+            val out = Files.createDirectory(root.resolve("image"))
+            Files.write(out.resolve("full-v3"), byteArrayOf(1))
+            assertFailsWith<java.nio.file.FileAlreadyExistsException> { JvmGenerationFiles.toDirectory(original, out) }
+            assertContentEquals(byteArrayOf(1), Files.readAllBytes(out.resolve("full-v3")), "an existing file is kept")
+            val linked = Files.createDirectory(root.resolve("linked"))
+            try {
+                Files.createSymbolicLink(linked.resolve("delta-v4"), outside)
+            } catch (e: java.io.IOException) {
+                if (!System.getProperty("os.name").startsWith("Windows")) throw e
+                Assumptions.abort<Unit>("cannot create symbolic links here: $e")
+            }
+            assertFailsWith<java.nio.file.FileAlreadyExistsException> {
+                JvmGenerationFiles.toDirectory(
+                    original,
+                    linked,
+                )
+            }
+            assertContentEquals(byteArrayOf(7), Files.readAllBytes(outside), "the link's target is untouched")
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
 }

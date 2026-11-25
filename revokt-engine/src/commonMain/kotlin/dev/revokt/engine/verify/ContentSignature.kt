@@ -108,14 +108,23 @@ internal object ContentSignature {
         records: List<JsonObject>,
         lastModified: Long,
     ): ByteArray? {
-        val sorted = sortedOrNull(records.filterNot(::deleted)) ?: return null
-        for (i in 1 until sorted.size) if (id(sorted[i - 1]) == id(sorted[i])) return null
+        val sorted = payloadRecords(records) ?: return null
         val payload = JsonObject.of("data" to JsonArray(sorted), "last_modified" to JsonString(lastModified.toString()))
         return try {
             CanonicalJson.write(payload)
         } catch (ignored: NonIntegerNumberException) {
             null // #227: no signed payload carries a non-integer number, so this one cannot verify.
         }
+    }
+
+    /**
+     * [records] as the signed payload holds them (spec §7.1): sorted by `id` in code point order, deleted records removed;
+     * null when a record has no string `id` or two share one. A stored generation keeps exactly these (§6.5).
+     */
+    fun payloadRecords(records: List<JsonObject>): List<JsonObject>? {
+        val sorted = sortedOrNull(records.filterNot(::deleted)) ?: return null
+        for (i in 1 until sorted.size) if (id(sorted[i - 1]) == id(sorted[i])) return null
+        return sorted
     }
 
     /**

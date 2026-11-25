@@ -9,6 +9,7 @@ import okio.ByteString.Companion.toByteString
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 
 /**
  * Reads [GenerationFiles] from disk (spec §3.2), so an engine can be tested against a C2SP directory image.
@@ -55,6 +56,29 @@ public object JvmGenerationFiles {
             .sourceTimestampMillis(Files.getLastModifiedTime(indexPath).toMillis())
             .also { b -> files.forEach { (name, bytes) -> b.file(name, bytes) } }
             .build()
+    }
+
+    /**
+     * Writes [files] to [dir] as a C2SP directory image, the inverse of [fromDirectory]: `index.bin` and every file it
+     * names, under the generation's names. [dir] is created when absent, and followed when it is itself a link; a file
+     * already there is never overwritten, and a link at a file's name is never followed (each file is created new). A
+     * [java.nio.file.FileAlreadyExistsException] part-way through leaves the files written before it. For an engine that
+     * reads a directory, such as the upki engine (spec §3.2), and for the corpus tests: the store keeps no directory
+     * image (§6.5).
+     *
+     * @throws java.nio.file.FileAlreadyExistsException when [dir] already holds one of the names.
+     */
+    @RevoktTestingApi
+    @JvmStatic
+    public fun toDirectory(
+        files: GenerationFiles,
+        dir: Path,
+    ) {
+        Files.createDirectories(dir)
+        // Every name is index.bin or a C2SP filename index.bin names (GenerationFiles checks it), so none leaves dir.
+        for (name in files.names) {
+            Files.write(dir.resolve(name), files.bytes(name), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+        }
     }
 
     private fun sha256Hex(bytes: ByteArray): String = bytes.toByteString().sha256().hex()

@@ -3,14 +3,17 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.RevoktLimits
 import dev.revokt.engine.json.CanonicalJson
 import dev.revokt.engine.json.Json
+import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonInteger
 import dev.revokt.engine.json.JsonNull
 import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.json.JsonParseException
 import dev.revokt.engine.json.JsonString
 import dev.revokt.engine.json.JsonValue
+import dev.revokt.engine.json.NonIntegerNumberException
 
 /** A store file's content that does not have the shape its decoder reads. */
 internal class MalformedStoreFileException(
@@ -44,6 +47,9 @@ internal class StoreFields(
             is JsonInteger -> v.toLongOrNull() ?: wrong(key)
             else -> wrong(key)
         }
+
+    /** The items of the array [key] holds; absent, `null` or anything but an array is malformed. */
+    fun array(key: String): List<JsonValue> = (obj[key] as? JsonArray)?.items ?: wrong(key)
 
     fun optObject(key: String): StoreFields? =
         when (val v = obj[key]) {
@@ -81,16 +87,17 @@ internal class StoreFields(
 
     companion object {
         /**
-         * [decode] over [bytes] parsed as a JSON object, or null when they are not JSON, not an object, or not the
-         * shape [decode] reads (a [MalformedStoreFileException], or an [IllegalArgumentException] from the value's own
-         * checks).
+         * [decode] over [bytes] parsed as a JSON object under [maxBytes], or null when they are not JSON, not an object,
+         * over the cap, or not the shape [decode] reads (a [MalformedStoreFileException], or an
+         * [IllegalArgumentException] from the value's own checks).
          */
         fun <T> decodeOrNull(
             bytes: ByteArray,
+            maxBytes: Long = RevoktLimits.MAX_JSON_BYTES,
             decode: (StoreFields) -> T,
         ): T? =
             try {
-                val root = Json.parse(bytes) as? JsonObject
+                val root = Json.parse(bytes, maxBytes) as? JsonObject
                 root?.let { decode(StoreFields(it)) }
             } catch (ignored: JsonParseException) {
                 null
@@ -98,6 +105,8 @@ internal class StoreFields(
                 null
             } catch (ignored: IllegalArgumentException) {
                 null
+            } catch (ignored: NonIntegerNumberException) {
+                null // A value with no canonical form (#227): no file this engine wrote holds one.
             }
 
         /** The canonical JSON of the object of [members], those whose value is null left out. */
