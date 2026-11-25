@@ -7,6 +7,7 @@ package dev.revokt.seed
 
 import dev.revokt.CrliteChannel
 import dev.revokt.MozillaRemoteSettings
+import dev.revokt.engine.seed.SeedSignature
 import dev.revokt.verify.JcaSignatureVerifier
 import java.nio.file.Files
 import java.nio.file.Path
@@ -27,8 +28,8 @@ import kotlin.test.assertTrue
 
 /**
  * The floor check's re-verification (#308; `seedTimestamp<Channel>`), over the check path's test-signed jar
- * (`testSeedJar`, which the test task depends on) under the fixture's test pin: the signed `<ts>` of a jar that
- * installs, and no `<ts>` for one that does not, with an earlier output deleted.
+ * (`testSeedJar`, which the test task depends on) under the fixture's test pin: the signed `<ts>` of a jar whose content
+ * signature verifies, and no `<ts>` for one that does not, with an earlier output deleted.
  */
 class SeedTimestampTest {
     private val jar: Path = Path.of(checkNotNull(System.getProperty("revokt.testSeedJar")) { "run through Gradle" })
@@ -63,14 +64,13 @@ class SeedTimestampTest {
         file: Path = jar,
         channel: CrliteChannel = CrliteChannel.COMPAT,
         source: MozillaRemoteSettings = pinned,
-        now: Long = signedTs,
-    ): SeedTimestampResult = verifiedTimestamp(file, channel, source, verifier, now)
+    ): SeedSignature = verifiedTimestamp(file, channel, source, verifier)
 
     private fun refused(
-        result: SeedTimestampResult,
+        result: SeedSignature,
         says: String,
     ) {
-        val refused = assertIs<SeedTimestampResult.Refused>(result)
+        val refused = assertIs<SeedSignature.Refused>(result)
         assertTrue(says in refused.detail, refused.detail)
     }
 
@@ -96,17 +96,15 @@ class SeedTimestampTest {
     private val archive: ByteArray = ZipFile(jar.toFile()).use { it.getInputStream(it.getEntry(RESOURCE)).readBytes() }
 
     @Test
-    fun `the check path's jar verifies at its signed ts, whatever the clock`() {
-        for (now in listOf(signedTs, signedTs + 60 * DAY, 0L)) {
-            assertEquals(signedTs, assertIs<SeedTimestampResult.Verified>(verified(now = now)).timestampMillis)
-        }
+    fun `the check path's jar verifies at its signed ts`() {
+        assertEquals(signedTs, assertIs<SeedSignature.Verified>(verified()).timestampMillis)
     }
 
     @Test
     fun `the ts is written as one line, over an earlier output`() =
         withDir { dir ->
             val out = dir.resolve("revokt-seed-compat.ts").apply { writeText("1\n") }
-            assertEquals(0, writeTimestamp(jar, CrliteChannel.COMPAT, pinned, verifier, out, signedTs))
+            assertEquals(0, writeTimestamp(jar, CrliteChannel.COMPAT, pinned, verifier, out))
             assertEquals("$signedTs\n", out.readText())
             assertEquals(listOf(out), Files.list(dir).use { it.toList() }, "no temporary file is left")
         }
@@ -115,15 +113,13 @@ class SeedTimestampTest {
     fun `a jar that does not verify writes nothing and deletes an earlier output`() =
         withDir { dir ->
             val out = dir.resolve("revokt-seed-compat.ts").apply { writeText("$signedTs\n") }
-            val status =
-                writeTimestamp(jar, CrliteChannel.COMPAT, MozillaRemoteSettings.DEFAULT, verifier, out, signedTs)
-            assertEquals(1, status)
+            assertEquals(1, writeTimestamp(jar, CrliteChannel.COMPAT, MozillaRemoteSettings.DEFAULT, verifier, out))
             assertFalse(out.exists(), "an earlier <ts> is left behind")
         }
 
     @Test
     fun `Mozilla's pins refuse the test-signed seed`() {
-        refused(verified(source = MozillaRemoteSettings.DEFAULT), "does not install")
+        refused(verified(source = MozillaRemoteSettings.DEFAULT), "the x5u chain fails")
     }
 
     @Test
@@ -131,15 +127,17 @@ class SeedTimestampTest {
         withDir { dir ->
             refused(verified(channel = CrliteChannel.DEFAULT), "holds no revokt/seed-default.zip")
             val renamed = jarOf(dir.resolve("renamed.jar"), "revokt/seed-default.zip" to archive)
-            refused(verified(renamed, CrliteChannel.DEFAULT), "ChannelMismatch")
+            refused(verified(renamed, CrliteChannel.DEFAULT), "the seed is for COMPAT, not DEFAULT")
         }
 
     @Test
-    fun `a flipped byte in the archive is refused`() =
+    fun `a flipped byte in records json, the signature or the x5u chain is refused`() =
         withDir { dir ->
-            for (at in listOf(archive.size / 3, archive.size / 2, archive.size - 30)) {
+            for (name in listOf("records.json", "signature", "x5u.pem")) {
+                // The local header's name, then its data: a flipped byte there fails the inflate, the CRC or the check.
+                val at = String(archive, Charsets.ISO_8859_1).indexOf(name) + name.length + 8
                 val flipped = archive.copyOf().also { it[at] = (it[at].toInt() xor 1).toByte() }
-                refused(verified(jarOf(dir.resolve("flipped-$at.jar"), RESOURCE to flipped)), "does not install")
+                assertIs<SeedSignature.Refused>(verified(jarOf(dir.resolve("flipped-$name.jar"), RESOURCE to flipped)))
             }
         }
 
@@ -153,7 +151,6 @@ class SeedTimestampTest {
 
     private companion object {
         const val RESOURCE = "revokt/seed-compat.zip"
-        const val DAY = 86_400_000L
 
         fun hex(text: String): ByteArray = text.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }

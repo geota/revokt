@@ -69,10 +69,10 @@ abstract class SeedTimestampExec : JavaExec() {
  *   data licence text as `META-INF/LICENSE-DATA` and in the manifest, and nothing else;
  * - `verifySeedJar<Channel>` ([VerifySeedJarTask]) and `smokeLoadSeed<Channel>`, which starts a `Revokt` on the jar
  *   alone through the public builder (the sole-seed `ENFORCE` configuration, so an unreadable seed throws).
- * - `seedTimestamp<Channel>` (#308): the weekly job's floor check re-verifies the last released seed jar,
- *   `-Prevokt.seedJar=<file>`, as an app's start loads it under Mozilla's pins, x5u validity at its signed `<ts>`, and
- *   writes that `<ts>` to `-Prevokt.seedTimestampOut=<file>` (default `build/seed-timestamp/revokt-seed-<channel>.ts`);
- *   no network, never up to date.
+ * - `seedTimestamp<Channel>` (#308): the weekly job's floor check re-verifies the content signature of the last
+ *   released seed jar, `-Prevokt.seedJar=<absolute path>`, under Mozilla's pins with the x5u valid at its signed
+ *   `<ts>` (the engine's `verifySeedSignature`), and writes that `<ts>` to `-Prevokt.seedTimestampOut=<file>`
+ *   (default `build/seed-timestamp/revokt-seed-<channel>.ts`); no network, never up to date.
  *
  * No Maven publication: in 0.2 a seed is a GitHub release asset with attestations, which release-seed.yml attaches
  * (the maintainer's decision, 2026-11-23). In `check`, with no network: the same chain over the committed test-signed
@@ -191,9 +191,12 @@ class DataArtifactPlugin : Plugin<Project> {
                 argumentProviders.add(
                     CommandLineArgumentProvider {
                         val path = jarPath.orNull
-                            ?: throw GradleException("seedTimestamp$suffix needs -P${DataArtifacts.SEED_JAR_PROPERTY}=<the released jar>.")
-                        val jarFile = file(path)
-                        listOf("--channel", channel, "--jar", jarFile.absolutePath, "--out", out.get().asFile.absolutePath)
+                            ?: throw GradleException("seedTimestamp$suffix needs -P${DataArtifacts.SEED_JAR_PROPERTY}=<the released jar, an absolute path>.")
+                        // Absolute only: a relative path would resolve against data/seed, not where Gradle was started.
+                        if (!java.io.File(path).isAbsolute) {
+                            throw GradleException("-P${DataArtifacts.SEED_JAR_PROPERTY} must be an absolute path, not '$path'.")
+                        }
+                        listOf("--channel", channel, "--jar", path, "--out", out.get().asFile.absolutePath)
                     },
                 )
                 outputs.upToDateWhen { false }

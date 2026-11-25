@@ -42,7 +42,8 @@ work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 
 entry="revokt/seed-$channel.zip"
-unzip -Z1 "$jar" | grep -qxF "$entry" || fail "$jar holds no $entry"
+# grep reads to the end (no -q), so unzip never writes into a closed pipe and dies of SIGPIPE under pipefail.
+unzip -Z1 "$jar" | grep -xF "$entry" >/dev/null || fail "$jar holds no $entry"
 unzip -p "$jar" "$entry" >| "$work/seed.zip"
 unzip -p "$work/seed.zip" seed.json >| "$work/seed.json" || fail "$entry holds no seed.json"
 unzip -p "$work/seed.zip" records.json >| "$work/records.json" || fail "$entry holds no records.json"

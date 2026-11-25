@@ -79,10 +79,12 @@ unzip -p "$tmp" records.json | jq -r .last_modified
 """
 
 FAKE_GRADLEW = r"""#!/usr/bin/env bash
-# A fake gradlew for test_seed_scripts.py: logs its arguments, prints Gradle-like noise, and writes $FAKE_TS (when set)
-# to the -Prevokt.seedTimestampOut file; fails when $FAKE_GRADLE_FAILS is set.
+# A fake gradlew for test_seed_scripts.py: logs its arguments, fails when GH_TOKEN or GITHUB_TOKEN reaches it, prints
+# Gradle-like noise, and writes $FAKE_TS (when set) to the -Prevokt.seedTimestampOut file; fails when $FAKE_GRADLE_FAILS
+# is set.
 set -euo pipefail
 printf '%s\n' "$@" >|"${FAKE_GRADLE_LOG:?}"
+if [ -n "${GH_TOKEN+x}" ] || [ -n "${GITHUB_TOKEN+x}" ]; then echo "a token reached Gradle" >&2; exit 4; fi
 echo "BUILD SUCCESSFUL in 1s"
 [ -z "${FAKE_GRADLE_FAILS:-}" ] || exit 1
 for a in "$@"; do
@@ -550,6 +552,14 @@ class VerifyTest(Base):
                 self.assertIn("-Porg.gradle.java.installations.paths=/opt/temurin-21", args)
                 for flag in ("--no-daemon", "--no-build-cache", "--no-configuration-cache"):
                     self.assertIn(flag, args)
+
+    def test_the_job_s_tokens_never_reach_gradle(self):
+        for tokens in ({"GH_TOKEN": "gh-secret"}, {"GITHUB_TOKEN": "github-secret"},
+                       {"GH_TOKEN": "", "GITHUB_TOKEN": ""}):
+            with self.subTest(tokens=tokens):
+                out = self.run_verify("compat", self.jar, **tokens)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(out.stdout, "1792587631204\n")
 
     def test_a_relative_jar_is_passed_as_an_absolute_path(self):
         full = dict(os.environ, JAVA_HOME="/opt/temurin-21", FAKE_GRADLE_LOG=str(self.log), FAKE_TS="5\n")

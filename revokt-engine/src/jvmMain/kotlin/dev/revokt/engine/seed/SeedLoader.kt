@@ -482,55 +482,11 @@ internal class SeedLoader(
             val wanted = caps.map { (name, cap) -> checkNotNull(archive.entry(name)) to cap }
             archive.read(wanted) { e, b -> fixed[e.name] = b }
             val recordsJson = fixed.getValue(SeedArchive.RECORDS)
-            val ders =
-                when (val pem = X5uPem.read(fixed.getValue(SeedArchive.X5U), RevoktLimits.MAX_X5U_BYTES)) {
-                    is X5uPemRead.Certificates -> pem.ders
-                    is X5uPemRead.Failed -> fail("x5u.pem is not a PEM chain: ${pem.reason}")
-                }
-            val path =
-                when (val chain = validateX5uChain(ders, policy.pinnedRootSpkis, verifier)) {
-                    is X5uChainResult.Valid -> chain.path
-                    is X5uChainResult.Failed -> fail("the x5u chain fails: $chain")
-                }
             val signature = fixed.getValue(SeedArchive.SIGNATURE)
-            val text = signature.decodeToString()
-            val checked =
-                ContentSignature.verifyRawPayload(
-                    verifier,
-                    recordsJson,
-                    text,
-                    ContentSignature.MODE,
-                    path.leafSpki,
-                )
-            if (!checked.verified) fail("the signature over records.json does not verify: $checked")
-            val (records, ts) = decode(recordsJson)
-            when (val validity = checkValidity(path, ts)) {
-                is X5uValidity.Valid -> Unit
-                is X5uValidity.ClockSkew -> fail("x5u link ${validity.certIndex} is outside its validity at $ts")
-            }
-            return Verified(records, ts, path, signature, recordsJson, fixed.getValue(SeedArchive.INDEX))
-        }
-
-        /** The records and `<ts>` of the verified [bytes], which must be the canonical payload of both. */
-        private fun decode(bytes: ByteArray): Pair<List<JsonObject>, Long> {
-            val root =
-                try {
-                    Json.parse(bytes, RevoktLimits.MAX_JSON_BYTES)
-                } catch (e: JsonParseException) {
-                    fail("records.json is not JSON: ${e.message}")
-                }
-            val data = ((root as? JsonObject)?.get("data") as? JsonArray) ?: fail("records.json has no data array")
-            val records =
-                data.items.map {
-                    it as? JsonObject
-                        ?: fail("records.json holds a record that is not an object")
-                }
-            val ts =
-                ((root["last_modified"] as? JsonString)?.value?.toLongOrNull())?.takeIf { it in 0..MAX_TIMESTAMP }
-                    ?: fail("records.json's last_modified is not a 13-digit timestamp")
-            val canonical = ContentSignature.recordsJson(records, ts)
-            if (canonical == null || !canonical.contentEquals(bytes)) fail("records.json is not the canonical payload")
-            return records to ts
+            val x5u = fixed.getValue(SeedArchive.X5U)
+            val signed = verifySignedRecords(recordsJson, signature, x5u, policy.pinnedRootSpkis, verifier)
+            val index = fixed.getValue(SeedArchive.INDEX)
+            return Verified(signed.records, signed.timestamp, signed.path, signature, recordsJson, index)
         }
 
         /**
@@ -962,10 +918,81 @@ internal class SeedLoader(
 
         /** The cap on the `signature` entry, which §6.5 does not name: `seed.json`'s, far above any raw pair's text. */
         const val MAX_SIGNATURE_BYTES: Long = 64L shl 10
-
-        /** The latest timestamp a generation directory name holds (13 digits, §6.5). */
-        private const val MAX_TIMESTAMP = 9_999_999_999_999L
     }
 }
 
 private fun fail(message: String): Nothing = throw SeedFormatException(message)
+
+/** A seed's `records.json` once [verifySignedRecords] verified it: its records, its signed `<ts>` and the x5u path. */
+internal class SignedRecords(
+    val records: List<JsonObject>,
+    val timestamp: Long,
+    val path: X5uPath,
+)
+
+/**
+ * Steps 2 to 4 of [SeedLoader.load], over a seed's raw entries: [x5uPem] read as PEM and validated to [pins]
+ * ([validateX5uChain], every check but validity); [signature] over [recordsJson]'s bytes unchanged
+ * ([ContentSignature.verifyRawPayload]); `records.json` decoded, which must be the canonical payload of its own records
+ * and `<ts>`; then the x5u validity periods at that `<ts>` ([checkValidity]). Nothing here depends on the seed format:
+ * it is what Firefox re-verifies of its local data (`RemoteSettingsClient`'s `validateCollectionSignature`), and the
+ * weekly job's floor check runs it alone ([verifySeedSignature]). Every failure is a [SeedFormatException].
+ */
+internal fun verifySignedRecords(
+    recordsJson: ByteArray,
+    signature: ByteArray,
+    x5uPem: ByteArray,
+    pins: Set<ByteString>,
+    verifier: SignatureVerifier,
+): SignedRecords {
+    val ders =
+        when (val pem = X5uPem.read(x5uPem, RevoktLimits.MAX_X5U_BYTES)) {
+            is X5uPemRead.Certificates -> pem.ders
+            is X5uPemRead.Failed -> fail("x5u.pem is not a PEM chain: ${pem.reason}")
+        }
+    val path =
+        when (val chain = validateX5uChain(ders, pins, verifier)) {
+            is X5uChainResult.Valid -> chain.path
+            is X5uChainResult.Failed -> fail("the x5u chain fails: $chain")
+        }
+    val checked =
+        ContentSignature.verifyRawPayload(
+            verifier,
+            recordsJson,
+            signature.decodeToString(),
+            ContentSignature.MODE,
+            path.leafSpki,
+        )
+    if (!checked.verified) fail("the signature over records.json does not verify: $checked")
+    val (records, ts) = decodeSigned(recordsJson)
+    when (val validity = checkValidity(path, ts)) {
+        is X5uValidity.Valid -> Unit
+        is X5uValidity.ClockSkew -> fail("x5u link ${validity.certIndex} is outside its validity at $ts")
+    }
+    return SignedRecords(records, ts, path)
+}
+
+/** The latest timestamp a generation directory name holds (13 digits, §6.5). */
+private const val MAX_TIMESTAMP = 9_999_999_999_999L
+
+/** The records and `<ts>` of the verified [bytes], which must be the canonical payload of both. */
+private fun decodeSigned(bytes: ByteArray): Pair<List<JsonObject>, Long> {
+    val root =
+        try {
+            Json.parse(bytes, RevoktLimits.MAX_JSON_BYTES)
+        } catch (e: JsonParseException) {
+            fail("records.json is not JSON: ${e.message}")
+        }
+    val data = ((root as? JsonObject)?.get("data") as? JsonArray) ?: fail("records.json has no data array")
+    val records =
+        data.items.map {
+            it as? JsonObject
+                ?: fail("records.json holds a record that is not an object")
+        }
+    val ts =
+        ((root["last_modified"] as? JsonString)?.value?.toLongOrNull())?.takeIf { it in 0..MAX_TIMESTAMP }
+            ?: fail("records.json's last_modified is not a 13-digit timestamp")
+    val canonical = ContentSignature.recordsJson(records, ts)
+    if (canonical == null || !canonical.contentEquals(bytes)) fail("records.json is not the canonical payload")
+    return records to ts
+}

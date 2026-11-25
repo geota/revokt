@@ -7,9 +7,6 @@ package dev.revokt.engine.seed
 
 import dev.revokt.CrliteChannel
 import dev.revokt.FilterFormat
-import dev.revokt.KotlinRevocationEngine
-import dev.revokt.MozillaRemoteSettings
-import dev.revokt.SeedSource
 import dev.revokt.SyncFailure
 import dev.revokt.engine.fetch.ChangesetVerification
 import dev.revokt.engine.fetch.ChangesetVerifier
@@ -25,7 +22,6 @@ import okio.Buffer
 import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
-import java.io.ByteArrayInputStream
 import java.nio.file.Files
 import java.time.LocalDateTime
 import java.util.zip.ZipEntry
@@ -273,31 +269,6 @@ internal class SeedWriterTest : SeedFixture() {
         } finally {
             dir.toFile().deleteRecursively()
         }
-    }
-
-    @Test
-    fun `the in-memory load installs a seed weeks after its ts and refuses it under other pins or another channel`() {
-        val bytes = assertIs<SeedJobResult.Built>(job().build(now)).build.bytes
-        val seed = SeedSource.of { ByteArrayInputStream(bytes) }
-        val quiet = dev.revokt.RevoktLogger { _, _, _ -> }
-
-        fun load(
-            channel: CrliteChannel = CrliteChannel.COMPAT,
-            under: MozillaRemoteSettings = source,
-            at: Long = now,
-        ): SeedLoad =
-            KotlinRevocationEngine().use {
-                loadInMemory(seed, channel, under, verifier, it, quiet, at)
-            }
-
-        // No check reads the clock: a release left behind by weeks of failed runs still verifies at its signed <ts>.
-        assertEquals(ts, installed(load(at = ts + 60 * day)).timestampMillis)
-        assertEquals(ts, installed(load(at = 0)).timestampMillis)
-        assertIs<SeedLoad.Unreadable>(
-            load(under = MozillaRemoteSettings.DEFAULT),
-            "Mozilla's pins refuse the test root",
-        )
-        assertIs<SeedLoad.ChannelMismatch>(load(channel = CrliteChannel.DEFAULT))
     }
 
     @Test

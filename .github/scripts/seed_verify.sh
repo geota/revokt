@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The floor check's re-verification of a released seed jar (#308; seed_floor.sh's SEED_VERIFY in release-seed.yml).
-# Runs :revokt-seed:seedTimestamp<Channel>, the engine's own seed load: the content signature over records.json, the
-# x5u chain inside the archive to Mozilla's pinned root and valid at the signed <ts>, the canonical payload, the schema,
-# each attachment's size and SHA-256, and the rebuilt index.bin. No network. Gradle runs on $JAVA_HOME alone, toolchain
-# detection off, as the build step's does. Gradle's own output goes to stderr; stdout is the verified <ts> alone.
+# Runs :revokt-seed:seedTimestamp<Channel>, the engine's verifySeedSignature: the parts of a seed load that do not depend
+# on the seed format, as Firefox re-verifies its local data. seed.json's channel, the x5u chain inside the archive to
+# Mozilla's pinned root, the content signature over records.json, the canonical payload that gives the <ts>, and the x5u
+# validity at that <ts>. No network. Gradle runs on $JAVA_HOME alone, toolchain detection off, as the build step's does,
+# and without the job's tokens. Gradle's own output goes to stderr; stdout is the verified <ts> alone.
 #
 #   seed_verify.sh <channel> <jar>   prints the jar's verified signed <ts>; fails when it does not verify
 # Needs JAVA_HOME.
@@ -32,7 +33,8 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 out="$work/ts"
-"$root/gradlew" -p "$root" ":revokt-seed:$task" \
+# The build reads no token: GH_TOKEN and GITHUB_TOKEN stay out of Gradle and everything it runs.
+env -u GH_TOKEN -u GITHUB_TOKEN "$root/gradlew" -p "$root" ":revokt-seed:$task" \
   -Prevokt.seedJar="$jar" \
   -Prevokt.seedTimestampOut="$out" \
   -Porg.gradle.java.installations.auto-detect=false \

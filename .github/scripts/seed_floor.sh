@@ -5,12 +5,12 @@
 # The seed job's monotonic freshness check (spec §7.2, CONTRIBUTING §9). A seed is never older than the last released
 # seed of its channel. The last release is the highest published seed-YYYY.MM.DD release; drafts don't count. For each
 # channel, that release's jar must pass `gh attestation verify` twice, as this workflow's work on main: once for
-# provenance, once for the seed-v1 predicate. Its content signature is then verified again, as an app's start loads it
-# (SEED_VERIFY: seed_verify.sh, the engine's seed load under Mozilla's pins, x5u validity at the signed <ts>), and the
-# <ts> that verifies, its records.json <ts> and the attested recordsLastModified must be one value. Firefox's client
-# does the same before it ignores an older changeset (RemoteSettingsClient.sys.mjs, _importChanges), but where its
-# local data does not verify it imports the older changeset; here a release that does not verify fails the run. The
-# new jar's signed <ts> is then compared with it:
+# provenance, once for the seed-v1 predicate. Its content signature is then verified again (SEED_VERIFY:
+# seed_verify.sh, the engine's format-independent verifySeedSignature under Mozilla's pins, x5u validity at the signed
+# <ts>), and the <ts> that verifies, its records.json <ts> and the attested recordsLastModified must be one value.
+# Firefox's client does the same before it ignores an older changeset (RemoteSettingsClient.sys.mjs, _importChanges),
+# but where its local data does not verify it imports the older changeset; here a release that does not verify fails
+# the run. The new jar's signed <ts> is then compared with it:
 # - older: the run fails;
 # - equal on every channel: nothing new, so publishing is skipped and the run stays green;
 # - otherwise: publish.

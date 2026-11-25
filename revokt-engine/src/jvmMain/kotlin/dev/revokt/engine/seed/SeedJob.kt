@@ -15,6 +15,7 @@ import dev.revokt.KotlinRevocationEngine
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktPolicy
+import dev.revokt.RevoktStorage
 import dev.revokt.SeedSource
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncFailure
@@ -22,9 +23,13 @@ import dev.revokt.engine.fetch.ChangesetVerification
 import dev.revokt.engine.fetch.ChangesetVerifier
 import dev.revokt.engine.fetch.ClientResult
 import dev.revokt.engine.fetch.RemoteSettingsClient
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
+import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.update.FilterRecord
 import dev.revokt.engine.update.IndexBuild
 import dev.revokt.engine.update.Placement
+import dev.revokt.engine.update.SnapshotRef
 import dev.revokt.engine.update.placeFilters
 import dev.revokt.engine.verify.ContentSignature
 import kotlinx.coroutines.CoroutineDispatcher
@@ -176,25 +181,34 @@ internal class SeedJob(
     }
 
     /**
-     * Why [build] does not install as a seed of [channel] under [source]'s pins, or null when it does: [loadInMemory]
-     * over the bytes in memory must install exactly [build]'s generation at its `<ts>`.
+     * Why [build] does not install as a seed of [channel] under [source]'s pins, or null when it does: the loader over
+     * the bytes in memory, into a fresh in-memory store, must install exactly [build]'s generation at its `<ts>`.
      */
     private fun selfLoad(
         build: SeedBuild.Built,
         engine: KotlinRevocationEngine,
     ): String? {
         val bytes = build.bytes
-        val load =
-            loadInMemory(
-                SeedSource.of { ByteArrayInputStream(bytes) },
-                channel,
-                source,
-                verifier,
-                engine,
-                logger,
-                build.timestampMillis,
+        val snapshot =
+            SnapshotRef(
+                GenerationSnapshot(
+                    0,
+                    mapOf(Dataset.CRLITE to DatasetGeneration(null, null, false, null, null, false, false)),
+                    null,
+                ),
             )
-        return when (load) {
+        val collection = source.collection(Dataset.CRLITE)?.let { source.bucket + "/" + it }
+        val loader =
+            SeedLoader(
+                SeedSource.of { ByteArrayInputStream(bytes) },
+                StoreLayout(RevoktStorage.inMemory(), Dataset.CRLITE, channel),
+                engine,
+                snapshot,
+                verifier,
+                SeedPolicy(source.pinnedRootSpkis, collection, fetchingSource = true),
+                logger,
+            )
+        return when (val load = loader.load(build.timestampMillis)) {
             is SeedLoad.Installed -> {
                 when {
                     load.generationId != build.generationId -> {
