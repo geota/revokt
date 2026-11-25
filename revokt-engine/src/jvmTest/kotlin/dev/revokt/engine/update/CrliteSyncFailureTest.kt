@@ -310,7 +310,8 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         assertEquals(epoch, snapshot.snapshot.generationEpoch, "nothing is published")
         assertEquals(emptyList(), server.attachmentRequests())
         assertIs<StoreRead.Found<*>>(store.readGeneration(stray), "no prune follows")
-        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
+        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified, "the cursor at <ts>")
+        assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
         assertEquals(ts, updater(now).watermarkMillis)
         sync(server, now = now + hour).assert(SyncOutcome.UNCHANGED)
     }
@@ -340,11 +341,18 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         val key = store.generationKey(served)
         storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
         val engine = TestEngine()
-        val run = sync(server, now = ts + 2 * hour, engine = engine).assert(SyncOutcome.UNCHANGED)
+        val epoch = snapshot.snapshot.generationEpoch
+        val now = ts + 2 * hour
+        val run = sync(server, now = now, engine = engine).assert(SyncOutcome.UNCHANGED)
         assertEquals(listOf("$ts/${delta.id}"), engine.prepared, "a full install")
+        assertEquals("$ts/${delta.id}", live().generationId, "the served generationId kept")
+        assertEquals(epoch + 1, snapshot.snapshot.generationEpoch, "its publish")
         assertEquals(StoreRead.Found(Pointer(served, null)), store.pointer(), "the same bytes, the same name")
         assertIs<StoreRead.Found<*>>(store.stored(served), "rewritten")
         assertEquals(1, run.storeFailures, "the damaged served file, once")
+        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified, "the cursor at <ts>")
+        assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
+        assertEquals(ts, updater(now).watermarkMillis)
     }
 
     @Test
