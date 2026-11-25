@@ -11,7 +11,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Spec §6.5's derived names (revision 48) and generation directory names. The expected hashes were computed outside the
+ * Spec §6.5's derived names (revision 48) and the content-addressed key shape. The expected hashes were computed outside the
  * engine, with `printf %s <name> | shasum -a 256`.
  */
 class GenerationNamesTest {
@@ -73,50 +73,6 @@ class GenerationNamesTest {
             "A-Z_a-z.0-9",
         )) {
             assertTrue(GenerationNames.isSourceFilename(good), good)
-        }
-    }
-
-    @Test
-    fun `a directory is gen, the 13-digit timestamp and 16 hex of the SHA-256 of the generation id`() {
-        assertEquals(
-            "gen-1762430400000-dc148ce178adeca2",
-            GenerationNames.directory(1_762_430_400_000, "crlite/compat/2026-11-06T12:00:00Z"),
-        )
-        assertEquals("gen-0000000000005-711430f6164e9380", GenerationNames.directory(5, "g1"))
-        assertEquals("gen-0000000000000-711430f6164e9380", GenerationNames.directory(0, "g1"))
-        assertEquals("gen-9999999999999-711430f6164e9380", GenerationNames.directory(9_999_999_999_999, "g1"))
-    }
-
-    @Test
-    fun `directory names sort chronologically`() {
-        val times = listOf(5L, 40L, 999L, 1_000L, 1_762_430_400_000L, 9_999_999_999_999L)
-        assertEquals(times, times.shuffled().sortedBy { GenerationNames.directory(it, "g$it") }.toList())
-    }
-
-    @Test
-    fun `a timestamp outside 13 digits and an empty id are refused`() {
-        assertFailsWith<IllegalArgumentException> { GenerationNames.directory(-1, "g1") }
-        assertFailsWith<IllegalArgumentException> { GenerationNames.directory(10_000_000_000_000, "g1") }
-        assertFailsWith<IllegalArgumentException> { GenerationNames.directory(1, "") }
-    }
-
-    @Test
-    fun `isDirectory accepts exactly the directory shape`() {
-        assertTrue(GenerationNames.isDirectory("gen-1762430400000-dc148ce178adeca2"))
-        for (bad in listOf(
-            "gen-1762430400000-dc148ce178adeca",
-            "gen-1762430400000-dc148ce178adeca22",
-            "gen-176243040000-dc148ce178adeca22",
-            "gen-1762430400000-DC148CE178ADECA2",
-            "gen-1762430400000-dc148ce178adecag",
-            "gen-17624304000a0-dc148ce178adeca2",
-            "gen-1762430400000_dc148ce178adeca2",
-            "gen_1762430400000-dc148ce178adeca2",
-            "Gen-1762430400000-dc148ce178adeca2",
-            "blobs",
-            "",
-        )) {
-            assertFalse(GenerationNames.isDirectory(bad), bad)
         }
     }
 

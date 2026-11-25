@@ -30,14 +30,23 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The `_since` merge's base and the #236 malformed-pointer cases: what the sync merges a delta changeset over, or
- * fetches in full instead, when the pointer or the live generation's `meta.json` does not read (spec §6.5, §7.1).
+ * The `_since` merge's base and the malformed-pointer cases over the content-addressed store: what the sync merges a
+ * delta changeset over (the served generation's file, spec §6.5), or fetches in full instead, and that nothing is
+ * deleted beside a pointer or a served generation that does not read (#236, #287).
  */
 internal class CrliteDeltaBaseTest : CrliteDeltaFixture() {
+    private fun malformPointer() = storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+
+    /** Damages the generation file [name] in place: still a key, no longer the bytes its name promises. */
+    private fun damage(name: String?) {
+        val key = store.generationKey(assertNotNull(name))
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
+    }
+
     @Test
     fun `#236 - with no cursor the whole collection is verified alone, never merged over the stored records`() {
         val server = installedFirst()
-        // A malformed updater.json loses the cursor; the pointed generation's records.json still reads.
+        // A malformed updater.json loses the cursor; the served generation's file still reads.
         storage.inner.write("crlite/compat/updater.json", "{".encodeToByteArray())
         // The next collection drops the first delta: merged over the stored records, it would keep it and fail.
         next(server, listOf(full, delta2), listOf(tombstone))
@@ -49,159 +58,113 @@ internal class CrliteDeltaBaseTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `#236 - a malformed pointer and a fresh loader re-serve the same ts, which installs and heals the pointer`() {
+    fun `#236 - a malformed pointer and a fresh loader re-serve the same ts, which installs the same file and heals`() {
         val server = installedFirst()
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
-        // A fresh loader over the same store: nothing is live in its snapshot.
+        malformPointer()
         freshLoader()
         server.fetcher.requests.clear()
         val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
-        assertTrue(run.storeFailures >= 1, "the malformed pointer is a store failure")
-        assertEquals(emptyList(), server.attachmentRequests())
-        assertEquals(directory1, liveDirectory())
-        assertNotNull(store.meta(directory1))
+        assertEquals(1, run.storeFailures, "the malformed pointer")
+        assertEquals(emptyList(), server.attachmentRequests(), "every blob is reused")
+        assertEquals(
+            StoreRead.Found(Pointer(assertNotNull(name1), null)),
+            store.pointer(),
+            "the same bytes, the same name",
+        )
     }
 
     @Test
     fun `#236 - a running loader re-serving the same ts beside a malformed pointer installs, with no previous`() {
-        // The retried-flip path: the target is the engine's live directory, so it is never its own previous.
         val server = installedFirst()
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        malformPointer()
         server.fetcher.requests.clear()
         sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
-        assertEquals(StoreRead.Found(Pointer(directory1, null)), store.pointer())
+        assertEquals(StoreRead.Found(Pointer(assertNotNull(name1), null)), store.pointer())
         assertEquals(emptyList(), server.attachmentRequests())
         sync(server, now = ts + 9 * hour).assert(SyncOutcome.UNCHANGED)
     }
 
     @Test
-    fun `#236 - beside a malformed pointer a complete directory with an altered delta fails, and is never deleted`() {
+    fun `#236 - beside a malformed pointer a rotted blob is fetched again and rewritten, and nothing is deleted`() {
         val server = installedFirst()
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
-        val key = "crlite/compat/$directory1/${delta.filename}"
+        malformPointer()
+        val key = store.blobKey(delta.body.toByteString().sha256())
         storage.inner.write(key, checkNotNull(storage.inner.read(key)).also { it[0] = (it[0] + 1).toByte() })
         freshLoader()
         server.fetcher.requests.clear()
-
-        fun files() =
-            storage.inner.names().filter { "/$directory1/" in it }.associateWith {
-                checkNotNull(storage.inner.read(it)).toList()
-            }
-        val before = files()
-        repeat(2) { i ->
-            sync(server, now = ts + (2 + 7 * i) * hour).assert(SyncFailure.STORE_FAILED)
-            assertEquals(before, files(), "sync $i left the directory byte-identical")
-        }
-        assertEquals(emptyList(), server.attachmentRequests())
+        val before = storage.inner.names()
+        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(2, run.storeFailures, "the malformed pointer and the rotted blob")
+        assertEquals(listOf(attachments + delta.location), server.attachmentRequests())
+        assertContentEquals(delta.body, storage.inner.read(key))
+        assertTrue(storage.inner.names().containsAll(before))
     }
 
     @Test
-    fun `#236 - a running loader whose live meta json is malformed heals a new ts with no previous, counted`() {
+    fun `#236 - a running loader with a damaged served file heals a new ts beside a malformed pointer`() {
         val server = installedFirst()
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
-        storage.inner.write("crlite/compat/$directory1/meta.json", "{".encodeToByteArray())
+        malformPointer()
+        damage(name1)
         next(server, listOf(full, delta, delta2))
         val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
-        // One for the malformed pointer, one for the unreadable fallback candidate.
-        assertEquals(2, run.storeFailures)
-        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
-        assertEquals(StoreRead.Found(Pointer(directory2, null)), store.pointer())
+        // One for the malformed pointer, one for the served file: no delta base (counted here, as the pointer does not
+        // name it), so no previous either, which reads it once more without counting it again.
+        assertEquals(3, run.storeFailures)
+        assertEquals(StoreRead.Found(Pointer(stored(liveName()).name, null)), store.pointer())
+        assertTrue(store.generationKey(assertNotNull(name1)) in storage.inner.names(), "the damaged file is kept")
     }
 
     @Test
-    fun `a malformed live meta json beside a pointer that reads is fetched in full, never merged over`() {
+    fun `a damaged served file beside a pointer that reads is fetched in full, counted once, and nothing is pruned`() {
         val server = installedFirst()
-        // The pointer and records.json read; only the live generation's meta.json does not, so it is no delta base.
-        storage.inner.write("crlite/compat/$directory1/meta.json", "{".encodeToByteArray())
-        assertEquals(StoreRead.Found(Pointer(directory1, null)), store.pointer())
-        assertNotNull(store.file(directory1, StoreLayout.RECORDS))
+        damage(name1)
         next(server, listOf(full, delta, delta2))
-        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+        val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(1, run.storeFailures)
         val changesets =
             server.fetcher.requests
                 .map { it.url }
                 .filter { it.startsWith(server.changesetUrl) }
         assertEquals(listOf(server.changesetUrl), changesets, "a full fetch, with no _since")
-        assertEquals(
-            StoreRead.Found(Pointer(GenerationNames.directory(ts2, "$ts2/${delta2.id}"), null)),
-            store.pointer(),
-        )
+        assertFalse("If-None-Match" in server.fetcher.requests[1].headers)
+        assertEquals(StoreRead.Found(Pointer(stored(liveName()).name, null)), store.pointer())
+        // The pointer named a generation that did not read before the install: prune deleted nothing (B2).
+        assertTrue(store.generationKey(assertNotNull(name1)) in storage.inner.names())
     }
 
     @Test
     fun `#236 - beside a malformed pointer a new ts installs, a running loader keeping its live one as previous`() {
         val server = installedFirst()
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        malformPointer()
         next(server, listOf(full, delta, delta2))
         sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
-        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
-        assertEquals(StoreRead.Found(Pointer(directory2, directory1)), store.pointer())
-        assertNotNull(store.readGeneration(directory1))
+        assertEquals(StoreRead.Found(Pointer(stored(liveName()).name, assertNotNull(name1))), store.pointer())
     }
 
     @Test
     fun `#236 - beside a malformed pointer a fresh loader installs a new ts, the healed pointer with no previous`() {
         val server = installedFirst()
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
+        malformPointer()
         freshLoader()
         next(server, listOf(full, delta, delta2))
         sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
-        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
-        assertEquals(StoreRead.Found(Pointer(directory2, null)), store.pointer())
+        assertEquals(StoreRead.Found(Pointer(stored(liveName()).name, null)), store.pointer())
     }
 
     @Test
-    fun `#236 - beside a malformed pointer a directory whose meta json is malformed is held, and a new ts heals`() {
+    fun `#256 - a heal flip deletes nothing, and the next install over the healed pointer prunes`() {
         val server = installedFirst()
-        storage.inner.write("crlite/compat/current", "{".encodeToByteArray())
-        storage.inner.write("crlite/compat/$directory1/meta.json", "{\"metaVersion\":2}".encodeToByteArray())
+        // Another binary's generation file under its own name, and a stray blob: both unnamed.
+        val stray = store.blobKey(okio.ByteString.of(1, 2, 3).sha256())
+        storage.inner.write(stray, byteArrayOf(1, 2, 3))
+        malformPointer()
         freshLoader()
-        server.fetcher.requests.clear()
-        val before =
-            storage.inner
-                .names()
-                .filter {
-                    "/$directory1/" in it
-                }.associateWith { checkNotNull(storage.inner.read(it)).toList() }
-        repeat(2) { i ->
-            sync(server, now = ts + (2 + 7 * i) * hour).assert(SyncFailure.STORE_FAILED)
-            val after =
-                storage.inner
-                    .names()
-                    .filter {
-                        "/$directory1/" in it
-                    }.associateWith { checkNotNull(storage.inner.read(it)).toList() }
-            assertEquals(before, after, "sync $i left the directory byte-identical")
-        }
-        assertEquals(emptyList(), server.attachmentRequests())
         next(server, listOf(full, delta, delta2))
-        sync(server, now = ts2 + 16 * hour).assert(SyncOutcome.INSTALLED)
-        assertEquals(GenerationNames.directory(ts2, "$ts2/${delta2.id}"), liveDirectory())
-    }
-
-    @Test
-    fun `a pointed records json of another shape is a store failure, and the sync fetches in full`() {
-        for (shape in listOf("[]", "{}", """{"data":{}}""", """{"data":[1]}""")) {
-            val server = installedFirst()
-            storage.inner.write("crlite/compat/$directory1/records.json", shape.encodeToByteArray())
-            next(server, listOf(full, delta, delta2))
-            val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
-            assertEquals(1, run.storeFailures, shape)
-            assertEquals(server.changesetUrl, server.fetcher.requests[1].url, shape)
-            // Back to the first generation for the next shape: a fresh store is what installedFirst expects.
-            storage.inner.names().forEach { storage.inner.delete(it) }
-            freshLoader()
-        }
-    }
-
-    @Test
-    fun `a pointed records json that does not read is a store failure, and the sync fetches in full`() {
-        val server = installedFirst()
-        storage.inner.write("crlite/compat/$directory1/records.json", "{".encodeToByteArray())
-        next(server, listOf(full, delta, delta2))
-        val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
-        assertEquals(1, run.storeFailures)
-        assertEquals(server.changesetUrl, server.fetcher.requests[1].url)
-        assertFalse("If-None-Match" in server.fetcher.requests[1].headers)
+        sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
+        assertTrue(stray in storage.inner.names(), "no prune after a heal")
+        server.ts = ts2 + 1_000
+        sync(server, now = server.ts + hour).assert(SyncOutcome.INSTALLED)
+        assertFalse(stray in storage.inner.names(), "the next install over a pointer that reads prunes")
+        assertEquals(StoreRead.Absent, store.readGeneration(assertNotNull(name1)))
     }
 }

@@ -68,7 +68,6 @@ internal class CrliteRuntimePollTest : SeedFixture() {
             verifier = verifier,
             policy = RevoktPolicy.DEFAULT,
             pinnedRootSpkis = pinned,
-            collection = collection,
             storage = storage,
             logger = logger,
             client = client(server.fetcher, source),
@@ -124,7 +123,6 @@ internal class CrliteRuntimePollTest : SeedFixture() {
                 verifier = verifier,
                 policy = RevoktPolicy.DEFAULT,
                 pinnedRootSpkis = pinned,
-                collection = collection,
                 storage = storage,
                 logger = logger,
             )
@@ -342,7 +340,6 @@ internal class CrliteRuntimePollTest : SeedFixture() {
                 verifier = verifier,
                 policy = RevoktPolicy.DEFAULT,
                 pinnedRootSpkis = pinned,
-                collection = collection,
                 storage = storage,
                 logger = logger,
                 client = client(server.fetcher, source),

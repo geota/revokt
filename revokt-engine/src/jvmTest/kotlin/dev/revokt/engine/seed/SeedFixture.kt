@@ -37,7 +37,8 @@ import kotlin.test.assertTrue
  * entries editable through [Seed.configure].
  */
 internal open class SeedFixture : CrliteSyncFixture() {
-    protected val collection = "security-state/cert-revocations"
+    /** Each payload and key's signature, so every build of one seed is the same archive. */
+    private val seedSignatures = HashMap<Pair<List<Byte>, PrivateKey>, String>()
 
     /** One seed: its records signed at [ts] under [key] with [chain] as `x5u.pem`, and each part's override. */
     protected inner class Seed(
@@ -71,14 +72,20 @@ internal open class SeedFixture : CrliteSyncFixture() {
         fun payload(): ByteArray =
             payload ?: checkNotNull(ContentSignature.recordsJson(records.map { json(it.json()) }, ts))
 
+        /**
+         * The signature over [payload] under [key], once per payload and key in this fixture: ECDSA signs with fresh
+         * randomness, and a seed built twice must be the same archive, so the same generation file (spec §6.5).
+         */
         fun signature(): String =
-            signature ?: Base64.getUrlEncoder().withoutPadding().encodeToString(
-                JcaFixtures.sign(
-                    "SHA384withECDSAinP1363Format",
-                    key,
-                    "Content-Signature:\u0000".encodeToByteArray() + payload(),
-                ),
-            )
+            signature ?: seedSignatures.getOrPut(payload().toList() to key) {
+                Base64.getUrlEncoder().withoutPadding().encodeToString(
+                    JcaFixtures.sign(
+                        "SHA384withECDSAinP1363Format",
+                        key,
+                        "Content-Signature:\u0000".encodeToByteArray() + payload(),
+                    ),
+                )
+            }
 
         fun filterRecords(): List<FilterRecord> =
             records.map { FilterRecord(it.id, it.channel, it.incremental, it.effectiveTimestamp, it.filename) }
@@ -127,8 +134,7 @@ internal open class SeedFixture : CrliteSyncFixture() {
         engine: TestEngine = TestEngine(),
         fetchingSource: Boolean = true,
         pins: Set<ByteString> = pinned,
-    ): SeedLoader =
-        SeedLoader(source, store, engine, snapshot, verifier, SeedPolicy(pins, collection, fetchingSource), logger)
+    ): SeedLoader = SeedLoader(source, store, engine, snapshot, verifier, SeedPolicy(pins, fetchingSource), logger)
 
     protected fun load(
         seed: Seed,
@@ -148,11 +154,12 @@ internal open class SeedFixture : CrliteSyncFixture() {
     protected fun assertUnreadable(
         load: SeedLoad,
         detail: String,
+        written: Boolean = false,
     ): SeedLoad.Unreadable {
         val unreadable = assertIs<SeedLoad.Unreadable>(load, "$load")
         assertTrue(detail in unreadable.detail, "'${unreadable.detail}' does not say '$detail'")
         assertTrue(unreadable.warnings.single().code == dev.revokt.WarningCode.SEED_UNREADABLE)
-        assertNothingInstalled()
+        assertNothingInstalled(written)
         return unreadable
     }
 
@@ -177,10 +184,13 @@ internal open class SeedFixture : CrliteSyncFixture() {
     }
 
     /** A store holding the seed at [at] installed, live and pointed. */
-    protected fun installedAt(at: Long): String = installed(load(Seed(ts = at))).directory
+    protected fun installedAt(at: Long): String = installed(load(Seed(ts = at))).name
 
-    /** Every key of [directory] and its bytes. */
-    protected fun files(directory: String): Map<String, List<Byte>> = contents().filterKeys { "/$directory/" in it }
+    /** The generation file [name] and every blob it names, each with its bytes. */
+    protected fun files(name: String): Map<String, List<Byte>> {
+        val blobs = stored(name).blobNames.map { "${store.root}/blobs/$it" }
+        return contents().filterKeys { it == store.generationKey(name) || it in blobs }
+    }
 
     /** An empty snapshot again, as at a fresh `start()`, and an empty store unless [keepStore]. */
     protected fun reset(keepStore: Boolean = false) {
@@ -194,11 +204,14 @@ internal open class SeedFixture : CrliteSyncFixture() {
         )
     }
 
-    /** No pointer, no `updater.json`, no generation directory and nothing live. */
-    protected fun assertNothingInstalled() {
+    /**
+     * No pointer, no `updater.json` and nothing live; no generation file either, unless [written] (an install that wrote
+     * its file and then failed, which deletes nothing, §6.5).
+     */
+    protected fun assertNothingInstalled(written: Boolean = false) {
         assertIs<StoreRead.Absent>(store.pointer())
         assertIs<StoreRead.Absent>(store.updater(ts))
-        assertTrue(storage.names().none { it.contains("/gen-") }, "${storage.names()}")
+        assertEquals(written, store.generationNames().isNotEmpty(), "${storage.names()}")
         assertTrue(
             snapshot.snapshot.datasets
                 .getValue(Dataset.CRLITE)

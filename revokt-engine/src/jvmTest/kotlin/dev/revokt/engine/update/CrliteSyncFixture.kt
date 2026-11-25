@@ -323,7 +323,15 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
 
     protected fun live(): DatasetGeneration = snapshot.snapshot.datasets.getValue(Dataset.CRLITE)
 
-    protected fun liveDirectory(): String? = (store.pointer() as? StoreRead.Found)?.value?.live
+    protected fun liveName(): String? = (store.pointer() as? StoreRead.Found)?.value?.live
+
+    /** The stored generation [name] through Load's steps 1 and 2 (spec §6.5). */
+    protected fun stored(name: String?): StoredGeneration =
+        assertNotNull((store.stored(assertNotNull(name)) as? StoreRead.Found)?.value, "$name does not read")
+
+    /** The stored generation [name] through Load's step 4. */
+    protected fun loaded(name: String?): LoadedGeneration =
+        assertIs<GenerationLoad.Loaded>(store.load(assertNotNull(name)), "$name does not load").value
 
     /** Nothing advanced: no cursor, no `lastVerified*`, no watermark, no pointer; the attempt written, one failure. */
     protected fun assertNothingAdvanced(
@@ -338,7 +346,7 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
             listOf<Any?>(null, null, now, failures),
             listOf(s.lastVerifiedLastModified, s.lastVerifiedAtMillis, s.lastAttemptAtMillis, s.consecutiveFailures),
         )
-        assertNull(liveDirectory())
+        assertNull(liveName())
         assertNull(live().generationId)
     }
 }

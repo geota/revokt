@@ -28,6 +28,7 @@ import dev.revokt.engine.fetch.json
 import dev.revokt.engine.fetch.ok
 import dev.revokt.engine.fetch.response
 import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.SourceRecord
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
@@ -221,11 +222,11 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     fun `a prune that throws after the flip leaves the sync INSTALLED and its updater json advanced`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val first = assertNotNull(liveDirectory())
+        val first = assertNotNull(liveName())
         server.ts = ts + 1_000
         sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
         // Only prune deletes in the first directory; the install itself deletes only its own before writing it.
-        storage.failDelete = { if ("/$first/" in it) IllegalStateException("delete") else null }
+        storage.failDelete = { if (first in it) IllegalStateException("delete") else null }
         server.ts = ts + 2_000
         val now = ts + 3 * hour
         val run = sync(server, now = now).assert(SyncOutcome.INSTALLED)
@@ -241,10 +242,10 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         // escapes prune, and only the post-install guard keeps the outcome.
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val first = assertNotNull(liveDirectory())
+        val first = assertNotNull(liveName())
         server.ts = ts + 1_000
         sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
-        storage.failDelete = { if ("/$first/" in it) IllegalStateException("delete") else null }
+        storage.failDelete = { if (first in it) IllegalStateException("delete") else null }
         throwOn = { if (it.startsWith("pruning")) OutOfMemoryError("logger") else null }
         server.ts = ts + 2_000
         val now = ts + 3 * hour
@@ -259,25 +260,31 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     fun `an install that counted store failures still prunes`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val first = assertNotNull(liveDirectory())
+        val first = assertNotNull(liveName())
         server.ts = ts + 1_000
         sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
         storage.inner.write("crlite/compat/updater.json", "{".encodeToByteArray())
         server.ts = ts + 2_000
         sync(server, now = ts + 3 * hour).assert(SyncOutcome.INSTALLED).also { assertEquals(1, it.storeFailures) }
-        assertNull(store.meta(first))
+        assertEquals(StoreRead.Absent, store.readGeneration(first))
     }
 
     @Test
     fun `a pointer that does not read back after the flip is not pruned on, so nothing is deleted`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val first = assertNotNull(liveDirectory())
-        storage.hidden = { it.endsWith("/current") }
+        val first = assertNotNull(liveName())
+        // current reads before the install, and not after its flip: a storage that breaks read-after-write.
+        var flipped = false
+        storage.failWrite = {
+            if (it.endsWith("/current")) flipped = true
+            null
+        }
+        storage.hidden = { flipped && it.endsWith("/current") }
         server.ts = ts + 1_000
         val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
         assertEquals(1, run.storeFailures)
-        assertNotNull(store.meta(first))
+        assertIs<StoreRead.Found<*>>(store.readGeneration(first))
     }
 
     @Test
@@ -286,12 +293,13 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
         sync(server).assert(SyncFailure.STORE_FAILED)
         assertEquals("$ts/${delta.id}", live().generationId)
-        assertNull(liveDirectory())
+        assertNull(liveName())
         assertNull(sourceRecord().lastVerifiedLastModified)
         storage.failWrite = { null }
         val now = ts + 2 * hour
         sync(server, now = now).assert(SyncOutcome.INSTALLED)
-        assertEquals(GenerationNames.directory(ts, "$ts/${delta.id}"), liveDirectory())
+        assertEquals(live().generationFile, liveName())
+        assertEquals("$ts/${delta.id}", stored(liveName()).generationId)
         assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
         assertEquals(ts, updater(now).watermarkMillis)
     }
@@ -302,15 +310,18 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
         sync(server).assert(SyncFailure.STORE_FAILED)
         storage.failWrite = { null }
-        val stored = assertNotNull(store.meta(GenerationNames.directory(ts, "$ts/${delta.id}")))
+        val first = assertNotNull(live().generationFile)
         // Remote Settings re-signs the same collection at the same <ts>: a fresh ECDSA signature.
         val resigned = Server().sign()
         assertNotEquals(server.sign(), resigned)
         server.signature = resigned
         val now = ts + 2 * hour
         sync(server, now = now).assert(SyncOutcome.INSTALLED)
-        assertEquals(GenerationNames.directory(ts, "$ts/${delta.id}"), liveDirectory())
-        assertEquals(stored, store.meta(assertNotNull(liveDirectory())))
+        // The re-signed collection is another file under another name; the one served before is its previous.
+        val second = assertNotNull(liveName())
+        assertNotEquals(first, second)
+        assertEquals(StoreRead.Found(Pointer(second, first)), store.pointer())
+        assertEquals("$ts/${delta.id}", stored(second).generationId)
         assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
         sync(server, now = now + hour).assert(SyncOutcome.UNCHANGED)
     }

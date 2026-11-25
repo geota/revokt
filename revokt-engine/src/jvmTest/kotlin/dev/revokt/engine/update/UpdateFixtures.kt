@@ -18,10 +18,11 @@ import dev.revokt.LogLevel
 import dev.revokt.PreparedGeneration
 import dev.revokt.RevocationEngine
 import dev.revokt.RevoktLogger
-import dev.revokt.engine.store.GenerationMeta
-import dev.revokt.engine.store.GenerationNames
-import dev.revokt.engine.store.SignedMeta
+import dev.revokt.engine.json.Json
+import dev.revokt.engine.json.JsonObject
+import dev.revokt.engine.store.GenerationFile
 import dev.revokt.engine.store.StoreLayout
+import dev.revokt.engine.verify.ContentSignature
 import okio.Buffer
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
@@ -73,57 +74,77 @@ internal object UpdateFixtures {
     ): IndexBuild.Built = build(records, bodies) as? IndexBuild.Built ?: error("refused: ${build(records, bodies)}")
 
     /**
-     * A generation as the sync would assemble it from [records]: [buildIndex]'s index, each full stored as a blob in
-     * [store] and named in `meta.json`, each delta a file staged in the directory (unless the directory is already
-     * complete, as the sync stages nothing there) and named with its SHA-256.
+     * The Remote Settings record of [r], whose attachment is [body]: the fields the CRLite schema reads (spec §6.3), a
+     * delta's `parent` being [parent].
      */
+    fun recordJson(
+        r: FilterRecord,
+        body: ByteArray,
+        parent: String? = null,
+    ): JsonObject {
+        val hash = body.toByteString().sha256().hex()
+        val parentMember = parent?.let { ""","parent":"$it"""" } ?: ""
+        val text =
+            """{"id":"${r.id}","last_modified":${r.effectiveTimestamp},"channel":"${r.channel}",""" +
+                """"incremental":${r.incremental}$parentMember,"effectiveTimestamp":${r.effectiveTimestamp},""" +
+                """"attachment":{"filename":"${r.filename}","hash":"$hash","size":${body.size},""" +
+                """"location":"x/${r.id}.filter","mimetype":"application/octet-stream"}}"""
+        return Json.parse(text.encodeToByteArray()) as JsonObject
+    }
+
+    /** The records of [records] as Remote Settings serves them, each delta's parent the full's id. */
+    fun recordsJson(
+        records: List<FilterRecord>,
+        bodies: Map<String, ByteArray> = this.bodies,
+    ): List<JsonObject> {
+        val full = records.firstOrNull { !it.incremental }?.id ?: "none"
+        return records.map { recordJson(it, bodies.getValue(it.filename), if (it.incremental) full else null) }
+    }
+
+    /**
+     * A generation as the sync would assemble it from [records], at [sourceTimestampMillis]: each placed attachment
+     * stored as its blob in [store] (as the sync writes each body it fetches), [buildIndex]'s index, and the generation
+     * file of the records (sorted as the signed payload holds them) signed with [signature] under a fixed leaf.
+     */
+    @Suppress("LongParameterList") // One per part of a generation a test varies; every one has a default.
     fun pending(
         store: StoreLayout,
         records: List<FilterRecord> = listOf(fullRecord, deltaRecord),
         bodies: Map<String, ByteArray> = this.bodies,
         freshness: Freshness = Freshness.RECORD_LAST_MODIFIED,
-        generationId: String = "1792587631204/${records.last().id}",
         sourceTimestampMillis: Long = 1_792_587_631_204,
         format: FilterFormat = FilterFormat.V3,
+        signature: ByteArray = ByteArray(96) { 9 },
+        json: List<JsonObject> = recordsJson(records, bodies),
     ): PendingGeneration {
         val built = built(records, bodies)
-        val blobs = LinkedHashMap<String, ByteString>()
-        val deltas = LinkedHashMap<String, ByteArray>()
-        for (p in built.filters) {
-            val bytes = bodies.getValue(p.record.filename)
-            if (p.full) {
-                store.putBlob(bytes)
-                blobs[p.name] = bytes.toByteString().sha256()
-            } else {
-                deltas[p.name] = bytes
-            }
-        }
-        val directory = GenerationNames.directory(sourceTimestampMillis, generationId)
-        if (store.meta(directory) == null) for ((name, bytes) in deltas) store.stageFile(directory, name, bytes)
-        val meta =
-            GenerationMeta(
-                dataset = Dataset.CRLITE,
-                channel = store.channel,
-                generationId = generationId,
-                format = format,
-                freshness = freshness,
-                sourceTimestampMillis = sourceTimestampMillis,
-                collection = "security-state/cert-revocations",
-                blobs = blobs,
-                signed =
-                    SignedMeta(
-                        sourceTimestampMillis,
-                        ByteArray(32) { 7 }.toByteString(),
-                        ByteArray(96) { 9 }.toByteString(),
-                    ),
-            )
+        for (p in built.filters) store.putBlob(bodies.getValue(p.record.filename))
         return PendingGeneration(
-            meta,
+            file(json, sourceTimestampMillis, freshness, signature),
+            built.filters,
             built.index,
-            deltas.mapValues { it.value.toByteString().sha256() },
-            "{\"data\":[]}".encodeToByteArray(),
+            format,
         )
     }
+
+    /** The generation file of [json] at [ts]: a sync's, or a seed's (`seedFormat` 1) under [freshness]. */
+    fun file(
+        json: List<JsonObject>,
+        ts: Long,
+        freshness: Freshness = Freshness.RECORD_LAST_MODIFIED,
+        signature: ByteArray = ByteArray(96) { 9 },
+        channel: CrliteChannel = CrliteChannel.COMPAT,
+    ): GenerationFile =
+        GenerationFile(
+            dataset = Dataset.CRLITE,
+            channel = channel,
+            freshness = freshness,
+            seedFormat = if (freshness == Freshness.SEED_SIGNED_TIME) 1 else null,
+            signature = signature.toByteString(),
+            signerLeafSha256 = ByteArray(32) { 7 }.toByteString(),
+            records = checkNotNull(ContentSignature.payloadRecords(json)),
+            lastModified = ts,
+        )
 
     /** A logger that keeps every message. */
     class Recording : RevoktLogger {

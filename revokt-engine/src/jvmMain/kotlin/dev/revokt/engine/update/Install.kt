@@ -4,6 +4,7 @@
 package dev.revokt.engine.update
 
 import dev.revokt.Dataset
+import dev.revokt.FilterFormat
 import dev.revokt.LogLevel
 import dev.revokt.PreparedGeneration
 import dev.revokt.RevocationEngine
@@ -13,8 +14,8 @@ import dev.revokt.SyncFailure
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
-import dev.revokt.engine.store.GenerationMeta
-import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.GenerationFile
+import dev.revokt.engine.store.GenerationFileJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
@@ -23,37 +24,34 @@ import dev.revokt.engine.walker.absorb
 import dev.revokt.engine.walker.isFatal
 import dev.revokt.engine.walker.restoreInterrupt
 import dev.revokt.safeLog
-import okio.ByteString
 
 /**
- * A generation ready to install (spec §6.5): its [meta], its `index.bin` ([index]), its delta files' names, each with the
- * SHA-256 of its signed record ([deltas]), and its `records.json`. Its bodies are already written, one at
- * a time before the install: its full filters as blobs, and its delta files staged in its directory
- * ([StoreLayout.stageFile]) unless the directory is already complete, so no delta body is held until the install. [index]
- * was built by the loader ([buildIndex]).
+ * A generation ready to install (spec §6.5): its generation [file], its filters as placed ([placed], in `index.bin`
+ * order), the `index.bin` built from them ([index], by [buildIndex]) and the full filter's [format]. Its bodies are
+ * already stored, one at a time before the install, each as the blob of its signed SHA-256, so no body is held until the
+ * install.
  */
+@OptIn(RevoktInternalApi::class)
 internal class PendingGeneration(
-    val meta: GenerationMeta,
+    val file: GenerationFile,
+    val placed: List<PlacedFilter>,
     index: ByteArray,
-    val deltas: Map<String, ByteString>,
-    records: ByteArray,
+    val format: FilterFormat,
 ) {
     val index: ByteArray = index.copyOf()
-    val records: ByteArray = records.copyOf()
 
-    override fun toString(): String = "PendingGeneration(${meta.generationId} in ${meta.directory})"
+    /** `"<ts>/<last placed record id>"`, as a load derives it (spec §4 `DataState.generationId`). */
+    val generationId: String = "${file.lastModified}/${placed.last().record.id}"
+
+    override fun toString(): String = "PendingGeneration($generationId)"
 }
 
 /**
  * What an install publishes beside the generation's own fields (spec §4 `DataState`, §5.1): whether it is the seed and
  * the seed's `seedFormat`, the seed `STALE` gate ([DatasetGeneration.staleGateOpen]), and the clock reading
  * `updater.json` is written at. [pointerCounted] when the caller has already counted a malformed pointer and each
- * pointed `meta.json` that does not read (the seed load, which reads them first, #138), so the install's own read of
- * them for the new `previous` does not count them again: each store fault is counted once.
- * [heal] when the caller found no trustworthy pointer (rule (b) of the seed-load rule, lead 2026-11-16): a complete
- * directory of this generation's name is then held and installed as it stands when it is this generation, and one whose
- * `meta.json` is absent or does not read is this install's to complete, pointed or not, and never deleted by it on a
- * failure: the caller deletes only a directory it staged afresh.
+ * pointed generation that fails Load's steps 1 and 2 (the seed load, which reads them first, #138), so the install's
+ * own read of them does not count them again: each store fault is counted once.
  */
 internal class Publication(
     val fromSeed: Boolean,
@@ -61,7 +59,6 @@ internal class Publication(
     val staleGateOpen: Boolean,
     val nowMillis: Long,
     val pointerCounted: Boolean = false,
-    val heal: Boolean = false,
 ) {
     init {
         require(fromSeed == (seedFormat != null)) { "seedFormat is set exactly for a seed" }
@@ -76,26 +73,28 @@ internal sealed interface InstallResult {
     val storeFailures: Int
 
     /**
-     * [generationId] is live in the engine, published at [generationEpoch], and named by the pointer as `live`. [healed]
-     * is true when the pointer was malformed before this install, so the flip healed it: a heal is never pruned after,
-     * since the damaged pointer may have named any directory (#256); the next install over a valid pointer prunes.
+     * [generationId] is live in the engine, published at [generationEpoch], and named by the pointer as `live`, the
+     * generation file [name]. [healed] when the pointer was malformed before this install, so the flip healed it.
+     * [prunable] when the pointer read `Found` before the install with every generation it named passing Load's steps 1
+     * and 2, which a heal never does: only then may a sync prune after it (spec §6.5 "Prune", #256).
      */
     class Installed(
-        val directory: String,
+        val name: String,
         val generationId: String,
         val generationEpoch: Long,
         override val storeFailures: Int,
         val healed: Boolean,
+        val prunable: Boolean,
     ) : InstallResult {
-        override fun toString(): String = "Installed($generationId in $directory at epoch $generationEpoch)"
+        override fun toString(): String = "Installed($generationId in $name at epoch $generationEpoch)"
     }
 
     /**
      * The install failed with [failure]. [activated] is true when the failure came after `activate` returned: a store
      * failure at the pointer flip or `updater.json` (`STORE_FAILED`, the snapshot published), or a fatal error such as
      * an `OutOfMemoryError` while publishing (`INTERNAL_ERROR`, the snapshot possibly not published). The engine then
-     * holds the new generation and its directory stays. Otherwise the engine, the snapshot and the pointer are
-     * untouched, and any directory this install wrote is deleted.
+     * holds the new generation. Otherwise the engine, the snapshot and the pointer are untouched. A failed install
+     * deletes nothing either way: its blobs and generation file are named by no pointer, and the next attempt reuses them.
      */
     class Failed(
         val failure: SyncFailure,
@@ -108,16 +107,17 @@ internal sealed interface InstallResult {
 }
 
 /**
- * Installs [generation] in spec §6.5's order: the `index.bin` cap → the format check (a format [engine] does not list is
- * never offered to `prepare`) → write the generation directory, `meta.json` last → `engine.prepare`, the install's only
- * decode of the filters → `engine.activate` → publish the generation snapshot (`generationEpoch++`) → flip the pointer → write
- * [updater] when given.
+ * Installs [generation] in spec §6.5's order, its bodies already stored: the `index.bin` cap → the format check (a
+ * format [engine] does not list is never offered to `prepare`) → the generation file's cap, then its write (not again
+ * when stored and re-hashing) → the load-back (the file re-read, re-hashed and placed, every blob re-hashed, with the
+ * index just built) → `engine.prepare`, the install's only decode of the filters → `engine.activate` → publish the
+ * generation snapshot (`generationEpoch++`) → flip the pointer → write [updater] when given.
  *
- * Nothing becomes live before every check passes. A failure before `activate` returns leaves the engine, [snapshot] and
- * the pointer untouched and deletes the directory this install wrote (its blobs stay, content-addressed); a `prepare`
- * or `activate` failure counts a store failure. A store write failure is `STORE_FAILED`, a `prepare` or `activate`
- * throw `ENGINE_FAILED`. Every throwable is caught, an `OutOfMemoryError` included, which counts a store failure and is
- * `ENGINE_FAILED` in the engine's steps and `INTERNAL_ERROR` elsewhere, so nothing escapes the loader thread.
+ * Nothing becomes live before every check passes, and nothing is ever deleted: a failure before `activate` returns
+ * leaves the engine, [snapshot] and the pointer untouched. A `prepare` or `activate` failure, and every store failure,
+ * counts a store failure. A store write failure is `STORE_FAILED`, a `prepare` or `activate` throw `ENGINE_FAILED`. Every
+ * throwable is caught, an `OutOfMemoryError` included, which is `ENGINE_FAILED` in the engine's steps and
+ * `INTERNAL_ERROR` elsewhere, so nothing escapes the loader thread.
  *
  * The publish follows `activate`: a verdict in between carries the new answer under the old epoch, for at most the
  * verdict-cache TTL (§6.5). The loader runs this on its dispatcher, or the `start()` caller in the sole-seed path, never
@@ -134,43 +134,11 @@ internal fun install(
     logger: RevoktLogger,
 ): InstallResult = Install(generation, engine, store, snapshot, publication, updater, logger).run()
 
-/** The directory of the CRLite generation this reference publishes live, or null when it publishes none. */
-internal fun SnapshotRef.liveDirectory(): String? {
-    val live = snapshot.datasets[Dataset.CRLITE] ?: return null
-    val id = live.generationId ?: return null
-    return live.sourceTimestampMillis?.let { GenerationNames.directory(it, id) }
-}
+/** The name of the generation file the engine serves for [dataset], as the snapshot published it, or null. */
+internal fun SnapshotRef.servedFile(dataset: Dataset = Dataset.CRLITE): String? =
+    snapshot.datasets[dataset]?.takeIf { it.generationId != null }?.generationFile
 
-/**
- * Prunes the store to the directories the pointer names, after the install of [installed], for the sync and the seed
- * loader; a failure calls [failed], a store failure, never the caller's. When the pointer does not read back as
- * [installed] (a storage that breaks read-after-write), nothing is deleted: a store failure and a warning, never
- * "delete everything".
- */
-@Suppress("TooGenericExceptionCaught") // §6.5: the loader catches every throwable.
-internal fun StoreLayout.pruneAfter(
-    installed: String,
-    logger: RevoktLogger,
-    failed: () -> Unit,
-) {
-    try {
-        if ((pointer() as? StoreRead.Found)?.value?.live != installed) {
-            failed()
-            logger.safeLog(
-                LogLevel.WARN,
-                "$root: the pointer does not read back as $installed; not pruned",
-            )
-            return
-        }
-        prune()
-    } catch (t: Throwable) {
-        restoreInterrupt(t)
-        failed()
-        logger.safeLog(LogLevel.WARN, "pruning $root failed", t)
-    }
-}
-
-/** One install's steps, and what its failure path must undo. */
+/** One install's steps. */
 @OptIn(RevoktInternalApi::class)
 private class Install(
     private val generation: PendingGeneration,
@@ -181,24 +149,24 @@ private class Install(
     private val updater: UpdaterRecord?,
     private val logger: RevoktLogger,
 ) {
-    private val meta = generation.meta
+    private val file = generation.file
 
     /**
      * What a throw here fails the install with: `STORE_FAILED` (a non-fatal one), `ENGINE_FAILED` or `INTERNAL_ERROR`.
      */
     private var step = SyncFailure.INTERNAL_ERROR
     private var storeFailures = 0
-
-    /** The directory of the generation the engine held live when this install began, before its publish. */
-    private var liveBefore: String? = null
-
-    /** Whether the pointer was malformed when this install began, so its flip heals it ([InstallResult.Installed.healed]). */
-    private var healing = false
-
-    /** The directory this install wrote into, deleted on a failure before activation. */
-    private var written: String? = null
     private var prepared: PreparedGeneration? = null
     private var activated = false
+
+    /** The generation file the engine served when this install began, before its publish. */
+    private val servedBefore: String? = snapshot.servedFile(store.dataset)
+
+    /** The pointer as it read when this install began. */
+    private var pointerBefore: StoreRead<Pointer> = StoreRead.Absent
+
+    /** Each generation the pointer named when this install began, through Load's steps 1 and 2. */
+    private val pointedBefore = LinkedHashMap<String, StoreRead<StoredGeneration>>()
 
     @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable, an OutOfMemoryError included.
     fun run(): InstallResult =
@@ -213,151 +181,86 @@ private class Install(
 
     private fun steps(): InstallResult {
         step = SyncFailure.STORE_FAILED
-        val directory = meta.directory
-        val (held, existing) = claim(directory)
+        readBefore()
         step = SyncFailure.INTERNAL_ERROR
         if (generation.index.size > C2spIndex.MAX_BYTES) {
-            // §3.2: a built index over the cap fails before the directory is written.
+            // §3.2: a built index over the cap fails before the generation file is written.
             return fail(SyncFailure.INDEX_INCONSISTENT, null, counted = false)
         }
-        if (meta.format !in engine.formats) {
-            return fail(SyncFailure.FORMAT_UNSUPPORTED, null, counted = false)
+        if (generation.format !in engine.formats) return fail(SyncFailure.FORMAT_UNSUPPORTED, null, counted = false)
+        val bytes = GenerationFileJson.write(file, store.generationCap)
+        if (bytes == null) {
+            // §6.5: never write a file this install's own load-back, or a later load, would refuse.
+            val detail = "the generation file is over maxJsonBytes (${store.maxJsonBytes}) + 64 KiB"
+            logger.safeLog(LogLevel.WARN, "${store.root}: $detail; raise maxJsonBytes to install it")
+            return fail(SyncFailure.STORE_FAILED, IllegalStateException(detail))
         }
         step = SyncFailure.STORE_FAILED
-        directory(directory, held, existing)?.let { return it }
+        val name = store.putGeneration(bytes)
         val files =
-            store.readGeneration(directory)?.files
-                ?: return fail(SyncFailure.STORE_FAILED, IllegalStateException("$directory does not read back"))
+            loadBack(name) ?: return fail(SyncFailure.STORE_FAILED, IllegalStateException("$name does not load back"))
         step = SyncFailure.ENGINE_FAILED
-        val p = engine.prepare(files).also { prepared = it }
+        val p = engine.prepare(files.files).also { prepared = it }
         engine.activate(p)
         activated = true
         step = SyncFailure.INTERNAL_ERROR
-        val epoch = publish()
+        val epoch = publish(name)
         step = SyncFailure.STORE_FAILED
-        store.point(Pointer(directory, previous(directory)))
+        store.point(Pointer(name, previous(name)))
         updater?.let { store.writeUpdater(it, publication.nowMillis) }
-        return InstallResult.Installed(directory, meta.generationId, epoch, storeFailures, healing)
+        val healed = pointerBefore is StoreRead.Malformed
+        val prunable = pointerBefore is StoreRead.Found && pointedBefore.values.all { it is StoreRead.Found }
+        return InstallResult.Installed(name, generation.generationId, epoch, storeFailures, healed, prunable)
     }
 
     /**
-     * Whether [directory] is held and its `meta.json` as it reads. It is held when it is the engine's live generation or
-     * one the pointer names, or when the pointer is malformed (it may name any directory) and [directory]'s `meta.json`
-     * is present, complete or malformed (#236, fail closed). A directory nothing holds is this install's: it is
-     * completed over its staged deltas, or deleted on a failure before activation. A complete one becomes this install's
-     * only once [StoreLayout.reopen] accepts it. Under [Publication.heal] (the seed's rule (b), #138) it is held when it is
-     * complete or is the engine's live generation: an incomplete one the engine does not serve is this install's, pointed
-     * or not, a complete one is never reopened, and the live one is never rewritten whatever its `meta.json` says.
+     * Reads the pointer and, when it reads, each generation it names through Load's steps 1 and 2, once, before anything
+     * is written: whether a sync may prune after this install (spec §6.5 "Prune") and the `previous` candidates. A
+     * malformed pointer and each named generation that does not read count a store failure, unless the caller counted
+     * them ([Publication.pointerCounted]).
      */
-    private fun claim(directory: String): Pair<Boolean, StoreRead<GenerationMeta>> {
-        liveBefore = liveDirectory()
-        val existing = store.readMeta(directory)
-        // #236, fail closed: a malformed pointer may name a directory whose meta.json is present, so it is held: compared,
-        // reused when it is this generation, never reopened, rewritten or deleted. The flip then writes a pointer that
-        // reads. Only a directory with no meta.json is staged.
-        healing = store.pointer() is StoreRead.Malformed
-        val unknown = healing && existing !is StoreRead.Absent
-        val held =
-            if (publication.heal) {
-                // The engine's live directory is held whatever its meta.json says: it is never rewritten while served.
-                existing is StoreRead.Found || directory == liveDirectory()
-            } else {
-                directory == liveDirectory() || directory in pointed() || unknown
-            }
-        // Under heal the caller owns its directory's cleanup: it never deletes one it reopened (#235's review).
-        if (!held && existing !is StoreRead.Found && !publication.heal) written = directory
-        return held to existing
-    }
-
-    /**
-     * Completes the generation directory, `meta.json` last, or returns the failure. [held] and [existing] were read at
-     * the start of the install ([claim]).
-     * - A held directory (live, pointed to, or beside a malformed pointer with its `meta.json` present) is never
-     *   replaced. When it holds this generation ([sameGeneration]: left by an install that failed after the publish,
-     *   the pointer's `previous` when an older changeset installs with no generation loaded, or the same `<ts>` served
-     *   again beside a malformed pointer) it is prepared as it stands, its stored `meta.json` kept, so a retry can
-     *   succeed. When it holds another
-     *   generation, a stored delta that does not re-hash included (#201), or its `meta.json` is malformed (a newer
-     *   binary's `metaVersion`, say, #178) or missing, it stays and fails the install, `STORE_FAILED`.
-     * - Any other directory is referenced by nothing, complete or not (beside a malformed pointer, only one with no
-     *   `meta.json`). It is completed again over its staged delta files ([StoreLayout.reopen], then
-     *   [StoreLayout.completeGeneration], which deletes every other file of an earlier attempt, re-hashes each staged
-     *   delta and writes this install's own `meta.json` with the signature it verified). A staged delta that is missing
-     *   or does not re-hash fails the install, and the directory is deleted, so the next sync stages it afresh rather
-     *   than failing on it at every sync (the #205 review).
-     */
-    private fun directory(
-        directory: String,
-        held: Boolean,
-        existing: StoreRead<GenerationMeta>,
-    ): InstallResult? {
-        if (held) {
-            if (existing is StoreRead.Found) {
-                if (sameGeneration(existing.value, directory)) return null
-                val cause = IllegalStateException("$directory holds another generation")
-                return fail(SyncFailure.STORE_FAILED, cause)
-            }
-            val cause = IllegalStateException("$directory is held, and its meta.json is not readable")
-            return fail(SyncFailure.STORE_FAILED, cause)
+    private fun readBefore() {
+        pointerBefore = store.pointer()
+        val read = pointerBefore
+        if (read is StoreRead.Malformed && !publication.pointerCounted) storeFailures++
+        if (read !is StoreRead.Found) return
+        for (n in listOfNotNull(read.value.live, read.value.previous)) {
+            val stored = store.stored(n)
+            pointedBefore[n] = stored
+            if (stored !is StoreRead.Found && !publication.pointerCounted) storeFailures++
         }
-        if (existing is StoreRead.Found) {
-            // A complete orphan: only once reopen accepts it (never a pointed one) is it this install's to delete.
-            store.reopen(directory)
-            written = directory
-        }
-        store.completeGeneration(meta, generation.index, generation.deltas, generation.records)
-        return null
     }
 
     /**
-     * Whether [directory], whose `meta.json` is [stored], holds this generation: the same `meta.json` but for its
-     * signed members (the signature that verified, and its leaf), byte-equal `index.bin` and `records.json`, and each
-     * delta file re-hashing against its signed record (#201: a stored filter is re-hashed before it is reused, as Firefox's
-     * `isFilterOnDisk` and upki's `Plan::construct` re-hash theirs; the full filters' blobs are re-hashed when the
-     * directory is read). A collection re-signed under the same `<ts>` is the same signed records, so a retried flip over
-     * it installs rather than failing every sync until the next `<ts>` (the maintainer's decision on #200; Firefox treats
-     * an equal timestamp as up to date, `RemoteSettingsClient.sys.mjs:778` at `cac25a6`). Under [Publication.heal] the
-     * `freshness` is not compared either: a seed and a sync of one `<ts>` are one generation (#138, the seed-load rule).
+     * The generation file [name] loaded back as `start()` would load it, but with the index this install built in step 2
+     * from the same records and bytes (spec §6.5): re-read, re-hashed against its name, its records placed, every blob
+     * re-hashed. Null when it does not read back as this generation.
      */
-    private fun sameGeneration(
-        stored: GenerationMeta,
-        directory: String,
-    ): Boolean =
-        stored.copy(signed = meta.signed, freshness = if (publication.heal) meta.freshness else stored.freshness) ==
-            meta &&
-            store.file(directory, StoreLayout.INDEX).contentEquals(generation.index) &&
-            store.file(directory, StoreLayout.RECORDS).contentEquals(generation.records) &&
-            generation.deltas.all { (name, sha256) -> store.file(directory, name, sha256) != null }
-
-    /** The directory of the generation the engine holds live for this dataset, as the snapshot published it. */
-    private fun liveDirectory(): String? {
-        val live = snapshot.snapshot.datasets[meta.dataset] ?: return null
-        val id = live.generationId ?: return null
-        return live.sourceTimestampMillis?.let { GenerationNames.directory(it, id) }
+    private fun loadBack(name: String): LoadedGeneration? {
+        val stored = (store.stored(name) as? StoreRead.Found)?.value ?: return null
+        if (stored.generationId != generation.generationId) return null
+        return store.loadFiles(stored, generation.index, generation.format)
     }
 
-    /** The directories the pointer names; none when it is absent or malformed (counted by [previous]). */
-    private fun pointed(): Set<String> =
-        (store.pointer() as? StoreRead.Found)?.value?.let { setOfNotNull(it.live, it.previous) }.orEmpty()
-
     /**
-     * Publishes the snapshot with this generation for its dataset, the engine's coverage end (null when the engine
-     * cannot tell, or throws), and the next epoch, which it returns.
+     * Publishes the snapshot with this generation for its dataset, under its file [name], the engine's coverage end (null
+     * when the engine cannot tell, or throws), and the next epoch, which it returns.
      */
     @Suppress("TooGenericExceptionCaught") // An injected engine's getter that throws means it cannot tell (§3.2).
-    private fun publish(): Long {
+    private fun publish(name: String): Long {
         val current = snapshot.snapshot
         val installed =
             DatasetGeneration(
-                generationId = meta.generationId,
-                freshness = meta.freshness,
+                generationId = generation.generationId,
+                freshness = file.freshness,
                 fromSeed = publication.fromSeed,
-                sourceTimestampMillis = meta.sourceTimestampMillis,
+                sourceTimestampMillis = file.lastModified,
                 seedFormat = publication.seedFormat,
                 pending = false,
                 staleGateOpen = publication.staleGateOpen,
+                generationFile = name,
             )
-        val datasets = current.datasets + (meta.dataset to installed)
+        val datasets = current.datasets + (file.dataset to installed)
         val coverageEnd =
             try {
                 engine.coverageEndMillis
@@ -372,55 +275,33 @@ private class Install(
 
     /**
      * The pointer's new `previous`: the first of the generation the engine served before this install, then the old
-     * `live` and `previous`, that is another complete generation that reads back ([qualifies], spec §6.5), else none.
+     * `live` and `previous`, that is another generation passing Load's steps 1 to 3 ([qualifies], spec §6.5), else none.
      * The served one comes first so that a flip that failed after activation, which left the engine serving a
-     * generation `current` does not name, never loses it to the next install's prune (#249: never delete what is
-     * served); so a running loader keeps its fallback beside an absent or malformed pointer too (#236), while a fresh one
-     * has none. A malformed pointer, and each candidate that does not qualify, count a store failure. A heal (the flip
-     * beside a malformed pointer) is not pruned after (#256). A caller that read the pointer and its directories first
-     * and counted their faults ([Publication.pointerCounted]) has them not counted again: the malformed pointer, and a
-     * pointed candidate whose `meta.json` does not read.
+     * generation `current` does not name, never loses it to the next prune (#249: never delete what is served); so a
+     * running loader keeps its fallback beside an absent or malformed pointer too (#236), while a fresh one has none.
+     * Every candidate is read once, so each that does not qualify counts its store failure, even when an earlier one
+     * qualifies; a pointed one already counted by [readBefore] is not counted again.
      */
-    private fun previous(directory: String): String? {
-        val pointed =
-            when (val read = store.pointer()) {
-                StoreRead.Absent -> {
-                    emptyList()
-                }
-
-                StoreRead.Malformed -> {
-                    if (!publication.pointerCounted) storeFailures++
-                    emptyList()
-                }
-
-                is StoreRead.Found -> {
-                    listOfNotNull(read.value.live, read.value.previous)
-                }
-            }
-        // Every candidate is read, once, so a pointed directory that does not read counts its store failure even when
-        // an earlier candidate qualifies.
-        val candidates = (listOfNotNull(liveBefore) + pointed).distinct().filter { it != directory }
-        return candidates
-            .filter { qualifies(it, callerCounted = publication.pointerCounted && it in pointed) }
-            .firstOrNull()
+    private fun previous(name: String): String? {
+        val pointed = pointedBefore.keys.toList()
+        val candidates = (listOfNotNull(servedBefore) + pointed).distinct().filter { it != name }
+        return candidates.filter(::qualifies).firstOrNull()
     }
 
     /**
-     * Whether [candidate] is a complete generation, as a `previous` must be. Complete is what loading it needs
-     * ([StoreLayout.readGeneration]: `meta.json`, `index.bin`, `records.json`, every file it names, each blob
-     * re-hashed), so the fallback is always one that can load (#246, the #247 review). One whose `meta.json` is missing
-     * or malformed, or that does not read back, counts a store failure.
+     * Whether [candidate] passes Load's steps 1 to 3, as a `previous` must, so the fallback always loads (#246, the #247
+     * review): its file reads, re-hashes and places, and every blob it names re-hashes. Step 4 rebuilds the index from
+     * those same bytes, which an earlier install already decoded. One that does not counts a store failure.
      */
-    private fun qualifies(
-        candidate: String,
-        callerCounted: Boolean = false,
-    ): Boolean {
-        if (store.readMeta(candidate) !is StoreRead.Found) {
-            // The seed loader counted a pointed directory whose meta.json does not read ([Publication.pointerCounted]).
-            if (!callerCounted) storeFailures++
+    private fun qualifies(candidate: String): Boolean {
+        val read = pointedBefore[candidate]
+        val stored = (read ?: store.stored(candidate)) as? StoreRead.Found
+        if (stored == null) {
+            // A pointed one that does not read was counted by readBefore (or by the caller).
+            if (read == null) storeFailures++
             return false
         }
-        if (store.readGeneration(candidate) == null) {
+        if (!store.blobsMatch(stored.value)) {
             storeFailures++
             return false
         }
@@ -428,8 +309,8 @@ private class Install(
     }
 
     /**
-     * Ends the install as [outcome]: before activation, closes the prepared generation and deletes the directory this
-     * install wrote. [counted] adds the store failure the step's failure counts.
+     * Ends the install as [failure]: before activation, closes the prepared generation. Nothing is deleted. [counted]
+     * adds the store failure the step's failure counts.
      */
     @Suppress("TooGenericExceptionCaught") // §6.5: the failure path catches every throwable too.
     private fun fail(
@@ -443,14 +324,6 @@ private class Install(
                 prepared?.close()
             } catch (t: Throwable) {
                 logger.safeLog(LogLevel.WARN, "closing an unactivated generation failed", t)
-            }
-            written?.let {
-                try {
-                    store.deleteGeneration(it)
-                } catch (t: Throwable) {
-                    storeFailures++
-                    logger.safeLog(LogLevel.WARN, "deleting $it failed", t)
-                }
             }
         }
         return InstallResult.Failed(failure, cause, activated, storeFailures)

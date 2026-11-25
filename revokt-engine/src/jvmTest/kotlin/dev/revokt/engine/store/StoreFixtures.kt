@@ -33,29 +33,6 @@ internal object StoreFixtures {
             ),
         )
 
-    fun meta(
-        generationId: String = "g1",
-        sourceTimestampMillis: Long = 1_762_430_400_000,
-        blobs: Map<String, ByteString> = emptyMap(),
-        channel: CrliteChannel = CrliteChannel.COMPAT,
-    ): GenerationMeta =
-        GenerationMeta(
-            dataset = Dataset.CRLITE,
-            channel = channel,
-            generationId = generationId,
-            format = FilterFormat.V3,
-            freshness = Freshness.RECORD_LAST_MODIFIED,
-            sourceTimestampMillis = sourceTimestampMillis,
-            collection = "security-state/cert-revocations",
-            blobs = blobs,
-            signed =
-                SignedMeta(
-                    sourceTimestampMillis + 1,
-                    ByteArray(32) { 7 }.toByteString(),
-                    ByteArray(96) { 9 }.toByteString(),
-                ),
-        )
-
     /** A storage that records every write and delete, in order, over an in-memory one. */
     class Recording(
         private val inner: RevoktStorage = RevoktStorage.inMemory(),

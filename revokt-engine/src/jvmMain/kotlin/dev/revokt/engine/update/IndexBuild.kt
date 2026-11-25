@@ -47,7 +47,7 @@ internal class FilterRecord(
 internal fun CrliteRecord.toFilterRecord(): FilterRecord =
     FilterRecord(id, channel, incremental, effectiveTimestamp, attachment.filename)
 
-/** The `meta.format` of a filter's decoded [Encoding] (spec §6.5). */
+/** The [FilterFormat] of a filter's decoded [Encoding] (spec §6.5). */
 @OptIn(dev.revokt.RevoktInternalApi::class, RevoktInternalApi::class)
 internal fun Encoding.toFilterFormat(): FilterFormat =
     when (this) {
@@ -83,7 +83,7 @@ internal sealed interface IndexBuild {
 
     /**
      * The record set builds no generation: [failure] is `INDEX_INCONSISTENT` (not exactly one full filter, two placed
-     * attachments that map to one name or one that maps to a name the directory reserves, or an index over
+     * attachments that map to one name or one that maps to a reserved name, or an index over
      * [C2spIndex.MAX_BYTES], spec §3.2 and §6.5), or `FILTER_UNREADABLE` (a placed filter does not decode under §6.3,
      * so its coverage cannot be read). A sync fails with [failure]; a seed loader maps it to `SEED_UNREADABLE` (spec
      * §6.5).
@@ -129,8 +129,8 @@ internal fun placeFilters(
  *
  * The generation is [placeFilters]' records of [records] for [channel], refused as there before any [body] is read.
  * Then each placed filter's [body] is read once, in order, and its coverage decoded with the clubcard decoders; the
- * index is laid out by [C2spIndex.index] and refused when over [C2spIndex.MAX_BYTES], before a generation directory
- * could be written.
+ * index is laid out by [C2spIndex.index] and refused when over [C2spIndex.MAX_BYTES], before a generation file could
+ * be written.
  */
 @OptIn(RevoktInternalApi::class)
 internal fun buildIndex(
@@ -167,12 +167,15 @@ internal fun buildIndex(
     return IndexBuild.Built(C2spIndex.write(index), placed)
 }
 
-/** The names a generation directory holds beside its filters. */
-private val DIRECTORY_FILES = setOf(StoreLayout.INDEX, StoreLayout.META, StoreLayout.RECORDS)
+/**
+ * The names a filter can never take in a generation: `index.bin`, which sits beside the filters in its C2SP image, and
+ * the reserved names §6.3 refuses as attachment filenames anyway (`meta.json`, `records.json`).
+ */
+private val RESERVED_NAMES = setOf(StoreLayout.INDEX, "meta.json", "records.json")
 
-/** Why [placed] cannot share one directory, or null when every name is distinct and none is a directory file. */
+/** Why [placed] cannot share one C2SP image, or null when every name is distinct and none is reserved. */
 private fun collision(placed: List<PlacedFilter>): String? {
-    placed.firstOrNull { it.name in DIRECTORY_FILES }?.let { return "${it.record.filename} is named ${it.name}" }
+    placed.firstOrNull { it.name in RESERVED_NAMES }?.let { return "${it.record.filename} is named ${it.name}" }
     val byName = placed.groupBy { it.name }.values.firstOrNull { it.size > 1 } ?: return null
     return "${byName.joinToString { it.record.filename }} map to ${byName.first().name}"
 }

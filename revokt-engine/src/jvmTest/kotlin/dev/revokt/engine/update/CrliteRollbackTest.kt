@@ -29,7 +29,6 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
     private val updaterKey = "crlite/compat/updater.json"
     private val currentKey = "crlite/compat/current"
     private val older = ts - hour
-    private val olderDirectory = GenerationNames.directory(older, "$older/${delta.id}")
 
     /** [server] moved back to [older], with the same records. */
     private fun older(server: Server): Server =
@@ -50,7 +49,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
             listOf(s.lastVerifiedLastModified, s.lastVerifiedAtMillis, s.consecutiveFailures),
         )
         assertEquals(ts, updater(now).watermarkMillis)
-        assertEquals(directory1, liveDirectory())
+        assertEquals(name1, liveName())
         assertEquals("$ts/${delta.id}", live().generationId)
     }
 
@@ -83,7 +82,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         assertNull(updater().watermarkMillis)
         sync(server, now = ts + 2 * hour).assert(SyncFailure.ROLLBACK_REFUSED)
         assertEquals(emptyList(), server.attachmentRequests())
-        assertEquals(directory1, liveDirectory())
+        assertEquals(name1, liveName())
         assertEquals("$ts/${delta.id}", live().generationId)
     }
 
@@ -96,7 +95,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         storage.failRead = { null }
         assertContentEquals(before, storage.inner.read(updaterKey))
         assertEquals(emptyList(), server.attachmentRequests())
-        assertEquals(directory1, liveDirectory())
+        assertEquals(name1, liveName())
     }
 
     @Test
@@ -118,8 +117,8 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         installsAfter { storage.inner.write(currentKey, "{".encodeToByteArray()) }
 
     @Test
-    fun `with no generation loaded beside a malformed live meta json an older changeset installs`() =
-        installsAfter { storage.inner.write("crlite/compat/$directory1/meta.json", "{".encodeToByteArray()) }
+    fun `with no generation loaded beside a live generation file that does not read an older changeset installs`() =
+        installsAfter { storage.inner.write(store.generationKey(checkNotNull(name1)), "{".encodeToByteArray()) }
 
     /** An older changeset after [damage] to the stored generation, which a fresh loader does not load: installs. */
     private fun installsAfter(damage: () -> Unit) {
@@ -140,7 +139,8 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
      */
     private fun installedOlder(now: Long) {
         assertEquals("$older/${delta.id}", live().generationId)
-        assertEquals(olderDirectory, liveDirectory())
+        assertEquals("$older/${delta.id}", stored(liveName()).generationId)
+        assertEquals(live().generationFile, liveName())
         assertEquals(older, sourceRecord(now).lastVerifiedLastModified)
         assertEquals(older, updater(now).watermarkMillis)
         sync(Server(ts = older - 1), now = now + hour).assert(SyncFailure.ROLLBACK_REFUSED)
@@ -228,7 +228,7 @@ internal class CrliteRollbackTest : CrliteDeltaFixture() {
         storage.failRead = { null }
         assertContentEquals(before, storage.inner.read(updaterKey))
         assertEquals(emptyList(), server.attachmentRequests())
-        assertEquals(directory1, liveDirectory())
+        assertEquals(name1, liveName())
         assertNull(live().generationId)
     }
 

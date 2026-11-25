@@ -7,9 +7,9 @@ import com.code_intelligence.jazzer.junit.FuzzTest
 import dev.revokt.RevoktLimits
 
 /**
- * Spec §9.1 target "store readers" (#213): the three files a generation store reads back from a disk that can rot,
- * `current` ([PointerJson]), `meta.json` ([MetaJson]) and `updater.json` ([UpdaterJson]), each read from the same
- * input. A reader returns a value or null, never throws, and reads the same bytes the same way twice; over
+ * Spec §9.1 target "store readers" (#213): two of the files a store reads back from a disk that can rot, `current`
+ * ([PointerJson]) and `updater.json` ([UpdaterJson]), each read from the same input; the generation file is
+ * `GenerationFileFuzzTest`'s. A reader returns a value or null, never throws, and reads the same bytes the same way twice; over
  * `RevoktLimits.MAX_JSON_BYTES` every reader returns null. Whatever a reader returns is written and read back to
  * itself. `updater.json`, read at the start and at the end of the clock, never holds a backoff past
  * `now + MAX_BACKOFF`, and counts one store failure per dropped source entry and one for a malformed `sources`.
@@ -37,11 +37,6 @@ class StoreJsonFuzzTest {
             if (pointer != null) {
                 check(PointerJson.read(PointerJson.write(pointer)) == pointer) { "the pointer does not round-trip" }
             }
-
-            val meta = MetaJson.read(data)
-            check(meta == MetaJson.read(data)) { "a second meta.json read differs" }
-            check(!over || meta == null) { "a meta.json over the cap" }
-            if (meta != null) check(MetaJson.read(MetaJson.write(meta)) == meta) { "meta.json does not round-trip" }
 
             for (now in NOWS) {
                 val read = UpdaterJson.read(data, now)
