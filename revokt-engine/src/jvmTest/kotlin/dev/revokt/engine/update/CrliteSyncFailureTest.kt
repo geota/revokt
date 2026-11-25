@@ -304,7 +304,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         server.fetcher.requests.clear()
         val now = ts + 2 * hour
         val engine = TestEngine()
-        sync(server, now = now, engine = engine).assert(SyncOutcome.INSTALLED)
+        sync(server, now = now, engine = engine).assert(SyncOutcome.UNCHANGED)
         assertEquals(StoreRead.Found(Pointer(assertNotNull(live().generationFile), null)), store.pointer())
         assertEquals(emptyList(), engine.prepared, "the engine already serves it")
         assertEquals(epoch, snapshot.snapshot.generationEpoch, "nothing is published")
@@ -326,7 +326,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         storage.failWrite = { null }
         val served = assertNotNull(live().generationFile)
         assertNotEquals(old, served)
-        sync(server, now = ts + day + 2 * hour).assert(SyncOutcome.INSTALLED)
+        sync(server, now = ts + day + 2 * hour).assert(SyncOutcome.UNCHANGED)
         assertEquals(StoreRead.Found(Pointer(served, old)), store.pointer())
     }
 
@@ -340,11 +340,31 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         val key = store.generationKey(served)
         storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
         val engine = TestEngine()
-        val run = sync(server, now = ts + 2 * hour, engine = engine).assert(SyncOutcome.INSTALLED)
+        val run = sync(server, now = ts + 2 * hour, engine = engine).assert(SyncOutcome.UNCHANGED)
         assertEquals(listOf("$ts/${delta.id}"), engine.prepared, "a full install")
         assertEquals(StoreRead.Found(Pointer(served, null)), store.pointer(), "the same bytes, the same name")
         assertIs<StoreRead.Found<*>>(store.stored(served), "rewritten")
         assertEquals(1, run.storeFailures, "the damaged served file, once")
+    }
+
+    @Test
+    fun `a heal-install beside a pointer that reads is never pruned after, and stays UNCHANGED`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val old = assertNotNull(liveName())
+        server.ts = ts + day
+        storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        sync(server, now = ts + day + hour).assert(SyncFailure.STORE_FAILED)
+        storage.failWrite = { null }
+        val served = assertNotNull(live().generationFile)
+        val key = store.generationKey(served)
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
+        val stray = store.blobKey(okio.ByteString.of(1, 2, 3).sha256())
+        storage.inner.write(stray, byteArrayOf(1, 2, 3))
+        sync(server, now = ts + day + 2 * hour).assert(SyncOutcome.UNCHANGED)
+        assertEquals(StoreRead.Found(Pointer(served, old)), store.pointer())
+        assertIs<StoreRead.Found<*>>(store.stored(served), "rewritten")
+        assertTrue(stray in storage.inner.names(), "a repair is never pruned after")
     }
 
     @Test
@@ -358,7 +378,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         storage.inner.write(key, checkNotNull(storage.inner.read(key)).also { it[0] = (it[0] + 1).toByte() })
         server.fetcher.requests.clear()
         val engine = TestEngine()
-        val run = sync(server, now = ts + 2 * hour, engine = engine).assert(SyncOutcome.INSTALLED)
+        val run = sync(server, now = ts + 2 * hour, engine = engine).assert(SyncOutcome.UNCHANGED)
         assertEquals(listOf(attachments + delta.location), server.attachmentRequests())
         assertContentEquals(delta.body, storage.inner.read(key))
         assertEquals(listOf("$ts/${delta.id}"), engine.prepared, "a full install")
@@ -378,7 +398,7 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         assertNotEquals(server.sign(), resigned)
         server.signature = resigned
         val now = ts + 2 * hour
-        sync(server, now = now).assert(SyncOutcome.INSTALLED)
+        sync(server, now = now).assert(SyncOutcome.UNCHANGED)
         // The re-signed collection is UNCHANGED at the same <ts>: the served file, which passes Load, is flipped to.
         assertEquals(StoreRead.Found(Pointer(first, null)), store.pointer())
         assertEquals("$ts/${delta.id}", stored(first).generationId)

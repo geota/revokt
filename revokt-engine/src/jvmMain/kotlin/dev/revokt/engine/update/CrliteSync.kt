@@ -126,8 +126,9 @@ internal class CrliteSync(
      * install whose flip or `updater.json` failed after `activate`, #184, or a pointer that does not read) is not the
      * end: spec §6.5's re-flip points `current` at the served file, once it and its blobs pass Load's steps 1 to 3, and
      * writes `updater.json` as the install of that `<ts>` would, with no fetch, no `prepare` and no prune ([reflip]).
-     * When the served file does not pass, the collection is installed as served, every stored blob that re-hashes
-     * reused (#137's notes from #184 and #190).
+     * When the served file does not pass, the heal-install installs the collection as served, every stored blob that
+     * re-hashes reused. Both are store repairs: the sync stays `UNCHANGED`, as the served generation does not change,
+     * and neither is pruned after (#137's notes from #184 and #190).
      */
     fun syncOnce(nowMillis: Long): SyncRun = Attempt(nowMillis).run()
 
@@ -365,7 +366,7 @@ internal class CrliteSync(
             val reflip = decision == SyncDecision.UNCHANGED && !reads.pointed()
             if (!reflip) decided(decision, ts)?.let { return it }
             if (reflip) reflipped(ts)?.let { return it }
-            return fetched(verified, crlite, records, placed, noneLoaded = live == null)
+            return fetched(verified, crlite, records, placed, noneLoaded = live == null, repair = reflip)
         }
 
         /**
@@ -379,14 +380,15 @@ internal class CrliteSync(
             val generationId = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId
             if (stored.generationId != generationId || stored.timestampMillis != ts) return null
             if (!stored { store.blobsMatch(stored) }) return null
-            return installed(ts, noneLoaded = false) { publication, updated ->
+            return installed(ts, noneLoaded = false, repair = true) { publication, updated ->
                 reflip(stored, store, snapshot, publication, updated)
             }
         }
 
         /**
          * Steps 7 to 9 for the [placed] filters of [records] (the channel's [crlite] records); [noneLoaded] when no
-         * generation was live at the decision, so the install sets the watermark to `<ts>` (§7.1).
+         * generation was live at the decision, so the install sets the watermark to `<ts>` (§7.1); [repair] for the
+         * heal-install of the served generation (spec §6.5), which stays `UNCHANGED` and is never pruned after.
          */
         private fun fetched(
             verified: ChangesetVerification.Verified,
@@ -394,6 +396,7 @@ internal class CrliteSync(
             records: List<FilterRecord>,
             placed: List<PlacedFilter>,
             noneLoaded: Boolean,
+            repair: Boolean,
         ): SyncResult {
             val ts = verified.timestamp
             val byId = crlite.associateBy { it.id }
@@ -412,7 +415,7 @@ internal class CrliteSync(
                 return end(Ended(SyncFailure.FORMAT_UNSUPPORTED, detail))
             }
             val pending = pending(verified, built, bodies.format(placed))
-            return installed(pending, noneLoaded)
+            return installed(pending, noneLoaded, repair)
         }
 
         /**
@@ -449,18 +452,22 @@ internal class CrliteSync(
         private fun installed(
             pending: PendingGeneration,
             noneLoaded: Boolean,
+            repair: Boolean,
         ): SyncResult =
-            installed(pending.file.lastModified, noneLoaded) { publication, updated ->
+            installed(pending.file.lastModified, noneLoaded, repair) { publication, updated ->
                 install(pending, engine, store, snapshot, publication, updated, logger)
             }
 
         /**
          * Ends the sync with the outcome of [flip] (an install, or the re-flip) of a generation at [ts], given its
-         * publication and the `updater.json` to write; a successful one is pruned to when [InstallResult.Installed.prunable].
+         * publication and the `updater.json` to write: `INSTALLED`, pruned to when [InstallResult.Installed.prunable];
+         * for a [repair] of the served generation (the re-flip or the heal-install, spec §6.5), `UNCHANGED` and never
+         * pruned to.
          */
         private inline fun installed(
             ts: Long,
             noneLoaded: Boolean,
+            repair: Boolean,
             flip: (Publication, UpdaterRecord) -> InstallResult,
         ): SyncResult {
             val updated =
@@ -478,12 +485,13 @@ internal class CrliteSync(
                 is InstallResult.Installed -> {
                     written = updated
                     storeFailures += result.storeFailures
-                    val installed =
-                        result(SyncOutcome.INSTALLED, null, emptyList(), mapOf(Dataset.CRLITE to result.generationId))
+                    val outcome = if (repair) SyncOutcome.UNCHANGED else SyncOutcome.INSTALLED
+                    val generations = if (repair) emptyMap() else mapOf(Dataset.CRLITE to result.generationId)
+                    val installed = result(outcome, null, emptyList(), generations)
                     done = installed
-                    // Only over a pointer that read, every generation it named reading: never after a heal (#256), and
-                    // never beside a pointed generation that did not read (§6.5, fail closed).
-                    if (result.prunable) store.pruneAfter(result.name, logger) { storeFailures++ }
+                    // Only over a pointer that read, every generation it named reading: never after a heal (#256) or a
+                    // repair, and never beside a pointed generation that did not read (§6.5, fail closed).
+                    if (result.prunable && !repair) store.pruneAfter(result.name, logger) { storeFailures++ }
                     installed
                 }
 

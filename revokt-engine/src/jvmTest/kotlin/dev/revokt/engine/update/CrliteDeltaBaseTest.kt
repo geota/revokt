@@ -74,11 +74,11 @@ internal class CrliteDeltaBaseTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `#236 - a running loader re-serving the same ts beside a malformed pointer installs, with no previous`() {
+    fun `#236 - a running loader re-serving the same ts beside a malformed pointer re-flips, with no previous`() {
         val server = installedFirst()
         malformPointer()
         server.fetcher.requests.clear()
-        sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
+        sync(server, now = ts + 2 * hour).assert(SyncOutcome.UNCHANGED)
         assertEquals(StoreRead.Found(Pointer(assertNotNull(name1), null)), store.pointer())
         assertEquals(emptyList(), server.attachmentRequests())
         sync(server, now = ts + 9 * hour).assert(SyncOutcome.UNCHANGED)

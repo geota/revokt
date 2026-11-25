@@ -195,7 +195,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `#201 - a retried flip whose stored delta rotted in between fetches it again and installs`() {
+    fun `#201 - a retried flip whose stored delta rotted in between fetches it again in the heal-install`() {
         val server = Server()
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
         sync(server).assert(SyncFailure.STORE_FAILED)
@@ -203,7 +203,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         val key = store.blobKey(delta.body.toByteString().sha256())
         storage.inner.write(key, delta.body.copyOf().also { it[it.size - 1] = (it.last() + 1).toByte() })
         server.fetcher.requests.clear()
-        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
+        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.UNCHANGED)
         assertEquals(1, run.storeFailures)
         assertEquals(listOf(attachments + delta.location), server.attachmentRequests())
         assertEquals(live().generationFile, liveName())
