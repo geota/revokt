@@ -141,6 +141,10 @@ class GenerationFileTest {
         // A tombstone with a number that has no canonical form: refused, never thrown (#332's fuzz finding).
         val decimal = edited(bytes, "\"incremental\":true}", "\"incremental\":true,\"deleted\":true,\"n\":1.5}")
         assertNull(read(decimal), "a tombstone holding a decimal")
+        // The reviewer's fuzz input: a tombstone whose id is a decimal.
+        val decimalId =
+            edited(bytes, "\"id\":\"b\",\"incremental\":true}", "\"id\":0.1,\"deleted\":true,\"incremental\":true}")
+        assertNull(read(decimalId), "a tombstone whose id is a decimal")
         assertNull(read(edited(bytes, "\"incremental\":true}", "\"incremental\":true,\"n\":1.5}")), "a decimal")
         assertNull(read(edited(bytes, "\"data\":[$a,$b]", "\"data\":{}")), "data not an array")
         assertNull(read(edited(bytes, "\"data\":[$a,$b]", "\"data\":[$a,1]")), "a record not an object")

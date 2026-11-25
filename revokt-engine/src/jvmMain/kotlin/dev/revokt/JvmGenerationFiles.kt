@@ -62,8 +62,9 @@ public object JvmGenerationFiles {
      * Writes [files] to [dir] as a C2SP directory image, the inverse of [fromDirectory]: `index.bin` and every file it
      * names, under the generation's names. [dir] is created when absent, and followed when it is itself a link; a file
      * already there is never overwritten, and a link at a file's name is never followed (each file is created new). A
-     * failure part-way through leaves the files written before it. For an engine that reads a directory, such as the
-     * upki engine (spec §3.2), and for the corpus tests: the store keeps no directory image (§6.5).
+     * [java.nio.file.FileAlreadyExistsException] part-way through leaves the files written before it. For an engine that
+     * reads a directory, such as the upki engine (spec §3.2), and for the corpus tests: the store keeps no directory
+     * image (§6.5).
      *
      * @throws java.nio.file.FileAlreadyExistsException when [dir] already holds one of the names.
      */

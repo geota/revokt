@@ -26,13 +26,14 @@ class GenerationFileFuzzTest {
         /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
-            val file = GenerationFileJson.readUnhashed(data, CAP)
-            val again = GenerationFileJson.readUnhashed(data, CAP)
+            val name = GenerationFileJson.name(data)
+            // Through the store's one read, under the file's own name.
+            val file = GenerationFileJson.read(data, name, CAP)
+            val again = GenerationFileJson.read(data, name, CAP)
             check((file == null) == (again == null)) { "a second read differs" }
             check(data.size <= CAP || file == null) { "a generation file over the cap" }
-            val name = GenerationFileJson.name(data)
-            val named = GenerationFileJson.read(data, name, CAP)
-            check((named == null) == (file == null)) { "a read under its own name differs" }
+            val unhashed = GenerationFileJson.readUnhashed(data, CAP)
+            check((unhashed == null) == (file == null)) { "a read under its own name differs from the unhashed one" }
             check(GenerationFileJson.read(data, OTHER, CAP) == null || name == OTHER) { "read under another name" }
             if (file == null) return
             val written = GenerationFileJson.write(file)
