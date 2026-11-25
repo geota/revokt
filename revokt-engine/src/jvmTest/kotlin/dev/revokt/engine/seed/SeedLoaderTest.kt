@@ -5,6 +5,7 @@
 
 package dev.revokt.engine.seed
 
+import dev.revokt.ClubcardCorpus
 import dev.revokt.Dataset
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
@@ -20,6 +21,7 @@ import dev.revokt.engine.seed.parse.TestZip
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
+import dev.revokt.engine.update.UpdateFixtures
 import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -297,6 +299,24 @@ internal class SeedLoaderTest : SeedFixture() {
         // seed.json's recordsLastModified is a hint: the verified <ts> decides.
         installed(load(Seed().apply { header = header + ("recordsLastModified" to 1) }))
         assertEquals(ts, live().sourceTimestampMillis)
+    }
+
+    @Test
+    fun `a filterFormat other than the decoded full's is unreadable, a delta in another listed encoding is not`() {
+        // Both formats listed, so the header read passes: the decoded full decides.
+        assertUnreadable(
+            load(Seed().apply { header = header + ("filterFormat" to "V4") }),
+            "filterFormat V4 is not the full filter's encoding, V3",
+        )
+        val v4 = ClubcardCorpus.file(UpdateFixtures.DELTA_PATH + ".v4").readBytes()
+        val mixed = Rec(delta.id, true, delta.effectiveTimestamp, delta.filename, v4, parent = full.id)
+        installed(load(Seed(records = listOf(full, mixed))))
+        assertEquals(FilterFormat.V3, checkNotNull(store.meta(directory)).format)
+        reset()
+        assertUnreadable(
+            load(Seed(records = listOf(full, mixed)).apply { header = header + ("filterFormat" to "V4") }),
+            "filterFormat V4 is not the full filter's encoding, V3",
+        )
     }
 
     @Test
