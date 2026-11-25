@@ -1553,8 +1553,11 @@ in the same sync, on any network: neither Firefox nor upki defers a download on 
 `last_modified`; a seed-backed generation is never `NO_DATA`; a future-dated seed installs like any other (§6.5); `DataState.fromSeed`, `ageMillis` and
 `stale` are loud. **Data artifacts**: date-versioned (`YYYY.MM.DD`, the run's UTC date; the signed `<ts>` is not
 after that day, nor more than the default CRLite `staleAfter` of 3 days before it; `SeedWriterTest`), never older than the
-last released seed of its channel (the weekly job refuses a signed `<ts>` older than that release's attested `<ts>`, and
-releases nothing when every channel's equals it, as Firefox ignores a changeset older than its verified local data),
+last released seed of its channel (the weekly job verifies that release's content signature again, as a seed load
+does, under Mozilla's pins with the x5u validity at its signed `<ts>`, requires that `<ts>` to equal the attested one,
+refuses a signed `<ts>` older than it, and releases nothing when every channel's equals it, as Firefox ignores a
+changeset older than its local data once that data verifies; a previous release that does not verify fails the job,
+where Firefox imports the older changeset),
 weekly, attested, not in the BOM, no build-time plugin for a consumer (`data-artifact` is
 revokt's own build's): a jar holding only the manifest, `META-INF/LICENSE-DATA` and the stored
 `/revokt/seed-<channel>.zip` (`DataArtifactPluginFunctionalTest`). **In 0.2 a seed is a GitHub release asset with

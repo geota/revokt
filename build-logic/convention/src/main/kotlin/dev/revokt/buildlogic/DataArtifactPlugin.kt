@@ -50,6 +50,12 @@ abstract class SeedArchiveExec : JavaExec() {
     abstract val archive: RegularFileProperty
 }
 
+/** A [JavaExec] that writes one released seed jar's verified signed `<ts>` to [timestamp], its declared output. */
+abstract class SeedTimestampExec : JavaExec() {
+    @get:OutputFile
+    abstract val timestamp: RegularFileProperty
+}
+
 /**
  * `data-artifact` (CONTRIBUTING §3; spec §6.5, §7.2; #145): the build of the `revokt-seed-<channel>` data artifacts.
  * Nothing it compiles is published: the project's `main` source set is the seed job's entry, compiled with
@@ -63,6 +69,10 @@ abstract class SeedArchiveExec : JavaExec() {
  *   data licence text as `META-INF/LICENSE-DATA` and in the manifest, and nothing else;
  * - `verifySeedJar<Channel>` ([VerifySeedJarTask]) and `smokeLoadSeed<Channel>`, which starts a `Revokt` on the jar
  *   alone through the public builder (the sole-seed `ENFORCE` configuration, so an unreadable seed throws).
+ * - `seedTimestamp<Channel>` (#308): the weekly job's floor check re-verifies the last released seed jar,
+ *   `-Prevokt.seedJar=<file>`, as an app's start loads it under Mozilla's pins, x5u validity at its signed `<ts>`, and
+ *   writes that `<ts>` to `-Prevokt.seedTimestampOut=<file>` (default `build/seed-timestamp/revokt-seed-<channel>.ts`);
+ *   no network, never up to date.
  *
  * No Maven publication: in 0.2 a seed is a GitHub release asset with attestations, which release-seed.yml attaches
  * (the maintainer's decision, 2026-11-23). In `check`, with no network: the same chain over the committed test-signed
@@ -164,6 +174,32 @@ class DataArtifactPlugin : Plugin<Project> {
                 args("--channel", channel)
                 notCompatibleWithConfigurationCache("runs after the network write")
             }
+            tasks.register<SeedTimestampExec>("seedTimestamp$suffix") {
+                description = "Re-verifies a released $channel seed jar (-P${DataArtifacts.SEED_JAR_PROPERTY}) under Mozilla's pins and writes its signed <ts>."
+                group = "revokt"
+                javaLauncher.set(launcher)
+                classpath = sourceSets.getByName("main").runtimeClasspath
+                mainClass.set(TIMESTAMP_MAIN)
+                timestamp.set(
+                    providers
+                        .gradleProperty(DataArtifacts.SEED_TIMESTAMP_OUT_PROPERTY)
+                        .map { layout.projectDirectory.file(it) }
+                        .orElse(layout.buildDirectory.file("seed-timestamp/$base.ts")),
+                )
+                val out = timestamp
+                val jarPath = providers.gradleProperty(DataArtifacts.SEED_JAR_PROPERTY)
+                argumentProviders.add(
+                    CommandLineArgumentProvider {
+                        val path = jarPath.orNull
+                            ?: throw GradleException("seedTimestamp$suffix needs -P${DataArtifacts.SEED_JAR_PROPERTY}=<the released jar>.")
+                        val jarFile = file(path)
+                        listOf("--channel", channel, "--jar", jarFile.absolutePath, "--out", out.get().asFile.absolutePath)
+                    },
+                )
+                outputs.upToDateWhen { false }
+                outputs.cacheIf { false }
+                notCompatibleWithConfigurationCache("reads a jar named on the command line; never cached")
+            }
         }
 
         // The check path: the same tasks over the committed test-signed fixture, no network.
@@ -210,6 +246,22 @@ class DataArtifactPlugin : Plugin<Project> {
                 outputs.file(marker)
                 doLast { marker.get().asFile.writeText("ok\n") }
             }
+
+        // SeedTimestampTest re-verifies the check path's jar through the floor check's entry, under the fixture's pin.
+        tasks.named<Test>("test") {
+            val testJarFile = testJar.flatMap { it.archiveFile }
+            val pin = fixture.file("pin.txt")
+            inputs.files(testJarFile).withPropertyName("testSeedJar")
+            inputs.file(pin).withPropertyName("pin")
+            jvmArgumentProviders.add(
+                CommandLineArgumentProvider {
+                    listOf(
+                        "-Drevokt.testSeedJar=${testJarFile.get().asFile.absolutePath}",
+                        "-Drevokt.testSeedPin=${pin.asFile.absolutePath}",
+                    )
+                },
+            )
+        }
 
         tasks.named("check") { dependsOn(smokeTest) }
     }
@@ -281,6 +333,7 @@ class DataArtifactPlugin : Plugin<Project> {
         const val TEST_JOB_MAIN = "dev.revokt.seed.FixtureSeedMainKt"
         const val SMOKE_MAIN = "dev.revokt.seed.smoke.SmokeLoadKt"
         const val TEST_SMOKE_MAIN = "dev.revokt.seed.smoke.TestPinSmokeLoad"
+        const val TIMESTAMP_MAIN = "dev.revokt.seed.SeedTimestampMain"
 
         /** The jars' version without `-Prevokt.seedVersion`: only the network tasks, which refuse to run, need one. */
         const val UNSET_VERSION = "unset"
