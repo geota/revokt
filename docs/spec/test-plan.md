@@ -43,7 +43,7 @@ tests; **live checks** are informational.
   higher of the watermark and the live `<ts>`, by 1 ms or more → `ROLLBACK_REFUSED` before any body, whatever its
   coverage; equal to a watermark above the live `<ts>` → installs; **newer timestamp with lower coverage → installs
   and advances the watermark**; with no generation loaded (a fresh loader beside a stored generation, an absent or
-  malformed pointer, or a malformed live `meta.json`) and a stored watermark above it, an older changeset →
+  malformed pointer, or a live generation file that does not load) and a stored watermark above it, an older changeset →
   installs, the watermark and the cursor set to its `<ts>`, and once it is live it is the floor (100, then 80
   installed with no generation loaded, then 90 → installs); a stored watermark far ahead and no generation ever
   installed → the changeset installs and the watermark is its `<ts>`; an install with no generation loaded whose
@@ -118,32 +118,48 @@ tests; **live checks** are informational.
   subtree alone → loads, a leaf outside the permitted subtree → `NAME_CONSTRAINTS`, an encoded `minimum` →
   `EXTENSION`, a wildcard or absolute base → `EXTENSION`, an empty NameConstraints → `EXTENSION`, and a directoryName
   subtree → `EXTENSION`; (e) store: power loss simulated after the pointer flip with a zero-length filter → start
-  falls to `previous`, `storeFailures = 1`; a crash before `meta.json` leaves an incomplete directory
-  that prune deletes; a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → migrates within one `READONLY_POLL_INTERVAL`, `storageFallback = false`, the in-memory generation on disk; an empty
-  directory → `storeFailures = 0`; a `meta.json` without its signed members, or without `records.json` beside it → no generation; a `meta.json` with the
-  other channel → no generation; a `current` with an unknown or a duplicate member → malformed, so the generation its
-  damaged `previous` member named is held, and a fresh loader's heal flip beside it prunes nothing, while the next
-  install over the healed pointer prunes; a pointed generation without `records.json` → no `previous`, counted; two instances on one directory in one process → the second throws;
-  a second JVM process on a held lock → read-only start within 1 s, `sync()` → `SKIPPED` with `STORE_LOCKED`, the
-  directory listing is byte-identical before and after its start even with a newer seed configured
-  (served in memory, `fromSeed = true`), it observes the first process's install within
-  `READONLY_POLL_INTERVAL`, and after the owner closes it acquires the lock within one interval and
-  its next `sync()` installs; `close()` then a new instance on the same directory in the same process
+  falls to `previous`, `storeFailures = 1`; a crash after the generation file is written and before the flip → `start()` loads the old `live`, the same
+  changeset then writes no generation file and flips, and the prune after the next install that passes it deletes it;
+  a failed install deletes nothing, and its retry fetches only the bodies not yet stored; a stop after the flip and
+  before `updater.json` → `start()` loads the new generation and the next `UNCHANGED` rewrites `updater.json`;
+  prune deletes generation files before blobs, and a stop that loses a generation file's delete but keeps its blob's →
+  `start()` loads the new `live`, and the adopt scan beside a deleted `current` counts one failure and adopts nothing;
+  [0.3] `JvmStorage` fsyncs every store directory at open and the parent of each directory it creates, and deletes its
+  temp files at open;
+  a `current` with a flipped hex digit at `start()` → `storeFailures = 1`, no `STORE_UNREADABLE` warning (which means
+  only the in-memory fallback, and stays until `close()`), and the next install heals it (`CrliteRuntimeStartTest`);
+  a sync against the served generation's `<ts>` while `current` does not name it → `UNCHANGED`, with §6.5's re-flip
+  (no fetch, no `prepare`, no publish) or, when the served file or a blob fails Load's steps 1 to 3, its heal-install,
+  and no prune after either (`CrliteSyncFailureTest`, `CrliteDeltaBaseTest`);
+  prune keeps a newer generation file that passes Load's steps 1 and 2 and the blobs it names; no prune after a seed
+  load at `start()`, rule (a) or (b), or after a heal flip (`StoreCrashTest`, `StoreModelTest` I1–I10); a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → stays in memory until its process restarts, `storageFallback = true`, nothing written; an empty
+  directory → `storeFailures = 0`; a generation file without its signed members, with an unknown or a duplicate member, of the
+  other channel, with a `generationVersion` too new, truncated, or with one byte flipped inside `records` that still
+  parses → no generation, counted once; a generation file over the configured `maxJsonBytes` + 64 KiB at the write →
+  `FAILED` with `STORE_FAILED`, nothing written; a first store read of the start task that throws, then one that reads →
+  the stored generation loads and polling resumes; a restart under a persisted backoff after a newer seed installed →
+  the first sync is `SKIPPED` with `BACKOFF` and opens the seed's `STALE` gate; a `current` with an unknown or a duplicate member, or with a hex digit flipped in `live` or `previous` → malformed, or
+  naming an absent key, so nothing under `generations/` or `blobs/` is deleted: a fresh loader's heal flip beside a
+  malformed one prunes nothing, while the next install over the healed pointer prunes; a pointed generation whose file
+  is absent or does not re-hash → no `previous`, counted, and the sync install after it deletes nothing; two instances on one directory in one process → the second throws;
+  a second JVM process on a held lock → starts within 1 s on `inMemory()` with `STORE_LOCKED` and `storageFallback =
+  true`, the directory listing byte-identical before and after its start even with a newer seed configured
+  (served in memory, `fromSeed = true`), and its `sync()` installs in memory, fetching in full; `close()` then a new instance on the same directory in the same process
   starts as owner; a directory owned by another uid or group-writable on POSIX → `STORE_UNREADABLE`
   and no file written for the session; two consecutive syncs whose `engine.prepare()` throws → `live`
-  and `previous` still load, `storeFailures = 2` (sync-time `prepare()` throws count), both syncs `FAILED` with `ENGINE_FAILED`, the two failed directories deleted; stored
-  generation equal to the seed → no verification, `names()` unchanged; a changeset of 257 records after channel filtering or a 17 MiB declared filter → rejected before any
+  and `previous` still load, `storeFailures = 2` (sync-time `prepare()` throws count), both syncs `FAILED` with `ENGINE_FAILED`, nothing deleted, and a third, clean sync reuses every blob the two wrote; stored
+  generation equal to the seed → no verification, `names()` unchanged; a changeset of 1,025 records after channel filtering or a 17 MiB declared filter → rejected before any
   body fetch; a channel whose
   coverage would make the built `index.bin` over 1 MiB → `FAILED` with `INDEX_INCONSISTENT`, no
-  generation directory written (a built index is always an even size, so not 1 MiB + 1 byte); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
+  generation file written (a built index is always an even size, so not 1 MiB + 1 byte); (f) seed: `seedFormat` above supported → ignored with a warning; channel mismatch →
   `start()` throws on both platforms; a stored generation not older than the seed beside a valid pointer
   → seed skipped, nothing written; a mutated shipped `index.bin` → `SEED_UNREADABLE`; the seed-load
-  rule's (b) (§6.5): a malformed or absent pointer beside a newer complete generation that re-verifies →
-  adopted, `updater.json` written first, the pointer healed; one that does not re-verify → not adopted,
-  counted once, kept, and the seed installed; never adopted below the generation the engine serves;
-  the seed's own complete directory → installed as it stands, rotted → completed again with only its
-  rotted files re-staged and, when the load fails, left incomplete, never deleted; the directory the engine
-  serves never rewritten; a throwing `updater.json` or pointer read → `STORE_FAILED`, nothing written;
+  rule's (b) (§6.5): a malformed or absent pointer beside a newer generation file that loads and re-verifies →
+  adopted, `updater.json` written first, `current` flipped to its `live` alone, no attachment read; one that fails
+  its signature under the seed's leaf, or is damaged → not adopted, counted once, kept, and the seed installed; one
+  not newer than the seed → not adopted, not counted; two candidates of one `<ts>` → the first by name; never adopted
+  below the generation the engine serves; the seed's install over its own stored blobs → reuses each that re-hashes
+  and rewrites a rotted one (`storeFailures++`); no seed load prunes; a throwing `updater.json` or pointer read → `STORE_FAILED`, nothing written;
   a seed archive over 256 MiB, or a source that never ends → `SEED_UNREADABLE`, no store failure; (g) fetcher: [0.3] the feed host's own
   chain revoked in the stored generation → the fetch proceeds over the platform's trust manager and installs; [0.3] an
   OkHttp base client whose trust manager is revokt's (wired with `.revokt(...)`) → `build()` throws
@@ -405,7 +421,9 @@ yield. **Targets**: v3/v4 filter decoders (differential against `clubcard-crlite
 round trip; JSON and canonical JSON (differential against `canonical_json`); the TBS/DER parser and
 SCT list (§9.2); DER ECDSA conversion and `AlgorithmIdentifier`/PSS parameters; seed archive and x5u
 PEM; the nameConstraints and subjectAltName readers of the walker's issuer rules, with the directoryName comparison,
-the mailbox grammar, and the subject's emailAddress and CN-ID reader (`NameConstraintsFuzzTest`, #237);
+the mailbox grammar, and the subject's emailAddress and CN-ID reader (`NameConstraintsFuzzTest`, #237); the store
+readers of what a disk can rot: `current`, `updater.json` and the generation file, size cap and re-hash included
+(`StoreJsonFuzzTest`, `GenerationFileFuzzTest`);
 the path walker (below); [M2] CRX3, zip, `crl-set`, OneCRL, preload DER; [M3] precert TBS, log
 list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput` wrapper;
 `-Xmx256m -rss_limit_mb=2560 -timeout=10` (the §9.2 parser target overrides with `-timeout=1`); `-max_len` = each target's cap + 1 (filters:
