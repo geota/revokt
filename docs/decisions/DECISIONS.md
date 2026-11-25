@@ -505,3 +505,22 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     called revokt narrower, was wrong.
   - **Tests only:** the stronger P6 (verifications equal depth + 1) and P2's issuer-identity clause stay out of the
     spec. The gate record is the nightly fuzz batch after merge.
+- 2026-11-24 (lead, #322, PR #323; independent review approved after one fix), from the maintainer-authorised fuzz
+  triage of GHSA-m4x5-jjf8-642j: an x5u host, and a Builder host, is a run of labels that each start and end with a
+  letter or digit, and the last label starts with a letter. The old rule let `java.net.URI` read no host where the
+  oracle read one (for example a label of `-`). The fetcher still reached the checked host, so the fix restores the
+  invariant that every JDK parser reads that host.
+  - **References:** webpki also refuses a leading or trailing hyphen, and refuses only an all-numeric last label.
+    WHATWG URL parsing, and so Firefox, accepts more. The binding parser is `java.net.URI` (RFC 2396 `toplabel`),
+    which `JdkHttpFetcher` uses, so revokt follows it.
+- 2026-11-24 (maintainer, #321, PR #324; independent review approved after one fix): "only report it if its an
+  actual issue and not a failure to run the tests".
+  - **The memory limit:** the fuzz job's `-rss_limit_mb` goes from 1024 to 2560, ClusterFuzz's libFuzzer
+    `DEFAULT_RSS_LIMIT_MB` and OSS-Fuzz's documented 2.5 GB per-input limit. It is not a default for every engine:
+    OSS-Fuzz's Centipede uses 4096. Kover is off while fuzzing. The 16 drafts of 2026-11-21 and 2026-11-22 were
+    RSS-limit OOMs at the JVM's own footprint (1107–1804 MB) and were closed as not vulnerabilities.
+  - **Reproduce before filing:** the job replays the empty input as a control, then each crash, timeout or OOM input
+    alone. An advisory is filed only for an input that fails again while the control passes, as ClusterFuzz re-runs
+    a crash to check that it reproduces. Anything else is a run failure: a red job and sealed logs, no advisory.
+  - **Gate record:** the 0.2 walker-fuzzer gate (#144) passed in the nightly runs of 2026-11-24 (45412705975) and
+    2026-11-25 (45624833898) on 4714c68, all 17 targets clean, `WalkerFuzzTest.walk` included.
