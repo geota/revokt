@@ -259,11 +259,11 @@ internal class SeedLoader(
      */
     fun load(nowMillis: Long): SeedLoad = Attempt(nowMillis).run()
 
-    /** What the header read gave: the archive and its header, or the load's end. */
+    /** What the header read gave: the archive and its header's `filterFormat`, or the load's end. */
     private sealed interface HeaderRead {
         class Read(
             val archive: SeedArchive,
-            val header: SeedHeader,
+            val filterFormat: FilterFormat,
         ) : HeaderRead
 
         class Ended(
@@ -292,7 +292,7 @@ internal class SeedLoader(
                 SeedLoad.ChannelMismatch(header.channel, listOf(warning(WarningCode.SEED_CHANNEL_MISMATCH, message))),
             )
         }
-        return HeaderRead.Read(archive, header)
+        return HeaderRead.Read(archive, format)
     }
 
     /** A store state the load does not write over: it ends as [SeedLoad.Failed] at `STORE`, nothing written. */
@@ -452,7 +452,7 @@ internal class SeedLoader(
                 }
             if (!built.index.contentEquals(verified.index)) fail("the shipped index.bin differs from the rebuilt one")
             bodies.unlisted(placed)?.let { fail("${it.record.id} is in an encoding the engine does not list") }
-            val meta = meta(verified, generationId, bodies.format(placed, opened.header.filterFormat), bodies.blobs)
+            val meta = meta(verified, generationId, bodies.format(placed, opened.filterFormat), bodies.blobs)
             val pending = PendingGeneration(meta, built.index, bodies.deltas, verified.recordsJson)
             // §7.1: a seed that installs because no generation loaded (no trusted pointer, nothing live in the engine)
             // sets the watermark to its <ts>, as the sync's install does; beside a loaded generation it keeps the max.
@@ -840,10 +840,10 @@ internal class SeedLoader(
             /** The full's encoding, `meta.format`, which `seed.json`'s [filterFormat] must name (§6.5). */
             fun format(
                 placed: List<PlacedFilter>,
-                filterFormat: String,
+                filterFormat: FilterFormat,
             ): FilterFormat {
                 val format = checkNotNull(encodings[placed.first { it.full }.record.id]).toFilterFormat()
-                if (format.name != filterFormat) {
+                if (format != filterFormat) {
                     fail("filterFormat $filterFormat is not the full filter's encoding, $format")
                 }
                 return format
