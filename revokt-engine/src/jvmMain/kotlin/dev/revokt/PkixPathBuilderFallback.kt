@@ -23,7 +23,8 @@ import java.util.IdentityHashMap
  * contract", §5.3); Android runs the same class through ojluni's builder with Conscrypt doing signatures.
  *
  * - **Anchors:** the snapshot's platform encodings (`getEncoded()`) are re-parsed with `CertificateFactory` once per
- *   `AnchorSnapshot.id`, memoised for the last [MEMO_SIZE] ids, into one base `PKIXBuilderParameters`
+ *   `AnchorSnapshot.id`, memoised for the last [MEMO_SIZE] ids; an entry holds the snapshot's `sha256`, and a snapshot
+ *   that reuses an id with another `sha256` is a miss, parsed again. The parse gives one base `PKIXBuilderParameters`
  *   (`setRevocationEnabled(false)`, `setPolicyQualifiersRejected(false)`, every other parameter the JDK default, as
  *   SunJSSE's `PKIXValidator` leaves them); an anchor the factory rejects is left out, and with none left every build
  *   returns null.
@@ -35,7 +36,9 @@ import java.util.IdentityHashMap
  * - **The result** lists the leaf first, as the presented leaf's exact bytes (decide requires them), then each
  *   intermediate as the presented bytes it was read from (its `getEncoded()` only when the builder found it elsewhere,
  *   through AIA), then **the trust anchor's certificate** as the snapshot's bytes read for it (`AnchorSnapshot.anchors`),
- *   which decide matches against the index by exact bytes.
+ *   which decide matches against the index by exact bytes. From the leaf to the anchor, each element's issuer must
+ *   equal the next element's subject under `X500Principal` equality; a result that breaks it is null, and so is the
+ *   JDK's empty path for a target that is itself an anchor.
  * - **AIA** (spec §10 item 13): it neither sets nor clears `com.sun.security.enableAIAcaIssuers`; with it set, the JDK's
  *   builder fetches issuers over the network, and decide applies its issuer rules to whatever comes back.
  *
@@ -46,6 +49,8 @@ import java.util.IdentityHashMap
 public class PkixPathBuilderFallback : PathBuilderFallback {
     /** One snapshot's anchors as the builder takes them: null [base] when none of them parses. */
     private class Anchors(
+        /** The snapshot's `sha256`: an entry answers only for the snapshot whose id and digest it was parsed from. */
+        val sha256: ByteArray,
         val base: PKIXBuilderParameters?,
         val bytesRead: IdentityHashMap<X509Certificate, ByteArray>,
     )
@@ -84,33 +89,48 @@ public class PkixPathBuilderFallback : PathBuilderFallback {
             }
         val anchor = result.trustAnchor.trustedCert ?: return null
         val path = result.certPath.certificates.map { it as X509Certificate }
-        return buildList {
-            add(chainDer[0])
-            path.drop(1).forEach { add(presented[it] ?: it.encoded) }
-            add(known.bytesRead[anchor] ?: anchor.encoded)
-        }
+        // The JDK returns an empty path when the target is itself an anchor. decide never asks for one (a leaf that is
+        // an anchor by bytes leaves at step 2, and a non-DER leaf fails the parse above), and the result would list the
+        // anchor twice, so it is no path.
+        if (path.isEmpty()) return null
+        // Each element paired with the bytes returned for it, so the linkage check reads what the result lists.
+        val elements =
+            buildList {
+                add(leaf to chainDer[0])
+                path.drop(1).forEach { add(it to (presented[it] ?: it.encoded)) }
+                add(anchor to (known.bytesRead[anchor] ?: anchor.encoded))
+            }
+        return elements.takeIf { linksByName(it.map(Pair<X509Certificate, ByteArray>::first)) }?.map { it.second }
     }
 
     private fun anchorsOf(snapshot: AnchorSnapshot): Anchors =
         synchronized(memo) {
-            memo.getOrPut(snapshot.id) {
-                anchorParses++
-                val factory = CertificateFactory.getInstance("X.509")
-                val bytesRead = IdentityHashMap<X509Certificate, ByteArray>()
-                val read = snapshot.anchors
-                snapshot.platformEncodings.forEachIndexed { i, encoding ->
-                    x509(factory, encoding.toByteArray())?.let { bytesRead[it] = read[i] }
-                }
-                val base =
-                    bytesRead.keys.takeIf { it.isNotEmpty() }?.let { certs ->
-                        PKIXBuilderParameters(certs.map { TrustAnchor(it, null) }.toSet(), null).apply {
-                            isRevocationEnabled = false
-                            policyQualifiersRejected = false
-                        }
-                    }
-                Anchors(base, bytesRead)
+            val digest = snapshot.sha256
+            memo[snapshot.id]?.takeIf { it.sha256.contentEquals(digest) } ?: parse(snapshot, digest).also {
+                memo[snapshot.id] = it
             }
         }
+
+    private fun parse(
+        snapshot: AnchorSnapshot,
+        digest: ByteArray,
+    ): Anchors {
+        anchorParses++
+        val factory = CertificateFactory.getInstance("X.509")
+        val bytesRead = IdentityHashMap<X509Certificate, ByteArray>()
+        val read = snapshot.anchors
+        snapshot.platformEncodings.forEachIndexed { i, encoding ->
+            x509(factory, encoding.toByteArray())?.let { bytesRead[it] = read[i] }
+        }
+        val base =
+            bytesRead.keys.takeIf { it.isNotEmpty() }?.let { certs ->
+                PKIXBuilderParameters(certs.map { TrustAnchor(it, null) }.toSet(), null).apply {
+                    isRevocationEnabled = false
+                    policyQualifiersRejected = false
+                }
+            }
+        return Anchors(digest, base, bytesRead)
+    }
 
     /** [der] as the platform's factory reads it; null where it rejects it, whatever it throws (§9.2 oracle 1). */
     @Suppress("TooGenericExceptionCaught") // a provider's parser may throw any runtime exception on hostile bytes
@@ -126,6 +146,13 @@ public class PkixPathBuilderFallback : PathBuilderFallback {
             null
         }
 }
+
+/**
+ * Whether each of [certs] is issued by the next under `X500Principal` equality, the JDK's own name matching: a check on
+ * the path the fallback returns, so a mis-mapped element fails the build instead of reaching decide.
+ */
+internal fun linksByName(certs: List<X509Certificate>): Boolean =
+    certs.zipWithNext().all { (child, parent) -> child.issuerX500Principal == parent.subjectX500Principal }
 
 /** How many snapshots' anchors one instance keeps parsed: the live one and a few being replaced. */
 private const val MEMO_SIZE = 8

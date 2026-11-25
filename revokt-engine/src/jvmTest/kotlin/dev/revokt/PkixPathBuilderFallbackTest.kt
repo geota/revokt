@@ -17,8 +17,9 @@ import kotlin.test.assertTrue
 /**
  * Spec §5.1 "PKIX fallback contract" on the JVM's [PkixPathBuilderFallback] over really signed chains: the path lists
  * the presented leaf's exact bytes first and the snapshot's bytes read for the anchor last; no path, a malformed leaf
- * and an anchor set the factory cannot read are null, never a throw; the anchors are parsed once per snapshot id; the
- * date is the caller's; and the AIA property is left alone (§10 item 13).
+ * and an anchor set the factory cannot read are null, never a throw; the anchors are parsed once per snapshot id and
+ * digest; the path links by name from the leaf to the anchor; the date is the caller's; and the AIA property is left
+ * alone (§10 item 13).
  */
 @OptIn(RevoktTestingApi::class, RevoktInternalApi::class)
 class PkixPathBuilderFallbackTest {
@@ -31,11 +32,13 @@ class PkixPathBuilderFallbackTest {
     private fun snapshot(
         vararg anchors: Issued,
         read: List<ByteArray> = anchors.map { it.der },
+        id: Long = ids++,
+        sha256: ByteArray = ByteArray(32),
     ): AnchorSnapshot =
         AnchorSnapshot
             .Builder()
-            .id(ids++)
-            .sha256(ByteArray(32))
+            .id(id)
+            .sha256(sha256)
             .anchors(read)
             .platformEncodings(anchors.map { it.der })
             .createdMillis(0)
@@ -129,6 +132,41 @@ class PkixPathBuilderFallbackTest {
         assertEquals(1, fallback.anchorParses)
         assertNotNull(fallback.build(listOf(leaf.der, intermediate.der), snapshot(root), PkixPki.NOW))
         assertEquals(2, fallback.anchorParses)
+    }
+
+    @Test
+    fun `fallback a snapshot that reuses an id with another sha256 is parsed again`() {
+        // A hand-built snapshot can reuse an id (the builder takes any): the memo answers only for the same digest.
+        val fallback = PkixPathBuilderFallback()
+        val chain = listOf(leaf.der, intermediate.der)
+        val id = ids++
+        val first = snapshot(root, id = id, sha256 = ByteArray(32) { 1 })
+        val reused = snapshot(PkixPki.root("Unrelated Root"), id = id, sha256 = ByteArray(32) { 2 })
+        assertNotNull(fallback.build(chain, first, PkixPki.NOW))
+        assertNull(fallback.build(chain, reused, PkixPki.NOW), "the reused id's own anchors, not the first's")
+        assertEquals(2, fallback.anchorParses)
+        assertNotNull(fallback.build(chain, first, PkixPki.NOW), "the first digest again is a miss after the reuse")
+        assertEquals(3, fallback.anchorParses)
+        assertNotNull(fallback.build(chain, snapshot(root, id = id, sha256 = ByteArray(32) { 1 }), PkixPki.NOW))
+        assertEquals(3, fallback.anchorParses, "the same id and digest is a hit")
+    }
+
+    @Test
+    fun `fallback a leaf that is itself the anchor is null`() {
+        // The JDK returns an empty path for a target that is a trust anchor; decide never asks (step 2), and the
+        // result would list the anchor twice.
+        assertNull(PkixPathBuilderFallback().build(listOf(root.der), snapshot(root), PkixPki.NOW))
+        assertNull(PkixPathBuilderFallback().build(listOf(root.der, intermediate.der), snapshot(root), PkixPki.NOW))
+    }
+
+    @Test
+    fun `fallback a path links by name from the leaf to the anchor`() {
+        val certs = listOf(leaf, intermediate, root).map { PkixPki.x509(it.der) }
+        assertTrue(linksByName(certs))
+        assertTrue(linksByName(certs.take(1)), "one element has no link to break")
+        assertFalse(linksByName(listOf(certs[0], certs[2])), "the leaf is not issued by the root")
+        assertFalse(linksByName(listOf(certs[1], certs[0], certs[2])), "out of order")
+        assertFalse(linksByName(listOf(certs[0], certs[1], PkixPki.x509(PkixPki.root("Unrelated Root").der))))
     }
 
     @Test
