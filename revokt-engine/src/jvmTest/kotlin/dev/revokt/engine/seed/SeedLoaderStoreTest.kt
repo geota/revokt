@@ -148,6 +148,33 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
+    fun `a live the start's chain could not load is passed over and never counted again, by the scan or the install`() {
+        val previous = installedAt(ts - hour)
+        val d2 = Rec("d2", true, delta.effectiveTimestamp + 1, "d2.filter.delta", d2Body, parent = full.id)
+        val live = installed(load(Seed(records = listOf(full, delta, d2), ts = ts + hour))).name
+        // live passes Load's steps 1 and 2 and fails step 3: the chain counted it when it failed to load it.
+        storage.inner.write(store.blobKey(okio.ByteString.of(*d2Body).sha256()), byteArrayOf(1))
+        reset(keepStore = true)
+        val bytes = Seed().bytes()
+        val load = installed(loader(Counted { bytes }.source).load(ts + hour, unloadable = setOf(live)))
+        assertEquals(0, load.storeFailures, "counted by the chain, not again here")
+        assertEquals(
+            Pointer(load.name, previous),
+            (store.pointer() as StoreRead.Found).value,
+            "the unloadable live is no previous",
+        )
+        assertTrue(previous in store.generationNames() && live in store.generationNames())
+    }
+
+    private val d2Body =
+        dev.revokt.engine.update.UpdateFixtures.v4(
+            listOf(
+                dev.revokt.engine.update.UpdateFixtures
+                    .log(2) to (1L to 2L),
+            ),
+        )
+
+    @Test
     fun `both pointed files unreadable are two faults, and the seed installs`() {
         val first = installedAt(ts - 2 * hour)
         val second = installedAt(ts - hour)

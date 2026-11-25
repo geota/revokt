@@ -21,6 +21,7 @@ import dev.revokt.engine.fetch.client
 import dev.revokt.engine.fetch.json
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
+import dev.revokt.engine.runtime.CrliteRuntime
 import dev.revokt.engine.seed.SeedFixture
 import dev.revokt.engine.seed.SeedLoad
 import dev.revokt.engine.seed.SeedLoader
@@ -668,7 +669,44 @@ internal class StoreModel : SeedFixture() {
             storage.served = ::served
             engine = engine()
             trail += "restart"
-            if (seed || choices.int(2) == 0) seedLoad()
+            val load = if (seed || choices.int(2) == 0) seedLoad() else null
+            // The start task's chain (§5.1, §6.5 crash recovery) serves the pointer's live, else its previous, unless
+            // the seed's install left the seed live.
+            if (load !is SeedLoad.Installed) startChain()
+        }
+
+        /**
+         * The start task's recovery chain over the stored generations, as [CrliteRuntime] runs it after a seed load that
+         * installed nothing: it deletes nothing (I2), and it serves exactly the first of the pointer's `live` and
+         * `previous` that the model finds intact and loading, or none (I1 at start).
+         */
+        private fun startChain() {
+            val pointer = (truth.pointer() as? StoreRead.Found)?.value
+            val expected =
+                listOfNotNull(pointer?.live, pointer?.previous).firstOrNull { n ->
+                    n !in forgedNames && intact(n) && truth.load(n) is GenerationLoad.Loaded
+                }
+            val runtime =
+                CrliteRuntime(
+                    seed = null,
+                    channel = CrliteChannel.COMPAT,
+                    crlite = true,
+                    fetchingSource = true,
+                    engine = engine,
+                    verifier = modelVerifier,
+                    policy = dev.revokt.RevoktPolicy.DEFAULT,
+                    pinnedRootSpkis = pinned,
+                    storage = storage,
+                    logger = UpdateFixtures.Recording(),
+                )
+            storage.arm(-1, -1, deletes = false)
+            runtime.startTask(loadSeed = false) { now }
+            storage.arm(-1, -1, deletes = false)
+            snapshot = runtime.snapshot
+            storage.served = ::served
+            trail += "  chain served ${served()}"
+            storage.violations.firstOrNull()?.let { fail(it) }
+            if (served() != expected) fail("I1: the start chain served ${served()}, not $expected")
         }
 
         /**
@@ -676,7 +714,7 @@ internal class StoreModel : SeedFixture() {
          * I2 (it deletes nothing), I3 and I10 are checked over it.
          */
         @Suppress("CyclomaticComplexMethod") // One arm per way a seed load ends, each with its invariant.
-        private fun seedLoad() {
+        private fun seedLoad(): SeedLoad {
             val p = published[choices.int(published.size)]
             val seed = Seed(records = p.records, ts = p.ts).apply { header = header + ("filterFormat" to "V4") }
             seed.signature = fakeSignature(seed.payload(), 0)
@@ -728,6 +766,7 @@ internal class StoreModel : SeedFixture() {
                 }
             }
             storage.violations.firstOrNull()?.let { fail(it) }
+            return load
         }
 
         /** I10's expected adoptee for a seed at [seedTs]: the newest undamaged stored generation above it, ties by name. */

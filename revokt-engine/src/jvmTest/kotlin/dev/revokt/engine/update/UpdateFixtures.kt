@@ -71,7 +71,9 @@ internal object UpdateFixtures {
     fun built(
         records: List<FilterRecord>,
         bodies: Map<String, ByteArray> = this.bodies,
-    ): IndexBuild.Built = build(records, bodies) as? IndexBuild.Built ?: error("refused: ${build(records, bodies)}")
+        channel: CrliteChannel = CrliteChannel.COMPAT,
+    ): IndexBuild.Built =
+        build(records, bodies, channel) as? IndexBuild.Built ?: error("refused: ${build(records, bodies, channel)}")
 
     /**
      * The Remote Settings record of [r], whose attachment is [body]: the fields the CRLite schema reads (spec §6.3), a
@@ -117,10 +119,10 @@ internal object UpdateFixtures {
         signature: ByteArray = ByteArray(96) { 9 },
         json: List<JsonObject> = recordsJson(records, bodies),
     ): PendingGeneration {
-        val built = built(records, bodies)
+        val built = built(records, bodies, store.channel)
         for (p in built.filters) store.putBlob(bodies.getValue(p.record.filename))
         return PendingGeneration(
-            file(json, sourceTimestampMillis, freshness, signature),
+            file(json, sourceTimestampMillis, freshness, signature, store.channel),
             built.filters,
             built.index,
             format,

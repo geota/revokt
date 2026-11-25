@@ -252,8 +252,15 @@ internal class SeedLoader(
      * Any seed fault is [SeedLoad.Unreadable]; a failed `prepare` or `activate` is too (§6.5: "the corresponding load
      * failure, `SEED_UNREADABLE` for the seed"). A read interrupted by the thread's interrupt (okio's `InterruptedIOException`) is `SEED_UNREADABLE` as
      * well, with the interrupt kept.
+     *
+     * [unloadable] names stored generation files the start task's recovery chain failed to load in full (spec §6.5:
+     * rule (b) applies to "a `live` that does not load"): such a `live` is no trustworthy pointer, and the adopt scan
+     * passes over them. Their failure is the chain's to count, not this load's.
      */
-    fun load(nowMillis: Long): SeedLoad = Attempt(nowMillis).run()
+    fun load(
+        nowMillis: Long,
+        unloadable: Set<String> = emptySet(),
+    ): SeedLoad = Attempt(nowMillis, unloadable).run()
 
     /** What the header read gave: the archive and its header's `filterFormat`, or the load's end. */
     private sealed interface HeaderRead {
@@ -320,6 +327,7 @@ internal class SeedLoader(
     @OptIn(RevoktInternalApi::class)
     private inner class Attempt(
         private val now: Long,
+        private val unloadable: Set<String>,
     ) {
         private var storeFailures = 0
 
@@ -493,7 +501,8 @@ internal class SeedLoader(
                     }
                 }
             var live: StoredGeneration? = null
-            for (name in listOfNotNull(pointer.live, pointer.previous)) {
+            // A live the chain could not load in full is no trustworthy pointer (rule (b)); its fault is the chain's.
+            for (name in listOfNotNull(pointer.live, pointer.previous).filter { it !in unloadable }) {
                 when (val read = store.stored(name)) {
                     is StoreRead.Found -> {
                         if (name == pointer.live) live = read.value
@@ -565,7 +574,7 @@ internal class SeedLoader(
          */
         private fun scan(floor: Long): List<Pair<String, GenerationFile>> {
             val found = ArrayList<Pair<String, GenerationFile>>()
-            for (name in store.generationNames().sorted()) {
+            for (name in store.generationNames().sorted().filter { it !in unloadable }) {
                 when (val read = store.readGeneration(name)) {
                     is StoreRead.Found -> {
                         if (read.value.lastModified >= floor) found += name to read.value
@@ -716,7 +725,14 @@ internal class SeedLoader(
             val gateOpen = !policy.fetchingSource || (read.datasetLastAttemptAtMillis ?: Long.MIN_VALUE) >= now
             // Every generation file this load counted (a pointed one, an adopt candidate) is counted once (#335 review).
             val publication =
-                Publication(true, SEED_FORMAT.toInt(), gateOpen, now, pointerCounted = true, counted = counted.toSet())
+                Publication(
+                    true,
+                    SEED_FORMAT.toInt(),
+                    gateOpen,
+                    now,
+                    pointerCounted = true,
+                    counted = counted + unloadable,
+                )
             installing = true
             val result = install(pending, engine, store, snapshot, publication, updated, logger)
             storeFailures += result.storeFailures

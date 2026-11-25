@@ -179,12 +179,14 @@ internal class CrliteRuntimeTest : SeedFixture() {
     }
 
     @Test
-    fun `the start task clears pending even when its seed step throws`() {
+    fun `the start task clears pending even when its store step throws`() {
+        storage.failRead = { if (it == pointerKey) java.io.IOException("disk") else null }
         val runtime = runtime(seed = null)
         runtime.startTask(loadSeed = true) { now }
         assertFalse(runtime.crlite().pending)
         assertEquals(1, runtime.epoch())
-        assertTrue(recording.messages.any { (level, _) -> level == LogLevel.ERROR })
+        assertTrue(runtime.storeReadUnresolved, "a read that threw is not 'nothing stored'")
+        assertTrue(recording.messages.any { (level, m) -> level == LogLevel.WARN && "recovery chain threw" in m })
     }
 
     @Test
