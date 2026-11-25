@@ -51,9 +51,14 @@ internal class GenerationFile(
         require(signature.size > 0 && signature.size % 2 == 0) { "the signature is not a raw r || s pair" }
         require(signerLeafSha256.size == SHA256_BYTES) { "the signer leaf SHA-256 is ${signerLeafSha256.size} bytes" }
         require(lastModified >= 0) { "the timestamp $lastModified is negative" }
-        // The payload must hold the records as given: sorted, no tombstone, so that what is stored is what was signed.
-        require(CanonicalJson.write(payloadObject(this.records, lastModified)).contentEquals(payload)) {
+        // The payload must hold the records as given: sorted, ids distinct, no tombstone, so that what is stored is what
+        // was signed. Checked on the records first, so a tombstone holding a number with no canonical form is refused
+        // here rather than thrown at the canonical write below.
+        require(ContentSignature.payloadRecords(this.records) == this.records) {
             "the records are not sorted by id, or hold a tombstone"
+        }
+        require(CanonicalJson.write(payloadObject(this.records, lastModified)).contentEquals(payload)) {
+            "the records are not the payload's"
         }
     }
 
@@ -82,6 +87,16 @@ internal object GenerationFileJson {
     /** The name of a generation file of [bytes]: the lowercase hex SHA-256 of the bytes, a store key segment. */
     fun name(bytes: ByteArray): String = bytes.toByteString().sha256().hex()
 
+    /**
+     * [file]'s bytes, or null when they are over [cap]: the cap is checked before the write as well as at every read
+     * (spec §6.5), so an install never stores a file its own load-back would refuse.
+     */
+    fun write(
+        file: GenerationFile,
+        cap: Long,
+    ): ByteArray? = write(file).takeIf { it.size <= cap }
+
+    /** [file]'s canonical bytes, whatever their size. */
     fun write(file: GenerationFile): ByteArray =
         StoreFields.encode(
             "channel" to StoreFields.string(file.channel.name),
@@ -96,8 +111,8 @@ internal object GenerationFileJson {
 
     /**
      * The generation file stored under [name]: null when [bytes] are over [cap], do not hash to [name], or do not
-     * [read]. The cap is checked before the hash, and the hash before anything is parsed, so a flipped byte never
-     * becomes another generation (spec §6.5 Load, step 1).
+     * parse ([readUnhashed]). The cap is checked before the hash, and the hash before anything is parsed, so a flipped
+     * byte never becomes another generation (spec §6.5 Load, step 1). The one read a store makes.
      */
     fun read(
         bytes: ByteArray,
@@ -106,14 +121,15 @@ internal object GenerationFileJson {
     ): GenerationFile? {
         if (bytes.size > cap) return null
         if (name(bytes) != name) return null
-        return read(bytes, cap)
+        return readUnhashed(bytes, cap)
     }
 
     /**
-     * The generation file in [bytes], or null when they are over [cap], are not the canonical encoding of one, or are of
-     * another `generationVersion`. Dataset and channel are the caller's to compare.
+     * The generation file in [bytes] with no re-hash against a name, or null when they are over [cap], are not the
+     * canonical encoding of one, or are of another `generationVersion`: for the codec's own tests and fuzzing, never a
+     * store read, which is [read] with the name. Dataset and channel are the caller's to compare.
      */
-    fun read(
+    fun readUnhashed(
         bytes: ByteArray,
         cap: Long,
     ): GenerationFile? {

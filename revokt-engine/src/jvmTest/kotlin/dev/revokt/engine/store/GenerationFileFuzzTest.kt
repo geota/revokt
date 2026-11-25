@@ -26,8 +26,8 @@ class GenerationFileFuzzTest {
         /** The static entry point a standalone Jazzer driver calls (CONTRIBUTING §6). */
         @JvmStatic
         fun fuzzerTestOneInput(data: ByteArray) {
-            val file = GenerationFileJson.read(data, CAP)
-            val again = GenerationFileJson.read(data, CAP)
+            val file = GenerationFileJson.readUnhashed(data, CAP)
+            val again = GenerationFileJson.readUnhashed(data, CAP)
             check((file == null) == (again == null)) { "a second read differs" }
             check(data.size <= CAP || file == null) { "a generation file over the cap" }
             val name = GenerationFileJson.name(data)

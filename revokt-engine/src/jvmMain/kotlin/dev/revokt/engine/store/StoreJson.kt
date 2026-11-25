@@ -13,6 +13,7 @@ import dev.revokt.engine.json.JsonObject
 import dev.revokt.engine.json.JsonParseException
 import dev.revokt.engine.json.JsonString
 import dev.revokt.engine.json.JsonValue
+import dev.revokt.engine.json.NonIntegerNumberException
 
 /** A store file's content that does not have the shape its decoder reads. */
 internal class MalformedStoreFileException(
@@ -104,6 +105,8 @@ internal class StoreFields(
                 null
             } catch (ignored: IllegalArgumentException) {
                 null
+            } catch (ignored: NonIntegerNumberException) {
+                null // A value with no canonical form (#227): no file this engine wrote holds one.
             }
 
         /** The canonical JSON of the object of [members], those whose value is null left out. */

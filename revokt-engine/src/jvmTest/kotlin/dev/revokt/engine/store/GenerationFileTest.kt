@@ -36,7 +36,7 @@ class GenerationFileTest {
         return s.replace(from, to).encodeToByteArray()
     }
 
-    private fun read(bytes: ByteArray): GenerationFile? = GenerationFileJson.read(bytes, cap)
+    private fun read(bytes: ByteArray): GenerationFile? = GenerationFileJson.readUnhashed(bytes, cap)
 
     @Test
     fun `a sync's generation file is the canonical encoding of its members`() {
@@ -138,6 +138,9 @@ class GenerationFileTest {
             read(edited(bytes, "\"incremental\":true}", "\"incremental\":true,\"deleted\":true}")),
             "a tombstone",
         )
+        // A tombstone with a number that has no canonical form: refused, never thrown (#332's fuzz finding).
+        val decimal = edited(bytes, "\"incremental\":true}", "\"incremental\":true,\"deleted\":true,\"n\":1.5}")
+        assertNull(read(decimal), "a tombstone holding a decimal")
         assertNull(read(edited(bytes, "\"incremental\":true}", "\"incremental\":true,\"n\":1.5}")), "a decimal")
         assertNull(read(edited(bytes, "\"data\":[$a,$b]", "\"data\":{}")), "data not an array")
         assertNull(read(edited(bytes, "\"data\":[$a,$b]", "\"data\":[$a,1]")), "a record not an object")
@@ -170,7 +173,27 @@ class GenerationFileTest {
         val name = GenerationFileJson.name(bytes)
         assertNotNull(GenerationFileJson.read(bytes, name, bytes.size.toLong()), "exactly at the cap")
         assertNull(GenerationFileJson.read(bytes, name, bytes.size - 1L), "one byte over")
-        assertNull(GenerationFileJson.read(bytes, bytes.size - 1L), "one byte over, unnamed")
+        assertNull(GenerationFileJson.readUnhashed(bytes, bytes.size - 1L), "one byte over, unnamed")
+    }
+
+    @Test
+    fun `the cap reaches the JSON reader, so a file over MAX_JSON_BYTES but under the cap reads`() {
+        val pad = "x".repeat(RevoktLimits.MAX_JSON_BYTES.toInt())
+        val records = listOf(Json.parse("{\"id\":\"a\",\"pad\":\"$pad\"}".encodeToByteArray(), cap) as JsonObject)
+        val bytes = GenerationFileJson.write(Generations.sync(records = records))
+        assertTrue(bytes.size > RevoktLimits.MAX_JSON_BYTES && bytes.size <= cap, "${bytes.size}")
+        assertNotNull(GenerationFileJson.read(bytes, GenerationFileJson.name(bytes), cap))
+    }
+
+    @Test
+    fun `the cap is checked at the write, and write and read agree at it`() {
+        val file = Generations.sync()
+        val bytes = GenerationFileJson.write(file)
+        val size = bytes.size.toLong()
+        assertContentEquals(bytes, GenerationFileJson.write(file, size))
+        assertNull(GenerationFileJson.write(file, size - 1))
+        assertNotNull(GenerationFileJson.read(bytes, GenerationFileJson.name(bytes), size))
+        assertNull(GenerationFileJson.read(bytes, GenerationFileJson.name(bytes), size - 1))
     }
 
     @Test
