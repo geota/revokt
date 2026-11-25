@@ -122,9 +122,12 @@ internal class CrliteSync(
      * `RevoktLimits` constant is a `CAP_NEAR_LIMIT` warning on whatever result the sync ends with (§4), and the sync
      * goes on.
      *
-     * `UNCHANGED`-by-timestamp against a generation the snapshot holds live but the pointer does not name (an install
-     * whose flip or `updater.json` failed after `activate`, #184) is not the end: the install is retried, which finds
-     * the generation file and every blob stored and flips the pointer (#137's notes from #184 and #190).
+     * `UNCHANGED`-by-timestamp against a generation the snapshot holds live but the pointer does not name as `live` (an
+     * install whose flip or `updater.json` failed after `activate`, #184, or a pointer that does not read) is not the
+     * end: spec §6.5's re-flip points `current` at the served file, once it and its blobs pass Load's steps 1 to 3, and
+     * writes `updater.json` as the install of that `<ts>` would, with no fetch, no `prepare` and no prune ([reflip]).
+     * When the served file does not pass, the collection is installed as served, every stored blob that re-hashes
+     * reused (#137's notes from #184 and #190).
      */
     fun syncOnce(nowMillis: Long): SyncRun = Attempt(nowMillis).run()
 
@@ -361,7 +364,24 @@ internal class CrliteSync(
             // The live generation's install activated but its flip did not land: retry it, never stop (#190).
             val reflip = decision == SyncDecision.UNCHANGED && !reads.pointed()
             if (!reflip) decided(decision, ts)?.let { return it }
+            if (reflip) reflipped(ts)?.let { return it }
             return fetched(verified, crlite, records, placed, noneLoaded = live == null)
+        }
+
+        /**
+         * Spec §6.5's re-flip of the served generation at [ts], or null when its file or a blob does not pass Load's
+         * steps 1 to 3, so the collection is installed instead. A fault found here is counted by that install, which
+         * reads the served file as its first `previous` candidate, or by [Reads.deltaBase]: each once.
+         */
+        private fun reflipped(ts: Long): SyncResult? {
+            val served = snapshot.servedFile() ?: return null
+            val stored = (stored { store.stored(served) } as? StoreRead.Found)?.value ?: return null
+            val generationId = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId
+            if (stored.generationId != generationId || stored.timestampMillis != ts) return null
+            if (!stored { store.blobsMatch(stored) }) return null
+            return installed(ts, noneLoaded = false) { publication, updated ->
+                reflip(stored, store, snapshot, publication, updated)
+            }
         }
 
         /**
@@ -429,8 +449,20 @@ internal class CrliteSync(
         private fun installed(
             pending: PendingGeneration,
             noneLoaded: Boolean,
+        ): SyncResult =
+            installed(pending.file.lastModified, noneLoaded) { publication, updated ->
+                install(pending, engine, store, snapshot, publication, updated, logger)
+            }
+
+        /**
+         * Ends the sync with the outcome of [flip] (an install, or the re-flip) of a generation at [ts], given its
+         * publication and the `updater.json` to write; a successful one is pruned to when [InstallResult.Installed.prunable].
+         */
+        private inline fun installed(
+            ts: Long,
+            noneLoaded: Boolean,
+            flip: (Publication, UpdaterRecord) -> InstallResult,
         ): SyncResult {
-            val ts = pending.file.lastModified
             val updated =
                 UpdaterTransitions.after(
                     record,
@@ -442,7 +474,7 @@ internal class CrliteSync(
                     noneLoaded = noneLoaded,
                 )
             val publication = Publication(fromSeed = false, seedFormat = null, staleGateOpen = true, nowMillis = now)
-            return when (val result = install(pending, engine, store, snapshot, publication, updated, logger)) {
+            return when (val result = flip(publication, updated)) {
                 is InstallResult.Installed -> {
                     written = updated
                     storeFailures += result.storeFailures
