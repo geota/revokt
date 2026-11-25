@@ -1464,7 +1464,7 @@ only `monitor/changes` and per-collection `changeset`; `_expected` mandatory; a 
 bare in the changeset query, as Firefox does, beside the quoted `If-None-Match` (§3), **only while the cursor is the live
 generation's `sourceTimestampMillis` and the pointer names that generation as `live`**, and otherwise fetches the whole
 collection, so a 304 always speaks for the generation served and stored (beside a pointer that does not name it, a flip
-that failed or a malformed pointer, the whole collection's `UNCHANGED` re-flips it, §6.5): after a fallback (the seed or `previous` live while the cursor names a newer generation) a 304 would
+that failed or a malformed pointer, the whole collection's `UNCHANGED` re-flips or heal-installs it, §6.5): after a fallback (the seed or `previous` live while the cursor names a newer generation) a 304 would
 otherwise leave the fallback live until the next `<ts>` (#147, from #205's review; Firefox's `_since` is its local
 data's own timestamp, and upki sends `If-Modified-Since` only when its local manifest reads, Appendix A;
 `CrliteRuntimePollTest` "after a fallback the cursor is not sent", `CrliteDeltaSyncTest` "a cursor older than the live

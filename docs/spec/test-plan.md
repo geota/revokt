@@ -129,8 +129,9 @@ tests; **live checks** are informational.
   a `current` with a flipped hex digit at `start()` → `storeFailures = 1`, no `STORE_UNREADABLE` warning (which means
   only the in-memory fallback, and stays until `close()`), and the next install heals it (`CrliteRuntimeStartTest`);
   a sync against the served generation's `<ts>` while `current` does not name it → `UNCHANGED`, with §6.5's re-flip
-  (no fetch, no `prepare`, no publish) or, when the served file or a blob fails Load's steps 1 to 3, its heal-install,
-  and no prune after either (`CrliteSyncFailureTest`, `CrliteDeltaBaseTest`);
+  (no fetch, no `prepare`, no publish) or, when the served file or a blob fails Load's steps 1 to 3, its heal-install
+  (the served `generationId` kept, `generationEpoch` + 1); either lands the cursor, `lastVerified*` and the watermark at
+  `<ts>`, and no prune follows (`CrliteSyncFailureTest`, `CrliteDeltaBaseTest`);
   prune keeps a newer generation file that passes Load's steps 1 and 2 and the blobs it names; no prune after a seed
   load at `start()`, rule (a) or (b), or after a heal flip (`StoreCrashTest`, `StoreModelTest` I1–I10); a non-empty store with a lower `store.version` → rebuilt from seed, `STORE_MIGRATED`, `storeFailures = 0`; with a higher `store.version` under `JvmStorage` → no file written, the lock released, `storageFallback = true` with `STORE_NEWER_LAYOUT`, and the worker-style `sync()` still installs in memory; under `AndroidStorage` → rebuilt from seed with `STORE_NEWER_LAYOUT`; an instance on the ownership fallback whose directory is chowned during the session → stays in memory until its process restarts, `storageFallback = true`, nothing written; an empty
   directory → `storeFailures = 0`; a generation file without its signed members, with an unknown or a duplicate member, of the
