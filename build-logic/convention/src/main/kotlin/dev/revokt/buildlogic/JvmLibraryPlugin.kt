@@ -99,6 +99,7 @@ class JvmLibraryPlugin : Plugin<Project> {
         tasks.withType<Test>().configureEach {
             useJUnitPlatform()
             configureTestJdk(project, this)
+            configureTestLogging(project, this)
         }
     }
 }

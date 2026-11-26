@@ -8,6 +8,7 @@ import org.gradle.api.artifacts.dsl.LockMode
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
 import org.gradle.kotlin.dsl.getByType
@@ -93,4 +94,15 @@ internal fun configureTestJdk(project: Project, test: Test) {
     }
     val toolchains = project.extensions.getByType<JavaToolchainService>()
     test.javaLauncher.set(toolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(requested)) })
+}
+
+/**
+ * CI logs: with the `CI` environment variable set (GitHub Actions sets `CI=true`) and not `false`, every test task
+ * prints each test's result, `<class> > <method> PASSED`, `SKIPPED` or `FAILED`, so a log shows which tests ran on
+ * each leg of the matrix without an uploaded report. Local runs keep Gradle's default, failures only.
+ */
+internal fun configureTestLogging(project: Project, test: Test) {
+    val ci = project.providers.environmentVariable("CI").orNull
+    if (ci.isNullOrEmpty() || ci.equals("false", ignoreCase = true)) return
+    test.testLogging.events(TestLogEvent.PASSED, TestLogEvent.SKIPPED, TestLogEvent.FAILED)
 }
