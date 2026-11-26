@@ -104,6 +104,9 @@ internal class SystemFsync(
  *   so never deleted by prune.
  * - Below the real root no symbolic link is followed: a link anywhere in a key's path makes it not a key, so [names]
  *   skips it and [read], [write] and [delete] of it throw (fail closed). The root itself may be a link the caller chose.
+ * - A directory below the root that holds a `.lock` is another store's root. It is treated as a link in a key's path,
+ *   so no write reaches into it; [names] does not enter it, and [lock]'s sweep deletes nothing inside it, while
+ *   [lock]'s ownership check and fsync still visit it, so a planted `.lock` hides no directory from the check.
  * - [lock] creates the root (its parent fsynced), resolves its real path, checks ownership, then opens `.lock`
  *   (rw-------, never deleted) with no link followed, requires a regular file, and takes a [FileChannel.tryLock] on it,
  *   tried every [lockPollMillis] for [lockWaitMillis]; then it deletes every temp file under the root and fsyncs every
@@ -222,7 +225,9 @@ internal class JvmStorage(
     override fun names(): Set<String> =
         guard.read {
             val keys = HashSet<String>()
-            existingBase()?.let { base -> walk(base) { _, relative -> keyOf(relative)?.let(keys::add) } }
+            existingBase()?.let { base ->
+                walk(base, enterNested = false) { _, relative, _ -> keyOf(relative)?.let(keys::add) }
+            }
             keys
         }
 
@@ -266,7 +271,10 @@ internal class JvmStorage(
                     dirs.add(d)
                     Unit
                 }
-                walk(base, enter) { file, _ -> if (TEMP.matches(file.fileName.toString())) deleteQuietly(file) }
+                walk(base, enterNested = true, enter) { file, _, nested ->
+                    // Another store's temp files are its own, perhaps in flight.
+                    if (!nested && TEMP.matches(file.fileName.toString())) deleteQuietly(file)
+                }
                 for (d in dirs) fsync.directory(d)
             }
             held = Held(lock, open, key)
@@ -420,15 +428,18 @@ internal class JvmStorage(
     }
 
     /**
-     * Visits every directory under [base], [base] first, with [onDirectory] and every regular file with [onFile]. A
-     * directory below [base] that holds a `.lock` is another store's root and is not entered: its keys are never listed,
-     * so never deleted, and the open's sweep never deletes its temp files in flight.
+     * Visits every directory under [base], [base] first, with [onDirectory] and every regular file with [onFile], which
+     * also gets whether the file lies inside another store's root: a directory below [base] that holds a `.lock`. Such a
+     * directory is entered only when [enterNested] (the open's ownership check and fsync, so a planted `.lock` hides no
+     * directory from the check); [names] does not enter it, and the open's sweep deletes no temp file inside it.
      */
     private fun walk(
         base: Path,
+        enterNested: Boolean,
         onDirectory: (Path) -> Unit = {},
-        onFile: (Path, Path) -> Unit,
+        onFile: (file: Path, relative: Path, nested: Boolean) -> Unit,
     ) {
+        val nestedRoots = ArrayList<Path>()
         // Links below the root are not followed: a link to a file or a directory is neither visited through nor listed.
         Files.walkFileTree(
             base,
@@ -437,10 +448,9 @@ internal class JvmStorage(
                     dir: Path,
                     attrs: BasicFileAttributes,
                 ): FileVisitResult {
-                    if (dir != base &&
-                        attributes(dir.resolve(StoreKeys.LOCK)) != null
-                    ) {
-                        return FileVisitResult.SKIP_SUBTREE
+                    if (dir != base && holdsLock(dir)) {
+                        if (!enterNested) return FileVisitResult.SKIP_SUBTREE
+                        nestedRoots.add(dir)
                     }
                     onDirectory(dir)
                     return FileVisitResult.CONTINUE
@@ -450,8 +460,16 @@ internal class JvmStorage(
                     file: Path,
                     attrs: BasicFileAttributes,
                 ): FileVisitResult {
-                    if (attrs.isRegularFile) onFile(file, base.relativize(file))
+                    if (attrs.isRegularFile) onFile(file, base.relativize(file), nestedRoots.isNotEmpty())
                     return FileVisitResult.CONTINUE
+                }
+
+                override fun postVisitDirectory(
+                    dir: Path,
+                    exc: IOException?,
+                ): FileVisitResult {
+                    if (nestedRoots.lastOrNull() == dir) nestedRoots.removeAt(nestedRoots.size - 1)
+                    return super.postVisitDirectory(dir, exc)
                 }
             },
         )
@@ -474,8 +492,9 @@ internal class JvmStorage(
 
         /**
          * What [name] names under [base], each segment's attributes read without following a link. A symbolic link, or
-         * anything but a directory or a regular file, anywhere on the path makes [name] not a key: this throws, so a read
-         * fails rather than reading as absent, and a write or a delete fails (spec §6.5, the store trusted at the OS level).
+         * anything but a directory or a regular file, anywhere on the path makes [name] not a key, and so does a
+         * directory on it that holds a `.lock`, another store's root: this throws, so a read fails rather than reading as
+         * absent, and a write or a delete fails (spec §3, §6.5, the store trusted at the OS level).
          */
         private fun kindOf(
             base: Path,
@@ -487,7 +506,8 @@ internal class JvmStorage(
                 path = path.resolve(segment)
                 val attrs = attributes(path) ?: return Kind.ABSENT
                 if (attrs.isRegularFile) return Kind.UNDER_FILE
-                if (!attrs.isDirectory) throw notAKey(name, path)
+                // Another store's root is treated as a link: no key of this store reaches into it.
+                if (!attrs.isDirectory || holdsLock(path)) throw notAKey(name, path)
             }
             path = path.resolve(segments.last())
             val attrs = attributes(path) ?: return Kind.ABSENT
@@ -497,6 +517,9 @@ internal class JvmStorage(
                 else -> throw notAKey(name, path)
             }
         }
+
+        /** Whether directory [dir] holds a `.lock`, as another store's root does; anything at that name counts. */
+        private fun holdsLock(dir: Path): Boolean = attributes(dir.resolve(StoreKeys.LOCK)) != null
 
         /** [path]'s own attributes, a link's rather than its target's; null when nothing is there. */
         private fun attributes(path: Path): BasicFileAttributes? =
@@ -509,7 +532,7 @@ internal class JvmStorage(
         private fun notAKey(
             name: String,
             path: Path,
-        ) = IOException("'$name' is not a key here: $path is a link or a special file")
+        ) = IOException("'$name' is not a key here: $path is a link, a special file or another store's root")
 
         private fun resolve(
             base: Path,

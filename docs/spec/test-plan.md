@@ -152,7 +152,9 @@ tests; **live checks** are informational.
   non-key file kept; a rebuild whose delete or version write throws → `STORE_UNREADABLE` with the old version kept,
   and the next start rebuilds again (`STORE_MIGRATED`), leaving nothing old; a storage other than `JvmStorage` with a
   higher version → `STORE_NEWER_LAYOUT`, untouched; the registration is still held while the lock is released; a store
-  nested inside another's root keeps its lock and keys through the outer one's open and rebuild; a lock held elsewhere →
+  nested inside another's root keeps its lock and keys through the outer one's open and rebuild, an outer key through
+  an inner root throws on `read`, `write` and `delete`, and the inner rebuild leaves the outer files alone; a 0777
+  subdirectory holding a `.lock` is still `STORE_UNREADABLE`; a lock held elsewhere →
   `STORE_LOCKED`, nothing written, and the fallback is never retried; after every fallback and every throw the lock is
   free and the identity deregistered; a second instance on one root in the process, through another spelling or a
   symbolic link to the root, throws `IllegalStateException` and takes no lock; `start()` registers and locks before the
