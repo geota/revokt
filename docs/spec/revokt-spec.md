@@ -1342,7 +1342,9 @@ case) and the next prune deletes what stays unnamed (`InstallTest`, `StoreCrashT
 the generation the engine serves beside the snapshot. **The re-flip**: a sync whose verified `<ts>` is the served
 generation's (`UNCHANGED`) while `current` does not name that generation as `live` (a flip that failed after
 activation, or a pointer that does not read) flips `current` to `{live: the served file, previous: per the candidate
-rule above}`, once the served file and its blobs pass Load's steps 1 to 3, with no fetch, no `prepare` and no publish.
+rule above}`, once the served file and its blobs pass Load's steps 1 to 3, with no fetch, no `prepare` and no publish;
+a `current` whose `live` is newer than the served generation and passes Load's steps 1 and 2 (one the start task fell
+back from) is left as it is, so a re-flip never moves the pointer back (`CrliteSyncFailureTest`).
 Else the **heal-install** installs the collection as served, reusing every stored blob and file that re-hashes
 (Firefox re-imports a full changeset alike, Appendix A); its publish keeps the served `generationId`. Both are store
 repairs that stay `UNCHANGED` (the served generation does not change) and write `updater.json` as the install of that

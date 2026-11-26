@@ -10,6 +10,8 @@ import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
+import dev.revokt.engine.runtime.StartChain
+import dev.revokt.engine.runtime.serveChain
 import dev.revokt.engine.seed.SeedFixture
 import dev.revokt.engine.seed.SeedLoad
 import dev.revokt.engine.store.Pointer
@@ -187,6 +189,28 @@ internal class StoreCrashTest : SeedFixture() {
         // The floor is max(watermark, the live <ts>): the stale watermark reopens no rollback.
         server.ts = ts2 - 1
         sync(server, now = ts2 + 3 * hour).assert(SyncFailure.ROLLBACK_REFUSED)
+    }
+
+    @Test
+    fun `row 4 - after a restart the chain serves the new pointed generation, and UNCHANGED catches updater_json up`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        second(server)
+        stopAt { it.endsWith("/updater.json") }
+        sync(server, now = ts2 + hour)
+        restart()
+        val name = checkNotNull(liveName())
+        val engine = UpdateFixtures.TestEngine()
+        assertEquals(StartChain.LIVE, serveChain(store, { ts2 + 2 * hour }, HashSet(), engine, snapshot, true, logger))
+        assertEquals(name, live().generationFile)
+        assertEquals(ts, updater(ts2 + 2 * hour).watermarkMillis, "stale until the next sync")
+        val now = ts2 + 3 * hour
+        sync(server, now = now).assert(SyncOutcome.UNCHANGED)
+        assertEquals(ts2, sourceRecord(now).lastVerifiedLastModified, "the cursor")
+        assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
+        assertEquals(ts2, updater(now).watermarkMillis, "the watermark")
+        server.ts = ts2 - 1
+        sync(server, now = now + hour).assert(SyncFailure.ROLLBACK_REFUSED)
     }
 
     /** [server] serving [records] at [at]. */

@@ -15,6 +15,8 @@ import dev.revokt.engine.store.GenerationFileJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
+import dev.revokt.engine.update.UpdateFixtures
+import dev.revokt.engine.update.UpdateFixtures.log
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.io.IOException
@@ -171,6 +173,33 @@ internal class SeedAdoptTest : SeedFixture() {
         reset(keepStore = true)
         assertEquals(1, installed(load(Seed())).storeFailures, "a candidate that fails step 3")
         assertIs<StoreRead.Found<*>>(store.readGeneration(n2))
+    }
+
+    @Test
+    fun `a pointed previous newer than the seed with a rotted blob of its own is counted once, by the scan`() {
+        val older = installedAt(ts - hour)
+        val d2 =
+            Rec(
+                "d2",
+                true,
+                delta.effectiveTimestamp + 1,
+                "d2.filter.delta",
+                UpdateFixtures.v4(listOf(log(2) to (1L to 2L))),
+                parent = full.id,
+            )
+        val newer = installed(load(Seed(records = listOf(full, delta, d2), ts = ts + hour))).name
+        store.point(Pointer(older, newer))
+        // The live does not read, so the pointer is no trustworthy one (rule (b)); the newer previous's own blob rots.
+        val key = store.generationKey(older)
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
+        storage.inner.write(store.blobKey(d2.body.toByteString().sha256()), byteArrayOf(1))
+        reset(keepStore = true)
+        // The scan rejects the newer previous and counts it; the seed's install does not count it again as a previous
+        // candidate (#335 review): one for the live, one for the previous.
+        val load = installed(load(Seed()))
+        assertEquals(2, load.storeFailures)
+        assertEquals(Pointer(load.name, null), (store.pointer() as StoreRead.Found).value)
+        assertTrue(store.generationKey(newer) in storage.inner.names(), "kept")
     }
 
     @Test

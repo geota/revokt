@@ -394,6 +394,48 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         assertEquals(1, run.storeFailures, "the rotted blob, once")
     }
 
+    @Test
+    fun `an UNCHANGED whose cursor alone is behind the live ts writes it as the install would`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val r = updater()
+        assertEquals(ts, r.watermarkMillis)
+        val behind = r.sources.mapValues { it.value.copy(lastVerifiedLastModified = ts - 1) }
+        store.writeUpdater(r.copy(sources = behind), ts + hour)
+        val now = ts + 2 * hour
+        sync(server, now = now).assert(SyncOutcome.UNCHANGED)
+        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
+        assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
+    }
+
+    @Test
+    fun `an UNCHANGED whose watermark alone is behind the live ts writes it as the install would`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val r = updater()
+        assertEquals(ts, sourceRecord().lastVerifiedLastModified)
+        store.writeUpdater(r.copy(watermarkMillis = ts - 1), ts + hour)
+        // The cursor is at the live ts, so a _since is sent; this server answers it in full, not with a 304.
+        server.overrides[server.sinceUrl(ts)] = { server.sinceResponse(ts) }
+        val now = ts + 2 * hour
+        sync(server, now = now).assert(SyncOutcome.UNCHANGED)
+        assertEquals(ts, updater(now).watermarkMillis)
+        assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
+    }
+
+    @Test
+    fun `the re-flip leaves a pointer whose live is newer than the served one and reads, never moving it back`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val served = assertNotNull(live().generationFile)
+        // A newer generation pointed to but not served: one the start task fell back from.
+        val newer = UpdateFixtures.pending(store, sourceTimestampMillis = ts + day).file
+        val name = store.putGeneration(GenerationFileJson.write(newer))
+        store.point(Pointer(name, served))
+        sync(server, now = ts + 2 * hour).assert(SyncOutcome.UNCHANGED)
+        assertEquals(StoreRead.Found(Pointer(name, served)), store.pointer())
+    }
+
     /** A sync of [server] whose flip fails after activation: the engine serves a file `current` does not name. */
     private fun failedFlip(server: Server): String {
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }

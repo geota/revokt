@@ -116,6 +116,29 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
     }
 
     @Test
+    fun `a trusted live that passes steps 1 and 2 but fails step 3, with no previous, falls to the seed`() {
+        val d2 =
+            Rec(
+                "d2",
+                true,
+                delta.effectiveTimestamp + 1,
+                "d2.filter.delta",
+                UpdateFixtures.v4(listOf(UpdateFixtures.log(2) to (1L to 2L))),
+                parent = full.id,
+            )
+        val live = installed(load(Seed(records = listOf(full, delta, d2), ts = ts + hour))).name
+        storage.inner.write(store.blobKey(d2.body.toByteString().sha256()), byteArrayOf(1))
+        reset(keepStore = true)
+        val runtime = runtime(source(Seed(ts = ts - hour)))
+        start(runtime)
+        // Rule (a) skipped the seed on Load's steps 1 and 2; the chain's full load failed, so the seed installs.
+        assertTrue(runtime.crlite().fromSeed)
+        assertEquals(ts - hour, runtime.crlite().sourceTimestampMillis)
+        assertTrue(live in store.generationNames(), "the unloadable live is never deleted")
+        assertFalse(runtime.storeReadUnresolved)
+    }
+
+    @Test
     fun `when live and previous both fail to load, the seed installs and nothing is deleted`() {
         val previous = installedAt(ts - hour)
         val live = installedAt(ts)

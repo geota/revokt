@@ -364,7 +364,8 @@ internal class CrliteSync(
             val live = reads.liveTimestamp()
             val decision = SyncRules.decide(ts, record.watermarkMillis, live)
             // The live generation's install activated but its flip did not land: retry it, never stop (#190).
-            val reflip = decision == SyncDecision.UNCHANGED && !reads.pointed()
+            // Never back: a pointer whose live is newer than the served generation and reads is left alone (#335 review).
+            val reflip = decision == SyncDecision.UNCHANGED && !reads.pointed() && !reads.newerLive(ts)
             if (!reflip) decided(decision, ts)?.let { return it }
             if (reflip) reflipped(ts)?.let { return it }
             return fetched(verified, crlite, records, placed, noneLoaded = live == null, repair = reflip)
@@ -648,6 +649,17 @@ internal class CrliteSync(
             /** Counts [name]'s failure, once. */
             fun count(name: String) {
                 if (counted.add(name)) storeFailures++
+            }
+
+            /**
+             * Whether the pointer's `live` is newer than [ts], the served generation's, and passes Load's steps 1 and 2
+             * (an adopt the start task could not serve): the re-flip then leaves the pointer alone, so it never moves a
+             * generation back (spec §6.5). A `live` that does not read is counted by the re-flip's own read.
+             */
+            fun newerLive(ts: Long): Boolean {
+                val live = (stored { store.pointer() } as? StoreRead.Found)?.value?.live ?: return false
+                val read = stored { store.stored(live) } as? StoreRead.Found ?: return false
+                return read.value.timestampMillis > ts
             }
 
             /**
