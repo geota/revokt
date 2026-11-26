@@ -591,3 +591,36 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     there). Any read prune makes that throws stops it with nothing deleted. A start counts each fault once: the adopt
     scan passes over a generation the chain already failed to load. A generation file reads only as its own canonical
     bytes, so a change to the canonical encoder's output is a `store.version` change.
+- 2026-11-26 (lead, #287, PRs #332, #335 and #336; each with an independent review and fix rounds): decisions from
+  building the store switch and the `start()` recovery chain.
+  - **Load time (B16):** `start()`'s load runs over §6.4's columns: 25 ms on `compat` and 43 ms on `default` under
+    HotSpot's JIT, about 1.5 to 2.5 times the estimate, with ART not yet measured. As design note §16 planned, the
+    fallbacks are a follow-up, #333, which measures on ART first. §6.4's numbers stay until then. upki persists
+    `index.bin` (`fetch.rs:337-376`, `index.rs:69-80`); Firefox keeps no index, and each filter carries its own coverage
+    (cert_storage `lib.rs:521-534`).
+  - **The repairs (B17):** an `UNCHANGED` whose pointer does not name the served generation re-flips it, to
+    `{live: served, previous: by the candidate rule}`, after Load's steps 1 to 3, and never prunes. When the served file
+    fails those steps, the sync heal-installs the collection as served instead: it reuses every blob that re-hashes and
+    publishes epoch + 1 with the same `generationId`, since a re-signed collection can rebuild to another file name.
+    Both report `UNCHANGED`, since what is served does not change, and both write the cursor, `lastVerified*` and the
+    watermark as the install of that `<ts>` does. A repair that fails is `FAILED` with its own failure. Firefox
+    re-imports a full changeset when its local data does not verify (RSC:1286-1300); upki has no pointer.
+  - **Counting and the pointer (B18):** a store fault is counted once, where it is first found, at sync and at
+    `start()`. A sync records the delta-base fault, the step-3 fault of a re-flip that falls through, and the blobs of a
+    generation it rewrites. A `start()` counts across all its passes with one shared fault set, and `recover` returns
+    the count. A pointed `UNCHANGED` rewrites `updater.json` when the cursor or the watermark is behind `<ts>`, which
+    repairs a crash between the flip and that write. A re-flip never replaces a pointed `live` that is newer than the
+    served generation and passes steps 1 and 2, so the pointer never moves back. Neither reference keeps a pointer:
+    this follows revokt's no-rollback rule.
+  - **The `start()` chain (B19):** a `previous` older than the seed is never decoded at `start()`; it is left to the
+    seed. When the pointed `live` fails to load, the seed's install lowers the watermark to the seed's `<ts>`, as
+    Firefox's floor drops after a dump import (RSC:1292-1300) and as §6.5 says. Residual: a one-off engine refusal at
+    start lowers the floor too, and once #330 lands that persists. The chain's bound is the number of stored
+    generations plus 2, and running out leaves the read unresolved, which fails closed. Once the chain has served a
+    `previous` not older than the seed, the seed's second pass still runs rule (b), but over the other generations
+    only. Residual: in that case `previous` and the adopted generation are both decoded, which needs a failed flip and
+    rolls nothing back. The review's other start points are follow-up #338.
+  - **From the independent review of #337 (#334):** `close()` waits for the loader thread itself to exit as well as
+    the pool's termination, which the JDK signals first. The remaining wait on consumer code is the JVM's
+    uncaught-exception handler, after a JDK-internal `Error` kills the worker. That is a residual, since no revokt
+    path reaches it.
