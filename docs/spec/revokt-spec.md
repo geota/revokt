@@ -912,12 +912,13 @@ returns normally) and release it before anything else → stop scheduling (a syn
 nothing, and a timer the loader's shutdown refuses drops the task: `RevoktPollTest` "a sync scheduled before close never
 runs") → complete the internal
 `dataReady` future and the public `readyFuture()` (the public one exceptionally) → cancel the
-loader and await an in-flight install and then the loader thread's exit, so no loader thread outlives `close()` (a sync waiting on a fetch ends `FAILED` at the interrupt and installs nothing,
-`RevoktPollTest` "close cancels a sync in flight"; a cancelled install never flips the pointer, closes an un-activated `PreparedGeneration` and deletes its
-own directory before returning) → drain in-flight handshakes (a handshake thread increments the in-flight counter
-**before** it reads the lifecycle state and decrements after, so the drain cannot miss a thread that
-has passed the check) → release the store lock → deregister the identity → clear the generation reference
-(the loader is stopped, so this is the only post-loader write) → `engine.close()` (always; `Revokt`
+loader and await an in-flight install (a sync waiting on a fetch ends `FAILED` at the interrupt and installs nothing; a
+cancelled install never flips the pointer, closes an un-activated `PreparedGeneration` and deletes its own directory
+before returning), then the loader thread's exit, so no loader thread outlives `close()` (`RevoktPollTest` "close
+cancels a sync in flight, and nothing runs after it returns") → drain in-flight handshakes (a handshake thread
+increments the in-flight counter **before** it reads the lifecycle state and decrements after, so the drain cannot
+miss a thread that has passed the check) → release the store lock → deregister the identity → clear the generation
+reference (the loader is stopped, so this is the only post-loader write) → `engine.close()` (always; `Revokt`
 owns the engine; a throw from it is rethrown once every other step has run, so an engine that did not close is never hidden, and a later `close()` is a no-op). **After `close()`, and in `CREATED`, every trust manager, existing ones included,
 runs step 1 only**, as `OFF`, with no events and frozen counters other than `unevaluated`; `trustManager(d)` in `CLOSED`
 returns such an instance. Clients that outlive `close()` therefore keep working on the platform verdict alone.

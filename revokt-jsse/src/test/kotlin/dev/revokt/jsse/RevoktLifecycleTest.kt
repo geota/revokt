@@ -329,7 +329,12 @@ class RevoktLifecycleTest {
                 started.countDown()
             }
         assertTrue(entered.await(5, TimeUnit.SECONDS))
-        val closer = thread { revokt.close() }
+        val closed = CountDownLatch(1)
+        val closer =
+            thread {
+                revokt.close()
+                closed.countDown()
+            }
         assertTrue(started.await(5, TimeUnit.SECONDS), "start() returned once close() flipped")
         closer.join(300)
         assertTrue(closer.isAlive, "close() waits for the in-flight task")
@@ -341,6 +346,7 @@ class RevoktLifecycleTest {
         closer.join(5_000)
         starter.join(5_000)
         assertFalse(closer.isAlive)
+        assertEquals(0, closed.count, "close() returned without throwing")
         assertEquals(1, engine.closes)
     }
 
