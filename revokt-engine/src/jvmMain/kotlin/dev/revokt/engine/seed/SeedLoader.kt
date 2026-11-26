@@ -252,8 +252,21 @@ internal class SeedLoader(
      * Any seed fault is [SeedLoad.Unreadable]; a failed `prepare` or `activate` is too (§6.5: "the corresponding load
      * failure, `SEED_UNREADABLE` for the seed"). A read interrupted by the thread's interrupt (okio's `InterruptedIOException`) is `SEED_UNREADABLE` as
      * well, with the interrupt kept.
+     *
+     * [unloadable] names stored generation files the start task's recovery chain failed to load in full (spec §6.5:
+     * rule (b) applies to "a `live` that does not load"): such a `live` is no trustworthy pointer, and the adopt scan
+     * passes over them. Their failure is the chain's to count, not this load's. [excluded] names files the adopt scan
+     * passes over without counting them (the generation the engine already serves, #336). [faults] is the start's one
+     * set of the store faults already counted, by key (`current`, `updater.json`, a generation file or blob name),
+     * shared across the start's passes: this load counts in [SeedLoad.storeFailures] only the faults it adds to it, so
+     * the start's passes add up to each fault once.
      */
-    fun load(nowMillis: Long): SeedLoad = Attempt(nowMillis).run()
+    fun load(
+        nowMillis: Long,
+        unloadable: Set<String> = emptySet(),
+        excluded: Set<String> = emptySet(),
+        faults: MutableSet<String> = HashSet(),
+    ): SeedLoad = Attempt(nowMillis, unloadable, excluded, faults).run()
 
     /** What the header read gave: the archive and its header's `filterFormat`, or the load's end. */
     private sealed interface HeaderRead {
@@ -320,6 +333,9 @@ internal class SeedLoader(
     @OptIn(RevoktInternalApi::class)
     private inner class Attempt(
         private val now: Long,
+        private val unloadable: Set<String>,
+        private val excluded: Set<String>,
+        private val faults: MutableSet<String>,
     ) {
         private var storeFailures = 0
 
@@ -331,8 +347,11 @@ internal class SeedLoader(
         /** Whether this load counted a stored generation as rejected ([adoptable]), whose rotted blobs it then rewrites. */
         private var rejected = false
 
-        /** The generation files whose failure this load counted, so each is counted once. */
-        private val counted = HashSet<String>()
+        /** The store faults counted so far, by key: this load's and the start's earlier passes' ([load]'s `faults`). */
+        private val counted: MutableSet<String> get() = faults
+
+        /** Counts the store fault [key] unless it is counted already; whether it was new. */
+        private fun fault(key: String): Boolean = counted.add(key).also { if (it) storeFailures++ }
 
         @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable, an OutOfMemoryError too.
         fun run(): SeedLoad =
@@ -465,14 +484,15 @@ internal class SeedLoader(
                     }
 
                     StoreRead.Malformed -> {
-                        storeFailures++
+                        fault(UPDATER_KEY)
                         logger.safeLog(LogLevel.WARN, "${store.root}: updater.json is malformed; read as absent")
                         UpdaterRecord()
                     }
 
                     is StoreRead.Found -> {
                         // A dropped source entry was malformed alone; the rest, the watermark included, was read.
-                        storeFailures += read.value.storeFailures
+                        val dropped = read.value.storeFailures
+                        if (dropped > 0 && counted.add(SOURCES_KEY)) storeFailures += dropped
                         read.value.record
                     }
                 }
@@ -483,7 +503,7 @@ internal class SeedLoader(
                     }
 
                     StoreRead.Malformed -> {
-                        storeFailures++
+                        fault(POINTER_KEY)
                         logger.safeLog(LogLevel.WARN, "${store.root}: the pointer is malformed")
                         return Stored(updater, null, null, counted)
                     }
@@ -493,15 +513,15 @@ internal class SeedLoader(
                     }
                 }
             var live: StoredGeneration? = null
-            for (name in listOfNotNull(pointer.live, pointer.previous)) {
+            // A live the chain could not load in full is no trustworthy pointer (rule (b)); its fault is the chain's.
+            for (name in listOfNotNull(pointer.live, pointer.previous).filter { it !in unloadable }) {
                 when (val read = store.stored(name)) {
                     is StoreRead.Found -> {
                         if (name == pointer.live) live = read.value
                     }
 
                     else -> {
-                        storeFailures++
-                        counted += name
+                        fault(name)
                         logger.safeLog(
                             LogLevel.WARN,
                             "${store.root}: the pointed generation $name does not read ($read)",
@@ -555,7 +575,11 @@ internal class SeedLoader(
                 logger.safeLog(LogLevel.INFO, "${store.root}: adopted $name, newer than the seed's $ts")
                 return SeedLoad.Adopted(name, file.lastModified, storeFailures)
             }
-            return engineLive?.takeIf { it > ts }?.let { SeedLoad.Skipped(ts, it, storeFailures) }
+            // A served generation newer than the seed is kept; so is the previous the chain fell back to ([excluded])
+            // when not older, as rule (a) keeps it (#336). An equal one otherwise is the seed's own, whose flip failed:
+            // the seed installs again and heals the pointer.
+            val kept = engineLive?.takeIf { it > ts || (excluded.isNotEmpty() && it >= ts) }
+            return kept?.let { SeedLoad.Skipped(ts, it, storeFailures) }
         }
 
         /**
@@ -565,15 +589,14 @@ internal class SeedLoader(
          */
         private fun scan(floor: Long): List<Pair<String, GenerationFile>> {
             val found = ArrayList<Pair<String, GenerationFile>>()
-            for (name in store.generationNames().sorted()) {
+            for (name in store.generationNames().sorted().filter { it !in unloadable && it !in excluded }) {
                 when (val read = store.readGeneration(name)) {
                     is StoreRead.Found -> {
                         if (read.value.lastModified >= floor) found += name to read.value
                     }
 
                     else -> {
-                        if (counted.add(name)) {
-                            storeFailures++
+                        if (fault(name)) {
                             logger.safeLog(LogLevel.WARN, "${store.root}: the generation file $name does not read")
                         }
                     }
@@ -597,7 +620,7 @@ internal class SeedLoader(
             val ok = reVerifies(name, file, seed)
             if (!ok) {
                 rejected = true
-                if (counted.add(name)) storeFailures++
+                fault(name)
                 logger.safeLog(LogLevel.WARN, "${store.root}: $name is newer than the seed but does not re-verify")
             }
             return ok
@@ -637,7 +660,7 @@ internal class SeedLoader(
                 }
                 stored {
                     // A blob of a generation this load counted as rejected is that fault, counted once (#235).
-                    if (store.putBlob(bytes) == BlobWrite.REWRITTEN && !rejected) storeFailures++
+                    if (store.putBlob(bytes) == BlobWrite.REWRITTEN && !rejected) fault(sha256.hex())
                 }
             }
 
@@ -716,7 +739,14 @@ internal class SeedLoader(
             val gateOpen = !policy.fetchingSource || (read.datasetLastAttemptAtMillis ?: Long.MIN_VALUE) >= now
             // Every generation file this load counted (a pointed one, an adopt candidate) is counted once (#335 review).
             val publication =
-                Publication(true, SEED_FORMAT.toInt(), gateOpen, now, pointerCounted = true, counted = counted.toSet())
+                Publication(
+                    true,
+                    SEED_FORMAT.toInt(),
+                    gateOpen,
+                    now,
+                    pointerCounted = true,
+                    counted = counted + unloadable,
+                )
             installing = true
             val result = install(pending, engine, store, snapshot, publication, updated, logger)
             storeFailures += result.storeFailures
@@ -833,6 +863,11 @@ internal fun verifySignedRecords(
 
 /** The latest `<ts>` a seed's `records.json` may hold: 13 digits, the width every millisecond timestamp has had since 2001. */
 private const val MAX_TIMESTAMP = 9_999_999_999_999L
+
+/** The start's fault keys ([SeedLoader.load]'s `faults`) of a malformed pointer, `updater.json`, and its sources. */
+private const val POINTER_KEY = "current"
+private const val UPDATER_KEY = "updater.json"
+private const val SOURCES_KEY = "updater.json sources"
 
 /** The records and `<ts>` of the verified [bytes], which must be the canonical payload of both. */
 private fun decodeSigned(bytes: ByteArray): Pair<List<JsonObject>, Long> {

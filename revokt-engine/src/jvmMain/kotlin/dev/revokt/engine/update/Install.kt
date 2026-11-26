@@ -52,8 +52,9 @@ internal class PendingGeneration(
  * `updater.json` is written at. [pointerCounted] when the caller has already counted a malformed pointer and each
  * pointed generation that fails Load's steps 1 and 2 (the seed load, which reads them first, #138), so the install's
  * own read of them does not count them again: each store fault is counted once. [counted] names the generation files
- * whose failure the caller has counted (the sync's served file, the seed load's rejected candidates), so neither the
- * install's read of the pointer's generations nor a `previous` candidate counts them again.
+ * whose failure the caller has counted at any step (the sync's served file, the seed load's rejected candidates, the
+ * start task's chain, which loads in full), so neither the install's read of the pointer's generations nor a
+ * `previous` candidate counts them again.
  */
 internal class Publication(
     val fromSeed: Boolean,

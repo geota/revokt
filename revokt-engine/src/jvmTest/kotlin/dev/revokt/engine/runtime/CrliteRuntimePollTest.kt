@@ -21,7 +21,9 @@ import dev.revokt.engine.fetch.response
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.seed.SeedFixture
+import dev.revokt.engine.store.SourceRecord
 import dev.revokt.engine.store.StoreRead
+import dev.revokt.engine.store.UpdaterRecord
 import dev.revokt.engine.update.PollSchedule
 import dev.revokt.engine.update.UpdateFixtures
 import dev.revokt.engine.update.UpdateFixtures.TestEngine
@@ -248,18 +250,78 @@ internal class CrliteRuntimePollTest : SeedFixture() {
     }
 
     @Test
-    fun `a stored generation 0_2 does not load keeps the store read unresolved, and nothing syncs`() {
-        // The stored generation is newer than the seed, so the load is Skipped: nothing is live beside it in 0.2.
-        installedAt(ts)
+    fun `a stored generation newer than the seed is loaded at start, resolving the store read, and the sync runs`() {
+        // #287's comment item 1: a load of a stored generation clears the flag, so polling never freezes.
+        val name = installedAt(ts)
         reset(keepStore = true)
         val server = Server(ts = ts + 30 * minute)
-        val runtime = runtime(source(Seed(ts = ts - hour)), server)
+        val engine = TestEngine()
+        val runtime = runtime(source(Seed(ts = ts - hour)), server, engine)
         val now = ts + hour
         runtime.startSeed(soleSeed = false, nowMillis = now)
-        assertEquals(now + 15 * minute, runtime.startTask(loadSeed = true) { now })
+        runtime.startTask(loadSeed = true) { now }
+        assertFalse(runtime.storeReadUnresolved)
+        assertEquals(listOf("$ts/${delta.id}", "${ts + 30 * minute}/${delta.id}"), engine.prepared, "no seed decoded")
+        assertTrue(server.fetcher.requests.any { it.url == monitor }, "the first sync ran")
+        assertTrue(name in store.generationNames())
+    }
+
+    @Test
+    fun `a store read that throws at start, then reads, resolves at the next sync, which loads and polls`() {
+        // #287's comment item 1, the test it asks for.
+        installedAt(ts)
+        reset(keepStore = true)
+        var reads = 0
+        // The start task's read and its first sync's re-read throw; the next sync's reads.
+        storage.failRead = { name -> if (name == pointerKey && reads++ < 2) IOException("the first reads") else null }
+        val server = Server(ts = ts + 30 * minute)
+        val runtime = runtime(null, server)
+        val now = ts + hour
+        runtime.startTask(loadSeed = false) { now }
         assertTrue(runtime.storeReadUnresolved)
         assertTrue(server.fetcher.requests.isEmpty())
-        assertTrue(warnings().any { "unresolved" in it }, "${warnings()}")
+        runtime.sync(now + hour)
+        assertFalse(runtime.storeReadUnresolved)
+        assertTrue(server.fetcher.requests.any { it.url == monitor }, "polling resumed")
+        assertEquals("${ts + 30 * minute}/${delta.id}", runtime.crlite().generationId)
+    }
+
+    @Test
+    fun `a sync after a start that found the seed's header absent re-runs the chain but not the seed`() {
+        installedAt(ts)
+        reset(keepStore = true)
+        var reads = 0
+        // The start task's read and its first sync's re-read throw; the next sync's reads.
+        storage.failRead = { name -> if (name == pointerKey && reads++ < 2) IOException("the first reads") else null }
+        val absent = Counted { null }
+        val runtime = runtime(absent.source, Server(ts = ts))
+        val now = ts + hour
+        val load = runtime.startSeed(soleSeed = false, nowMillis = now)
+        assertFalse(load, "the header is absent")
+        val opened = absent.opens
+        runtime.startTask(load) { now }
+        assertTrue(runtime.storeReadUnresolved)
+        runtime.sync(now + hour)
+        assertFalse(runtime.storeReadUnresolved)
+        assertEquals(opened, absent.opens, "the seed is not opened again")
+    }
+
+    @Test
+    fun `a restart under a persisted backoff after a seed installed opens the STALE gate on SKIPPED BACKOFF`() {
+        // #287's comment item 2, decided as §8 states (B10): a backoffed first sync is a completed attempt.
+        store.writeUpdater(
+            UpdaterRecord(sources = mapOf(source.sourceId to SourceRecord(backoffUntilMillis = ts + day))),
+            ts,
+        )
+        val server = Server(ts = ts + 30 * minute)
+        val runtime = runtime(source(Seed()), server)
+        val now = ts + hour
+        runtime.startSeed(soleSeed = false, nowMillis = now)
+        runtime.startTask(loadSeed = true) { now }
+        assertTrue(runtime.crlite().fromSeed)
+        assertTrue(server.fetcher.requests.isEmpty(), "under the backoff nothing is fetched")
+        assertEquals(now, updater(now).datasetLastAttemptAtMillis)
+        assertTrue(runtime.crlite().staleGateOpen, "SKIPPED with BACKOFF is an attempt")
     }
 
     @Test

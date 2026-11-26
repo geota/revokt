@@ -167,6 +167,14 @@ internal open class SeedFixture : CrliteSyncFixture() {
     protected val updaterKey = "$root/updater.json"
     protected val pointerKey = "$root/current"
 
+    /** Flips one hex digit of [live]'s name in `current`: the pointer still parses, and names a file nothing stores. */
+    protected fun flipLiveHex(live: String) {
+        val text = checkNotNull(storage.inner.read(pointerKey)).decodeToString()
+        val at = text.indexOf(live)
+        val flipped = if (text[at] == '0') '1' else '0'
+        storage.inner.write(pointerKey, (text.substring(0, at) + flipped + text.substring(at + 1)).encodeToByteArray())
+    }
+
     /** Every key and its bytes, to show a failure left the store byte-identical. */
     protected fun contents(): Map<String, List<Byte>> =
         storage.inner.names().associateWith { checkNotNull(storage.inner.read(it)).toList() }

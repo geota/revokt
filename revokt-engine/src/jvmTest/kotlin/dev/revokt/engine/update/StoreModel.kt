@@ -21,10 +21,9 @@ import dev.revokt.engine.fetch.client
 import dev.revokt.engine.fetch.json
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
+import dev.revokt.engine.runtime.CrliteRuntime
 import dev.revokt.engine.seed.SeedFixture
-import dev.revokt.engine.seed.SeedLoad
 import dev.revokt.engine.seed.SeedLoader
-import dev.revokt.engine.seed.SeedPolicy
 import dev.revokt.engine.store.GenerationFileJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.PointerJson
@@ -88,6 +87,23 @@ internal class OrderedStorage : RevoktStorage {
     override fun lock(): AutoCloseable = AutoCloseable {}
 }
 
+/** What the start task should serve (spec §6.5 crash recovery), as [StoreModel] reads the store. */
+private sealed interface ExpectedStart {
+    /** The stored generation [name], [adopted] under rule (b) or the pointer's. */
+    data class Stored(
+        val name: String,
+        val adopted: Boolean,
+    ) : ExpectedStart
+
+    /** The seed, installed with [noneLoaded] (its watermark set, not raised). */
+    data class Seed(
+        val noneLoaded: Boolean,
+    ) : ExpectedStart
+
+    /** Nothing. */
+    data object None : ExpectedStart
+}
+
 /** An invariant of [StoreModel] that a run broke; the message names the run's steps. */
 internal class ModelViolation(
     message: String,
@@ -115,6 +131,8 @@ internal class ModelViolation(
  * steps so far):
  * - **I1** what the pointer names as `live` or `previous`, and the generation the snapshot holds live, loads, unless
  *   damage or a lost delete hit its file or a blob it names; damage is forgotten once the code rewrites or deletes the key;
+ *   at a restart, the real start task (seed and chain) serves what §6.5's chain names, and decodes nothing older than
+ *   the seed;
  * - **I2** no generation file the last written pointer names, nor the served one, and no blob such a file names, is
  *   deleted or overwritten with other bytes; beside a pointer that did not read before the sync, or that named a
  *   generation failing Load's steps 1 and 2 then, nothing under `generations/` or `blobs/` is deleted at all, and a seed
@@ -668,79 +686,166 @@ internal class StoreModel : SeedFixture() {
             storage.served = ::served
             engine = engine()
             trail += "restart"
-            if (seed || choices.int(2) == 0) seedLoad()
+            startTask(if (seed || choices.int(2) == 0) published[choices.int(published.size)] else null)
         }
 
         /**
-         * The start task's seed load (§5.1), of a publication's records signed as a seed: an older one, or the newest.
-         * I2 (it deletes nothing), I3 and I10 are checked over it.
+         * The start task as [CrliteRuntime] runs it (§5.1, §6.5 crash recovery), the seed a publication's records signed
+         * as one, or none: it deletes nothing (I2), it serves what §6.5's chain names from the model's own reads (I1 at
+         * start), and an adopt writes no blob or generation file (I10).
          */
-        @Suppress("CyclomaticComplexMethod") // One arm per way a seed load ends, each with its invariant.
-        private fun seedLoad() {
-            val p = published[choices.int(published.size)]
-            val seed = Seed(records = p.records, ts = p.ts).apply { header = header + ("filterFormat" to "V4") }
-            seed.signature = fakeSignature(seed.payload(), 0)
-            val bytes = seed.bytes()
-            val untrusted =
-                (truth.pointer() as? StoreRead.Found)?.value?.let { truth.stored(it.live) !is StoreRead.Found } ?: true
-            val expected = if (untrusted) expectedAdoptee(p.ts) else null
-            storage.arm(-1, -1, deletes = false)
-            val loader =
-                SeedLoader(
-                    SeedSource.of { ByteArrayInputStream(bytes) },
-                    store,
-                    engine,
-                    snapshot,
-                    modelVerifier,
-                    SeedPolicy(pinned, fetchingSource = true),
-                    UpdateFixtures.Recording(),
+        @Suppress("CyclomaticComplexMethod") // One arm per way the start ends, each with its invariant.
+        private fun startTask(p: Publication?) {
+            val expected = expectedStart(p?.ts)
+            val source =
+                p?.let {
+                    val seed = Seed(records = it.records, ts = it.ts)
+                    seed.header = seed.header + ("filterFormat" to "V4")
+                    seed.signature = fakeSignature(seed.payload(), 0)
+                    val bytes = seed.bytes()
+                    SeedSource.of { ByteArrayInputStream(bytes) }
+                }
+            val runtime =
+                CrliteRuntime(
+                    seed = source,
+                    channel = CrliteChannel.COMPAT,
+                    crlite = true,
+                    fetchingSource = true,
+                    engine = engine,
+                    verifier = modelVerifier,
+                    policy = dev.revokt.RevoktPolicy.DEFAULT,
+                    pinnedRootSpkis = pinned,
+                    storage = storage,
+                    logger = UpdateFixtures.Recording(),
                 )
-            val load = loader.load(now)
+            storage.arm(-1, -1, deletes = false)
+            val loadSeed = runtime.startSeed(soleSeed = false, now)
+            runtime.startTask(loadSeed) { now }
             val writes = storage.contentWrites.toList()
             storage.arm(-1, -1, deletes = false)
-            trail += "  seed ${p.ts} $load"
-            when (load) {
-                is SeedLoad.Adopted -> {
-                    if (load.name != expected) fail("I10: adopted ${load.name}, not $expected")
-                    if (writes.isNotEmpty()) fail("I10: the adopt wrote $writes")
-                    watermark = maxOf(watermark ?: Long.MIN_VALUE, load.timestampMillis)
-                    highWater = maxOf(highWater ?: Long.MIN_VALUE, load.timestampMillis)
+            snapshot = runtime.snapshot
+            storage.served = ::served
+            trail += "  start ${p?.ts ?: "with no seed"}: served ${served()}, expected $expected"
+            storage.violations.firstOrNull()?.let { fail(it) }
+            // §6.5: the chain decides on Load's step 1, so a stored generation older than the seed is not decoded.
+            p?.let { seed ->
+                engine.prepared.firstOrNull { it.substringBefore('/').toLong() < seed.ts }?.let {
+                    fail("I1: the start task decoded $it, older than the seed at ${seed.ts}")
                 }
-
-                is SeedLoad.Installed -> {
-                    if (expected != null) fail("I10: the seed installed while $expected was adoptable")
-                    // With nothing loaded the seed sets the watermark to its <ts> (§7.1); beside a trusted pointer, max.
-                    if (untrusted) {
-                        watermark = p.ts
-                        highWater = p.ts
-                    } else {
-                        watermark = maxOf(watermark ?: Long.MIN_VALUE, p.ts)
-                        highWater = maxOf(highWater ?: Long.MIN_VALUE, p.ts)
+            }
+            val live = snapshot.snapshot.datasets[Dataset.CRLITE]?.takeIf { it.generationId != null }
+            when (expected) {
+                is ExpectedStart.Stored -> {
+                    if (served() != expected.name) fail("I1: the start task served ${served()}, not ${expected.name}")
+                    if (expected.adopted) {
+                        if (writes.isNotEmpty()) fail("I10: the adopt wrote $writes")
+                        val at = checkNotNull(live?.sourceTimestampMillis)
+                        watermark = maxOf(watermark ?: Long.MIN_VALUE, at)
+                        highWater = maxOf(highWater ?: Long.MIN_VALUE, at)
                     }
                 }
 
-                is SeedLoad.Skipped -> {
-                    if (expected != null) fail("I10: the seed was skipped while $expected was adoptable")
+                is ExpectedStart.Seed -> {
+                    val seedTs = checkNotNull(p).ts
+                    if (live?.fromSeed != true || live.sourceTimestampMillis != seedTs) {
+                        fail("I10: the start task served ${served()}, not the seed at $seedTs")
+                    }
+                    // With nothing loaded the seed sets the watermark to its <ts> (§7.1); beside a trusted pointer, max.
+                    if (expected.noneLoaded) {
+                        watermark = seedTs
+                        highWater = seedTs
+                    } else {
+                        watermark = maxOf(watermark ?: Long.MIN_VALUE, seedTs)
+                        highWater = maxOf(highWater ?: Long.MIN_VALUE, seedTs)
+                    }
                 }
 
-                else -> {
-                    fail("model: the seed load ended $load")
+                ExpectedStart.None -> {
+                    if (served() != null) fail("I1: the start task served ${served()}, not nothing")
                 }
             }
-            storage.violations.firstOrNull()?.let { fail(it) }
         }
 
-        /** I10's expected adoptee for a seed at [seedTs]: the newest undamaged stored generation above it, ties by name. */
-        private fun expectedAdoptee(seedTs: Long): String? {
+        /**
+         * Rule (a) of [expectedStart] over [pointer]: what it serves, the seed beside an older trusted `live`, or null
+         * to go on to rule (b), with the generations the chain failed added to [failed].
+         */
+        private fun ruleA(
+            pointer: Pointer,
+            seedTs: Long,
+            failed: MutableSet<String>,
+        ): ExpectedStart? {
+            val live = (truth.stored(pointer.live) as? StoreRead.Found)?.value ?: return null
+            if (live.timestampMillis < seedTs) return ExpectedStart.Seed(noneLoaded = false)
+            if (serves(live.name)) return ExpectedStart.Stored(live.name, adopted = false)
+            failed += live.name
+            val previous = pointer.previous ?: return null
+            val at = (truth.readGeneration(previous) as? StoreRead.Found)?.value?.lastModified
+            if (at != null && at < seedTs) return null
+            if (serves(previous)) return ExpectedStart.Stored(previous, adopted = false)
+            failed += previous
+            return null
+        }
+
+        /** Whether the model finds [name] intact and loading in full (Load's steps 1 to 4). */
+        private fun serves(name: String): Boolean = intact(name) && truth.load(name) is GenerationLoad.Loaded
+
+        /**
+         * What §6.5's chain serves at start for a seed at [seedTs] (or none), from the model's own reads: without a seed,
+         * the pointer's `live`, else its `previous`. With one, rule (a): a `live` that passes Load's steps 1 and 2 and is
+         * older than the seed lets the seed install beside it; one not older is served, else its `previous` when that is
+         * not older than the seed. Otherwise rule (b): the newest adoptable generation, not one the chain failed, else the
+         * seed with nothing loaded.
+         */
+        private fun expectedStart(seedTs: Long?): ExpectedStart {
+            val pointer = (truth.pointer() as? StoreRead.Found)?.value
+            if (seedTs == null) {
+                val name = listOfNotNull(pointer?.live, pointer?.previous).firstOrNull(::serves)
+                return name?.let { ExpectedStart.Stored(it, adopted = false) } ?: ExpectedStart.None
+            }
+            val failed = HashSet<String>()
+            val pointed = pointer?.let { ruleA(it, seedTs, failed) }
+            if (pointed is ExpectedStart.Stored && failed.isNotEmpty()) {
+                // The previous the chain fell back to: rule (b) still runs for the live that did not load, its floor
+                // that previous, which stays served when nothing newer loads (#336).
+                val at = checkNotNull((truth.stored(pointed.name) as? StoreRead.Found)?.value).timestampMillis
+                return adopt(seedTs, failed + pointed.name, maxOf(seedTs + 1, at)) ?: pointed
+            }
+            return pointed ?: adopt(seedTs, failed, seedTs + 1) ?: ExpectedStart.Seed(noneLoaded = true)
+        }
+
+        /** Rule (b)'s adopt for a seed at [seedTs]: the newest adoptable generation from [floor] that loads, none of [failed]. */
+        private fun adopt(
+            seedTs: Long,
+            failed: Set<String>,
+            floor: Long,
+        ): ExpectedStart? {
+            val passed = failed.toMutableSet()
+            while (true) {
+                val adoptee = expectedAdoptee(seedTs, passed, floor) ?: return null
+                if (serves(adoptee)) return ExpectedStart.Stored(adoptee, adopted = true)
+                passed += adoptee
+            }
+        }
+
+        /**
+         * I10's expected adoptee for a seed at [seedTs]: the newest undamaged stored generation above it, ties by name,
+         * none of [failed].
+         */
+        private fun expectedAdoptee(
+            seedTs: Long,
+            failed: Set<String> = emptySet(),
+            atLeast: Long? = null,
+        ): String? {
             val floor =
-                maxOf(
+                atLeast ?: maxOf(
                     seedTs + 1,
                     served()?.let { (truth.stored(it) as? StoreRead.Found)?.value?.timestampMillis } ?: Long.MIN_VALUE,
                 )
             return truth
                 .generationNames()
                 .sorted()
-                .filter { it !in forgedNames && intact(it) }
+                .filter { it !in forgedNames && it !in failed && intact(it) }
                 .mapNotNull { n ->
                     (truth.load(n) as? GenerationLoad.Loaded)?.value?.generation?.takeIf {
                         it.timestampMillis >=

@@ -36,11 +36,16 @@ import dev.revokt.engine.seed.SeedLoad
 import dev.revokt.engine.seed.SeedLoader
 import dev.revokt.engine.seed.SeedPolicy
 import dev.revokt.engine.store.StoreLayout
+import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
 import dev.revokt.engine.update.CrliteSync
 import dev.revokt.engine.update.PollSchedule
 import dev.revokt.engine.update.SnapshotRef
+import dev.revokt.engine.update.StoredServe
 import dev.revokt.engine.update.SyncRun
+import dev.revokt.engine.update.serveStored
+import dev.revokt.engine.update.servedFile
+import dev.revokt.engine.update.stored
 import dev.revokt.engine.walker.AnchorSnapshots
 import dev.revokt.engine.walker.DecideInputs
 import dev.revokt.engine.walker.IndexedSnapshot
@@ -127,15 +132,32 @@ public class CrliteRuntime internal constructor(
     private var seedTimestampMillis: Long? = null
 
     /**
-     * Whether the seed load's store step did not resolve (the #273 review on #143, spec §7.1 "no sync runs after a
-     * stored-generation read that threw until that read resolves"): its read threw, or its install failed before
-     * `activate`, or it found a stored generation 0.2 does not load (`Skipped`, `Adopted`). No generation is live then,
-     * although the store may hold one, so a sync would wrongly treat it as "none loaded" and ignore the watermark. While
-     * it is set, every sync re-runs the seed load first and syncs only once it resolves ([sync], #147).
+     * Whether the start task's store step did not resolve (the #273 review on #143, spec §7.1 "no sync runs after a
+     * stored-generation read that threw until that read resolves"): a store read of the recovery chain threw, or the
+     * seed's install failed before `activate`. No generation is live then, although the store may hold one, so a sync
+     * would wrongly treat it as "none loaded" and ignore the watermark. While it is set, every sync re-runs the chain
+     * first and syncs only once it resolves ([sync], #147). A chain that serves a stored generation, or installs the
+     * seed, resolves it (#287).
      */
     @Volatile
     public var storeReadUnresolved: Boolean = false
         private set
+
+    /** Whether `start()`'s sole-seed step left the seed live, so the start task's chain has nothing to load. */
+    @Volatile
+    private var seededSynchronously = false
+
+    /**
+     * The store failures the last run of the start task's store step counted, each once (spec §5.1, §6.5): its value
+     * for `storeFailures`, which 0.2 only logs (§11's 0.2 row has no `state`).
+     */
+    @Volatile
+    internal var startStoreFailures: Int = 0
+        private set
+
+    /** Whether `start()` found the seed's header absent or unreadable: the chain's re-runs then skip the seed. */
+    @Volatile
+    private var seedHeaderFailed = false
 
     /**
      * The anchor snapshot over [delegate] and its index (spec §5.1 "Anchor snapshot"), or null when it cannot be built:
@@ -177,11 +199,15 @@ public class CrliteRuntime internal constructor(
         val header = loader.checkHeader()
         check(header !is SeedLoad.ChannelMismatch) { CHANNEL_MISMATCH }
         if (header != null) {
+            seedHeaderFailed = true
             check(!soleSeed) { unreadable(header) }
             if (header is SeedLoad.Absent) logAbsent()
             return false
         }
         if (!soleSeed) return true
+        // §4 S bullet: a stored live generation that passes Load's steps 1 and 2 is the start task's to load, so the
+        // common cold start never decodes on the calling thread, and a readable store masks a bad seed.
+        if (storedLive(store)) return true
         val load = loader.load(nowMillis)
         when (load) {
             is SeedLoad.Installed -> seedTimestampMillis = load.timestampMillis
@@ -191,6 +217,7 @@ public class CrliteRuntime internal constructor(
 
             else -> error(if (load is SeedLoad.ChannelMismatch) CHANNEL_MISMATCH else unreadable(load))
         }
+        seededSynchronously = true
         return false
     }
 
@@ -210,14 +237,11 @@ public class CrliteRuntime internal constructor(
     ): Long? {
         var fatal: Throwable? = null
         try {
-            if (loadSeed) {
-                storeReadUnresolved =
-                    loaded(checkNotNull(loader).load(nowMillis()), nowMillis, resolved = true)
-            }
+            if (!seededSynchronously) storeReadUnresolved = recover(nowMillis, withSeed = loadSeed).unresolved
         } catch (t: Throwable) {
             restoreInterrupt(t)
             if (isFatal(t)) fatal = t
-            logger.safeLog(LogLevel.ERROR, "the start task's seed step threw", t)
+            logger.safeLog(LogLevel.ERROR, "the start task's store step threw", t)
         }
         var next: Long? = null
         if (polls && fatal == null) {
@@ -248,8 +272,8 @@ public class CrliteRuntime internal constructor(
      * One sync of the fetching source at [nowMillis], the loader's one clock read for it (spec §5.1, §7.1, #147), and
      * the time of the next one ([PollSchedule]): 6 h plus a jitter in `[0, 36 min)` after a poll that did not fail,
      * the source's backoff after one that did, and 15 min after a sync that wrote nothing.
-     * 1. While [storeReadUnresolved], the seed load runs again first, to re-read the store; the sync runs only once it
-     *    resolves, and otherwise fetches nothing, writes nothing and is retried in 15 min.
+     * 1. While [storeReadUnresolved], the start task's recovery chain runs again first, to re-read the store; the sync
+     *    runs only once it resolves, and otherwise fetches nothing, writes nothing and is retried in 15 min.
      * 2. [CrliteSync.syncOnce]; its result is logged (spec §11's 0.2 row has no `state`): `INSTALLED` at `INFO`, each
      *    warning at `WARN`; `FAILED` is logged by the sync.
      * 3. The seed's `STALE` gate (§8): once `updater.json` records an attempt since the seed's install, the seed
@@ -263,7 +287,18 @@ public class CrliteRuntime internal constructor(
     public fun sync(nowMillis: Long): Long {
         val sync = checkNotNull(updater) { "no fetching source" }
         return try {
-            if (storeReadUnresolved && !reread(nowMillis)) return PollSchedule.retryAtMillis(nowMillis)
+            if (storeReadUnresolved) {
+                // The start task's store step again (#147): no sync while it does not resolve, rather than one that
+                // ignores the watermark beside a generation the store may hold (fail closed).
+                storeReadUnresolved = recover({ nowMillis }, withSeed = loader != null && !seedHeaderFailed).unresolved
+                if (storeReadUnresolved) {
+                    logger.safeLog(
+                        LogLevel.WARN,
+                        "the store read is still unresolved: no sync until it resolves (spec §7.1)",
+                    )
+                    return PollSchedule.retryAtMillis(nowMillis)
+                }
+            }
             val run = sync.syncOnce(nowMillis)
             report(run)
             openGate(run.updater)
@@ -292,23 +327,103 @@ public class CrliteRuntime internal constructor(
     public fun retryAtMillis(nowMillis: Long): Long = PollSchedule.retryAtMillis(nowMillis)
 
     /**
-     * The seed load again, for [storeReadUnresolved] (#147): true once the store read resolves, which here is a load
-     * that left the seed live (`Installed`, or `Failed` after `activate`). Anything else keeps the read unresolved: a
-     * read that throws again, an install that failed before `activate`, a stored generation 0.2 does not load
-     * (`Skipped`, `Adopted`), and a seed that no longer reaches the store read (`Unreadable`, `Absent`). Fail closed:
-     * no sync then, rather than one that ignores the watermark beside a generation the store may hold.
+     * The start task's store step (spec §5.1 "one loader task", §6.5 crash recovery): `live` → `previous` → seed →
+     * nothing, each failure logged and counted once. The seed load decides first, on Load's step 1 alone (each stored
+     * candidate's `<ts>` against the seed's): it skips the seed beside a trustworthy `live` that is not older, adopts a
+     * newer stored generation under rule (b), or installs the seed. Only the generation that wins is then loaded in full
+     * ([serveStored]); one that fails falls down the chain, and the seed load runs again with it [SeedLoader.load]'s
+     * `unloadable`, so rule (b) applies to it. A stored generation older than the seed is not decoded here (B4).
+     * Without a seed ([withSeed] false, or none configured), the chain is the pointer's `live`, then its `previous`.
+     *
+     * Returns whether the store read stays unresolved (a store read that threw, or a seed install that failed before
+     * `activate`), and the start's store failures: the chain's, and each pass's new ones through one fault set
+     * ([SeedLoader.load]'s `faults`), so each fault is counted once across passes. A fatal error propagates, for the
+     * start task to rethrow after `pending` is cleared.
      */
-    private fun reread(nowMillis: Long): Boolean {
-        val load = checkNotNull(loader) { "only the seed load leaves the store read unresolved" }.load(nowMillis)
-        storeReadUnresolved = loaded(load, { nowMillis }, resolved = false)
-        if (storeReadUnresolved) {
-            logger.safeLog(
-                LogLevel.WARN,
-                "the store read is still unresolved ($load): no sync until it resolves (spec §7.1)",
-            )
+    @Suppress("TooGenericExceptionCaught", "ReturnCount", "CyclomaticComplexMethod") // One arm per way a step ends.
+    private fun recover(
+        clock: () -> Long,
+        withSeed: Boolean,
+    ): Recovery {
+        val store = store ?: return Recovery(unresolved = false, storeFailures = 0)
+        val failed = LinkedHashSet<String>()
+        val faults = HashSet<String>()
+        var counted = 0
+        // Read once, and only when a step needs it: an empty store with no seed reads no clock here.
+        val nowMillis by lazy(clock)
+
+        fun chain(notBefore: Long? = null): StartChain {
+            val before = failed.toSet()
+            return serveChain(store, { nowMillis }, failed, engine, snapshot, fetchingSource, logger, notBefore).also {
+                // A failed generation whose file reads is that one fault: the seed's rewrite of its blobs is not another
+                // (as the sync's heal-install does not count them, #336 review).
+                for (name in failed - before) {
+                    (store.stored(name) as? StoreRead.Found)?.value?.let { faults += it.blobNames }
+                }
+            }
         }
-        return !storeReadUnresolved
+
+        fun done(unresolved: Boolean): Recovery {
+            // A generation the chain failed is a fault of its own unless a seed pass counted it first.
+            counted += failed.count { faults.add(it) }
+            // Noted for [startStoreFailures], and logged: §11's 0.2 row has no `state`.
+            startStoreFailures = counted
+            if (counted > 0) logger.safeLog(LogLevel.WARN, "the start task counted $counted store failures")
+            return Recovery(unresolved, counted)
+        }
+        return try {
+            val seedLoader = loader.takeIf { withSeed } ?: return chain().let { done(unresolved = false) }
+            // The generation the chain fell back to, served: no seed pass adopts it again (#336), so it decodes once.
+            var served: String? = null
+            // At start nothing is served yet, so each pass that does not end fails a generation: this bound suffices.
+            repeat(store.generationNames().size + 2) {
+                val load = seedLoader.load(nowMillis, failed, setOfNotNull(served), faults)
+                counted += load.storeFailures
+                when (load) {
+                    is SeedLoad.Installed, is SeedLoad.Failed -> {
+                        return done(loaded(load) { nowMillis })
+                    }
+
+                    is SeedLoad.Absent, is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch -> {
+                        loaded(load) { nowMillis }
+                        if (served == null) chain()
+                        return done(unresolved = false)
+                    }
+
+                    is SeedLoad.Skipped -> {
+                        // Kept beside the previous the chain fell back to, when nothing newer is adoptable.
+                        if (served != null) return done(unresolved = false)
+                        when (chain(notBefore = load.seedTimestampMillis)) {
+                            StartChain.LIVE -> return done(unresolved = false)
+
+                            // Rule (b) still runs for the live that did not load: a newer stored generation wins.
+                            StartChain.PREVIOUS -> served = snapshot.servedFile(store.dataset)
+
+                            StartChain.NONE -> Unit
+                        }
+                    }
+
+                    is SeedLoad.Adopted -> {
+                        if (chain() != StartChain.NONE) return done(unresolved = false)
+                    }
+                }
+            }
+            // Fail closed: a chain that does not settle leaves the read unresolved, retried at the next sync.
+            logger.safeLog(LogLevel.WARN, "${store.root}: the recovery chain did not settle; the read stays unresolved")
+            done(unresolved = true)
+        } catch (t: Throwable) {
+            restoreInterrupt(t)
+            if (isFatal(t)) throw t
+            logger.safeLog(LogLevel.WARN, "${store.root}: a store read of the recovery chain threw", t)
+            done(unresolved = true)
+        }
     }
+
+    /** How [recover] ended: whether the store read stays unresolved, and the store failures it counted, each once. */
+    private class Recovery(
+        val unresolved: Boolean,
+        val storeFailures: Int,
+    )
 
     /** Logs [run]'s result (spec §11's 0.2 row: no `state` yet): `FAILED` is the sync's own log line. */
     private fun report(run: SyncRun) {
@@ -341,16 +456,13 @@ public class CrliteRuntime internal constructor(
     }
 
     /**
-     * What the loader does with a seed load's end: the live seed's `<ts>`, or the warning for a load that did not.
-     * Returns whether the store read stays unresolved ([storeReadUnresolved]): after a load that threw or failed before
-     * `activate`, or that found a stored generation 0.2 does not load (`Skipped`, `Adopted`); after one that never
-     * reached the store read (`Unreadable`, `Absent`, `ChannelMismatch`), [resolved], which is the start task's reading
-     * (nothing read yet, the 0.2 store fresh) and not a re-read's.
+     * What the loader does with a seed load's end: the live seed's `<ts>` and its diagnostics, or the warning for a load
+     * that did not install. Returns whether the store read stays unresolved: after an install that failed before
+     * `activate`. `Skipped` and `Adopted` are [recover]'s, which then loads the stored generation.
      */
     private fun loaded(
         load: SeedLoad,
         nowMillis: () -> Long,
-        resolved: Boolean,
     ): Boolean {
         when (load) {
             is SeedLoad.Installed -> {
@@ -367,18 +479,11 @@ public class CrliteRuntime internal constructor(
 
             is SeedLoad.Absent -> {
                 logAbsent()
-                return !resolved
             }
 
-            // Logged by the loader.
-            is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch -> {
-                return !resolved
-            }
-
-            // A stored generation this in-memory store, fresh at every build, cannot hold at start; 0.3 loads it. 0.2
-            // does not, so nothing is live beside it, and a sync must not take that for "none loaded" (fail closed).
-            is SeedLoad.Skipped, is SeedLoad.Adopted -> {
-                return true
+            // Logged by the loader; the stored ones are recover's.
+            is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch, is SeedLoad.Skipped, is SeedLoad.Adopted -> {
+                return false
             }
         }
         return false

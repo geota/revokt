@@ -156,8 +156,8 @@ public class Revokt private constructor(
                     }
                 } catch (
                     // A loader that cannot start (no thread): start() throws, the instance stays CREATED. Under the
-                    // sole-seed path the engine already holds the seed then, so a retry's load ends Skipped and throws
-                    // SEED_UNREADABLE; this happens only under thread exhaustion.
+                    // sole-seed path the engine already holds the seed then, and the stored seed generation: a retry
+                    // finds it live (storedLive), keeps serving it, and its start task skips the chain.
                     @Suppress("TooGenericExceptionCaught") t: Throwable,
                 ) {
                     executor.shutdownNow()

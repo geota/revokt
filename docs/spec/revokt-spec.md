@@ -1343,7 +1343,9 @@ case) and the next prune deletes what stays unnamed (`InstallTest`, `StoreCrashT
 the generation the engine serves beside the snapshot. **The re-flip**: a sync whose verified `<ts>` is the served
 generation's (`UNCHANGED`) while `current` does not name that generation as `live` (a flip that failed after
 activation, or a pointer that does not read) flips `current` to `{live: the served file, previous: per the candidate
-rule above}`, once the served file and its blobs pass Load's steps 1 to 3, with no fetch, no `prepare` and no publish.
+rule above}`, once the served file and its blobs pass Load's steps 1 to 3, with no fetch, no `prepare` and no publish;
+a `current` whose `live` is newer than the served generation and passes Load's steps 1 and 2 (one the start task fell
+back from) is left as it is, so a re-flip never moves the pointer back (`CrliteSyncFailureTest`).
 Else the **heal-install** installs the collection as served, reusing every stored blob and file that re-hashes
 (Firefox re-imports a full changeset alike, Appendix A); its publish keeps the served `generationId`. Both are store
 repairs that stay `UNCHANGED` (the served generation does not change) and write `updater.json` as the install of that
@@ -1436,15 +1438,16 @@ malformed `updater.json` reads as absent. Each store fault is counted once, wher
   under `generations/` whose last segment is 64 lowercase hex characters goes through Load's step 1, and a file that
   fails it counts one store failure, unless the same start already counted it (a `live` or `previous` the chain failed
   to load is passed over, never counted twice). The candidates are the files whose `<ts>` is newer than the seed's and not older
-  than the generation the engine serves; from the newest down, ties broken by name, each runs Load's steps 2 to 4 and,
+  than the generation the engine serves, the `previous` the chain fell back to apart (it stays
+  served, and the scan passes over it without counting it); from the newest down, ties broken by name, each runs Load's steps 2 to 4 and,
   when its `signerLeafSha256` is the SHA-256 of the seed's verified leaf, its `signature` must verify over the
   canonical serialisation of its `records` (a generation signed by another leaf is trusted at the OS level, as every
   stored generation is). The first that passes is adopted: `updater.json` is written from the record read (an absent or
   malformed one replaced) with its watermark raised to max(the stored watermark, the adopted `<ts>`), then `current` is
   flipped to `{live: <it>}`; nothing else is written, and the seed is not installed. Each candidate that fails counts
   one store failure; a file not newer than the seed is not counted. With none to adopt, a generation the engine serves
-  that is newer than the seed is kept and the seed skipped. Otherwise the seed installs, reusing every stored blob that
-  re-hashes, and its flip heals the pointer (`SeedAdoptTest`, `StoreModelTest`'s I10).
+  that is newer than the seed (or, for the `previous` the chain fell back to, not older) is kept and the seed skipped. Otherwise the seed installs, reusing every stored blob that
+  re-hashes, and its flip heals the pointer (`SeedAdoptTest`, `CrliteRuntimeStartTest`, `StoreModelTest`'s I10).
 - A seed's install writes `updater.json` in its own write with `seedInstalledAtMillis` and the watermark: beside a
   loaded generation (a trustworthy pointer, or one the engine serves) the higher of the stored watermark and the seed's
   `<ts>`; with none loaded the seed's `<ts>`, lowered if the stored one was higher, as Firefox's floor after a dump

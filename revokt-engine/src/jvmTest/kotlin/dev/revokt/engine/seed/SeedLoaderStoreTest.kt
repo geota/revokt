@@ -97,6 +97,17 @@ internal class SeedLoaderStoreTest : SeedFixture() {
     }
 
     @Test
+    fun `a current with a flipped hex digit is counted once, and the seed's install heals it`() {
+        val own = installedAt(ts)
+        flipLiveHex(own)
+        assertIs<StoreRead.Found<*>>(store.pointer(), "the pointer still parses")
+        reset(keepStore = true)
+        val load = installed(load(Seed()))
+        assertEquals(1, load.storeFailures, "the live the pointer names, which is no stored file")
+        assertEquals(Pointer(own, null), (store.pointer() as StoreRead.Found).value)
+    }
+
+    @Test
     fun `beside a malformed pointer the seed's own rotted blob is rewritten from the seed, counted`() {
         val own = installedAt(ts)
         val blob = "$root/blobs/" + stored(own).blobNames.last()
@@ -146,6 +157,34 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         assertEquals(1, load.storeFailures)
         assertEquals(Pointer(own, older), (store.pointer() as StoreRead.Found).value)
     }
+
+    @Test
+    fun `a live the start's chain could not load is passed over and never counted again, by the scan or the install`() {
+        val previous = installedAt(ts - hour)
+        val d2 = Rec("d2", true, delta.effectiveTimestamp + 1, "d2.filter.delta", d2Body, parent = full.id)
+        val live = installed(load(Seed(records = listOf(full, delta, d2), ts = ts + hour))).name
+        // live passes Load's steps 1 and 2 and fails step 3: the chain counted it when it failed to load it.
+        storage.inner.write(store.blobKey(okio.ByteString.of(*d2Body).sha256()), byteArrayOf(1))
+        reset(keepStore = true)
+        val bytes = Seed().bytes()
+        val load = installed(loader(Counted { bytes }.source).load(ts + hour, unloadable = setOf(live)))
+        // The chain counts it: CrliteRuntimeStartTest's rotted-live case logs exactly one for the whole start.
+        assertEquals(0, load.storeFailures, "the seed load leaves the chain's failure to the chain")
+        assertEquals(
+            Pointer(load.name, previous),
+            (store.pointer() as StoreRead.Found).value,
+            "the unloadable live is no previous",
+        )
+        assertTrue(previous in store.generationNames() && live in store.generationNames())
+    }
+
+    private val d2Body =
+        dev.revokt.engine.update.UpdateFixtures.v4(
+            listOf(
+                dev.revokt.engine.update.UpdateFixtures
+                    .log(2) to (1L to 2L),
+            ),
+        )
 
     @Test
     fun `both pointed files unreadable are two faults, and the seed installs`() {
