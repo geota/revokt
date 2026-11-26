@@ -124,16 +124,20 @@ tests; **live checks** are informational.
   before `updater.json` → `start()` loads the new generation and the next `UNCHANGED` rewrites `updater.json`;
   prune deletes generation files before blobs, and a stop that loses a generation file's delete but keeps its blob's →
   `start()` loads the new `live`, and the adopt scan beside a deleted `current` counts one failure and adopts nothing;
-  [0.3] `JvmStorage` (`JvmStorageTest`, on real directories, each fsync recorded through a seam that also runs it):
-  a write forces its temp file, renames it, then fsyncs the key's directory, new key or not; every directory it
-  creates, the root's parent included, has its parent fsynced; `lock()` deletes every temp file under the root, then
-  fsyncs every directory under it, the root included, and a failed fsync fails the write with the key as it was; a
-  second `lock()` in the process, and a child JVM holding the lock, are `StoreLockedException` after the 1 s wait, the
-  failed attempt leaves the holder's lock in place, and a killed holder leaves no stale lock; `names()` lists no lock,
-  temp file, non-key entry or link; a key file or a directory segment that is a symbolic link is never followed:
-  `read`, `write` and `delete` of it throw and its target is untouched; `.lock` as a link is `STORE_UNREADABLE`, and
-  the ownership check runs before `.lock` is opened; the ownership check refuses a group-writable root under `STRICT`,
-  an other-writable one always and a root whose uid is not a probe file's; the contract tests run over both stores
+  [0.3] `JvmStorage` (`JvmStorageTest` and `JvmStorageLockTest`, on real directories, each fsync recorded through a
+  seam that also runs it): a write forces its temp file, renames it, then fsyncs the key's directory, new key or not;
+  every directory it creates, the root's parent included, has its parent fsynced; `lock()` deletes every temp file
+  under the root, keeping every key (a 64-hex one included), then fsyncs every directory under it, the root included;
+  a failed file fsync fails the write with the key as it was, and a failed directory fsync fails it after the rename,
+  with the new bytes in place and no temp file; a second `lock()` in the process, through another path or a hard link
+  to `.lock` too, and a child JVM holding the lock, are `StoreLockedException` after the 1 s wait (under 3 s), the
+  failed attempt leaves the holder's lock in place, a lock released during the wait is taken within a poll, and a
+  killed holder leaves no stale lock; a FIFO at `.lock` is `StoreUnreadableException` within the bound; `names()`
+  lists no lock, temp file, non-key entry or link; a key file or a directory segment that is a symbolic link is never
+  followed: `read`, `write` and `delete` of it throw and its target is untouched; `.lock` as a link is
+  `STORE_UNREADABLE`, and the ownership check runs before `.lock` is opened; the ownership check refuses a
+  group-writable root or subdirectory under `STRICT`, an other-writable one always and one whose uid is not a probe
+  file's; the contract tests run over both stores, refusing uppercase keys `.LOCK` and `.Lock`
   (`JvmStorageContractTest`);
   a `current` with a flipped hex digit at `start()` → `storeFailures = 1`, no `STORE_UNREADABLE` warning (which means
   only the in-memory fallback, and stays until `close()`), and the next install heals it (`CrliteRuntimeStartTest`;

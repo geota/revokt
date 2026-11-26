@@ -4,7 +4,7 @@
 package dev.revokt.engine.store
 
 /**
- * The key rule of `RevoktStorage` (spec §3): segments of `[A-Za-z0-9._-]{1,96}` joined by `/`, never `.` or `..`, and
+ * The key rule of `RevoktStorage` (spec §3): segments of `[a-z0-9._-]{1,96}` joined by `/`, never `.` or `..`, and
  * never the reserved key `.lock`. The whole string is checked character by character, so no trailing newline, empty
  * segment or leading `/` passes, and no key resolves outside the store's root.
  */
@@ -43,7 +43,8 @@ internal object StoreKeys {
         if (length !in 1..MAX_SEGMENT) return false
         // A segment of one or two characters that starts and ends with a dot is `.` or `..`.
         if (length <= 2 && name[start] == '.' && name[end - 1] == '.') return false
-        for (i in start until end) if (!isNameChar(name[i])) return false
+        // Lowercase only: on a case-insensitive file system (macOS, Windows) `.LOCK` would be `.lock`, and `A` be `a`.
+        for (i in start until end) if (!isNameChar(name[i]) || name[i] in 'A'..'Z') return false
         return true
     }
 }

@@ -4,10 +4,8 @@
 package dev.revokt.engine.store
 
 import org.junit.jupiter.api.Assumptions
-import java.io.BufferedReader
 import java.io.FileInputStream
 import java.io.IOException
-import java.io.InputStreamReader
 import java.nio.channels.FileChannel
 import java.nio.file.AccessDeniedException
 import java.nio.file.Files
@@ -21,7 +19,6 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -162,6 +159,9 @@ class JvmStorageTest {
             plain.write("crlite/compat/blobs/b", byteArrayOf(1))
             plain.write("crlite/compat/generations/g", byteArrayOf(2))
             plain.write("store.version", byteArrayOf('1'.code.toByte()))
+            // A content-addressed key is 64 hex digits, as long as a temp's tail and more: the sweep must keep it.
+            val hexKey = "crlite/compat/blobs/" + "0123456789abcdef".repeat(4)
+            plain.write(hexKey, byteArrayOf(3))
             val temps = listOf("s/store.version", "s/crlite/compat/blobs/b", "s/crlite/compat/generations/h")
             for (t in temps) {
                 Files.write(
@@ -199,9 +199,16 @@ class JvmStorageTest {
                 assertEquals(5, fsync.events.size)
                 assertTrue(fsync.heldTemp.none { it }, "a directory was fsynced before its temp files were deleted")
                 for (k in kept) assertTrue(Files.exists(dir.resolve(k)), k)
+                assertContentEquals(byteArrayOf(3), store.read(hexKey))
                 // A key-shaped file is a key, whoever wrote it; the other kept entries are not.
                 assertEquals(
-                    setOf("crlite/compat/blobs/b", "crlite/compat/generations/g", "crlite/notes.txt", "store.version"),
+                    setOf(
+                        "crlite/compat/blobs/b",
+                        "crlite/compat/generations/g",
+                        hexKey,
+                        "crlite/notes.txt",
+                        "store.version",
+                    ),
                     store.names(),
                 )
                 Files.walk(dir).use { s -> assertTrue(s.noneMatch { JvmStorage.TEMP.matches(it.fileName.toString()) }) }
@@ -357,7 +364,7 @@ class JvmStorageTest {
         }
 
     @Test
-    fun `a failed fsync fails the write, leaves the key as it was and no temp file`() =
+    fun `a failed file fsync fails the write with the key as it was, a failed directory fsync after the rename`() =
         withDir { dir ->
             val fsync = recording(dir)
             val store = JvmStorage(dir.resolve("s"), fsync = fsync)
@@ -374,6 +381,8 @@ class JvmStorageTest {
             fsync.failFile = null
             fsync.failDirectory = IOException("injected directory fsync")
             assertFailsWith<IOException> { store.write("a/k", byteArrayOf(3)) }
+            // The directory fsync comes after the rename: the key holds the new bytes, only their durability is unknown.
+            assertContentEquals(byteArrayOf(3), store.read("a/k"))
             assertEquals(
                 listOf("k"),
                 Files.list(dir.resolve("s/a")).use { s ->
@@ -393,105 +402,6 @@ class JvmStorageTest {
             Assumptions.assumeFalse(Files.isReadable(file), "running as a user who can read anything")
             assertFailsWith<AccessDeniedException> { store.read("k") }
         }
-
-    @Test
-    fun `a second lock in this JVM waits its bound and is locked, then succeeds once the first is closed`() =
-        withDir { dir ->
-            val first = JvmStorage(dir.resolve("s")).lock()
-            val second = JvmStorage(dir.resolve("s/../s"))
-            val started = System.nanoTime()
-            assertFailsWith<StoreLockedException> { second.lock() }
-            val waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-            assertTrue(waited >= JvmStorage.LOCK_WAIT_MILLIS - 50, "waited only $waited ms")
-            // The failed attempt closed its own channel on `.lock`: the first instance's lock must survive it.
-            assertEquals(LockHolder.BUSY, tryFromAnotherProcess(dir.resolve("s")))
-            first.close()
-            first.close()
-            assertEquals(LockHolder.LOCKED, tryFromAnotherProcess(dir.resolve("s")))
-            second.lock().close()
-        }
-
-    private fun tryFromAnotherProcess(root: Path): String {
-        val child = holderProcess(root, "try")
-        try {
-            val line = BufferedReader(InputStreamReader(child.inputStream)).readLine()
-            assertTrue(child.waitFor(30, TimeUnit.SECONDS))
-            return line
-        } finally {
-            child.destroyForcibly()
-        }
-    }
-
-    private fun holderProcess(
-        root: Path,
-        vararg extra: String,
-    ): Process {
-        val java = Path.of(System.getProperty("java.home"), "bin", "java").toString()
-        return ProcessBuilder(
-            listOf(java, "-cp", System.getProperty("java.class.path"), LockHolder::class.java.name, root.toString()) +
-                extra,
-        ).redirectError(ProcessBuilder.Redirect.INHERIT)
-            .start()
-    }
-
-    @Test
-    fun `a lock held through another link to the same lock file is locked`() =
-        withDir { dir ->
-            JvmStorage(dir.resolve("a")).lock().close()
-            Files.createDirectory(dir.resolve("b"))
-            try {
-                Files.createLink(dir.resolve("b/.lock"), dir.resolve("a/.lock"))
-            } catch (e: IOException) {
-                Assumptions.abort<Unit>("cannot create hard links here: $e")
-            } catch (e: UnsupportedOperationException) {
-                Assumptions.abort<Unit>("cannot create hard links here: $e")
-            }
-            JvmStorage(dir.resolve("a")).lock().use {
-                assertFailsWith<StoreLockedException> { JvmStorage(dir.resolve("b"), lockWaitMillis = 200).lock() }
-            }
-        }
-
-    @Test
-    fun `a lock wait that is interrupted is locked and keeps the interrupt`() =
-        withDir { dir ->
-            JvmStorage(dir.resolve("s")).lock().use {
-                val waiter = JvmStorage(dir.resolve("s"), lockWaitMillis = 60_000)
-                Thread.currentThread().interrupt()
-                assertFailsWith<StoreLockedException> { waiter.lock() }
-                assertTrue(Thread.interrupted())
-            }
-        }
-
-    @Test
-    fun `another process's lock is held until it exits, and a killed holder leaves no stale lock`() =
-        withDir { dir ->
-            val root = dir.resolve("s")
-            for (kill in listOf(false, true)) {
-                val child = startHolder(root)
-                try {
-                    val started = System.nanoTime()
-                    assertFailsWith<StoreLockedException> { JvmStorage(root).lock() }
-                    assertTrue(
-                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) >= JvmStorage.LOCK_WAIT_MILLIS - 50,
-                    )
-                    if (kill) child.destroyForcibly() else child.outputStream.close()
-                    assertTrue(child.waitFor(30, TimeUnit.SECONDS))
-                } finally {
-                    child.destroyForcibly()
-                }
-                JvmStorage(root, lockWaitMillis = 5_000).lock().close()
-            }
-        }
-
-    private fun startHolder(root: Path): Process {
-        val child = holderProcess(root)
-        val line = BufferedReader(InputStreamReader(child.inputStream)).readLine()
-        if (line != LockHolder.LOCKED) {
-            child.destroyForcibly()
-            error("the lock holder printed $line")
-        }
-        return child
-    }
 
     @Test
     fun `ownership on POSIX - group-writable only under OWNER_OR_GROUP, never other-writable, never chmod`() =
@@ -585,6 +495,7 @@ class JvmStorageTest {
                     Thread.sleep(200)
                     open.close()
                 }
+            val started = System.nanoTime()
             closer.start()
             try {
                 store.write("current", byteArrayOf(2))
@@ -592,6 +503,9 @@ class JvmStorageTest {
                 closer.join()
                 open.close()
             }
+            // The rename waited for the reader to close at 200 ms: it was retried, within the 1 s bound.
+            val waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+            assertTrue(waited in 150 until JvmStorage.MOVE_RETRY_MILLIS, "the write took $waited ms")
             assertContentEquals(byteArrayOf(2), store.read("current"))
         }
 
@@ -663,7 +577,8 @@ class JvmStorageTest {
         )
         assertEquals("owned by uid 0, not 501", StoragePlatform.ownershipFault(mode("rwx------"), strict, 501, 0))
         assertEquals("owned by uid 0, not 501", StoragePlatform.ownershipFault(mode("rwxr-xr-x"), group, 501, 0))
-        assertNull(StoragePlatform.OTHER.ownershipFault(Path.of("anywhere"), strict) { 1 })
+        assertNull(StoragePlatform.OTHER.directoryFault(Path.of("anywhere"), strict, 1) { 2 })
+        assertNull(StoragePlatform.OTHER.processOwner(Path.of("anywhere")) { 1 })
         assertEquals(
             if (posix) StoragePlatform.POSIX else StoragePlatform.OTHER,
             StoragePlatform.of(Path.of(".").fileSystem),

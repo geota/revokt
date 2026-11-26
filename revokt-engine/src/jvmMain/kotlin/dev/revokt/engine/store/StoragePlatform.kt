@@ -6,6 +6,7 @@ package dev.revokt.engine.store
 import java.nio.channels.FileChannel
 import java.nio.file.FileSystem
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.OpenOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
@@ -38,20 +39,26 @@ internal enum class StoragePlatform {
 
         override val moveRetryMillis: Long = 0
 
-        override fun ownershipFault(
+        override fun processOwner(
             base: Path,
-            ownership: OwnershipCheck,
             owner: (Path) -> Any?,
-        ): String? {
-            val mode = Files.getPosixFilePermissions(base)
+        ): Any? {
             val probe = base.resolve(JvmStorage.tempName("probe"))
             createFile(probe)
             try {
-                return ownershipFault(mode, ownership, mine = owner(probe), theirs = owner(base))
+                return owner(probe)
             } finally {
                 Files.deleteIfExists(probe)
             }
         }
+
+        override fun directoryFault(
+            dir: Path,
+            ownership: OwnershipCheck,
+            mine: Any?,
+            owner: (Path) -> Any?,
+        ): String? =
+            ownershipFault(Files.getPosixFilePermissions(dir, LinkOption.NOFOLLOW_LINKS), ownership, mine, owner(dir))
     },
 
     /** Windows: default modes, no directory fsync (a directory cannot be opened), no ownership check. */
@@ -75,9 +82,15 @@ internal enum class StoragePlatform {
 
         override val moveRetryMillis: Long = JvmStorage.MOVE_RETRY_MILLIS
 
-        override fun ownershipFault(
+        override fun processOwner(
             base: Path,
+            owner: (Path) -> Any?,
+        ): Any? = null
+
+        override fun directoryFault(
+            dir: Path,
             ownership: OwnershipCheck,
+            mine: Any?,
             owner: (Path) -> Any?,
         ): String? = null
     }, ;
@@ -101,12 +114,19 @@ internal enum class StoragePlatform {
     abstract val moveRetryMillis: Long
 
     /**
-     * Why [base] is not this process's store, or null: on POSIX the root's mode, and its uid against that of a probe file
-     * this call creates under a temp name and deletes (the JVM has no getuid). Never chmods.
+     * The process's owner, on POSIX the uid of a probe file this call creates under a temp name in [base] and deletes
+     * (the JVM has no getuid); null where there is no ownership check.
      */
-    abstract fun ownershipFault(
+    abstract fun processOwner(
         base: Path,
+        owner: (Path) -> Any?,
+    ): Any?
+
+    /** Why directory [dir] is not this process's ([mine]) under [ownership], or null: on POSIX its mode and its owner. */
+    abstract fun directoryFault(
+        dir: Path,
         ownership: OwnershipCheck,
+        mine: Any?,
         owner: (Path) -> Any?,
     ): String?
 

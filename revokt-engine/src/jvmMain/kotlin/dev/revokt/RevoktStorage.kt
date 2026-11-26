@@ -8,7 +8,7 @@ import kotlin.jvm.JvmStatic
 
 /**
  * A flat key space the engine keeps its store in; the engine owns the layout (spec §3, §6.5). A key is segments of
- * `[A-Za-z0-9._-]{1,96}` joined by `/`, never `.` or `..`, so no key resolves outside the root; every method throws
+ * `[a-z0-9._-]{1,96}` joined by `/`, never `.` or `..`, so no key resolves outside the root; every method throws
  * [IllegalArgumentException] for any other name, and for the reserved key `.lock`, which only [lock] uses. Methods
  * are thread-safe, reads concurrently.
  */

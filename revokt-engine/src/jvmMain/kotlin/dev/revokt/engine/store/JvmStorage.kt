@@ -27,6 +27,7 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Which group bits `JvmStorage`'s ownership check tolerates on the store's root (spec §3); growable. */
 internal enum class OwnershipCheck {
@@ -203,53 +204,66 @@ internal class JvmStorage(
         }
 
     override fun lock(): AutoCloseable {
-        val base =
+        val base: Path
+        val mine: Any?
+        try {
+            ensureDirectory(root)
+            base = resolveBase()
+            mine = platform.processOwner(base, owner)
+            checkDirectory(base, mine)
+        } catch (e: IOException) {
+            throw unreadable(e)
+        }
+        val lockFile = base.resolve(StoreKeys.LOCK)
+        val deadline = System.nanoTime() + lockWaitMillis * NANOS_PER_MILLI
+        // One channel per `.lock` file in the process, keyed on its file key: closing any descriptor of the file drops
+        // the process's fcntl lock, so a second lock() here, through any path, waits for the first to close instead of
+        // opening `.lock` itself.
+        val key =
             try {
-                ensureDirectory(root)
-                val resolved = resolveBase()
-                checkOwnership(resolved)
-                resolved
+                awaitTurn(lockFile, deadline)
             } catch (e: IOException) {
                 throw unreadable(e)
             }
-        val lockFile = base.resolve(StoreKeys.LOCK)
-        val deadline = System.nanoTime() + lockWaitMillis * NANOS_PER_MILLI
-        // One channel per `.lock` in the process: closing any descriptor of the file drops the process's fcntl lock, so
-        // a second lock() here waits for the first to close instead of opening `.lock` itself.
-        awaitTurn(lockFile, deadline)
         var channel: FileChannel? = null
         var held: Held? = null
         try {
-            val open =
-                platform.open(
-                    lockFile,
-                    setOf(StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
-                )
+            // READ and WRITE: O_RDWR does not block on a FIFO swapped in since awaitTurn's lstat; the check after refuses it.
+            val open = platform.open(lockFile, LOCK_OPTIONS)
             channel = open
-            if (!Files
-                    .readAttributes(
-                        lockFile,
-                        BasicFileAttributes::class.java,
-                        LinkOption.NOFOLLOW_LINKS,
-                    ).isRegularFile
-            ) {
-                throw IOException("$lockFile is not a regular file")
-            }
+            requireRegular(lockFile)
             val lock = acquire(open, deadline)
             guard.write {
                 val dirs = ArrayList<Path>()
                 walk(base, dirs::add) { file, _ -> if (TEMP.matches(file.fileName.toString())) deleteQuietly(file) }
-                for (d in dirs) fsync.directory(d)
+                for (d in dirs) {
+                    checkDirectory(d, mine)
+                    fsync.directory(d)
+                }
             }
-            held = Held(lock, open, lockFile)
+            held = Held(lock, open, key)
             return held
         } catch (e: IOException) {
             throw unreadable(e)
         } finally {
             if (held == null) {
                 channel?.let(::closeQuietly)
-                leave(lockFile)
+                leave(key)
             }
+        }
+    }
+
+    /**
+     * [dir] must be the process's ([mine]) and pass the mode rule ([StoragePlatform.directoryFault]): the root before
+     * `.lock` is opened, then every directory under it in the open's walk, so no one but the owner can swap a directory
+     * on a key's path for a link between the checks and the use. Never chmods.
+     */
+    private fun checkDirectory(
+        dir: Path,
+        mine: Any?,
+    ) {
+        platform.directoryFault(dir, ownership, mine, owner)?.let {
+            throw StoreUnreadableException("the store at $root is not this process's: $dir is $it")
         }
     }
 
@@ -263,38 +277,61 @@ internal class JvmStorage(
 
     private fun unreadable(cause: Throwable?) = StoreUnreadableException("cannot open the store at $root", cause)
 
-    /** The lock until closed; closing twice is a no-op. Closing the channel releases the lock with it. */
+    /** The lock until closed; closing twice, even at once, closes once. Closing the channel releases the lock with it. */
     private class Held(
         private val lock: FileLock,
         private val channel: FileChannel,
-        private val lockFile: Path,
+        private val key: Any,
     ) : AutoCloseable {
-        @Volatile private var closed = false
+        private val closed = AtomicBoolean(false)
 
         override fun close() {
-            if (closed) return
-            closed = true
+            if (!closed.compareAndSet(false, true)) return
             try {
                 lock.release()
             } finally {
                 try {
                     channel.close()
                 } finally {
-                    leave(lockFile)
+                    leave(key)
                 }
             }
         }
     }
 
-    /** Waits, polling every [lockPollMillis] until [deadline], until no other lock() in this process holds [lockFile]. */
+    /**
+     * Waits, polling every [lockPollMillis] until [deadline], until no other lock() in this process holds [lockFile], and
+     * returns the key it took. Under the table's monitor it creates `.lock` when absent, lstats it with no link followed
+     * and refuses anything but a regular file (a FIFO would block the open), and keys on its file key, the (device,
+     * inode) pair the JDK's own lock table uses, so two paths to one file (a hard link, a bind mount) share one entry.
+     */
     private fun awaitTurn(
         lockFile: Path,
         deadline: Long,
-    ) {
+    ): Any {
         while (true) {
-            synchronized(OPEN) { if (OPEN.add(lockFile)) return }
+            synchronized(OPEN) {
+                val key = lockKey(lockFile)
+                if (OPEN.add(key)) return key
+            }
             pause(deadline)
         }
+    }
+
+    private fun lockKey(lockFile: Path): Any {
+        try {
+            platform.createFile(lockFile)
+        } catch (_: FileAlreadyExistsException) {
+            // Already there, as it is after the first open: it is never deleted.
+        }
+        return requireRegular(lockFile).fileKey() ?: lockFile
+    }
+
+    /** [path]'s own attributes, which must be a regular file's; a link, a FIFO or a directory throws. */
+    private fun requireRegular(path: Path): BasicFileAttributes {
+        val attrs = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        if (!attrs.isRegularFile) throw IOException("$path is not a regular file")
+        return attrs
     }
 
     private fun acquire(
@@ -323,16 +360,6 @@ internal class JvmStorage(
             Thread.currentThread().interrupt()
             throw StoreLockedException("interrupted waiting for the lock of $root", e)
         }
-    }
-
-    /** On POSIX, [base] must be the process's and owner-only writable ([StoragePlatform.ownershipFault]); never chmods. */
-    private fun checkOwnership(base: Path) {
-        platform
-            .ownershipFault(
-                base,
-                ownership,
-                owner,
-            )?.let { throw StoreUnreadableException("the store at $root is $it") }
     }
 
     /**
@@ -464,15 +491,23 @@ internal class JvmStorage(
         private const val TEMP_HEX = 32
 
         /** A temp file's name: a key segment, `~` and 32 lowercase hex digits. */
-        val TEMP: Regex = Regex("[A-Za-z0-9._-]{1,${StoreKeys.MAX_SEGMENT}}~[0-9a-f]{$TEMP_HEX}")
+        val TEMP: Regex = Regex("[a-z0-9._-]{1,${StoreKeys.MAX_SEGMENT}}~[0-9a-f]{$TEMP_HEX}")
 
         private val random = SecureRandom()
 
-        /** The real `.lock` paths a lock() in this process holds or is taking; guarded by itself. */
-        private val OPEN = HashSet<Path>()
+        private val LOCK_OPTIONS: Set<OpenOption> =
+            setOf(
+                StandardOpenOption.CREATE,
+                StandardOpenOption.READ,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS,
+            )
 
-        private fun leave(lockFile: Path) {
-            synchronized(OPEN) { OPEN.remove(lockFile) }
+        /** The `.lock` file keys a lock() in this process holds or is taking; guarded by itself. */
+        private val OPEN = HashSet<Any>()
+
+        private fun leave(key: Any) {
+            synchronized(OPEN) { OPEN.remove(key) }
         }
 
         fun tempName(segment: String): String {
