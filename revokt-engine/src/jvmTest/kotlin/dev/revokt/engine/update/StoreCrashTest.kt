@@ -174,18 +174,26 @@ internal class StoreCrashTest : SeedFixture() {
         val name = checkNotNull(liveName())
         assertEquals("$ts2/d3", stored(name).generationId, "every key it needs was durable before the flip")
         assertEquals(ts, updater(ts2 + hour).watermarkMillis, "the watermark stayed")
-        // The running loader serves it; the cursor is stale, so the whole collection is fetched, UNCHANGED, and
-        // updater.json is written as the install of ts2 would have written it (spec §6.5).
+        // The running loader serves it; updater.json is behind ts2, so the changeset since ts2 is fetched with no
+        // If-None-Match (§7.1), verifies, UNCHANGED, and updater.json is written as the install of ts2 would have
+        // written it (spec §6.5): never on an unsigned 304.
         val now = ts2 + 2 * hour
+        server.fetcher.requests.clear()
         sync(server, now = now).assert(SyncOutcome.UNCHANGED)
+        val behind = server.fetcher.requests.single { it.url.startsWith(server.changesetUrl) }
+        assertEquals(server.sinceUrl(ts2), behind.url)
+        assertFalse("If-None-Match" in behind.headers)
         assertEquals(now, updater(now).datasetLastAttemptAtMillis)
         assertEquals(ts2, sourceRecord(now).lastVerifiedLastModified, "the cursor")
         assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
         assertEquals(ts2, updater(now).watermarkMillis, "the watermark")
-        // Caught up, the next sync sends the cursor: a 304.
+        // Caught up, the next sync sends If-None-Match beside _since: a 304.
         server.fetcher.requests.clear()
         sync(server, now = now + hour).assert(SyncOutcome.UNCHANGED)
-        assertTrue(server.fetcher.requests.any { "_since" in it.url || "If-None-Match" in it.headers })
+        val caughtUp = server.fetcher.requests.single { it.url.startsWith(server.changesetUrl) }
+        assertEquals(server.sinceUrl(ts2), caughtUp.url)
+        assertEquals("\"$ts2\"", caughtUp.headers["If-None-Match"])
+        assertEquals(listOf(monitor, server.sinceUrl(ts2)), server.fetcher.requests.map { it.url }, "a 304")
         // The floor is max(watermark, the live <ts>): the stale watermark reopens no rollback.
         server.ts = ts2 - 1
         sync(server, now = ts2 + 3 * hour).assert(SyncFailure.ROLLBACK_REFUSED)

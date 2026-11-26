@@ -361,9 +361,9 @@ internal class CrliteRuntimePollTest : SeedFixture() {
     }
 
     @Test
-    fun `after a fallback the cursor is not sent, so the whole collection reinstalls instead of a 304`() {
-        // A sync installed the server's <ts> (the cursor); then the snapshot serves an older generation, as after a
-        // start that fell back to the seed or to previous while the pointer still names the cursor's generation.
+    fun `a served file whose ts is not the snapshot's sends no _since, and the whole collection reinstalls`() {
+        // A sync installed the server's <ts>; then the snapshot says an older <ts> for the same served file, which no
+        // install publishes: _since and the merge base come from one file only while it agrees (§7.1).
         val server = Server()
         val runtime = runtime(seed = null, server = server)
         runtime.startTask(loadSeed = false) { ts + hour }
@@ -382,6 +382,54 @@ internal class CrliteRuntimePollTest : SeedFixture() {
         assertTrue(server.fetcher.requests.any { it.url == server.changesetUrl })
         assertEquals("$ts/${delta.id}", runtime.crlite().generationId, "the cursor's generation is live again")
         assertEquals(ts, (store.updater(ts) as StoreRead.Found).value.record.watermarkMillis)
+    }
+
+    @Test
+    fun `the first sync after a seed install sends the seed's ts with no If-None-Match, and the changes install`() {
+        val server = Server()
+        val runtime = runtime(source(Seed(ts = ts - hour)), server)
+        val now = ts + hour
+        runtime.startSeed(soleSeed = false, nowMillis = now)
+        server.fetcher.requests.clear()
+        // The start task installs the seed, then syncs.
+        runtime.startTask(loadSeed = true) { now }
+        // As Firefox sends its dump's timestamp: the seed's file is the merge base, and no cursor is held (§7.1).
+        val changesets = server.fetcher.requests.filter { it.url.startsWith(server.changesetUrl) }
+        assertEquals(listOf(server.sinceUrl(ts - hour)), changesets.map { it.url })
+        assertFalse("If-None-Match" in changesets.single().headers, "updater.json holds no cursor")
+        assertEquals("$ts/${delta.id}", runtime.crlite().generationId)
+        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
+    }
+
+    @Test
+    fun `after a seed fallback the seed's ts is sent, never the cursor, and the cursor's generation installs`() {
+        val server = Server()
+        runtime(seed = null, server = server).startTask(loadSeed = false) { ts + hour }
+        assertEquals(ts, sourceRecord(ts + hour).lastVerifiedLastModified)
+        // A restart whose engine refuses the pointed live once, with no previous: the chain falls to the seed, which
+        // installs and is pointed, the watermark lowered to its <ts>, while the cursor still names ts (the #205 case).
+        var refused = false
+        val engine = TestEngine()
+        engine.onPrepare = {
+            if (!refused) {
+                refused = true
+                error("refused")
+            }
+        }
+        val runtime = runtime(source(Seed(ts = ts - hour)), server, engine)
+        val now = ts + 2 * hour
+        runtime.startSeed(soleSeed = false, nowMillis = now)
+        server.fetcher.requests.clear()
+        runtime.startTask(loadSeed = true) { now }
+        assertEquals(listOf("$ts/${delta.id}", "${ts - hour}/${delta.id}", "$ts/${delta.id}"), engine.prepared)
+        // _since is the seed's <ts>, so a 304 could only say the collection is still at the seed's; nothing is behind
+        // it, so If-None-Match goes beside it. The server is at ts: the changes since the seed install ts.
+        val changeset = server.fetcher.requests.single { it.url.startsWith(server.changesetUrl) }
+        assertEquals(server.sinceUrl(ts - hour), changeset.url)
+        assertEquals("\"${ts - hour}\"", changeset.headers["If-None-Match"])
+        assertFalse(runtime.crlite().fromSeed)
+        assertEquals("$ts/${delta.id}", runtime.crlite().generationId)
+        assertEquals(ts, (store.updater(now) as StoreRead.Found).value.record.watermarkMillis)
     }
 
     @Test

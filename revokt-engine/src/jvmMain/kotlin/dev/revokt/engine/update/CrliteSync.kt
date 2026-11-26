@@ -89,10 +89,10 @@ internal class CrliteSync(
      * §7.1, §7.2):
      * 1. Under the source's persisted backoff (`backoffUntilMillis` after now) → `SKIPPED` (`BACKOFF`), the attempt
      *    fields written.
-     * 2. Poll `monitor/changes`, then fetch the collection's changeset at its `_expected`: from the cursor
-     *    (`_since=<cursor>` and `If-None-Match: "<cursor>"`) when `updater.json` holds one, it is the live generation's
-     *    `<ts>` (#147) and the served generation's file loads (spec §6.5 Load), else the whole collection. A 304 is
-     *    `UNCHANGED`.
+     * 2. Poll `monitor/changes`, then fetch the collection's changeset at its `_expected`: from the served generation's
+     *    own `<ts>` (`_since=<ts>`) when its file loads (spec §6.5 Load), that `<ts>` is the live generation's and the
+     *    pointer names it, else the whole collection; `If-None-Match: "<ts>"` goes beside it only while `updater.json`
+     *    is not behind `<ts>`, so a 304, which is `UNCHANGED`, never stands in for the repair (§7.1).
      * 3. Verify it ([ChangesetVerifier]) over the stored records with its changes merged, tombstones first
      *    ([ContentSignature.merge]); everything after reads only the verified records and `<ts>`
      *    ([ChangesetVerification.Verified]), never the changeset's `changes`. A `_since` changeset whose changes do not
@@ -241,18 +241,19 @@ internal class CrliteSync(
             val polled = client.pollChanges()
             val expected = ok(polled) { return it }
             gates.nearCap(polled, "monitor/changes", RevoktLimits.MAX_JSON_BYTES)
-            val cursor = record.sources[source.sourceId]?.lastVerifiedLastModified
-            // The stored records are the merge base of a _since changeset only: the whole collection, fetched when there is
-            // no cursor (an absent or malformed updater.json) or no stored records to merge with, merges over nothing (#236).
-            // The cursor is sent only while it is the live generation's <ts> (§7.1, #147 from #205's review) and the
-            // pointer names that generation: a 304 to it must speak for what is served and stored, as Firefox's `_since`
-            // is its local data's own timestamp. After a fallback (the seed, or `previous`, live while the cursor names a
-            // newer generation) or beside a pointer that does not name what is served (a flip that failed or a malformed
-            // pointer, which the reflip of the whole collection heals) the whole collection is fetched.
-            val since = cursor?.takeIf { base != null && it == reads.liveTimestamp() && reads.pointed() }
-            val merged = if (since != null) base.orEmpty() else emptyList()
+            // _since is the served file's own <ts>, from the same read as the merge base, as Firefox's `_since` is its
+            // local data's own timestamp (§7.1): never the updater.json cursor, so after a fallback (the seed, or
+            // `previous`, live while the cursor names a newer generation) a 304 speaks for the generation served. It is
+            // sent only while that <ts> is the live generation's and the pointer names the file: beside a pointer that
+            // does not (a flip that failed or a malformed pointer) the whole collection is fetched, and its UNCHANGED
+            // re-flips or heal-installs. The whole collection merges over nothing (#236).
+            val since = base?.lastModified?.takeIf { it == reads.liveTimestamp() && reads.pointed() }
+            val merged = if (since != null) base.records else emptyList()
+            // If-None-Match only while updater.json is not behind: behind it, the changeset since <ts> verifies and the
+            // UNCHANGED writes the repair (§6.5), which an unsigned 304 must never stand in for.
+            val conditional = since != null && !reads.behind(since)
             val verified =
-                when (val fetched = Changesets().verified(expected, since, merged)) {
+                when (val fetched = Changesets().verified(expected, since, conditional, merged)) {
                     is Fetched.Verified -> fetched.verified
                     is Fetched.Unverified -> return unverified(fetched.failure)
                     is Fetched.Ended -> return fetched.result
@@ -271,8 +272,9 @@ internal class CrliteSync(
         /** The changeset fetches of one sync, which share one [ChangesetVerifier] (§7.1: one x5u fetch per URL per sync). */
         private inner class Changesets {
             /**
-             * The changeset at [expected], verified: from [since] over [base] (the pointed generation's records) when
-             * [since] is set, and the whole collection when it is null. A `_since` changeset is fetched once more as the
+             * The changeset at [expected], verified: from [since] over [base] (the served generation's records) when
+             * [since] is set, with `If-None-Match` when [conditional], and the whole collection when it is null. A `_since`
+             * changeset is fetched once more as the
              * whole collection when its changes do not merge with [base] or its signature fails with a failure that
              * [SignatureFailure.resets] (§7.1, Firefox's retry of an `InvalidSignatureError`); never on an x5u failure,
              * which the shared [ChangesetVerifier] would reuse (one x5u result per URL per sync, §7.1).
@@ -280,10 +282,11 @@ internal class CrliteSync(
             fun verified(
                 expected: Long,
                 since: Long?,
+                conditional: Boolean,
                 base: List<JsonObject>,
             ): Fetched {
                 val signatures = ChangesetVerifier(client, verifier, now)
-                val first = changeset(signatures, expected, since, base)
+                val first = changeset(signatures, expected, since, conditional, base)
                 val why =
                     when {
                         since == null -> {
@@ -308,11 +311,12 @@ internal class CrliteSync(
                     LogLevel.WARN,
                     "${source.sourceId} ${store.root}: the changeset since $since: $why; fetching the whole collection",
                 )
-                return changeset(signatures, expected, null, emptyList())
+                return changeset(signatures, expected, null, conditional = false, base = emptyList())
             }
 
             /**
-             * One changeset at [expected] from [since] (null: the whole collection), verified over [base] merged with it;
+             * One changeset at [expected] from [since] (null: the whole collection), `If-None-Match` when [conditional],
+             * verified over [base] merged with it;
              * [Fetched.Unmergeable] when [since] is set and its changes do not merge. The whole collection merges over
              * nothing, and when even that is null (a record with no string `id`), its changes are verified as served.
              */
@@ -320,9 +324,10 @@ internal class CrliteSync(
                 signatures: ChangesetVerifier,
                 expected: Long,
                 since: Long?,
+                conditional: Boolean,
                 base: List<JsonObject>,
             ): Fetched {
-                val fetched = client.fetchChangeset(expected, since)
+                val fetched = client.fetchChangeset(expected, since, ifNoneMatch = conditional)
                 if (fetched is ClientResult.Unchanged) {
                     backoff(fetched.backoffMillis)
                     lastStatus = fetched.httpStatus
@@ -673,8 +678,9 @@ internal class CrliteSync(
             }
 
             /**
-             * The served generation's verified records, which a `_since` changeset is merged with (spec §6.5: "a `_since`
-             * changeset is merged over the served generation's `records`"), or null when there is none to merge with: no
+             * The served generation's file, whose verified records a `_since` changeset is merged with (spec §6.5: "a
+             * `_since` changeset is merged over the served generation's `records`") and whose `<ts>` is the `_since`
+             * (§7.1), or null when there is none to merge with: no
              * generation served, or its file does not load through Load's steps 1 and 2. The served file is the one the
              * engine holds, which may not be the pointer's `live` after a flip that failed after activation, so the merge is
              * always over what is served, as Firefox merges over its local data.
@@ -683,10 +689,10 @@ internal class CrliteSync(
              * here, whatever the sync then does, and is noted in [counted] so the install's reads of the pointer's
              * generations and of its `previous` candidates do not count it again (#335 review): each fault once.
              */
-            fun deltaBase(): List<JsonObject>? {
+            fun deltaBase(): GenerationFile? {
                 val served = snapshot.servedFile() ?: return null
                 val read = store.stored(served)
-                if (read is StoreRead.Found) return read.value.file.records
+                if (read is StoreRead.Found) return read.value.file
                 count(served)
                 logger.safeLog(
                     LogLevel.WARN,

@@ -689,7 +689,10 @@ Appendix A of the spec: what was verified against live sources and reference cod
     saved only when every collection synced (line 608) and cleared on a server error (line 480).
   - **Firefox's conditional changeset:** `RemoteSettingsClient.sys.mjs` sends `_since` = the local database's own
     timestamp (`maybeSync`, line 744; `since = retry || !hasLocalData ? undefined : localTimestamp`, line 1164) and no
-    `If-None-Match` (`_fetchChangeset`, lines 1350 to 1365). `RemoteSecuritySettings.sys.mjs` then reinstalls, on each
+    `If-None-Match` (`_fetchChangeset`, lines 1350 to 1365). The records it merges over come from the same database
+    (lines 747 to 749), and with no local data it imports the dump and reads the timestamp again (lines 756 to 769), so
+    after a dump import `_since` is the dump's timestamp; local data with no signature metadata is verified from
+    `_fetchChangeset(expectedTimestamp, expectedTimestamp)` (lines 787 to 790); read 2026-11-26 at the same commit. `RemoteSecuritySettings.sys.mjs` then reinstalls, on each
     `remote-settings:changes-poll-end`, the CRLite filters whose hashes cert_storage has not loaded (lines 645 to 700).
     No sync starts while the browser shuts down (`maybeSync`, line 720), and one cut off by it reports `SHUTDOWN_ERROR`
     (line 934).

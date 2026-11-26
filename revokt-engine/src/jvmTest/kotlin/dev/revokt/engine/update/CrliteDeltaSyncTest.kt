@@ -259,7 +259,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `a cursor older than the live generation fetches the whole collection, and installs`() {
+    fun `a cursor older than the live generation sends its ts with no If-None-Match, and the changeset installs`() {
         val server = installedFirst()
         // The second generation flips, then its updater json write fails: the pointer names it, the cursor stays ts.
         next(server, listOf(full, delta, delta2))
@@ -268,12 +268,13 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         storage.failWrite = { null }
         assertEquals("$ts2/${delta2.id}", stored(liveName()).generationId)
         assertEquals(ts, sourceRecord(ts2 + hour).lastVerifiedLastModified)
-        // A third. The cursor is not the live generation's <ts>, so it is not sent (#147, §7.1): the whole collection.
+        // A third. _since is the served file's own <ts>, never the cursor; updater.json is behind it, so no If-None-Match
+        // (§7.1): the changes since ts2, merged over the served records, verify.
         val delta3 =
             Rec(
                 "f1e2d3c4-0000-4000-8000-000000000004",
                 true,
-                ts + 800,
+                ts2 + 800,
                 "20261023-1-compat.filter.delta",
                 UpdateFixtures.v4(listOf(log(4) to (1_000L to 2_000L))),
                 parent = full.id,
@@ -284,9 +285,10 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         server.fetcher.requests.clear()
         val now = server.ts + 8 * hour
         sync(server, now = now).assert(SyncOutcome.INSTALLED)
-        assertEquals(server.changesetUrl, server.fetcher.requests[1].url)
-        assertFalse(server.fetcher.requests.any { "_since" in it.url }, "no cursor sent")
-        assertFalse(server.fetcher.requests.any { "If-None-Match" in it.headers }, "no cursor sent")
+        assertEquals(server.sinceUrl(ts2), server.fetcher.requests[1].url)
+        assertFalse(server.fetcher.requests.any { it.url.endsWith("_since=$ts") }, "the cursor is never sent")
+        assertFalse(server.fetcher.requests.any { "If-None-Match" in it.headers }, "updater.json is behind")
+        assertEquals(1, server.fetcher.requests.count { it.url.startsWith(server.changesetUrl) }, "no whole collection")
         // The stored full and the deltas the live generation holds are reused: only the new delta is fetched.
         assertEquals(listOf(attachments + delta3.location), server.attachmentRequests())
         assertEquals(server.ts, sourceRecord(now).lastVerifiedLastModified)
