@@ -59,6 +59,11 @@ internal enum class StoragePlatform {
             owner: (Path) -> Any?,
         ): String? =
             ownershipFault(Files.getPosixFilePermissions(dir, LinkOption.NOFOLLOW_LINKS), ownership, mine, owner(dir))
+
+        override fun modeFault(
+            dir: Path,
+            ownership: OwnershipCheck,
+        ): String? = modeFault(Files.getPosixFilePermissions(dir, LinkOption.NOFOLLOW_LINKS), ownership)
     },
 
     /** Windows: default modes, no directory fsync (a directory cannot be opened), no ownership check. */
@@ -93,6 +98,11 @@ internal enum class StoragePlatform {
             mine: Any?,
             owner: (Path) -> Any?,
         ): String? = null
+
+        override fun modeFault(
+            dir: Path,
+            ownership: OwnershipCheck,
+        ): String? = null
     }, ;
 
     /** Creates directory [dir], rwx------ on POSIX; follows no link at [dir]. */
@@ -122,6 +132,12 @@ internal enum class StoragePlatform {
         owner: (Path) -> Any?,
     ): Any?
 
+    /** Why [dir]'s mode is not owner-only under [ownership], or null; on POSIX only, and read before any probe is written. */
+    abstract fun modeFault(
+        dir: Path,
+        ownership: OwnershipCheck,
+    ): String?
+
     /** Why directory [dir] is not this process's ([mine]) under [ownership], or null: on POSIX its mode and its owner. */
     abstract fun directoryFault(
         dir: Path,
@@ -146,6 +162,12 @@ internal enum class StoragePlatform {
             ownership: OwnershipCheck,
             mine: Any?,
             theirs: Any?,
+        ): String? = modeFault(mode, ownership) ?: if (mine != theirs) "owned by uid $theirs, not $mine" else null
+
+        /** The mode half of [ownershipFault]: never other-writable; group-writable only under `OWNER_OR_GROUP`. */
+        fun modeFault(
+            mode: Set<PosixFilePermission>,
+            ownership: OwnershipCheck,
         ): String? =
             when {
                 PosixFilePermission.OTHERS_WRITE in mode -> {
@@ -154,10 +176,6 @@ internal enum class StoragePlatform {
 
                 ownership == OwnershipCheck.STRICT && PosixFilePermission.GROUP_WRITE in mode -> {
                     "group-writable under STRICT: ${PosixFilePermissions.toString(mode)}"
-                }
-
-                mine != theirs -> {
-                    "owned by uid $theirs, not $mine"
                 }
 
                 else -> {

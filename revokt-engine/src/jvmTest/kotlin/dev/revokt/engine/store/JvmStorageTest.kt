@@ -420,6 +420,21 @@ class JvmStorageTest {
         }
 
     @Test
+    fun `ownership on POSIX - a root with the wrong mode never gets a probe written`() =
+        withDir { dir ->
+            Assumptions.assumeTrue(posix, "POSIX permissions")
+            val root = Files.createDirectory(dir.resolve("s"))
+            val asked = ArrayList<Path>()
+            val owner = { p: Path -> asked.add(p).let { 501 } }
+            for (mode in listOf("rwx---rwx", "rwxrwx---")) {
+                Files.setPosixFilePermissions(root, PosixFilePermissions.fromString(mode))
+                assertFailsWith<StoreUnreadableException> { JvmStorage(root, owner = owner).lock() }
+            }
+            assertEquals(emptyList(), asked, "a probe was written before the mode check")
+            assertEquals(emptyList(), Files.list(root).use { it.toList() })
+        }
+
+    @Test
     fun `ownership on POSIX - a root owned by another uid than a probe file's is unreadable, and the probe goes`() =
         withDir { dir ->
             Assumptions.assumeTrue(posix, "POSIX permissions")
@@ -579,6 +594,12 @@ class JvmStorageTest {
         assertEquals("owned by uid 0, not 501", StoragePlatform.ownershipFault(mode("rwxr-xr-x"), group, 501, 0))
         assertNull(StoragePlatform.OTHER.directoryFault(Path.of("anywhere"), strict, 1) { 2 })
         assertNull(StoragePlatform.OTHER.processOwner(Path.of("anywhere")) { 1 })
+        assertNull(StoragePlatform.OTHER.modeFault(Path.of("anywhere"), strict))
+        assertNull(StoragePlatform.modeFault(mode("rwxrwx---"), group))
+        assertEquals(
+            StoragePlatform.modeFault(mode("rwxrwx---"), strict),
+            StoragePlatform.ownershipFault(mode("rwxrwx---"), strict, 1, 1),
+        )
         assertEquals(
             if (posix) StoragePlatform.POSIX else StoragePlatform.OTHER,
             StoragePlatform.of(Path.of(".").fileSystem),

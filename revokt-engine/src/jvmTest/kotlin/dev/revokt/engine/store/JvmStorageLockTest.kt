@@ -198,8 +198,11 @@ class JvmStorageLockTest {
             val root = dir.resolve("s")
             JvmStorage(root).write("crlite/compat/current", byteArrayOf(1))
             val sub = root.resolve("crlite")
+            val temp = Files.write(sub.resolve(JvmStorage.tempName("current")), byteArrayOf(9))
             Files.setPosixFilePermissions(sub, PosixFilePermissions.fromString("rwxrwxrwx"))
             assertFailsWith<StoreUnreadableException> { JvmStorage(root).lock() }
+            // The directory is checked before its temp files are swept: nothing in a directory that fails is deleted.
+            assertTrue(Files.exists(temp), "the sweep ran in a directory that failed its check")
             assertFailsWith<StoreUnreadableException> { JvmStorage(root, OwnershipCheck.OWNER_OR_GROUP).lock() }
             assertEquals("rwxrwxrwx", PosixFilePermissions.toString(Files.getPosixFilePermissions(sub)), "never chmod")
             Files.setPosixFilePermissions(sub, PosixFilePermissions.fromString("rwxrwx---"))

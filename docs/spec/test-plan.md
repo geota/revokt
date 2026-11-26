@@ -137,7 +137,7 @@ tests; **live checks** are informational.
   followed: `read`, `write` and `delete` of it throw and its target is untouched; `.lock` as a link is
   `STORE_UNREADABLE`, and the ownership check runs before `.lock` is opened; the ownership check refuses a
   group-writable root or subdirectory under `STRICT`, an other-writable one always and one whose uid is not a probe
-  file's; the contract tests run over both stores, refusing uppercase keys `.LOCK` and `.Lock`
+  file's; a root with the wrong mode never gets a probe written, and a temp file in a subdirectory that fails stays; the contract tests run over both stores, refusing uppercase keys `.LOCK` and `.Lock`
   (`JvmStorageContractTest`);
   a `current` with a flipped hex digit at `start()` → `storeFailures = 1`, no `STORE_UNREADABLE` warning (which means
   only the in-memory fallback, and stays until `close()`), and the next install heals it (`CrliteRuntimeStartTest`;

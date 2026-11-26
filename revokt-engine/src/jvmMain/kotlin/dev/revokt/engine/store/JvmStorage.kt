@@ -209,6 +209,8 @@ internal class JvmStorage(
         try {
             ensureDirectory(root)
             base = resolveBase()
+            // The mode first, so a root others can write never gets a probe written into it; then the uid.
+            platform.modeFault(base, ownership)?.let { throw notThisProcess(root, base, it) }
             mine = platform.processOwner(base, owner)
             checkDirectory(base, mine)
         } catch (e: IOException) {
@@ -235,11 +237,14 @@ internal class JvmStorage(
             val lock = acquire(open, deadline)
             guard.write {
                 val dirs = ArrayList<Path>()
-                walk(base, dirs::add) { file, _ -> if (TEMP.matches(file.fileName.toString())) deleteQuietly(file) }
-                for (d in dirs) {
+                // Each directory is checked as the walk enters it, before any temp file in it is deleted.
+                val enter = { d: Path ->
                     checkDirectory(d, mine)
-                    fsync.directory(d)
+                    dirs.add(d)
+                    Unit
                 }
+                walk(base, enter) { file, _ -> if (TEMP.matches(file.fileName.toString())) deleteQuietly(file) }
+                for (d in dirs) fsync.directory(d)
             }
             held = Held(lock, open, key)
             return held
@@ -262,9 +267,7 @@ internal class JvmStorage(
         dir: Path,
         mine: Any?,
     ) {
-        platform.directoryFault(dir, ownership, mine, owner)?.let {
-            throw StoreUnreadableException("the store at $root is not this process's: $dir is $it")
-        }
+        platform.directoryFault(dir, ownership, mine, owner)?.let { throw notThisProcess(root, dir, it) }
     }
 
     /** The root's real path, or null while the root does not exist. */
@@ -423,6 +426,12 @@ internal class JvmStorage(
     }
 
     internal companion object {
+        private fun notThisProcess(
+            root: Path,
+            dir: Path,
+            fault: String,
+        ) = StoreUnreadableException("the store at $root is not this process's: $dir is $fault")
+
         private fun keyOf(relative: Path): String? {
             val key = relative.joinToString("/")
             return if (StoreKeys.isKey(key)) key else null
