@@ -912,7 +912,7 @@ returns normally) and release it before anything else → stop scheduling (a syn
 nothing, and a timer the loader's shutdown refuses drops the task: `RevoktPollTest` "a sync scheduled before close never
 runs") → complete the internal
 `dataReady` future and the public `readyFuture()` (the public one exceptionally) → cancel the
-loader and await an in-flight install (a sync waiting on a fetch ends `FAILED` at the interrupt and installs nothing,
+loader and await an in-flight install and then the loader thread's exit, so no loader thread outlives `close()` (a sync waiting on a fetch ends `FAILED` at the interrupt and installs nothing,
 `RevoktPollTest` "close cancels a sync in flight"; a cancelled install never flips the pointer, closes an un-activated `PreparedGeneration` and deletes its
 own directory before returning) → drain in-flight handshakes (a handshake thread increments the in-flight counter
 **before** it reads the lifecycle state and decrements after, so the drain cannot miss a thread that
