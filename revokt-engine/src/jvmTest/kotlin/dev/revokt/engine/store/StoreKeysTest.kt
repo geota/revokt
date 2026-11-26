@@ -17,7 +17,7 @@ class StoreKeysTest {
             "crlite/compat/updater.json",
             "crlite/compat/gen-1762430400000-dc148ce178adeca2/meta.json",
             "crlite/compat/blobs/" + "0".repeat(64),
-            "A-Z_a-z.0-9",
+            "a-z_.0-9",
             "...",
             ".a",
             "a.",
@@ -31,7 +31,7 @@ class StoreKeysTest {
     }
 
     @Test
-    fun `dot segments, empty segments, long segments, the lock and any other character are not keys`() {
+    fun `dot segments, empty segments, long segments, the lock, uppercase and any other character are not keys`() {
         for (key in listOf(
             "",
             ".",
@@ -49,6 +49,11 @@ class StoreKeysTest {
             "x".repeat(97),
             "a/" + "x".repeat(97),
             ".lock",
+            ".LOCK",
+            ".Lock",
+            "A-Z_a-z.0-9",
+            "A",
+            "crlite/COMPAT/current",
             "abc\n",
             "\nabc",
             "a\nb",
