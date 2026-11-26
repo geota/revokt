@@ -75,8 +75,9 @@ internal class OpenedStore(
  * - `store.version` absent in an empty store ([RevoktStorage.isEmpty]): [StoreVersion.CURRENT] is written, silently.
  *   Absent beside other entries, malformed, or a read that throws: `STORE_UNREADABLE`, the store untouched (fail
  *   closed: a directory without `store.version` is not a revokt store, and the caller's directory is the root).
- * - Equal: the store as it is. Lower: `STORE_MIGRATED`, rebuilt ([rebuild]). Higher: `STORE_NEWER_LAYOUT`, then per
- *   the storage's [NewerLayout], run in memory with the store untouched, or rebuilt.
+ * - Equal: the store as it is. Lower: `STORE_MIGRATED`, rebuilt ([rebuild]: every other key deleted, then the
+ *   version written). Higher: `STORE_NEWER_LAYOUT`, then per the storage's [NewerLayout], run in memory with the store
+ *   untouched, or rebuilt.
  *
  * Each fallback releases the lock and deregisters the identity before it returns, so does any throw, and the instance
  * then runs on a fresh in-memory store. [current] is this engine's version, a test seam.
@@ -182,10 +183,10 @@ internal object StoreOpen {
     }
 
     /**
-     * The rebuild (spec §6.5): `store.version` written first, so an older co-tenant cannot take a half-written new layout
-     * for its own empty store, then every other key [RevoktStorage.names] lists deleted, so no old-layout `current` or
-     * `updater.json` survives; the start task then runs as on an empty store. A write or delete that throws is
-     * `STORE_UNREADABLE`: the instance runs in memory, and deletes nothing more.
+     * The rebuild (spec §6.5): every key [RevoktStorage.names] lists but `store.version` deleted, then `store.version`
+     * written, and the start task then runs as on an empty store. A rebuild that fails or is interrupted keeps the old
+     * version, so the next start runs the same arm and finishes it, and no old-layout `current` or `updater.json` ever
+     * sits under the new version. A delete or write that throws is `STORE_UNREADABLE`: the instance runs in memory.
      */
     @Suppress("TooGenericExceptionCaught") // A store write or delete that throws is STORE_UNREADABLE.
     private fun rebuild(
@@ -195,8 +196,8 @@ internal object StoreOpen {
         found: Int,
     ): Step =
         try {
-            storage.write(StoreVersion.KEY, StoreVersion.encode(current))
             for (name in storage.names()) if (name != StoreVersion.KEY) storage.delete(name)
+            storage.write(StoreVersion.KEY, StoreVersion.encode(current))
             Step.Open(code, "store.version $found, this engine's $current: the store was rebuilt")
         } catch (e: Exception) {
             Step.Fallback(WarningCode.STORE_UNREADABLE, "the rebuild from store.version $found failed", e)

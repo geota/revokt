@@ -419,7 +419,11 @@ internal class JvmStorage(
         fsync.directory(dir.parent)
     }
 
-    /** Visits every directory under [base], [base] first, with [onDirectory] and every regular file with [onFile]. */
+    /**
+     * Visits every directory under [base], [base] first, with [onDirectory] and every regular file with [onFile]. A
+     * directory below [base] that holds a `.lock` is another store's root and is not entered: its keys are never listed,
+     * so never deleted, and the open's sweep never deletes its temp files in flight.
+     */
     private fun walk(
         base: Path,
         onDirectory: (Path) -> Unit = {},
@@ -433,6 +437,11 @@ internal class JvmStorage(
                     dir: Path,
                     attrs: BasicFileAttributes,
                 ): FileVisitResult {
+                    if (dir != base &&
+                        attributes(dir.resolve(StoreKeys.LOCK)) != null
+                    ) {
+                        return FileVisitResult.SKIP_SUBTREE
+                    }
                     onDirectory(dir)
                     return FileVisitResult.CONTINUE
                 }

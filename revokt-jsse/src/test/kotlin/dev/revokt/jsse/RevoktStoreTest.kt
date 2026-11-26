@@ -18,6 +18,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.time.TimeSource
 
 /**
  * Where `start()` and `close()` open and release the store (spec §5.1, §6.5), through the builder's internal `storage`
@@ -64,6 +65,7 @@ class RevoktStoreTest {
         seed: ScriptedSeed = ScriptedSeed({ headerSeed() }) { events += "seed" },
         engine: StubEngine = StubEngine(),
         logger: RevoktLogger? = null,
+        timeSource: TimeSource? = null,
     ): Revokt =
         bare()
             .seed(seed.source)
@@ -71,6 +73,7 @@ class RevoktStoreTest {
             .also {
                 it.storage = storage
                 if (logger != null) it.logger = logger
+                if (timeSource != null) it.timeSource = timeSource
             }.revocationEngine(engine)
             .build()
             .also { opened += it }
@@ -97,6 +100,24 @@ class RevoktStoreTest {
         assertEquals(1, engine.closes)
         revokt.close()
         assertEquals(1, events.count { it == "release" }, "released once")
+    }
+
+    @Test
+    fun `a start that throws once its loader runs leaves the store to the loader, and close releases it after`() {
+        val storage = Tracked("e")
+        val throwing =
+            object : TimeSource {
+                override fun markNow(): TimeSource.Monotonic.ValueTimeMark = throw StackOverflowError()
+            }
+        val revokt = build(storage, timeSource = throwing)
+        val atRelease = ArrayList<Int>()
+        storage.onRelease = { atRelease += loaderThreads(revokt).size }
+        assertFailsWith<StackOverflowError> { revokt.start() }
+        assertEquals(1, storage.held, "held while the loader may write")
+        assertEquals(1, loaderThreads(revokt).size)
+        revokt.close()
+        assertEquals(0, storage.held)
+        assertEquals(listOf(0), atRelease, "released once the loader is gone")
     }
 
     @Test

@@ -10,7 +10,7 @@ package dev.revokt.engine.store
  */
 internal object StoreVersion {
     /** The key of the file. */
-    const val KEY: String = "store.version"
+    const val KEY: String = StoreKeys.VERSION
 
     /** This engine's layout. */
     const val CURRENT: Int = 1

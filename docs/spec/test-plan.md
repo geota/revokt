@@ -148,13 +148,17 @@ tests; **live checks** are informational.
   no `store.version`, a malformed `store.version` (empty, `0`, `01`, `1\n`, ` 1`, ten digits), one that is a
   directory, a link, or whose read throws → `STORE_UNREADABLE`, nothing written or deleted; higher under `IN_MEMORY` →
   `STORE_NEWER_LAYOUT`, the directory untouched, and the seed installs in memory; higher under `REBUILD` and lower (the
-  current version given as a test parameter) → rebuilt, `store.version` written before any delete, every other key
-  deleted, a non-key file kept; a rebuild whose delete throws → `STORE_UNREADABLE`; a lock held elsewhere →
+  current version given as a test parameter) → rebuilt, every other key deleted before `store.version` is written, a
+  non-key file kept; a rebuild whose delete or version write throws → `STORE_UNREADABLE` with the old version kept,
+  and the next start rebuilds again (`STORE_MIGRATED`), leaving nothing old; a storage other than `JvmStorage` with a
+  higher version → `STORE_NEWER_LAYOUT`, untouched; the registration is still held while the lock is released; a store
+  nested inside another's root keeps its lock and keys through the outer one's open and rebuild; a lock held elsewhere →
   `STORE_LOCKED`, nothing written, and the fallback is never retried; after every fallback and every throw the lock is
   free and the identity deregistered; a second instance on one root in the process, through another spelling or a
   symbolic link to the root, throws `IllegalStateException` and takes no lock; `start()` registers and locks before the
-  seed's header, a `start()` that throws releases both, and `close()` releases the lock after the loader's exit and
-  before `engine.close()`; a seed installed into the directory is served from it after a restart;
+  seed's header, a `start()` that throws before its loader runs releases both, one that throws after it (a throwing time
+  source) keeps both until `close()`, and `close()` releases the lock after the loader's exit and before
+  `engine.close()`; a seed installed into the directory is served from it after a restart;
   a `current` with a flipped hex digit at `start()` → `storeFailures = 1`, no `STORE_UNREADABLE` warning (which means
   only the in-memory fallback, and stays until `close()`), and the next install heals it (`CrliteRuntimeStartTest`;
   the count in `SeedLoaderStoreTest`);

@@ -114,7 +114,8 @@ public class Revokt private constructor(
      *    its schedule (spec §5.1, §7.1, #147): 6 h plus a jitter of up to 36 min after a poll that did not fail, the
      *    source's backoff after one that did, every wait between 60 s and 24 h.
      *
-     * A `start()` that throws leaves the instance `CREATED`, holding nothing, and may be called again. Then `start()`
+     * A `start()` that throws leaves the instance `CREATED`, holding nothing, and may be called again; one that throws
+     * after its loader started (only an `Error` can) leaves the store to the loader, and [close] releases it. Then `start()`
      * waits for that task up to `awaitData` (a bounded wait on the task, not a readiness future: §11's 0.2 row has none)
      * and returns the start diagnostics: `validate()`'s `WARNING`s, then the S diagnostics of §4
      * (`SEED_PAST_REJECT_THRESHOLD` once the seed is live, `UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP`,
@@ -138,7 +139,8 @@ public class Revokt private constructor(
             // Every step below may call consumer code (the logger, the trust store, the seed source, the engine), and
             // the lock is re-entrant: a call back into start() or close() from this thread throws instead.
             startThread = Thread.currentThread()
-            var started = false
+            // Once the loader runs it owns the store: only close(), after stopping the loader, releases it (spec §5.1).
+            var loaderOwnsStore = false
             try {
                 validateOrThrow(config.enforcement)
                 val index = runtime.anchorIndex(config.platformTrust, config.defaultDelegate, nowMillis())
@@ -168,18 +170,22 @@ public class Revokt private constructor(
                     // finds it live (storedLive), keeps serving it, and its start task skips the chain.
                     @Suppress("TooGenericExceptionCaught") t: Throwable,
                 ) {
+                    // A worker the refused execute started must be gone before the store is released below.
                     executor.shutdownNow()
+                    awaitUninterruptibly { executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS) }
                     throw t
                 }
-                indexed = index
+                // First, so that close() stops this loader whatever throws below.
                 loader = executor
+                loaderOwnsStore = true
+                indexed = index
                 startTaskDone = done
                 lifecycle = RevoktLifecycle.STARTED
                 flipped = config.timeSource.markNow()
-                started = true
             } finally {
-                // A start() that throws holds nothing: the store's lock released and its identity deregistered.
-                if (!started) releaseStore()
+                // A start() that throws before its loader runs holds nothing: the store's lock released and its
+                // identity deregistered. After, the loader may be writing, so close() releases it once it has stopped.
+                if (!loaderOwnsStore) releaseStore()
                 startThread = null
             }
         }

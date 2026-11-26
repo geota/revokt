@@ -22,7 +22,9 @@ class StoreKeysTest {
             ".a",
             "a.",
             "a.lock",
-            "a/.lock",
+            "store.version",
+            "a/store.versions",
+            "a/x.store.version",
             "x".repeat(96),
             "x".repeat(96) + "/" + "y".repeat(96),
         )) {
@@ -31,7 +33,7 @@ class StoreKeysTest {
     }
 
     @Test
-    fun `dot segments, empty segments, long segments, the lock, uppercase and any other character are not keys`() {
+    fun `dot, empty or long segments, a reserved segment, uppercase and any other character are not keys`() {
         for (key in listOf(
             "",
             ".",
@@ -49,6 +51,11 @@ class StoreKeysTest {
             "x".repeat(97),
             "a/" + "x".repeat(97),
             ".lock",
+            "a/.lock",
+            "a/.lock/b",
+            ".lock/b",
+            "crlite/store.version",
+            "store.version/x",
             ".LOCK",
             ".Lock",
             "A-Z_a-z.0-9",

@@ -4,9 +4,10 @@
 package dev.revokt.engine.store
 
 /**
- * The key rule of `RevoktStorage` (spec §3): segments of `[a-z0-9._-]{1,96}` joined by `/`, never `.` or `..`, and
- * never the reserved key `.lock`. The whole string is checked character by character, so no trailing newline, empty
- * segment or leading `/` passes, and no key resolves outside the store's root.
+ * The key rule of `RevoktStorage` (spec §3): segments of `[a-z0-9._-]{1,96}` joined by `/`, never `.` or `..`, never
+ * `.lock` as any segment, and `store.version` only as the whole key, so no key reaches into a store nested inside this
+ * one. The whole string is checked character by character, so no trailing newline, empty segment or leading `/`
+ * passes, and no key resolves outside the store's root.
  */
 internal object StoreKeys {
     const val MAX_SEGMENT: Int = 96
@@ -14,17 +15,27 @@ internal object StoreKeys {
     /** The lock's key; no path but `lock()` ever opens, lists or deletes it. */
     const val LOCK: String = ".lock"
 
+    /** `store.version`'s key (spec §6.5), a key only at the top: elsewhere it would be a nested store's. */
+    const val VERSION: String = "store.version"
+
     fun isKey(name: String): Boolean {
-        if (name == LOCK) return false
+        if (name == VERSION) return true
         var start = 0
         while (true) {
             val slash = name.indexOf('/', start)
             val end = if (slash < 0) name.length else slash
-            if (!isSegment(name, start, end)) return false
+            if (!isSegment(name, start, end) || reserved(name, start, end)) return false
             if (slash < 0) return true
             start = slash + 1
         }
     }
+
+    /** Whether the segment is `.lock` or `store.version`, a store's own files, which no other key may name. */
+    private fun reserved(
+        name: String,
+        start: Int,
+        end: Int,
+    ): Boolean = name.substring(start, end).let { it == LOCK || it == VERSION }
 
     fun requireKey(name: String) {
         require(isKey(name)) { "'$name' is not a store key" }
