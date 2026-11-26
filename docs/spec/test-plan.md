@@ -61,8 +61,11 @@ tests; **live checks** are informational.
   fetch ends the sync with nothing installed and nothing scheduled; (#147, the #273 review moved from #143) a store whose
   first generation read throws, then reads, a watermark above the seed and a changeset between them → the first sync
   re-reads the store and is `ROLLBACK_REFUSED`, no body fetched; a read that keeps throwing → no request and nothing
-  written, retried in 15 min; (#147, from #205's review) a cursor that is not the live generation's `<ts>` → the whole
-  collection fetched, with no `_since` and no `If-None-Match`, and its generation installed instead of a 304; (revision 56, #131) a `CLOCK_SKEW` and
+  written, retried in 15 min; (#147, from #205's review) a cursor that is not the live generation's `<ts>` → `_since` the
+  served generation's own `<ts>`, never the cursor, with `If-None-Match` only while `updater.json`'s cursor and
+  watermark are at or past it, and the newer generation installed instead of a 304; a served file whose `<ts>` is not
+  the snapshot's → the whole collection, with no `_since`; the first sync after a seed install → `_since` the seed's
+  `<ts>`, with no `If-None-Match`; (revision 56, #131) a `CLOCK_SKEW` and
   a `STORE_FAILED` sync each advance `consecutiveFailures`, the first feed failure waiting 15 min, the second 30 min and
   the sixth capped at 6 h, while `ROLLBACK_REFUSED` and `BACKOFF` leave the count unchanged; after three
   failures an `INSTALLED` poll, a 304 and a timestamp-match `UNCHANGED` each reset it to 0; a
@@ -385,7 +388,7 @@ tests; **live checks** are informational.
   `host/x`, `host?x`, `host#x`, `[::1]` or a non-ASCII name → `IllegalArgumentException`, while an upper-case entry
   builds; an x5u URL on
   `content-signature-2.CDN.mozilla.net` or `evilcdn.mozilla.net` against the default `allowedDomains` → `FAILED`, and one on any host under `cdn.mozilla.net` → fetched; a rewrite target outside `allowedDomains`, or a single-label `allowedDomains` entry (`net`) → `IllegalArgumentException`; the attachment base: by default `GET <baseUrl>/` once per sync, before the first attachment fetch, and its `capabilities.attachments.base_url` used; a `base_url` that is not https, carries userinfo, a port other than 443, a query or fragment, or a host outside `allowedDomains` (`evilcdn.mozilla.net`, `cdn.mozilla.net.evil.example`), a root that is not that shape, or a failed root fetch → `FAILED` with `ATTACHMENT_BASE`, no attachment fetched and nothing advanced; a pinned `attachmentBaseUrl` → no root request; every base the rules accept reads to `java.net.URI` and `java.net.URL` as https on 443 to an allowed host; [#141] a delta poll's changeset URL carries
-  `_since=<cursor>` bare and `If-None-Match: "<cursor>"`, and before #141 a sync with a stored cursor sends neither
+  `_since=<ts>` bare, the served generation's, and `If-None-Match: "<ts>"`, and before #141 a sync with a stored cursor sends neither
   (revision 57); decision steps 7 and 8 (#133): a key answered `ENGINE_ERROR`
   while another is `REVOKED` → `Finding.Crlite(ENGINE_ERROR)` for it and no `EngineError(ENGINE)`; a boundary throw
   after one exemption ran → that exemption stands, no later one runs, rules = those fired plus `ENGINE_ERROR`; a

@@ -93,8 +93,8 @@ internal class SignatureEntry(
  * its callers'. Only `monitor/changes` and the collection's `changeset` are requested, plus the x5u chain and the
  * attachments.
  *
- * Every request carries `User-Agent` ([MozillaRemoteSettings.userAgent]); a changeset fetch from a cursor also carries
- * `If-None-Match` as the quoted cursor, synthesised, never an echoed ETag; no request carries `Accept-Encoding` (the
+ * Every request carries `User-Agent` ([MozillaRemoteSettings.userAgent]); a conditional changeset fetch also carries
+ * `If-None-Match` as the quoted `_since`, synthesised, never an echoed ETag; no request carries `Accept-Encoding` (the
  * fetcher decodes gzip itself, §3). Every fetch runs on [io] under [FetchLimits.fetchTimeoutMillis] ([fetchWithin]), and
  * its body is re-checked against the request's cap before anything reads it. A 304 is [ClientResult.Unchanged] only
  * for the conditional changeset fetch; any other status but 200 is `FAILED` with the status, so a 3xx is never followed
@@ -146,16 +146,19 @@ internal class RemoteSettingsClient(
 
     /**
      * The collection's changeset at [expected] (`_expected`, mandatory), the whole collection when [since] is null, else
-     * the changes after the verified cursor [since] (`_since=<since>`, bare, as Firefox's `RemoteSettingsClient` sends
-     * it at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`, and `If-None-Match: "<since>"`, quoted, as §3 says; a 304 is
-     * [ClientResult.Unchanged]). The body is parsed with the engine's JSON tree under `MAX_JSON_BYTES`; its `changes`
-     * are objects and its `timestamp` an integer from 0 to `Long.MAX_VALUE`, else `CHANGESET_MALFORMED`. Nothing in it
-     * is trusted until [ChangesetVerifier] verifies it.
+     * the changes after [since], the served generation's `<ts>` (`_since=<since>`, bare, as Firefox's
+     * `RemoteSettingsClient` sends it at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`), with `If-None-Match: "<since>"`,
+     * quoted, as §3 says, when [ifNoneMatch] (a 304 is then [ClientResult.Unchanged]; without it a 304 is `FAILED`).
+     * The body is parsed with the engine's JSON tree under `MAX_JSON_BYTES`; its `changes` are objects and its
+     * `timestamp` an integer from 0 to `Long.MAX_VALUE`, else `CHANGESET_MALFORMED`. Nothing in it is trusted until
+     * [ChangesetVerifier] verifies it.
      */
     fun fetchChangeset(
         expected: Long,
         since: Long?,
+        ifNoneMatch: Boolean = since != null,
     ): ClientResult<Changeset> {
+        require(since != null || !ifNoneMatch) { "If-None-Match is the quoted _since" }
         if (expected < 0 || (since != null && since < 0)) {
             return ClientResult.Failed(
                 SyncFailure.CHANGESET_FETCH,
@@ -164,8 +167,9 @@ internal class RemoteSettingsClient(
         }
         val query = "?_expected=$expected" + (since?.let { "&_since=$it" } ?: "")
         val url = joinUrl(source.baseUrl, "buckets/${source.bucket}/collections/$collection/changeset$query")
+        val etag = since.takeIf { ifNoneMatch }
         val body =
-            when (val exchange = exchange(SyncFailure.CHANGESET_FETCH, url, limits.maxJsonBytes, cursor = since)) {
+            when (val exchange = exchange(SyncFailure.CHANGESET_FETCH, url, limits.maxJsonBytes, cursor = etag)) {
                 is Exchange.Ended -> return exchange.result
                 is Exchange.Body -> exchange
             }
