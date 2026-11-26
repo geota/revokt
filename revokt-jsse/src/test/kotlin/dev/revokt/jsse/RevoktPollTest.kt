@@ -186,9 +186,11 @@ class RevoktPollTest {
         timer.rejectWhenShutdown = false
         revokt.start()
         assertTrue(entered.await(10, TimeUnit.SECONDS))
+        val loader = loaderThreads(revokt).single()
         revokt.close()
+        // Read first: a terminated pool signals before its worker thread exits, so close() must wait for the thread.
+        assertTrue(!loader.isAlive, "the loader thread has exited when close() returns")
         assertEquals(0, timer.count.get(), "the cancelled sync, which ended after close's flip, asked for no next sync")
-        assertTrue(loaderThreads(revokt).isEmpty(), "the loader has ended")
         assertEquals(1, engine.closes)
         assertEquals(1, requests.get())
     }

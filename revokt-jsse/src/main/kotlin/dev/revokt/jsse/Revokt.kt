@@ -179,8 +179,9 @@ public class Revokt private constructor(
     /**
      * Closes the instance (spec §5.1 `close()`); it blocks. Idempotent: a second `close()` returns once the first has
      * finished. In order: the flip to `CLOSED` (under the start lock, so a `close()` racing [start] waits for its
-     * synchronous part); the loader cancelled, and an in-flight install awaited, without a deadline, so the engine is
-     * never closed while it prepares or activates a generation; the generation reference cleared; then `engine.close()`,
+     * synchronous part); the loader cancelled, and an in-flight install and the loader thread's exit awaited, without a
+     * deadline, so the engine is never closed while it prepares or activates a generation and no loader thread outlives
+     * `close()`; the generation reference cleared; then `engine.close()`,
      * always, last, in `CREATED` too (`Revokt` owns the engine). A throw from `engine.close()` is rethrown once every
      * other step has run, so an engine that did not close is never hidden (`try`-with-resources and `use {}` attach it
      * as suppressed when their body threw); a second `close()` is then a no-op. Throws [IllegalStateException] on the
@@ -349,10 +350,15 @@ public class Revokt private constructor(
         }
     }
 
-    /** Cancels [executor] and waits for it, uninterruptibly: an in-flight install ends before the engine closes. */
+    /**
+     * Cancels [executor] and waits for it, uninterruptibly: an in-flight install ends before the engine closes. Then
+     * waits for the loader thread to exit, which a pool that has terminated has signalled before its worker leaves, so
+     * no loader thread outlives [close] (spec §5.1).
+     */
     private fun stop(executor: ScheduledExecutorService) {
         executor.shutdownNow()
         awaitUninterruptibly { executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS) }
+        loaderThread?.let { thread -> awaitUninterruptibly { thread.join() } }
     }
 
     /**
