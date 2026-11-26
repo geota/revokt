@@ -158,7 +158,7 @@ internal fun reflip(
  * What an install and a re-flip share: the pointer as it read before anything was written, the generations it named
  * through Load's steps 1 and 2, and the `previous` candidate rule over them (spec §6.5), each fault counted once.
  */
-private abstract class PointerFlip(
+private open class PointerFlip(
     protected val store: StoreLayout,
     protected val snapshot: SnapshotRef,
     protected val publication: Publication,
