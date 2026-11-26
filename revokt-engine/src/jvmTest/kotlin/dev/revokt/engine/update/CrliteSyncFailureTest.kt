@@ -424,6 +424,20 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     }
 
     @Test
+    fun `a pointed live at the served ts under another name is re-flipped to the served file`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val served = assertNotNull(live().generationFile)
+        // The same <ts>, another signature: another file, not newer, so the never-back rule does not hold it.
+        val same = UpdateFixtures.pending(store, sourceTimestampMillis = ts, signature = ByteArray(96) { 7 }).file
+        val name = store.putGeneration(GenerationFileJson.write(same))
+        assertNotEquals(served, name)
+        store.point(Pointer(name, served))
+        sync(server, now = ts + 2 * hour).assert(SyncOutcome.UNCHANGED)
+        assertEquals(served, liveName())
+    }
+
+    @Test
     fun `the re-flip leaves a pointer whose live is newer than the served one and reads, never moving it back`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)

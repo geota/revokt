@@ -168,7 +168,8 @@ internal class SeedLoaderStoreTest : SeedFixture() {
         reset(keepStore = true)
         val bytes = Seed().bytes()
         val load = installed(loader(Counted { bytes }.source).load(ts + hour, unloadable = setOf(live)))
-        assertEquals(0, load.storeFailures, "counted by the chain, not again here")
+        // The chain counts it: CrliteRuntimeStartTest's rotted-live case logs exactly one for the whole start.
+        assertEquals(0, load.storeFailures, "the seed load leaves the chain's failure to the chain")
         assertEquals(
             Pointer(load.name, previous),
             (store.pointer() as StoreRead.Found).value,

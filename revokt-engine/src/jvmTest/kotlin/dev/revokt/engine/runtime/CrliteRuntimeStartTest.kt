@@ -19,6 +19,7 @@ import dev.revokt.engine.update.stored
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -37,12 +38,13 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
     private fun runtime(
         seed: SeedSource?,
         engine: TestEngine = TestEngine(),
+        fetchingSource: Boolean = false,
     ): CrliteRuntime =
         CrliteRuntime(
             seed = seed,
             channel = CrliteChannel.COMPAT,
             crlite = true,
-            fetchingSource = false,
+            fetchingSource = fetchingSource,
             engine = engine,
             verifier = verifier,
             policy = RevoktPolicy.DEFAULT,
@@ -54,6 +56,29 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
     private fun CrliteRuntime.crlite(): DatasetGeneration = assertNotNull(snapshot.snapshot.datasets[Dataset.CRLITE])
 
     private val now = ts + 2 * hour
+
+    /** A delta no other generation names, so its blob rots alone ([rotExtra]). */
+    private val extra =
+        Rec(
+            "d2",
+            true,
+            delta.effectiveTimestamp + 1,
+            "d2.filter.delta",
+            UpdateFixtures.v4(listOf(UpdateFixtures.log(2) to (1L to 2L))),
+            parent = full.id,
+        )
+
+    /** A stored seed generation at [at] that names [extra]: Load's steps 1 and 2 pass, and step 3 fails once rotted. */
+    private fun withExtra(at: Long): String = installed(load(Seed(records = listOf(full, delta, extra), ts = at))).name
+
+    private fun rotExtra() = storage.inner.write(store.blobKey(extra.body.toByteString().sha256()), byteArrayOf(1))
+
+    /** The `<ts>` of the seed's generation, `"<ts>/<last placed record id>"`. */
+    private fun seedId(at: Long = ts) = "$at/${delta.id}"
+
+    private fun counted(): List<String> = recording.messages.map { it.second }.filter { "the start task counted" in it }
+
+    private fun watermark(): Long? = updater(now).watermarkMillis
 
     private fun start(
         runtime: CrliteRuntime,
@@ -92,43 +117,28 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
     fun `a live that does not load falls to previous, which is served when newer than the seed`() {
         val previous = installedAt(ts)
         // The live one names a blob the previous does not, which is then rotted: it fails Load's step 3.
-        val d2 =
-            Rec(
-                "d2",
-                true,
-                delta.effectiveTimestamp + 1,
-                "d2.filter.delta",
-                UpdateFixtures.v4(
-                    listOf(UpdateFixtures.log(2) to (1L to 2L)),
-                ),
-                parent = full.id,
-            )
-        val live = installed(load(Seed(records = listOf(full, delta, d2), ts = ts + hour))).name
-        storage.inner.write(store.blobKey(d2.body.toByteString().sha256()), byteArrayOf(1))
+        val live = withExtra(ts + hour)
+        rotExtra()
         reset(keepStore = true)
+        val pointer = store.pointer()
         val engine = TestEngine()
         val runtime = runtime(source(Seed(ts = ts - hour)), engine)
         start(runtime)
         assertEquals(previous, runtime.crlite().generationFile)
         assertEquals("$ts/${delta.id}", runtime.crlite().generationId)
+        // Served once, and kept: no second seed pass re-adopts it, so current is not rewritten at start.
+        assertEquals(listOf("$ts/${delta.id}"), engine.prepared)
+        assertEquals(pointer, store.pointer())
         assertTrue(live in store.generationNames(), "the unloadable live is never deleted")
         assertFalse(runtime.storeReadUnresolved)
     }
 
     @Test
     fun `a trusted live that passes steps 1 and 2 but fails step 3, with no previous, falls to the seed`() {
-        val d2 =
-            Rec(
-                "d2",
-                true,
-                delta.effectiveTimestamp + 1,
-                "d2.filter.delta",
-                UpdateFixtures.v4(listOf(UpdateFixtures.log(2) to (1L to 2L))),
-                parent = full.id,
-            )
-        val live = installed(load(Seed(records = listOf(full, delta, d2), ts = ts + hour))).name
-        storage.inner.write(store.blobKey(d2.body.toByteString().sha256()), byteArrayOf(1))
+        val live = withExtra(ts + hour)
+        rotExtra()
         reset(keepStore = true)
+        recording.messages.clear()
         val runtime = runtime(source(Seed(ts = ts - hour)))
         start(runtime)
         // Rule (a) skipped the seed on Load's steps 1 and 2; the chain's full load failed, so the seed installs.
@@ -136,6 +146,99 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
         assertEquals(ts - hour, runtime.crlite().sourceTimestampMillis)
         assertTrue(live in store.generationNames(), "the unloadable live is never deleted")
         assertFalse(runtime.storeReadUnresolved)
+        // As coded: the watermark is lowered to the seed's ts (the residual in #336's Risk section).
+        assertEquals(ts - hour, watermark())
+        assertEquals(listOf("the start task counted 1 store failures"), counted(), "the rotted live, once")
+    }
+
+    @Test
+    fun `a previous older than the seed is never decoded, and the seed installs over a live that fails step 3`() {
+        val previous = installedAt(ts - hour)
+        val live = withExtra(ts + hour)
+        assertEquals(Pointer(live, previous), (store.pointer() as StoreRead.Found).value)
+        rotExtra()
+        reset(keepStore = true)
+        val engine = TestEngine()
+        val runtime = runtime(source(Seed()), engine)
+        start(runtime)
+        assertEquals(listOf(seedId()), engine.prepared, "only the seed is decoded")
+        assertEquals(1, runtime.snapshot.snapshot.generationEpoch)
+        assertTrue(runtime.crlite().fromSeed)
+        assertTrue(store.generationNames().containsAll(listOf(live, previous)))
+    }
+
+    @Test
+    fun `an intact live the engine refuses once falls to the seed, its watermark lowered and the live kept`() {
+        val live = installedAt(ts + hour)
+        assertEquals(ts + hour, watermark())
+        reset(keepStore = true)
+        var refused = false
+        val engine = TestEngine()
+        engine.onPrepare = {
+            if (!refused) {
+                refused = true
+                error("refused")
+            }
+        }
+        val runtime = runtime(source(Seed()), engine)
+        start(runtime)
+        assertTrue(runtime.crlite().fromSeed)
+        // As coded and as Firefox imports a dump: the live passed over, the seed's install sets the watermark to its ts.
+        assertEquals(ts, watermark())
+        val seed = assertNotNull(runtime.crlite().generationFile)
+        assertEquals(Pointer(seed, live), (store.pointer() as StoreRead.Found).value)
+    }
+
+    @Test
+    fun `nine newer stored generations the engine refuses are each tried once, then the seed installs`() {
+        val names = (1..9).map { installedAt(ts + it * hour) }
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        val engine = TestEngine()
+        engine.onPrepare = { check(it.generationId == seedId()) { "refused" } }
+        recording.messages.clear()
+        val runtime = runtime(source(Seed()), engine)
+        start(runtime)
+        assertEquals(10, engine.prepared.size)
+        assertEquals(seedId(), engine.prepared.last())
+        assertTrue(runtime.crlite().fromSeed)
+        assertFalse(runtime.storeReadUnresolved)
+        assertTrue(store.generationNames().containsAll(names))
+        assertEquals(listOf("the start task counted 9 store failures"), counted())
+    }
+
+    @Test
+    fun `a stored seed's STALE gate with a fetching source opens only once an attempt follows its install`() {
+        installedAt(ts)
+        val installed = assertNotNull(updater(now).seedInstalledAtMillis)
+        reset(keepStore = true)
+        val closed = runtime(null, fetchingSource = true)
+        start(closed)
+        assertFalse(closed.crlite().staleGateOpen, "no attempt since the seed's install")
+        store.writeUpdater(updater(now).copy(datasetLastAttemptAtMillis = installed), now)
+        reset(keepStore = true)
+        val open = runtime(null, fetchingSource = true)
+        start(open)
+        assertTrue(open.crlite().staleGateOpen, "an attempt at the install's own time")
+    }
+
+    @Test
+    fun `the sole-seed check beside a pointer whose live does not read decodes the seed, and a bad one throws`() {
+        val name = installedAt(ts)
+        storage.inner.delete(store.generationKey(name))
+        reset(keepStore = true)
+        val runtime = runtime(source(Seed().apply { signature = "not base64url!" }))
+        assertFailsWith<IllegalStateException> { runtime.startSeed(soleSeed = true, now) }
+    }
+
+    @Test
+    fun `a seed that does not verify beside a readable store leaves the store served`() {
+        val name = installedAt(ts - hour)
+        reset(keepStore = true)
+        val runtime = runtime(source(Seed().apply { signature = "not base64url!" }))
+        start(runtime)
+        assertEquals(name, runtime.crlite().generationFile)
+        assertEquals(ts - hour, runtime.crlite().sourceTimestampMillis)
     }
 
     @Test

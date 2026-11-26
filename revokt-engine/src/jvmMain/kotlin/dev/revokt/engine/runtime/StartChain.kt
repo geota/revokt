@@ -21,8 +21,9 @@ import dev.revokt.safeLog
 internal enum class StartChain { LIVE, PREVIOUS, NONE }
 
 /**
- * Whether the store's pointer reads and its `live` passes Load's steps 1 and 2 (§4 S bullet, B5): one small file
- * read on the calling thread, no blob. A read that throws is no stored generation here; the seed load then reads the
+ * Whether the store's pointer reads and its `live` passes Load's steps 1 and 2 (§4 S bullet, B5), on the calling
+ * thread: the pointer and the `live` generation file (up to its cap) are read, its records schema-checked and placed;
+ * no blob is read and nothing is decoded. A read that throws is no stored generation here; the seed load then reads the
  * store itself and fails as §6.5 says.
  */
 @Suppress("TooGenericExceptionCaught") // The seed load that follows reports the store's failure.
@@ -38,7 +39,9 @@ internal fun storedLive(store: StoreLayout?): Boolean =
 
 /**
  * Serves the pointer's `live`, else its `previous`, skipping any in [failed] and adding each that fails to it, logged
- * once ([serveStored]); which one it served. A pointer that does not read serves nothing.
+ * once ([serveStored]); which one it served. A pointer that does not read serves nothing. With [notBefore], the seed's
+ * `<ts>`, a generation whose Load step 1 `<ts>` is older is not decoded (spec §6.5 crash recovery): it is left to the
+ * seed, whose next pass installs over it.
  */
 @Suppress("LongParameterList") // The chain's store, clock and failures, and the runtime's engine side.
 internal fun serveChain(
@@ -49,10 +52,16 @@ internal fun serveChain(
     snapshot: SnapshotRef,
     fetchingSource: Boolean,
     logger: RevoktLogger,
+    notBefore: Long? = null,
 ): StartChain {
     val pointer = (store.pointer() as? StoreRead.Found)?.value ?: return StartChain.NONE
-    for ((i, name) in listOfNotNull(pointer.live, pointer.previous).withIndex()) {
-        if (name in failed) continue
+
+    fun older(name: String): Boolean {
+        val ts = notBefore?.let { (store.readGeneration(name) as? StoreRead.Found)?.value?.lastModified }
+        return ts != null && ts < checkNotNull(notBefore)
+    }
+    val candidates = listOfNotNull(pointer.live, pointer.previous).withIndex()
+    for ((i, name) in candidates.filter { it.value !in failed && !older(it.value) }) {
         when (val served = serveStored(name, engine, store, snapshot, fetchingSource, nowMillis(), logger)) {
             is StoredServe.Served -> {
                 logger.safeLog(LogLevel.INFO, "${store.root}: loaded the stored generation ${served.generationId}")

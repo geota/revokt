@@ -146,6 +146,10 @@ public class CrliteRuntime internal constructor(
     @Volatile
     private var seededSynchronously = false
 
+    /** Whether `start()` found the seed's header absent or unreadable: the chain's re-runs then skip the seed. */
+    @Volatile
+    private var seedHeaderFailed = false
+
     /**
      * The anchor snapshot over [delegate] and its index (spec §5.1 "Anchor snapshot"), or null when it cannot be built:
      * an empty, null or throwing `getAcceptedIssuers()`, or no anchor that parses. In 0.2 `start()` then succeeds and
@@ -186,6 +190,7 @@ public class CrliteRuntime internal constructor(
         val header = loader.checkHeader()
         check(header !is SeedLoad.ChannelMismatch) { CHANNEL_MISMATCH }
         if (header != null) {
+            seedHeaderFailed = true
             check(!soleSeed) { unreadable(header) }
             if (header is SeedLoad.Absent) logAbsent()
             return false
@@ -276,7 +281,7 @@ public class CrliteRuntime internal constructor(
             if (storeReadUnresolved) {
                 // The start task's store step again (#147): no sync while it does not resolve, rather than one that
                 // ignores the watermark beside a generation the store may hold (fail closed).
-                storeReadUnresolved = recover({ nowMillis }, withSeed = loader != null)
+                storeReadUnresolved = recover({ nowMillis }, withSeed = loader != null && !seedHeaderFailed)
                 if (storeReadUnresolved) {
                     logger.safeLog(
                         LogLevel.WARN,
@@ -324,7 +329,7 @@ public class CrliteRuntime internal constructor(
      * Returns whether the store read stays unresolved: a store read that threw, or a seed install that failed before
      * `activate`. A fatal error propagates, for the start task to rethrow after `pending` is cleared.
      */
-    @Suppress("TooGenericExceptionCaught", "ReturnCount", "CyclomaticComplexMethod") // One arm per way a step ends.
+    @Suppress("TooGenericExceptionCaught", "ReturnCount") // One arm per way a step ends.
     private fun recover(
         clock: () -> Long,
         withSeed: Boolean,
@@ -333,51 +338,54 @@ public class CrliteRuntime internal constructor(
         val failed = LinkedHashSet<String>()
         // Read once, and only when a step needs it: an empty store with no seed reads no clock here.
         val nowMillis by lazy(clock)
+        var seedFailures = 0
+
+        fun chain(notBefore: Long? = null): StartChain =
+            serveChain(store, { nowMillis }, failed, engine, snapshot, fetchingSource, logger, notBefore)
         return try {
             val seedLoader = loader.takeIf { withSeed }
             if (seedLoader == null) {
-                serveChain(store, { nowMillis }, failed, engine, snapshot, fetchingSource, logger)
+                chain()
                 return false
             }
-            var served = false
-            repeat(MAX_CHAIN_STEPS) {
-                when (val load = seedLoader.load(nowMillis, failed)) {
+            // Each pass that does not end adds a generation to `failed`, so this bound always reaches the seed (#336).
+            repeat(store.generationNames().size + 2) {
+                val load = seedLoader.load(nowMillis, failed)
+                // The last pass counts every fault it read but the chain's own (`unloadable`): each fault once.
+                seedFailures = load.storeFailures
+                when (load) {
                     is SeedLoad.Installed, is SeedLoad.Failed -> {
                         return loaded(load) { nowMillis }
                     }
 
                     is SeedLoad.Absent, is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch -> {
                         loaded(load) { nowMillis }
-                        if (!served) serveChain(store, { nowMillis }, failed, engine, snapshot, fetchingSource, logger)
+                        chain()
                         return false
                     }
 
                     is SeedLoad.Skipped -> {
-                        // Kept beside what the engine already serves (a previous the chain fell back to), or the pointer's.
-                        if (served) return false
-                        when (serveChain(store, { nowMillis }, failed, engine, snapshot, fetchingSource, logger)) {
-                            StartChain.LIVE -> return false
-                            StartChain.PREVIOUS -> served = true
-                            StartChain.NONE -> Unit
-                        }
+                        // A previous not older than the seed is kept as served: no second pass re-adopts it (#336).
+                        if (chain(notBefore = load.seedTimestampMillis) != StartChain.NONE) return false
                     }
 
                     is SeedLoad.Adopted -> {
-                        if (serveChain(store, { nowMillis }, failed, engine, snapshot, fetchingSource, logger) !=
-                            StartChain.NONE
-                        ) {
-                            return false
-                        }
+                        if (chain() != StartChain.NONE) return false
                     }
                 }
             }
-            logger.safeLog(LogLevel.WARN, "${store.root}: the recovery chain did not settle; nothing more is tried")
-            false
+            // Fail closed: a chain that does not settle leaves the read unresolved, retried at the next sync.
+            logger.safeLog(LogLevel.WARN, "${store.root}: the recovery chain did not settle; the read stays unresolved")
+            true
         } catch (t: Throwable) {
             restoreInterrupt(t)
             if (isFatal(t)) throw t
             logger.safeLog(LogLevel.WARN, "${store.root}: a store read of the recovery chain threw", t)
             true
+        } finally {
+            // Spec §11's 0.2 row has no `state`: the start's store failures are logged, as a sync's are ([report]).
+            val counted = failed.size + seedFailures
+            if (counted > 0) logger.safeLog(LogLevel.WARN, "the start task counted $counted store failures")
         }
     }
 
@@ -539,9 +547,6 @@ public class CrliteRuntime internal constructor(
 
     @RevoktInternalApi
     public companion object {
-        /** The recovery chain's bound: each step either ends it or adds a failed generation, so a few suffice. */
-        private const val MAX_CHAIN_STEPS = 8
-
         private val CHANNEL_MISMATCH =
             "${WarningCode.SEED_CHANNEL_MISMATCH}: the seed is for another channel than the configured " +
                 "one; ship the seed of the configured channel (spec §4, §6.5)"
