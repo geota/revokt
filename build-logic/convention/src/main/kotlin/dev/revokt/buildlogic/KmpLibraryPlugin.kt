@@ -122,6 +122,7 @@ class KmpLibraryPlugin : Plugin<Project> {
         tasks.withType<Test>().configureEach {
             systemProperty("junit.jupiter.execution.parallel.enabled", "false")
             configureTestJdk(project, this)
+            configureTestLogging(project, this)
         }
     }
 }

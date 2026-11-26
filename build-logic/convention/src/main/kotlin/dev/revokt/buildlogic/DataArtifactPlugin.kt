@@ -126,7 +126,10 @@ class DataArtifactPlugin : Plugin<Project> {
                 add("ktlint", "ch.qos.logback:logback-classic:1.5.34") { because("keeps logback-classic aligned with logback-core") }
             }
         }
-        tasks.withType<Test>().configureEach { useJUnitPlatform() }
+        tasks.withType<Test>().configureEach {
+            useJUnitPlatform()
+            configureTestLogging(project, this)
+        }
 
         val version: Provider<String> = providers.gradleProperty(DataArtifacts.VERSION_PROPERTY)
         val jarVersion = version.getOrElse(UNSET_VERSION)
