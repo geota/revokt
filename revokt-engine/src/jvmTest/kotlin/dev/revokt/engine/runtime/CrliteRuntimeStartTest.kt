@@ -18,6 +18,7 @@ import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import dev.revokt.engine.update.stored
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -258,6 +259,36 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
         // The adopt healed the pointer before the second pass: its fault counts from the first pass.
         assertEquals(2, runtime.startStoreFailures)
         assertTrue(adoptee in store.generationNames())
+    }
+
+    @Test
+    fun `S12 - a rotted blob the seed also ships is one store failure, not one more for its rewrite`() {
+        val live = installedAt(ts + hour)
+        // The live's delta, which the seed ships too: the chain fails the live at step 3, the seed's install rewrites it.
+        storage.inner.write(store.blobKey(delta.body.toByteString().sha256()), byteArrayOf(1))
+        reset(keepStore = true)
+        val runtime = runtime(source(Seed()))
+        start(runtime)
+        assertTrue(runtime.crlite().fromSeed)
+        assertContentEquals(delta.body, storage.inner.read(store.blobKey(delta.body.toByteString().sha256())))
+        assertEquals(1, runtime.startStoreFailures)
+        assertTrue(live in store.generationNames())
+    }
+
+    @Test
+    fun `a pointed previous failing steps 1 and 2 beside a live that fails is counted once, by the seed read`() {
+        val previous = installedAt(ts + hour)
+        val live = withExtra(ts + 2 * hour)
+        assertEquals(Pointer(live, previous), (store.pointer() as StoreRead.Found).value)
+        val key = store.generationKey(previous)
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
+        rotExtra()
+        reset(keepStore = true)
+        val runtime = runtime(source(Seed()))
+        start(runtime)
+        assertTrue(runtime.crlite().fromSeed)
+        // The seed's read counts the previous; the chain then fails both, and counts only the live.
+        assertEquals(2, runtime.startStoreFailures)
     }
 
     @Test

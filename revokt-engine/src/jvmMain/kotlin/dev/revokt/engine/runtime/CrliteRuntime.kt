@@ -352,8 +352,16 @@ public class CrliteRuntime internal constructor(
         // Read once, and only when a step needs it: an empty store with no seed reads no clock here.
         val nowMillis by lazy(clock)
 
-        fun chain(notBefore: Long? = null): StartChain =
-            serveChain(store, { nowMillis }, failed, engine, snapshot, fetchingSource, logger, notBefore)
+        fun chain(notBefore: Long? = null): StartChain {
+            val before = failed.toSet()
+            return serveChain(store, { nowMillis }, failed, engine, snapshot, fetchingSource, logger, notBefore).also {
+                // A failed generation whose file reads is that one fault: the seed's rewrite of its blobs is not another
+                // (as the sync's heal-install does not count them, #336 review).
+                for (name in failed - before) {
+                    (store.stored(name) as? StoreRead.Found)?.value?.let { faults += it.blobNames }
+                }
+            }
+        }
 
         fun done(unresolved: Boolean): Recovery {
             // A generation the chain failed is a fault of its own unless a seed pass counted it first.
