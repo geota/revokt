@@ -56,6 +56,8 @@ same time, each in its own worktree. The coordinator reviews and merges; you nev
   `user.email`). The coordinator gives you both lines.
 - Push with an explicit refspec only: `git push origin HEAD:refs/heads/<branch>`. Never force-push. Never push to
   `main`.
+- Never pass `--no-verify` to `git commit` or `git push`: the hooks are part of the gates. A work-in-progress
+  checkpoint is an ordinary commit on your branch, with the hooks run, squashed away by the merge.
 
 ## Building and testing
 
