@@ -21,6 +21,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -95,7 +96,7 @@ class JvmStorageTest {
         Files.walk(dir).use { s -> s.forEach { runCatching { Files.setPosixFilePermissions(it, mode) } } }
     }
 
-    private fun recording(dir: Path) = Recording(dir, SystemFsync(posix))
+    private fun recording(dir: Path) = Recording(dir, SystemFsync(StoragePlatform.of(dir.fileSystem)))
 
     @Test
     fun `a write forces its temp file, renames it into place, then fsyncs the key's directory, new key or not`() =
@@ -240,6 +241,8 @@ class JvmStorageTest {
                 Files.delete(temp)
             }
             assertTrue(Files.exists(dir.resolve("s/.lock")), "closing the lock never deletes .lock")
+            // A fresh instance over the existing root reads before it writes or locks.
+            assertContentEquals(byteArrayOf(1), JvmStorage(dir.resolve("s")).read("a/k"))
             store.delete("a/k")
             assertFalse(Files.exists(dir.resolve("s/a")), "a directory left empty is removed")
             assertTrue(Files.isDirectory(dir.resolve("s")), "the root stays")
@@ -518,7 +521,7 @@ class JvmStorageTest {
             assertTrue(JvmStorage.TEMP.matches(probes.single().fileName.toString()))
             assertFalse(Files.exists(probes.single()))
             JvmStorage(root, owner = { 7 }).lock().close()
-            JvmStorage(root, owner = null).lock().close()
+            JvmStorage(root, owner = { null }).lock().close()
             JvmStorage(root).lock().close()
         }
 
@@ -563,11 +566,11 @@ class JvmStorageTest {
     fun `off POSIX no mode is set and no directory is fsynced`() =
         withDir { dir ->
             val fsync = recording(dir)
-            val store = JvmStorage(dir.resolve("s"), posix = false, fsync = fsync, owner = null)
+            val store = JvmStorage(dir.resolve("s"), platform = StoragePlatform.OTHER, fsync = fsync, owner = { null })
             store.write("a/k", byteArrayOf(1))
             store.lock().close()
             assertContentEquals(byteArrayOf(1), store.read("a/k"))
-            SystemFsync(posix = false).directory(dir.resolve("absent"))
+            SystemFsync(StoragePlatform.OTHER).directory(dir.resolve("absent"))
         }
 
     @Test
@@ -642,6 +645,29 @@ class JvmStorageTest {
             }
         assertTrue(thrown.suppressed.single() is InterruptedException)
         assertTrue(Thread.interrupted())
+    }
+
+    @Test
+    fun `the ownership rule - never other-writable, group-writable only under OWNER_OR_GROUP, the process's uid`() {
+        fun mode(text: String) = PosixFilePermissions.fromString(text)
+        val strict = OwnershipCheck.STRICT
+        val group = OwnershipCheck.OWNER_OR_GROUP
+        assertNull(StoragePlatform.ownershipFault(mode("rwx------"), strict, 501, 501))
+        assertNull(StoragePlatform.ownershipFault(mode("rwxrwx---"), group, 501, 501))
+        assertTrue(StoragePlatform.ownershipFault(mode("rwxrwx---"), strict, 501, 501)!!.startsWith("group-writable"))
+        assertTrue(
+            StoragePlatform.ownershipFault(mode("rwx---rwx"), group, 501, 501)!!.startsWith("writable by others"),
+        )
+        assertTrue(
+            StoragePlatform.ownershipFault(mode("rwx----w-"), strict, 501, 501)!!.startsWith("writable by others"),
+        )
+        assertEquals("owned by uid 0, not 501", StoragePlatform.ownershipFault(mode("rwx------"), strict, 501, 0))
+        assertEquals("owned by uid 0, not 501", StoragePlatform.ownershipFault(mode("rwxr-xr-x"), group, 501, 0))
+        assertNull(StoragePlatform.OTHER.ownershipFault(Path.of("anywhere"), strict) { 1 })
+        assertEquals(
+            if (posix) StoragePlatform.POSIX else StoragePlatform.OTHER,
+            StoragePlatform.of(Path.of(".").fileSystem),
+        )
     }
 
     @Test

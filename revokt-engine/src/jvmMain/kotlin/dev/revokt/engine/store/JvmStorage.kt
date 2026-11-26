@@ -7,6 +7,8 @@ package dev.revokt.engine.store
 
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktStorage
+import okio.buffer
+import okio.source
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -24,8 +26,6 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
-import java.nio.file.attribute.PosixFilePermission
-import java.nio.file.attribute.PosixFilePermissions
 import java.security.SecureRandom
 
 /** Which group bits `JvmStorage`'s ownership check tolerates on the store's root (spec §3); growable. */
@@ -74,12 +74,11 @@ internal interface Fsync {
 }
 
 /**
- * `FileChannel.force(true)` for a file, and for a directory a read-only channel forced the same way, which the JDK
- * maps to fsync(2). Where the file system is not POSIX (Windows), a directory cannot be opened as a channel and its
- * fsync is skipped (spec §3).
+ * `FileChannel.force(true)` for a file, and for a directory [StoragePlatform.syncDirectory]: a read-only channel forced
+ * the same way, which the JDK maps to fsync(2), and nothing where the file system is not POSIX (spec §3).
  */
 internal class SystemFsync(
-    private val posix: Boolean,
+    private val platform: StoragePlatform,
 ) : Fsync {
     override fun file(
         path: Path,
@@ -89,8 +88,7 @@ internal class SystemFsync(
     }
 
     override fun directory(dir: Path) {
-        if (!posix) return
-        FileChannel.open(dir, StandardOpenOption.READ).use { it.force(true) }
+        platform.syncDirectory(dir)
     }
 }
 
@@ -112,18 +110,18 @@ internal class SystemFsync(
  *   is durable before a pointer names it.
  * - [identity] is the absolute normalised root, computed with no I/O: the constructor touches no file.
  *
- * Reads run concurrently; [write], [delete] and [lock]'s sweep run alone. [fsync], [posix], [owner] and the lock timings
- * are test seams.
+ * Reads run concurrently; [write], [delete] and [lock]'s sweep run alone. [platform], [fsync], [owner] and the lock
+ * timings are test seams.
  */
 internal class JvmStorage(
     dir: Path,
     private val ownership: OwnershipCheck = OwnershipCheck.STRICT,
-    private val posix: Boolean = dir.fileSystem.supportedFileAttributeViews().contains("posix"),
-    private val fsync: Fsync = SystemFsync(posix),
-    private val owner: ((Path) -> Any?)? = defaultOwner(dir),
+    private val platform: StoragePlatform = StoragePlatform.of(dir.fileSystem),
+    private val fsync: Fsync = SystemFsync(platform),
+    private val owner: (Path) -> Any? = defaultOwner(dir),
     private val lockWaitMillis: Long = LOCK_WAIT_MILLIS,
     private val lockPollMillis: Long = LOCK_POLL_MILLIS,
-    private val moveRetryMillis: Long = if (posix) 0 else MOVE_RETRY_MILLIS,
+    private val moveRetryMillis: Long = platform.moveRetryMillis,
 ) : RevoktStorage {
     private val root: Path = dir.toAbsolutePath().normalize()
     private val guard = ReadWriteGuard()
@@ -164,7 +162,7 @@ internal class JvmStorage(
             createBelow(base, parent)
             val temp = parent.resolve(tempName(target.fileName.toString()))
             try {
-                openFile(temp, setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)).use {
+                platform.open(temp, setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)).use {
                     val buffer = ByteBuffer.wrap(bytes)
                     while (buffer.hasRemaining()) it.write(buffer)
                     fsync.file(temp, it)
@@ -223,7 +221,7 @@ internal class JvmStorage(
         var held: Held? = null
         try {
             val open =
-                openFile(
+                platform.open(
                     lockFile,
                     setOf(StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
                 )
@@ -327,31 +325,14 @@ internal class JvmStorage(
         }
     }
 
-    /**
-     * On POSIX, [base] must be owned by the process's uid, read from a probe file this call creates under a temp name
-     * with `CREATE_NEW`, which follows no link (the JVM has no getuid), and must not be other-writable, nor
-     * group-writable under [OwnershipCheck.STRICT]. Never chmods. Skipped where the file system is not POSIX.
-     */
+    /** On POSIX, [base] must be the process's and owner-only writable ([StoragePlatform.ownershipFault]); never chmods. */
     private fun checkOwnership(base: Path) {
-        if (!posix) return
-        val mode = Files.getPosixFilePermissions(base)
-        if (PosixFilePermission.OTHERS_WRITE in mode ||
-            (ownership == OwnershipCheck.STRICT && PosixFilePermission.GROUP_WRITE in mode)
-        ) {
-            throw StoreUnreadableException(
-                "the store at $root is writable by others: ${PosixFilePermissions.toString(mode)}",
-            )
-        }
-        val uid = owner ?: return
-        val probe = base.resolve(tempName("probe"))
-        Files.createFile(probe, FILE_MODE)
-        try {
-            val mine = uid(probe)
-            val theirs = uid(base)
-            if (mine != theirs) throw StoreUnreadableException("the store at $root is owned by uid $theirs, not $mine")
-        } finally {
-            deleteQuietly(probe)
-        }
+        platform
+            .ownershipFault(
+                base,
+                ownership,
+                owner,
+            )?.let { throw StoreUnreadableException("the store at $root is $it") }
     }
 
     /**
@@ -363,7 +344,7 @@ internal class JvmStorage(
         val parent = checkNotNull(dir.parent) { "no parent for $dir" }
         ensureDirectory(parent)
         try {
-            createDirectory(dir)
+            platform.createDirectory(dir)
         } catch (e: FileAlreadyExistsException) {
             if (Files.isDirectory(dir)) return
             throw e
@@ -381,12 +362,8 @@ internal class JvmStorage(
     ) {
         if (dir == base || Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return
         createBelow(base, dir.parent)
-        createDirectory(dir)
+        platform.createDirectory(dir)
         fsync.directory(dir.parent)
-    }
-
-    private fun createDirectory(dir: Path) {
-        if (posix) Files.createDirectory(dir, DIRECTORY_MODE) else Files.createDirectory(dir)
     }
 
     /** Visits every directory under [base], [base] first, with [onDirectory] and every regular file with [onFile]. */
@@ -418,12 +395,6 @@ internal class JvmStorage(
         )
     }
 
-    /** Opens [path] with [options], created rw------- on POSIX. */
-    private fun openFile(
-        path: Path,
-        options: Set<OpenOption>,
-    ): FileChannel = if (posix) FileChannel.open(path, options, FILE_MODE) else FileChannel.open(path, options)
-
     internal companion object {
         private fun keyOf(relative: Path): String? {
             val key = relative.joinToString("/")
@@ -444,40 +415,46 @@ internal class JvmStorage(
         ): Kind {
             val segments = name.split('/')
             var path = base
-            for ((i, segment) in segments.withIndex()) {
+            for (segment in segments.subList(0, segments.size - 1)) {
                 path = path.resolve(segment)
-                val attrs =
-                    try {
-                        Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-                    } catch (_: NoSuchFileException) {
-                        return Kind.ABSENT
-                    }
-                val last = i == segments.lastIndex
-                when {
-                    attrs.isDirectory -> if (last) return Kind.DIRECTORY
-                    attrs.isRegularFile -> return if (last) Kind.FILE else Kind.UNDER_FILE
-                    else -> throw IOException("'$name' is not a key here: $path is a link or a special file")
-                }
+                val attrs = attributes(path) ?: return Kind.ABSENT
+                if (attrs.isRegularFile) return Kind.UNDER_FILE
+                if (!attrs.isDirectory) throw notAKey(name, path)
             }
-            error("unreachable: a key has at least one segment")
+            path = path.resolve(segments.last())
+            val attrs = attributes(path) ?: return Kind.ABSENT
+            return when {
+                attrs.isDirectory -> Kind.DIRECTORY
+                attrs.isRegularFile -> Kind.FILE
+                else -> throw notAKey(name, path)
+            }
         }
+
+        /** [path]'s own attributes, a link's rather than its target's; null when nothing is there. */
+        private fun attributes(path: Path): BasicFileAttributes? =
+            try {
+                Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+            } catch (_: NoSuchFileException) {
+                null
+            }
+
+        private fun notAKey(
+            name: String,
+            path: Path,
+        ) = IOException("'$name' is not a key here: $path is a link or a special file")
 
         private fun resolve(
             base: Path,
             name: String,
         ): Path = name.split('/').fold(base, Path::resolve)
 
-        /** Reads [path] whole, through a channel opened with no link followed. */
+        /** Reads [path] whole, opened with no link followed. */
         private fun readFile(path: Path): ByteArray =
-            Files.newByteChannel(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { channel ->
-                val size = channel.size()
-                check(size <= Int.MAX_VALUE) { "$path is too large" }
-                val buffer = ByteBuffer.allocate(size.toInt())
-                while (buffer.hasRemaining() && channel.read(buffer) >= 0) {
-                    // Read until full or end of file.
-                }
-                buffer.array().copyOf(buffer.position())
-            }
+            Files
+                .newInputStream(path, LinkOption.NOFOLLOW_LINKS)
+                .source()
+                .buffer()
+                .use { it.readByteArray() }
 
         const val LOCK_WAIT_MILLIS: Long = 1_000
         const val LOCK_POLL_MILLIS: Long = 100
@@ -489,8 +466,6 @@ internal class JvmStorage(
         /** A temp file's name: a key segment, `~` and 32 lowercase hex digits. */
         val TEMP: Regex = Regex("[A-Za-z0-9._-]{1,${StoreKeys.MAX_SEGMENT}}~[0-9a-f]{$TEMP_HEX}")
 
-        private val FILE_MODE = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
-        private val DIRECTORY_MODE = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))
         private val random = SecureRandom()
 
         /** The real `.lock` paths a lock() in this process holds or is taking; guarded by itself. */
@@ -505,12 +480,12 @@ internal class JvmStorage(
             return segment + "~" + bytes.joinToString("") { "%02x".format(it) }
         }
 
-        /** `unix:uid` where the file system has the `unix` view; null (no uid check) elsewhere. */
-        fun defaultOwner(dir: Path): ((Path) -> Any?)? =
+        /** `unix:uid` where the file system has the `unix` view; elsewhere no uid, so every owner compares equal. */
+        fun defaultOwner(dir: Path): (Path) -> Any? =
             if (dir.fileSystem.supportedFileAttributeViews().contains("unix")) {
                 { p: Path -> Files.getAttribute(p, "unix:uid") }
             } else {
-                null
+                { _: Path -> null }
             }
 
         /**
