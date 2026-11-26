@@ -117,7 +117,8 @@ internal class StoreLoadTest : InstallFixture() {
         assertEquals(StoreRead.Found(Pointer(g3.name, g2.name)), store.pointer())
         assertEquals(true, g3.prunable)
         storage.inner.write("crlite/compat/blobs/${"c".repeat(64)}", byteArrayOf(1))
-        storage.inner.write("crlite/compat/store.version", "1".encodeToByteArray())
+        // A key outside blobs/ and generations/, which prune never lists for deletion.
+        storage.inner.write("crlite/compat/meta.json", "1".encodeToByteArray())
         storage.deletes.clear()
         assertEquals(3, prune(g3.name))
         assertEquals(0, pruneFailures)
@@ -126,7 +127,7 @@ internal class StoreLoadTest : InstallFixture() {
         val keys = storage.names().map { it.removePrefix("crlite/compat/") }.toSet()
         val kept = listOf(fullRecord, deltaRecord).map { "blobs/" + blob(UpdateFixtures.bodies.getValue(it.filename)) }
         val expected =
-            setOf("current", "updater.json", "store.version", "generations/${g2.name}", "generations/${g3.name}")
+            setOf("current", "updater.json", "meta.json", "generations/${g2.name}", "generations/${g3.name}")
         assertEquals(expected + kept, keys)
     }
 

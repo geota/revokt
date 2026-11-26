@@ -497,19 +497,46 @@ class JvmStorageTest {
         }
 
     @Test
-    fun `identity is the absolute normalised root and building one touches no file`() =
+    fun `building one touches no file, and identity creates the root and is one key through any path to it`() =
         withDir { dir ->
             val store = JvmStorage(dir.resolve("a/../s"))
-            assertEquals(
-                dir
-                    .resolve("s")
-                    .toAbsolutePath()
-                    .normalize()
-                    .toString(),
-                store.identity(),
-            )
             assertFalse(Files.exists(dir.resolve("s")))
             assertFalse(Files.exists(dir.resolve("a")))
+            val key = store.identity()
+            assertTrue(Files.isDirectory(dir.resolve("s")))
+            assertEquals(key, JvmStorage(dir.resolve("s")).identity())
+            if (posix) {
+                assertEquals(
+                    key,
+                    JvmStorage(Files.createSymbolicLink(dir.resolve("link"), dir.resolve("s"))).identity(),
+                )
+            }
+            assertFalse(key == JvmStorage(dir.resolve("t")).identity(), "another root, another key")
+            // A root that cannot be created is STORE_UNREADABLE.
+            Files.write(dir.resolve("file"), byteArrayOf(1))
+            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("file/s")).identity() }
+        }
+
+    @Test
+    fun `isEmpty sees only the lock and temp files as nothing`() =
+        withDir { dir ->
+            val root = dir.resolve("s")
+            assertTrue(JvmStorage(root).isEmpty(), "an absent root")
+            JvmStorage(root).lock().close()
+            Files.write(root.resolve("current~" + "0".repeat(32)), byteArrayOf(1))
+            assertTrue(JvmStorage(root).isEmpty(), "the lock and a temp file")
+            for (entry in listOf("notes.txt", "README", "store.version", "x~1")) {
+                Files.write(root.resolve(entry), byteArrayOf(1))
+                assertFalse(JvmStorage(root).isEmpty(), entry)
+                Files.delete(root.resolve(entry))
+            }
+            // A directory, even an empty one or one named as a temp file, is an entry.
+            for (entry in listOf("crlite", "current~" + "1".repeat(32))) {
+                Files.createDirectory(root.resolve(entry))
+                assertFalse(JvmStorage(root).isEmpty(), entry)
+                Files.delete(root.resolve(entry))
+            }
+            assertTrue(JvmStorage(root).isEmpty())
         }
 
     @Test

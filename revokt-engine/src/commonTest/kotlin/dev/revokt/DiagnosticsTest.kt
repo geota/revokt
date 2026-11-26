@@ -75,7 +75,9 @@ class DiagnosticsTest {
                 "FORMAT_UNSUPPORTED, NO_FETCHING_SOURCE, IO_DISPATCHER_UNCONFINED, SEED_PAST_REJECT_THRESHOLD, " +
                 "UNVERIFIED_REJECTS_WITH_CLASSICAL_GAP, RULE_FLIPPED_THIS_MINOR"
         assertEquals(diagnostics.split(", "), DiagnosticCode.entries.map { it.name })
-        val warnings = "CAP_NEAR_LIMIT, SEED_UNREADABLE, SEED_CHANNEL_MISMATCH"
+        val warnings =
+            "CAP_NEAR_LIMIT, SEED_UNREADABLE, SEED_CHANNEL_MISMATCH, STORE_UNREADABLE, STORE_MIGRATED, " +
+                "STORE_NEWER_LAYOUT, STORE_LOCKED"
         assertEquals(warnings.split(", "), WarningCode.entries.map { it.name })
         // Spec §4: NOT_STARTED is the unevaluated counter, never a diagnostic.
         assertTrue(DiagnosticCode.entries.none { it.name == "NOT_STARTED" })
