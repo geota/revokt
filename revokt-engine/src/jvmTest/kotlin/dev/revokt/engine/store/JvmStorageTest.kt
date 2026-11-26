@@ -420,6 +420,31 @@ class JvmStorageTest {
         }
 
     @Test
+    fun `ownership on POSIX - a probe that cannot be deleted is unreadable, never a silent leftover`() =
+        withDir { dir ->
+            Assumptions.assumeTrue(posix, "POSIX permissions")
+            val root = dir.resolve("s")
+            // The owner seam swaps the probe for a non-empty directory of its name, once, so its delete throws.
+            var swapped = false
+            val owner = { p: Path ->
+                if (!swapped && JvmStorage.TEMP.matches(p.fileName.toString())) {
+                    swapped = true
+                    Files.delete(p)
+                    Files.createDirectories(p.resolve("x"))
+                }
+                501
+            }
+            val thrown = assertFailsWith<StoreUnreadableException> { JvmStorage(root, owner = owner).lock() }
+            assertTrue(thrown.cause is java.nio.file.DirectoryNotEmptyException, "cause ${thrown.cause}")
+            // Released: a normal open goes on to succeed once the leftover is gone.
+            Files
+                .walk(root)
+                .use { w -> w.filter { JvmStorage.TEMP.matches(it.fileName.toString()) }.toList() }
+                .forEach { it.toFile().deleteRecursively() }
+            JvmStorage(root, lockWaitMillis = 0).lock().close()
+        }
+
+    @Test
     fun `ownership on POSIX - a root with the wrong mode never gets a probe written`() =
         withDir { dir ->
             Assumptions.assumeTrue(posix, "POSIX permissions")
