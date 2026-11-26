@@ -1437,14 +1437,15 @@ malformed `updater.json` reads as absent. Each store fault is counted once, wher
   under `generations/` whose last segment is 64 lowercase hex characters goes through Load's step 1, and a file that
   fails it counts one store failure, unless the same start already counted it (a `live` or `previous` the chain failed
   to load is passed over, never counted twice). The candidates are the files whose `<ts>` is newer than the seed's and not older
-  than the generation the engine serves; from the newest down, ties broken by name, each runs Load's steps 2 to 4 and,
+  than the generation the engine serves, that generation itself apart (it stays served: the `previous` the chain fell
+  back to); from the newest down, ties broken by name, each runs Load's steps 2 to 4 and,
   when its `signerLeafSha256` is the SHA-256 of the seed's verified leaf, its `signature` must verify over the
   canonical serialisation of its `records` (a generation signed by another leaf is trusted at the OS level, as every
   stored generation is). The first that passes is adopted: `updater.json` is written from the record read (an absent or
   malformed one replaced) with its watermark raised to max(the stored watermark, the adopted `<ts>`), then `current` is
   flipped to `{live: <it>}`; nothing else is written, and the seed is not installed. Each candidate that fails counts
   one store failure; a file not newer than the seed is not counted. With none to adopt, a generation the engine serves
-  that is newer than the seed is kept and the seed skipped. Otherwise the seed installs, reusing every stored blob that
+  that is newer than the seed (or, for the `previous` the chain fell back to, not older) is kept and the seed skipped. Otherwise the seed installs, reusing every stored blob that
   re-hashes, and its flip heals the pointer (`SeedAdoptTest`, `StoreModelTest`'s I10).
 - A seed's install writes `updater.json` in its own write with `seedInstalledAtMillis` and the watermark: beside a
   loaded generation (a trustworthy pointer, or one the engine serves) the higher of the stored watermark and the seed's

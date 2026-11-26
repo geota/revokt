@@ -57,6 +57,8 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
 
     private val now = ts + 2 * hour
 
+    private val minute = 60_000L
+
     /** A delta no other generation names, so its blob rots alone ([rotExtra]). */
     private val extra =
         Rec(
@@ -205,6 +207,75 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
         assertFalse(runtime.storeReadUnresolved)
         assertTrue(store.generationNames().containsAll(names))
         assertEquals(listOf("the start task counted 9 store failures"), counted())
+    }
+
+    @Test
+    fun `S9 - after the previous fallback a newer unpointed generation that loads is still adopted`() {
+        val previous = installedAt(ts + hour)
+        // Newer than the previous, named by no pointer once current names live and previous, and it loads.
+        val newer = installedAt(ts + 90 * minute)
+        val live = withExtra(ts + 2 * hour)
+        store.point(Pointer(live, previous))
+        rotExtra()
+        reset(keepStore = true)
+        val engine = TestEngine()
+        val runtime = runtime(source(Seed()), engine)
+        start(runtime)
+        assertEquals(newer, runtime.crlite().generationFile, "rule (b) adopts the newest that loads")
+        // The chain serves the previous first (live -> previous), then the seed's second pass adopts the newer one.
+        assertEquals(listOf(seedId(ts + hour), seedId(ts + 90 * minute)), engine.prepared)
+        assertEquals(1, runtime.startStoreFailures, "the rotted live")
+    }
+
+    @Test
+    fun `a previous at exactly the seed's ts is kept as served after the live fails, decoded once`() {
+        val previous = installedAt(ts)
+        val live = withExtra(ts + hour)
+        assertEquals(Pointer(live, previous), (store.pointer() as StoreRead.Found).value)
+        rotExtra()
+        reset(keepStore = true)
+        val pointer = store.pointer()
+        val engine = TestEngine()
+        val runtime = runtime(source(Seed()), engine)
+        start(runtime)
+        assertEquals(previous, runtime.crlite().generationFile)
+        // Not older than the seed, so kept, as rule (a) keeps it: the seed does not install over it.
+        assertEquals(1, engine.prepared.size)
+        assertEquals(1, runtime.snapshot.snapshot.generationEpoch)
+        assertEquals(pointer, store.pointer())
+    }
+
+    @Test
+    fun `S10 - a malformed pointer and an adopted generation the engine refuses are two store failures`() {
+        val adoptee = installedAt(ts + hour)
+        storage.inner.write(pointerKey, "{".encodeToByteArray())
+        reset(keepStore = true)
+        val engine = TestEngine()
+        engine.onPrepare = { check(it.generationId == seedId()) { "refused" } }
+        val runtime = runtime(source(Seed()), engine)
+        start(runtime)
+        assertTrue(runtime.crlite().fromSeed)
+        // The adopt healed the pointer before the second pass: its fault counts from the first pass.
+        assertEquals(2, runtime.startStoreFailures)
+        assertTrue(adoptee in store.generationNames())
+    }
+
+    @Test
+    fun `a fault every pass reads again is counted once across the start's passes`() {
+        installedAt(ts + hour)
+        // A generation file that fails Load's step 1: each pass's adopt scan reads it again.
+        val damaged = installedAt(ts + 2 * hour)
+        val key = store.generationKey(damaged)
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
+        storage.inner.write(pointerKey, "{".encodeToByteArray())
+        reset(keepStore = true)
+        val engine = TestEngine()
+        engine.onPrepare = { check(it.generationId == seedId()) { "refused" } }
+        val runtime = runtime(source(Seed()), engine)
+        start(runtime)
+        assertTrue(runtime.crlite().fromSeed)
+        // The malformed pointer, the damaged file, and the adopted generation the engine refused: once each.
+        assertEquals(3, runtime.startStoreFailures)
     }
 
     @Test

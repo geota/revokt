@@ -44,6 +44,7 @@ import dev.revokt.engine.update.SnapshotRef
 import dev.revokt.engine.update.StoredServe
 import dev.revokt.engine.update.SyncRun
 import dev.revokt.engine.update.serveStored
+import dev.revokt.engine.update.servedFile
 import dev.revokt.engine.update.stored
 import dev.revokt.engine.walker.AnchorSnapshots
 import dev.revokt.engine.walker.DecideInputs
@@ -146,6 +147,14 @@ public class CrliteRuntime internal constructor(
     @Volatile
     private var seededSynchronously = false
 
+    /**
+     * The store failures the last run of the start task's store step counted, each once (spec §5.1, §6.5): its value
+     * for `storeFailures`, which 0.2 only logs (§11's 0.2 row has no `state`).
+     */
+    @Volatile
+    internal var startStoreFailures: Int = 0
+        private set
+
     /** Whether `start()` found the seed's header absent or unreadable: the chain's re-runs then skip the seed. */
     @Volatile
     private var seedHeaderFailed = false
@@ -228,7 +237,7 @@ public class CrliteRuntime internal constructor(
     ): Long? {
         var fatal: Throwable? = null
         try {
-            if (!seededSynchronously) storeReadUnresolved = recover(nowMillis, withSeed = loadSeed)
+            if (!seededSynchronously) storeReadUnresolved = recover(nowMillis, withSeed = loadSeed).unresolved
         } catch (t: Throwable) {
             restoreInterrupt(t)
             if (isFatal(t)) fatal = t
@@ -281,7 +290,7 @@ public class CrliteRuntime internal constructor(
             if (storeReadUnresolved) {
                 // The start task's store step again (#147): no sync while it does not resolve, rather than one that
                 // ignores the watermark beside a generation the store may hold (fail closed).
-                storeReadUnresolved = recover({ nowMillis }, withSeed = loader != null && !seedHeaderFailed)
+                storeReadUnresolved = recover({ nowMillis }, withSeed = loader != null && !seedHeaderFailed).unresolved
                 if (storeReadUnresolved) {
                     logger.safeLog(
                         LogLevel.WARN,
@@ -326,68 +335,87 @@ public class CrliteRuntime internal constructor(
      * `unloadable`, so rule (b) applies to it. A stored generation older than the seed is not decoded here (B4).
      * Without a seed ([withSeed] false, or none configured), the chain is the pointer's `live`, then its `previous`.
      *
-     * Returns whether the store read stays unresolved: a store read that threw, or a seed install that failed before
-     * `activate`. A fatal error propagates, for the start task to rethrow after `pending` is cleared.
+     * Returns whether the store read stays unresolved (a store read that threw, or a seed install that failed before
+     * `activate`), and the start's store failures: the chain's, and each pass's new ones through one fault set
+     * ([SeedLoader.load]'s `faults`), so each fault is counted once across passes. A fatal error propagates, for the
+     * start task to rethrow after `pending` is cleared.
      */
-    @Suppress("TooGenericExceptionCaught", "ReturnCount") // One arm per way a step ends.
+    @Suppress("TooGenericExceptionCaught", "ReturnCount", "CyclomaticComplexMethod") // One arm per way a step ends.
     private fun recover(
         clock: () -> Long,
         withSeed: Boolean,
-    ): Boolean {
-        val store = store ?: return false
+    ): Recovery {
+        val store = store ?: return Recovery(unresolved = false, storeFailures = 0)
         val failed = LinkedHashSet<String>()
+        val faults = HashSet<String>()
+        var counted = 0
         // Read once, and only when a step needs it: an empty store with no seed reads no clock here.
         val nowMillis by lazy(clock)
-        var seedFailures = 0
 
         fun chain(notBefore: Long? = null): StartChain =
             serveChain(store, { nowMillis }, failed, engine, snapshot, fetchingSource, logger, notBefore)
+
+        fun done(unresolved: Boolean): Recovery {
+            // A generation the chain failed is a fault of its own unless a seed pass counted it first.
+            counted += failed.count { faults.add(it) }
+            // Noted for [startStoreFailures], and logged: §11's 0.2 row has no `state`.
+            startStoreFailures = counted
+            if (counted > 0) logger.safeLog(LogLevel.WARN, "the start task counted $counted store failures")
+            return Recovery(unresolved, counted)
+        }
         return try {
-            val seedLoader = loader.takeIf { withSeed }
-            if (seedLoader == null) {
-                chain()
-                return false
-            }
-            // Each pass that does not end adds a generation to `failed`, so this bound always reaches the seed (#336).
+            val seedLoader = loader.takeIf { withSeed } ?: return chain().let { done(unresolved = false) }
+            // The generation the chain fell back to, served: no seed pass adopts it again (#336), so it decodes once.
+            var served: String? = null
+            // At start nothing is served yet, so each pass that does not end fails a generation: this bound suffices.
             repeat(store.generationNames().size + 2) {
-                val load = seedLoader.load(nowMillis, failed)
-                // The last pass counts every fault it read but the chain's own (`unloadable`): each fault once.
-                seedFailures = load.storeFailures
+                val load = seedLoader.load(nowMillis, failed, setOfNotNull(served), faults)
+                counted += load.storeFailures
                 when (load) {
                     is SeedLoad.Installed, is SeedLoad.Failed -> {
-                        return loaded(load) { nowMillis }
+                        return done(loaded(load) { nowMillis })
                     }
 
                     is SeedLoad.Absent, is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch -> {
                         loaded(load) { nowMillis }
-                        chain()
-                        return false
+                        if (served == null) chain()
+                        return done(unresolved = false)
                     }
 
                     is SeedLoad.Skipped -> {
-                        // A previous not older than the seed is kept as served: no second pass re-adopts it (#336).
-                        if (chain(notBefore = load.seedTimestampMillis) != StartChain.NONE) return false
+                        // Kept beside the previous the chain fell back to, when nothing newer is adoptable.
+                        if (served != null) return done(unresolved = false)
+                        when (chain(notBefore = load.seedTimestampMillis)) {
+                            StartChain.LIVE -> return done(unresolved = false)
+
+                            // Rule (b) still runs for the live that did not load: a newer stored generation wins.
+                            StartChain.PREVIOUS -> served = snapshot.servedFile(store.dataset)
+
+                            StartChain.NONE -> Unit
+                        }
                     }
 
                     is SeedLoad.Adopted -> {
-                        if (chain() != StartChain.NONE) return false
+                        if (chain() != StartChain.NONE) return done(unresolved = false)
                     }
                 }
             }
             // Fail closed: a chain that does not settle leaves the read unresolved, retried at the next sync.
             logger.safeLog(LogLevel.WARN, "${store.root}: the recovery chain did not settle; the read stays unresolved")
-            true
+            done(unresolved = true)
         } catch (t: Throwable) {
             restoreInterrupt(t)
             if (isFatal(t)) throw t
             logger.safeLog(LogLevel.WARN, "${store.root}: a store read of the recovery chain threw", t)
-            true
-        } finally {
-            // Spec §11's 0.2 row has no `state`: the start's store failures are logged, as a sync's are ([report]).
-            val counted = failed.size + seedFailures
-            if (counted > 0) logger.safeLog(LogLevel.WARN, "the start task counted $counted store failures")
+            done(unresolved = true)
         }
     }
+
+    /** How [recover] ended: whether the store read stays unresolved, and the store failures it counted, each once. */
+    private class Recovery(
+        val unresolved: Boolean,
+        val storeFailures: Int,
+    )
 
     /** Logs [run]'s result (spec §11's 0.2 row: no `state` yet): `FAILED` is the sync's own log line. */
     private fun report(run: SyncRun) {

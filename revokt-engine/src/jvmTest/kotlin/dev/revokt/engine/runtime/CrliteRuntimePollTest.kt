@@ -287,6 +287,26 @@ internal class CrliteRuntimePollTest : SeedFixture() {
     }
 
     @Test
+    fun `a sync after a start that found the seed's header absent re-runs the chain but not the seed`() {
+        installedAt(ts)
+        reset(keepStore = true)
+        var reads = 0
+        // The start task's read and its first sync's re-read throw; the next sync's reads.
+        storage.failRead = { name -> if (name == pointerKey && reads++ < 2) IOException("the first reads") else null }
+        val absent = Counted { null }
+        val runtime = runtime(absent.source, Server(ts = ts))
+        val now = ts + hour
+        val load = runtime.startSeed(soleSeed = false, nowMillis = now)
+        assertFalse(load, "the header is absent")
+        val opened = absent.opens
+        runtime.startTask(load) { now }
+        assertTrue(runtime.storeReadUnresolved)
+        runtime.sync(now + hour)
+        assertFalse(runtime.storeReadUnresolved)
+        assertEquals(opened, absent.opens, "the seed is not opened again")
+    }
+
+    @Test
     fun `a restart under a persisted backoff after a seed installed opens the STALE gate on SKIPPED BACKOFF`() {
         // #287's comment item 2, decided as §8 states (B10): a backoffed first sync is a completed attempt.
         store.writeUpdater(

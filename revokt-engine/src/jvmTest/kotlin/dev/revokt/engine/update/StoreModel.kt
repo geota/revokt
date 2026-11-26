@@ -804,11 +804,27 @@ internal class StoreModel : SeedFixture() {
                 return name?.let { ExpectedStart.Stored(it, adopted = false) } ?: ExpectedStart.None
             }
             val failed = HashSet<String>()
-            pointer?.let { ruleA(it, seedTs, failed) }?.let { return it }
+            val pointed = pointer?.let { ruleA(it, seedTs, failed) }
+            if (pointed is ExpectedStart.Stored && failed.isNotEmpty()) {
+                // The previous the chain fell back to: rule (b) still runs for the live that did not load, its floor
+                // that previous, which stays served when nothing newer loads (#336).
+                val at = checkNotNull((truth.stored(pointed.name) as? StoreRead.Found)?.value).timestampMillis
+                return adopt(seedTs, failed + pointed.name, maxOf(seedTs + 1, at)) ?: pointed
+            }
+            return pointed ?: adopt(seedTs, failed, seedTs + 1) ?: ExpectedStart.Seed(noneLoaded = true)
+        }
+
+        /** Rule (b)'s adopt for a seed at [seedTs]: the newest adoptable generation from [floor] that loads, none of [failed]. */
+        private fun adopt(
+            seedTs: Long,
+            failed: Set<String>,
+            floor: Long,
+        ): ExpectedStart? {
+            val passed = failed.toMutableSet()
             while (true) {
-                val adoptee = expectedAdoptee(seedTs, failed) ?: return ExpectedStart.Seed(noneLoaded = true)
+                val adoptee = expectedAdoptee(seedTs, passed, floor) ?: return null
                 if (serves(adoptee)) return ExpectedStart.Stored(adoptee, adopted = true)
-                failed += adoptee
+                passed += adoptee
             }
         }
 
@@ -819,9 +835,10 @@ internal class StoreModel : SeedFixture() {
         private fun expectedAdoptee(
             seedTs: Long,
             failed: Set<String> = emptySet(),
+            atLeast: Long? = null,
         ): String? {
             val floor =
-                maxOf(
+                atLeast ?: maxOf(
                     seedTs + 1,
                     served()?.let { (truth.stored(it) as? StoreRead.Found)?.value?.timestampMillis } ?: Long.MIN_VALUE,
                 )

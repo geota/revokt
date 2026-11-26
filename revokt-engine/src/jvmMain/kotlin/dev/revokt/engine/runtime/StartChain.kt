@@ -60,8 +60,9 @@ internal fun serveChain(
         val ts = notBefore?.let { (store.readGeneration(name) as? StoreRead.Found)?.value?.lastModified }
         return ts != null && ts < checkNotNull(notBefore)
     }
-    val candidates = listOfNotNull(pointer.live, pointer.previous).withIndex()
-    for ((i, name) in candidates.filter { it.value !in failed && !older(it.value) }) {
+    for ((i, name) in listOfNotNull(pointer.live, pointer.previous).withIndex()) {
+        // Each step-1 read only when that candidate is next: a live that serves never reads its previous (B16).
+        if (name in failed || older(name)) continue
         when (val served = serveStored(name, engine, store, snapshot, fetchingSource, nowMillis(), logger)) {
             is StoredServe.Served -> {
                 logger.safeLog(LogLevel.INFO, "${store.root}: loaded the stored generation ${served.generationId}")
