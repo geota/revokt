@@ -5,34 +5,63 @@
 
 package dev.revokt.engine.seed
 
+import dev.revokt.Dataset
+import dev.revokt.Freshness
 import dev.revokt.RevoktInternalApi
-import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.generation.DatasetGeneration
+import dev.revokt.engine.generation.GenerationSnapshot
+import dev.revokt.engine.store.GenerationFile
+import dev.revokt.engine.store.GenerationFileJson
 import dev.revokt.engine.store.Pointer
-import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
-import dev.revokt.engine.update.UpdateFixtures.TestEngine
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The seed-load rule's rule (b) (lead, 2026-11-16 and 2026-11-19, on #138): with no trusted pointer, the seed adopts
- * the newest complete generation newer than it, and not older than the one the engine serves, whose stored files
- * re-verify, and installs otherwise. Split from [SeedLoaderStoreTest].
+ * The seed-load rule's rule (b) over generation files (spec §6.5, the maintainer's Q2 answer): with no trustworthy
+ * pointer, the adopt scan adopts the newest stored generation newer than the seed, and not older than the one the
+ * engine serves, that re-verifies, and the seed installs otherwise. Split from [SeedLoaderStoreTest].
  */
 internal class SeedAdoptTest : SeedFixture() {
+    /** [name]'s generation file with [signature], under [leaf], at [ts]: another file, under another name. */
+    private fun variant(
+        name: String,
+        signature: ByteString = stored(name).file.signature,
+        leaf: ByteString = stored(name).file.signerLeafSha256,
+        ts: Long = stored(name).timestampMillis,
+    ): String {
+        val f = stored(name).file
+        val file = GenerationFile(f.dataset, f.channel, f.freshness, f.seedFormat, signature, leaf, f.records, ts)
+        return store.putGeneration(GenerationFileJson.write(file))
+    }
+
+    private fun serve(at: Long) {
+        snapshot.publish(
+            GenerationSnapshot(
+                1,
+                mapOf(
+                    Dataset.CRLITE to
+                        DatasetGeneration("$at/x", Freshness.RECORD_LAST_MODIFIED, false, at, null, false, true),
+                ),
+                null,
+            ),
+        )
+    }
+
     @Test
-    fun `with no trusted pointer a newer complete generation that re-verifies is adopted, nothing else written`() {
+    fun `with no trustworthy pointer a newer generation that re-verifies is adopted, nothing else written`() {
         val newer = installedAt(ts + hour)
         storage.inner.write(pointerKey, "garbage".encodeToByteArray())
         reset(keepStore = true)
         val before = contents()
         val adopted = assertIs<SeedLoad.Adopted>(load(Seed()))
-        assertEquals(newer to ts + hour, adopted.directory to adopted.timestampMillis)
+        assertEquals(newer to ts + hour, adopted.name to adopted.timestampMillis)
         assertEquals(1, adopted.storeFailures, "the malformed pointer, counted where it is found")
         assertEquals(Pointer(newer, null), (store.pointer() as StoreRead.Found).value)
         val written = setOf(pointerKey, updaterKey)
@@ -44,233 +73,138 @@ internal class SeedAdoptTest : SeedFixture() {
     }
 
     @Test
-    fun `with no trusted pointer and nothing to adopt, a newer generation live in the engine is kept`() {
-        snapshot.publish(
-            dev.revokt.engine.generation.GenerationSnapshot(
-                1,
-                mapOf(
-                    dev.revokt.Dataset.CRLITE to
-                        dev.revokt.engine.generation.DatasetGeneration(
-                            "${ts + hour}/x",
-                            dev.revokt.Freshness.RECORD_LAST_MODIFIED,
-                            false,
-                            ts + hour,
-                            null,
-                            false,
-                            true,
-                        ),
-                ),
-                null,
-            ),
-        )
-        val before = contents()
-        assertEquals(ts + hour, assertIs<SeedLoad.Skipped>(load(Seed())).storedTimestampMillis)
-        assertEquals(before, contents())
+    fun `a pointer whose live does not read is no trustworthy pointer, and the scan adopts`() {
+        val newer = installedAt(ts + hour)
+        store.point(Pointer("e".repeat(64), null))
+        reset(keepStore = true)
+        val adopted = assertIs<SeedLoad.Adopted>(load(Seed()))
+        assertEquals(newer, adopted.name)
+        assertEquals(1, adopted.storeFailures, "the absent live, once")
+    }
+
+    @Test
+    fun `with no trustworthy pointer and nothing to adopt, a newer generation live in the engine is kept`() {
+        serve(ts + hour)
+        val skipped = assertIs<SeedLoad.Skipped>(load(Seed()))
+        assertEquals(ts to ts + hour, skipped.seedTimestampMillis to skipped.storedTimestampMillis)
+        assertTrue(store.generationNames().isEmpty())
     }
 
     @Test
     fun `adopt writes updater_json from the record read, its watermark raised to the adopted timestamp`() {
         val newer = installedAt(ts + hour)
-        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
-        storage.inner.write(updaterKey, "{not json".encodeToByteArray())
+        storage.inner.delete(pointerKey)
+        store.writeUpdater(UpdaterRecord(watermarkMillis = ts - day, seedInstalledAtMillis = 5), ts)
         reset(keepStore = true)
         assertIs<SeedLoad.Adopted>(load(Seed()))
-        assertEquals(ts + hour, updater().watermarkMillis, "a malformed updater.json is replaced")
-        storage.inner.delete(updaterKey)
-        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+        assertEquals(UpdaterRecord(watermarkMillis = ts + hour, seedInstalledAtMillis = 5), updater())
+        // Never lowered: a stored watermark above the adopted <ts> stays.
+        store.writeUpdater(UpdaterRecord(watermarkMillis = ts + day), ts)
+        storage.inner.delete(pointerKey)
         assertIs<SeedLoad.Adopted>(load(Seed()))
-        assertEquals(ts + hour, updater().watermarkMillis, "an absent one is written")
-        store.writeUpdater(UpdaterRecord(watermarkMillis = ts + day, seedInstalledAtMillis = 5), ts)
-        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
-        assertIs<SeedLoad.Adopted>(load(Seed()))
-        assertEquals(
-            UpdaterRecord(watermarkMillis = ts + day, seedInstalledAtMillis = 5),
-            updater(),
-            "the rest is kept",
-        )
-        assertTrue(store.meta(newer) != null)
-    }
-
-    @Test
-    fun `the seed's own rotted directory is never rewritten while the engine serves it`() {
-        val own = installedAt(ts)
-        storage.inner.write("$root/$own/${delta.filename}", ByteArray(3))
-        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
-        val before = contents()
-        failed(load(Seed()), "does not re-hash")
-        assertEquals(before, contents(), "the served directory is byte-identical")
+        assertEquals(ts + day, updater().watermarkMillis)
+        assertEquals(Pointer(newer, null), (store.pointer() as StoreRead.Found).value)
     }
 
     @Test
     fun `adopt writes updater_json before the flip, so a failed flip is an honest failure and adopts again`() {
         val newer = installedAt(ts + hour)
-        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
-        store.writeUpdater(UpdaterRecord(watermarkMillis = 1), ts)
+        storage.inner.delete(pointerKey)
         reset(keepStore = true)
         storage.failWrite = { if (it == pointerKey) IOException("flip") else null }
         failed(load(Seed()), "flip")
-        assertEquals(ts + hour, updater().watermarkMillis, "the watermark is raised; adopt never reads it")
-        assertIs<StoreRead.Malformed>(store.pointer())
+        assertEquals(ts + hour, updater().watermarkMillis)
         storage.failWrite = { null }
-        assertEquals(newer, assertIs<SeedLoad.Adopted>(load(Seed())).directory)
+        assertEquals(newer, assertIs<SeedLoad.Adopted>(load(Seed())).name)
     }
 
     @Test
-    fun `adopt never rolls back below the generation the engine serves`() {
-        // The engine serves ts + 2 h, whose delta has rotted on disk; ts + 1 h re-verifies, and the pointer is malformed.
-        installedAt(ts + hour)
-        val serving = installedAt(ts + 2 * hour)
-        storage.inner.write("$root/$serving/${delta.filename}", ByteArray(3))
-        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
-        val before = contents()
-        val skipped = assertIs<SeedLoad.Skipped>(load(Seed()))
-        assertEquals(ts + 2 * hour, skipped.storedTimestampMillis)
-        assertEquals(2, skipped.storeFailures, "the malformed pointer and the rejected directory")
-        assertEquals(before, contents())
-    }
-
-    @Test
-    fun `adopt takes a generation not older than the one the engine serves`() {
-        installedAt(ts + hour)
-        val serving = snapshot.snapshot
-        val newer = installedAt(ts + 2 * hour)
-        snapshot.publish(serving)
-        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
-        assertEquals(newer, assertIs<SeedLoad.Adopted>(load(Seed())).directory)
-    }
-
-    @Test
-    fun `a newer generation whose records json no longer verifies under the seed's leaf is not adopted`() {
+    fun `adopt never rolls back below the generation the engine serves, and takes one not older`() {
         val newer = installedAt(ts + hour)
-        val recordsKey = "$root/$newer/records.json"
-        val records = checkNotNull(storage.inner.read(recordsKey)).decodeToString()
-        storage.inner.write(recordsKey, records.replace("octet-stream", "octet-streax").encodeToByteArray())
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        serve(ts + 2 * hour)
+        assertIs<SeedLoad.Skipped>(load(Seed()))
+        assertEquals(StoreRead.Absent, store.pointer())
+        serve(ts + hour)
+        assertEquals(newer, assertIs<SeedLoad.Adopted>(load(Seed())).name)
+    }
+
+    @Test
+    fun `a newer generation whose signature no longer verifies under the seed's leaf is not adopted, counted, kept`() {
+        val newer = installedAt(ts + hour)
+        val forged = variant(newer, signature = ByteArray(96) { 1 }.toByteString())
+        storage.inner.delete(store.generationKey(newer))
         storage.inner.delete(pointerKey)
         reset(keepStore = true)
         val load = installed(load(Seed()))
-        assertEquals(1, load.storeFailures, "the rejected directory")
-        assertTrue(store.meta(newer) != null)
-    }
-
-    @Test
-    fun `a newer generation whose meta json timestamps disagree with its records is not adopted`() {
-        val newer = installedAt(ts + hour)
-        val meta = checkNotNull(store.meta(newer))
-        val signed = checkNotNull(meta.signed).copy(changesetTimestampMillis = ts + 2 * hour)
-        storage.inner.write(
-            "$root/$newer/meta.json",
-            dev.revokt.engine.store.MetaJson
-                .write(meta.copy(signed = signed)),
-        )
-        storage.inner.delete(pointerKey)
-        reset(keepStore = true)
-        assertEquals(1, installed(load(Seed())).storeFailures, "the rejected directory")
-    }
-
-    @Test
-    fun `a newer generation whose index names fewer files than its records place is not adopted`() {
-        val newer = installedAt(ts + hour)
-        val fullOnly =
-            (
-                dev.revokt.engine.update.buildIndex(
-                    listOf(dev.revokt.engine.update.UpdateFixtures.fullRecord),
-                    dev.revokt.CrliteChannel.COMPAT,
-                ) { full.body } as dev.revokt.engine.update.IndexBuild.Built
-            ).index
-        storage.inner.write("$root/$newer/index.bin", fullOnly)
-        storage.inner.delete(pointerKey)
-        reset(keepStore = true)
-        assertEquals(1, installed(load(Seed())).storeFailures, "the rejected directory")
-    }
-
-    @Test
-    fun `a newer generation of another leaf whose records and changeset timestamps both moved is not adopted`() {
-        val newer = installedAt(ts + hour)
-        val recordsKey = "$root/$newer/records.json"
-        val records = checkNotNull(storage.inner.read(recordsKey)).decodeToString()
-        val moved = records.replace("\"last_modified\":\"${ts + hour}\"}", "\"last_modified\":\"${ts + 2 * hour}\"}")
-        check(moved != records)
-        storage.inner.write(recordsKey, moved.encodeToByteArray())
-        val meta = checkNotNull(store.meta(newer))
-        val other =
-            checkNotNull(meta.signed).copy(
-                changesetTimestampMillis = ts + 2 * hour,
-                signerLeafSha256 = okio.ByteString.of(*ByteArray(32) { 7 }),
-            )
-        storage.inner.write(
-            "$root/$newer/meta.json",
-            dev.revokt.engine.store.MetaJson
-                .write(meta.copy(signed = other)),
-        )
-        storage.inner.delete(pointerKey)
-        reset(keepStore = true)
-        assertEquals(1, installed(load(Seed())).storeFailures, "the rejected directory")
+        assertEquals(1, load.storeFailures)
+        assertIs<StoreRead.Found<*>>(store.readGeneration(forged), "kept")
     }
 
     @Test
     fun `a newer generation signed by another leaf is adopted on its stored hashes alone`() {
         val newer = installedAt(ts + hour)
-        val meta = checkNotNull(store.meta(newer))
-        val other = checkNotNull(meta.signed).copy(signerLeafSha256 = okio.ByteString.of(*ByteArray(32) { 7 }))
-        storage.inner.write(
-            "$root/$newer/meta.json",
-            dev.revokt.engine.store.MetaJson
-                .write(meta.copy(signed = other)),
-        )
+        val other =
+            variant(newer, signature = ByteArray(96) { 1 }.toByteString(), leaf = ByteArray(32) { 2 }.toByteString())
+        storage.inner.delete(store.generationKey(newer))
         storage.inner.delete(pointerKey)
         reset(keepStore = true)
-        assertEquals(newer, assertIs<SeedLoad.Adopted>(load(Seed())).directory)
+        assertEquals(other, assertIs<SeedLoad.Adopted>(load(Seed())).name)
     }
 
     @Test
-    fun `a trusted pointer whose live is the engine's and the seed's directory with an unreadable meta counts once`() {
-        val own = installedAt(ts)
-        storage.inner.write("$root/$own/meta.json", "{}".encodeToByteArray())
-        val before = contents()
-        val failed = failed(load(Seed()), "is the engine's live generation")
-        assertEquals(1, failed.storeFailures, "the unreadable pointed meta.json, counted once")
-        assertEquals(before, contents())
-    }
-
-    @Test
-    fun `a trusted older pointed live generation is kept when the engine serves one newer than the seed`() {
-        val older = installedAt(ts - hour)
-        installedAt(ts + hour)
-        store.point(Pointer(older, null))
-        val before = contents()
-        assertEquals(ts + hour, assertIs<SeedLoad.Skipped>(load(Seed())).storedTimestampMillis)
-        assertEquals(before, contents())
-    }
-
-    @Test
-    fun `a newer complete generation that does not re-verify is not adopted, and is kept while the seed installs`() {
+    fun `a damaged newer file, or one whose blob is gone, is not adopted, counted once, and kept`() {
         val newer = installedAt(ts + hour)
-        storage.inner.write("$root/$newer/${delta.filename}", ByteArray(3))
+        val key = store.generationKey(newer)
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
         storage.inner.delete(pointerKey)
         reset(keepStore = true)
-        val kept = files(newer)
-        val load = installed(load(Seed()))
-        assertEquals(1, load.storeFailures, "the rejected directory, counted once")
-        assertEquals(Pointer(load.directory, null), (store.pointer() as StoreRead.Found).value)
-        assertEquals(kept, files(newer), "never pruned in a rule (b) load")
+        assertEquals(1, installed(load(Seed())).storeFailures, "a file that fails step 1")
+        assertTrue(key in storage.inner.names())
+        // A newer generation that reads but whose blob is missing fails step 3.
+        reset()
+        val n2 = installedAt(ts + hour)
+        val blob = stored(n2).blobNames.first()
+        storage.inner.delete(pointerKey)
+        storage.inner.delete("$root/blobs/$blob")
+        reset(keepStore = true)
+        assertEquals(1, installed(load(Seed())).storeFailures, "a candidate that fails step 3")
+        assertIs<StoreRead.Found<*>>(store.readGeneration(n2))
     }
 
     @Test
-    fun `a sync's directory of the seed's own generation, beside a malformed pointer, installs as it stands`() {
-        val own = installedAt(ts)
-        val meta = checkNotNull(store.meta(own))
-        storage.inner.write(
-            "$root/$own/meta.json",
-            dev.revokt.engine.store.MetaJson
-                .write(meta.copy(freshness = dev.revokt.Freshness.RECORD_LAST_MODIFIED)),
-        )
-        storage.inner.write(pointerKey, "garbage".encodeToByteArray())
+    fun `a newer generation whose blob holds another filter's valid bytes is not adopted`() {
+        val newer = installedAt(ts + hour)
+        val (a, b) = stored(newer).blobNames.toList()
+        storage.inner.write("$root/blobs/$b", checkNotNull(storage.inner.read("$root/blobs/$a")))
+        storage.inner.delete(pointerKey)
         reset(keepStore = true)
-        val kept = files(own)
-        val load = installed(load(Seed()))
-        assertEquals(own, load.directory)
-        assertEquals(Pointer(own, null), (store.pointer() as StoreRead.Found).value)
-        assertEquals(kept, files(own))
-        assertTrue(live().fromSeed)
+        assertEquals(1, installed(load(Seed())).storeFailures, "the rejected candidate, once")
+        assertIs<StoreRead.Found<*>>(store.readGeneration(newer))
+    }
+
+    @Test
+    fun `the newest candidate wins, ties broken by name, and an older valid file is not counted`() {
+        val older = installedAt(ts - hour)
+        val newer = installedAt(ts + hour)
+        val newest = installedAt(ts + 2 * hour)
+        val twin =
+            variant(newest, signature = ByteArray(96) { 1 }.toByteString(), leaf = ByteArray(32) { 3 }.toByteString())
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        val adopted = assertIs<SeedLoad.Adopted>(load(Seed()))
+        assertEquals(minOf(newest, twin), adopted.name, "two files of one <ts>: the first by name")
+        assertEquals(0, adopted.storeFailures)
+        assertTrue(older != newer)
+    }
+
+    @Test
+    fun `beside a trustworthy pointer nothing is scanned, so no damaged file is counted`() {
+        installedAt(ts + hour)
+        storage.inner.write(store.generationKey("f".repeat(64)), "{}".encodeToByteArray())
+        reset(keepStore = true)
+        val skipped = assertIs<SeedLoad.Skipped>(load(Seed()))
+        assertEquals(0, skipped.storeFailures)
     }
 }

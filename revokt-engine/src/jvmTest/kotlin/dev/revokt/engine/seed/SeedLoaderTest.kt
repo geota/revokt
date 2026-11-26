@@ -38,7 +38,6 @@ import kotlin.test.assertTrue
  */
 internal class SeedLoaderTest : SeedFixture() {
     private val generationId = "$ts/${delta.id}"
-    private val directory = GenerationNames.directory(ts, generationId)
 
     @Test
     fun `a seed installs as a SIGNED generation from the seed, with the watermark and seedInstalledAtMillis`() {
@@ -46,10 +45,8 @@ internal class SeedLoaderTest : SeedFixture() {
         val engine = TestEngine()
         val seed = Seed()
         val load = installed(load(seed, now, engine))
-        assertEquals(
-            listOf(generationId, directory, ts),
-            listOf(load.generationId, load.directory, load.timestampMillis),
-        )
+        assertEquals(listOf(generationId, ts), listOf(load.generationId, load.timestampMillis))
+        assertEquals(load.name, live().generationFile)
         assertEquals(emptyList(), load.warnings)
         assertEquals(generationId, engine.live)
         val live = live()
@@ -58,20 +55,18 @@ internal class SeedLoaderTest : SeedFixture() {
         assertEquals(Freshness.SEED_SIGNED_TIME, live.freshness)
         assertEquals(ts, live.sourceTimestampMillis)
         assertFalse(live.staleGateOpen, "a fetching source: the gate opens once a sync attempt completes")
-        assertEquals(directory, liveDirectory())
+        assertEquals(load.name, liveName())
         val record = updater(now)
         assertEquals(ts, record.watermarkMillis)
         assertEquals(now, record.seedInstalledAtMillis)
         assertNull(record.datasetLastAttemptAtMillis)
-        val meta = checkNotNull(store.meta(directory))
-        assertEquals(
-            listOf(Freshness.SEED_SIGNED_TIME, FilterFormat.V3),
-            listOf(meta.freshness, meta.format),
-        )
-        assertEquals(collection, meta.collection)
-        assertEquals(ts, meta.signed.changesetTimestampMillis)
-        assertContentEquals(seed.payload(), store.file(directory, StoreLayout.RECORDS))
-        assertContentEquals(seed.index(), store.file(directory, StoreLayout.INDEX))
+        val stored = stored(load.name)
+        assertEquals(Freshness.SEED_SIGNED_TIME, stored.file.freshness)
+        assertEquals(1, stored.file.seedFormat)
+        assertEquals(FilterFormat.V3, loaded(load.name).format)
+        assertEquals(ts, stored.timestampMillis)
+        assertContentEquals(seed.payload(), stored.file.payload)
+        assertContentEquals(seed.index(), loaded(load.name).files.bytes(StoreLayout.INDEX))
     }
 
     @Test
@@ -225,11 +220,13 @@ internal class SeedLoaderTest : SeedFixture() {
         val name64 = "b".repeat(56) + ".delta.x"
         val fullLong = Rec(full.id, false, full.effectiveTimestamp, name33, full.body)
         val deltaLong = Rec(delta.id, true, delta.effectiveTimestamp, name64, delta.body, parent = full.id)
-        installed(load(Seed(records = listOf(fullLong, deltaLong))))
-        val meta = checkNotNull(store.meta(directory))
-        assertEquals(setOf(GenerationNames.derive(name33)), meta.blobs.keys)
+        val name = installed(load(Seed(records = listOf(fullLong, deltaLong)))).name
+        val files = loaded(name).files
+        assertEquals(
+            setOf(StoreLayout.INDEX, GenerationNames.derive(name33), GenerationNames.derive(name64)),
+            files.names,
+        )
         assertEquals(32, GenerationNames.derive(name64).length)
-        assertTrue(store.file(directory, GenerationNames.derive(name64)) != null)
     }
 
     @Test
@@ -310,8 +307,7 @@ internal class SeedLoaderTest : SeedFixture() {
         )
         val v4 = ClubcardCorpus.file(UpdateFixtures.DELTA_PATH + ".v4").readBytes()
         val mixed = Rec(delta.id, true, delta.effectiveTimestamp, delta.filename, v4, parent = full.id)
-        installed(load(Seed(records = listOf(full, mixed))))
-        assertEquals(FilterFormat.V3, checkNotNull(store.meta(directory)).format)
+        assertEquals(FilterFormat.V3, loaded(installed(load(Seed(records = listOf(full, mixed)))).name).format)
         reset()
         assertUnreadable(
             load(Seed(records = listOf(full, mixed)).apply { header = header + ("filterFormat" to "V4") }),
@@ -461,10 +457,10 @@ internal class SeedLoaderTest : SeedFixture() {
     fun `a newer seed replaces an older stored SIGNED generation, which becomes previous`() {
         val older = Seed(ts = ts - hour)
         installed(load(older))
-        val oldDirectory = checkNotNull(liveDirectory())
-        installed(load(Seed()))
+        val oldName = checkNotNull(liveName())
+        val newName = installed(load(Seed())).name
         val pointer = assertIs<StoreRead.Found<dev.revokt.engine.store.Pointer>>(store.pointer()).value
-        assertEquals(directory to oldDirectory, pointer.live to pointer.previous)
+        assertEquals(newName to oldName, pointer.live to pointer.previous)
     }
 
     @Test
@@ -488,12 +484,15 @@ internal class SeedLoaderTest : SeedFixture() {
     }
 
     @Test
-    fun `a failed prepare or activate is unreadable, counted, and leaves nothing installed`() {
+    fun `a failed prepare or activate is unreadable, counted, installs nothing and deletes nothing`() {
         val throwing = TestEngine().apply { onPrepare = { error("corrupt") } }
-        val prepare = assertUnreadable(load(Seed(), engine = throwing), "the install failed")
+        val prepare = assertUnreadable(load(Seed(), engine = throwing), "the install failed", written = true)
         assertEquals(1, prepare.storeFailures)
         val activate = TestEngine().apply { onActivate = { error("activate") } }
-        assertEquals(1, assertUnreadable(load(Seed(), engine = activate), "ENGINE_FAILED").storeFailures)
+        assertEquals(
+            1,
+            assertUnreadable(load(Seed(), engine = activate), "ENGINE_FAILED", written = true).storeFailures,
+        )
     }
 
     @Test

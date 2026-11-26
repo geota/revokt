@@ -16,6 +16,7 @@ import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.update.UpdateFixtures.log
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
@@ -61,23 +62,23 @@ internal class CrliteHealTest : CrliteSyncFixture() {
     fun `a heal flip keeps what the damaged pointer named, and the next install over a valid pointer prunes it`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val g1 = GenerationNames.directory(ts, "$ts/${delta.id}")
+        val g1 = checkNotNull(liveName())
         // r256's S3: the live member still reads, but an unknown member makes the pointer malformed (#246).
         storage.inner.write("crlite/compat/current", "{\"live\":\"$g1\",\"x\":1}".encodeToByteArray())
         assertEquals(StoreRead.Malformed, store.pointer())
         freshLoader()
         serve(server, ts2)
         sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
-        val g2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
+        val g2 = checkNotNull(liveName())
         // A fresh loader has no previous beside a malformed pointer, and the heal does not prune: g1 stays.
         assertEquals(StoreRead.Found(Pointer(g2, null)), store.pointer())
-        assertNotNull(store.readGeneration(g1), "the heal flip pruned g1")
+        assertIs<StoreRead.Found<*>>(store.readGeneration(g1), "the heal flip pruned g1")
         // The next install flips over a valid pointer, so it prunes what that pointer no longer names.
         serve(server, ts3)
         sync(server, now = ts3 + hour).assert(SyncOutcome.INSTALLED)
-        val g3 = GenerationNames.directory(ts3, "$ts3/${delta2.id}")
+        val g3 = checkNotNull(liveName())
         assertEquals(StoreRead.Found(Pointer(g3, g2)), store.pointer())
-        assertNull(store.readGeneration(g1), "the install after the heal prunes g1")
-        assertNotNull(store.readGeneration(g2))
+        assertEquals(StoreRead.Absent, store.readGeneration(g1), "the install after the heal prunes g1")
+        assertIs<StoreRead.Found<*>>(store.readGeneration(g2))
     }
 }

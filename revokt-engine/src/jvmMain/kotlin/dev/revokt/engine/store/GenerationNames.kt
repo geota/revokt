@@ -7,8 +7,8 @@ import dev.revokt.engine.c2sp.C2spIndex
 import okio.ByteString.Companion.encodeUtf8
 
 /**
- * The names spec §6.5 derives: a file's name in a generation (revision 48) and a generation's directory name. Both are
- * store key segments.
+ * The names spec §6.5 derives: a file's name in a generation, and the shape of a content-addressed key's name (a
+ * blob's or a generation file's SHA-256). Both are store key segments.
  */
 internal object GenerationNames {
     /** §6.3's longest source filename. */
@@ -19,9 +19,6 @@ internal object GenerationNames {
 
     private const val PREFIX = 15
     private const val HASH_HEX = 16
-    private const val TIMESTAMP_DIGITS = 13
-    private const val MAX_TIMESTAMP = 9_999_999_999_999L
-    private const val DIRECTORY_LENGTH = 4 + TIMESTAMP_DIGITS + 1 + HASH_HEX
     private const val SHA256_HEX = 64
 
     /**
@@ -41,27 +38,6 @@ internal object GenerationNames {
         if (C2spIndex.isFilename(filename)) return filename
         return filename.substring(0, PREFIX) + "-" + hash16(filename)
     }
-
-    /**
-     * A generation's directory name: `gen-`, [sourceTimestampMillis] zero-padded to 13 digits (so lexical order is
-     * chronological), `-` and the first 16 lowercase hex characters of the SHA-256 of [generationId]'s UTF-8 bytes.
-     */
-    fun directory(
-        sourceTimestampMillis: Long,
-        generationId: String,
-    ): String {
-        require(sourceTimestampMillis in 0..MAX_TIMESTAMP) { "the timestamp $sourceTimestampMillis is not 13 digits" }
-        require(generationId.isNotEmpty()) { "generationId is empty" }
-        return "gen-" + sourceTimestampMillis.toString().padStart(TIMESTAMP_DIGITS, '0') + "-" + hash16(generationId)
-    }
-
-    /** Whether [name] has the shape [directory] produces. */
-    fun isDirectory(name: String): Boolean =
-        name.length == DIRECTORY_LENGTH &&
-            name.startsWith("gen-") &&
-            name[4 + TIMESTAMP_DIGITS] == '-' &&
-            (4 until 4 + TIMESTAMP_DIGITS).all { name[it] in '0'..'9' } &&
-            (DIRECTORY_LENGTH - HASH_HEX until DIRECTORY_LENGTH).all { isLowerHex(name[it]) }
 
     /** Whether [hex] is exactly 64 lowercase hex characters, a SHA-256 as a blob key segment. */
     fun isSha256Hex(hex: String): Boolean = hex.length == SHA256_HEX && hex.all(::isLowerHex)

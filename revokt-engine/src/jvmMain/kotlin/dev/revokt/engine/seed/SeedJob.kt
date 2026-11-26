@@ -197,7 +197,6 @@ internal class SeedJob(
                     null,
                 ),
             )
-        val collection = source.collection(Dataset.CRLITE)?.let { source.bucket + "/" + it }
         val loader =
             SeedLoader(
                 SeedSource.of { ByteArrayInputStream(bytes) },
@@ -205,7 +204,7 @@ internal class SeedJob(
                 engine,
                 snapshot,
                 verifier,
-                SeedPolicy(source.pinnedRootSpkis, collection, fetchingSource = true),
+                SeedPolicy(source.pinnedRootSpkis, fetchingSource = true),
                 logger,
             )
         return when (val load = loader.load(build.timestampMillis)) {

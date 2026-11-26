@@ -39,10 +39,8 @@ import dev.revokt.engine.seed.parse.SeedArchive
 import dev.revokt.engine.seed.parse.SeedFormatException
 import dev.revokt.engine.seed.parse.SeedHeader
 import dev.revokt.engine.store.BlobWrite
-import dev.revokt.engine.store.GenerationMeta
-import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.GenerationFile
 import dev.revokt.engine.store.Pointer
-import dev.revokt.engine.store.SignedMeta
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
@@ -53,11 +51,13 @@ import dev.revokt.engine.update.PlacedFilter
 import dev.revokt.engine.update.Placement
 import dev.revokt.engine.update.Publication
 import dev.revokt.engine.update.SnapshotRef
+import dev.revokt.engine.update.StoredGeneration
 import dev.revokt.engine.update.buildIndex
 import dev.revokt.engine.update.install
-import dev.revokt.engine.update.liveDirectory
+import dev.revokt.engine.update.loadFiles
+import dev.revokt.engine.update.place
 import dev.revokt.engine.update.placeFilters
-import dev.revokt.engine.update.pruneAfter
+import dev.revokt.engine.update.stored
 import dev.revokt.engine.update.toFilterFormat
 import dev.revokt.engine.update.toFilterRecord
 import dev.revokt.engine.verify.ContentSignature
@@ -127,19 +127,19 @@ internal sealed interface SeedLoad {
     }
 
     /**
-     * Rule (b) of the seed-load rule (lead, 2026-11-16): no pointer could be trusted, and a complete directory newer
-     * than the seed, whose stored files re-verify, was adopted instead: the pointer now names [directory] (at
-     * [timestampMillis]) and the seed was not installed. The loader loads that generation, as it loads a pointed one.
-     * Nothing was deleted.
+     * Rule (b) of the seed-load rule (spec §6.5): no pointer could be trusted, and a stored generation newer than the
+     * seed, which re-verifies, was adopted instead: the pointer now names the generation file [name] (at
+     * [timestampMillis]) alone and the seed was not installed. The loader loads that generation, as it loads a pointed
+     * one. Nothing was deleted.
      */
     class Adopted(
-        val directory: String,
+        val name: String,
         val timestampMillis: Long,
         override val storeFailures: Int,
     ) : SeedLoad {
         override val warnings: List<RevoktWarning> get() = emptyList()
 
-        override fun toString(): String = "Adopted($directory at $timestampMillis)"
+        override fun toString(): String = "Adopted($name at $timestampMillis)"
     }
 
     /**
@@ -150,7 +150,7 @@ internal sealed interface SeedLoad {
      * timestamp ahead of the local clock installs like any other (§7.1: no rule on signed data reads local time).
      */
     class Installed(
-        val directory: String,
+        val name: String,
         val generationId: String,
         val generationEpoch: Long,
         val timestampMillis: Long,
@@ -163,7 +163,7 @@ internal sealed interface SeedLoad {
 
     /**
      * A store read or write failed ([failure] `STORE_FAILED`), or the install failed after `activate` ([activated]: the
-     * engine holds the seed and its directory stays, as [InstallResult.Failed] says). A store read that throws fails
+     * engine holds the seed, as [InstallResult.Failed] says). A store read that throws fails
      * the load before anything is written, so `updater.json` is never written from a record that was not read (#209).
      */
     class Failed(
@@ -181,12 +181,10 @@ internal sealed interface SeedLoad {
 
 /**
  * The inputs of a [SeedLoader] beside its collaborators: the pinned content-signature root SPKI SHA-256s the x5u chain
- * must end in, the Remote Settings [collection] `meta.json` records, and whether a fetching source is configured, which
- * opens the §8 `STALE` gate at once when none is.
+ * must end in, and whether a fetching source is configured, which opens the §8 `STALE` gate at once when none is.
  */
 internal class SeedPolicy(
     val pinnedRootSpkis: Set<ByteString>,
-    val collection: String?,
     val fetchingSource: Boolean,
 )
 
@@ -241,20 +239,18 @@ internal class SeedLoader(
      *    each placed record's signed size within `MAX_FILTER_BYTES`, and the `attachments/` entries exactly the placed
      *    records' filenames ([SeedArchive.attachments]), before any attachment is inflated.
      * 6. The store read (a throw is [SeedLoad.Failed], nothing written; a malformed `updater.json` reads as absent),
-     *    then the seed-load rule ([decide]): (a) a trusted pointer whose `live` is not older skips the seed; (b) with no
-     *    trusted pointer, a newer complete directory that re-verifies is adopted, else the seed installs.
+     *    then the seed-load rule ([decide]): (a) a trustworthy pointer whose `live` is not older skips the seed; (b)
+     *    with none, the adopt scan adopts a newer stored generation that re-verifies, else the seed installs.
      * 7. Each attachment inflated under `min(signed size, MAX_FILTER_BYTES)`, checked against its signed size and
-     *    SHA-256, and written as the sync writes it: a full as its blob, a delta staged in the generation directory.
+     *    SHA-256, and written as the sync writes it, as its blob (a stored one that re-hashes is reused).
      * 8. `index.bin` rebuilt ([buildIndex]) and byte-compared with the archive's; every placed filter's encoding listed
      *    by the engine, and `seed.json`'s `filterFormat` the full filter's decoded encoding.
      * 9. The install ([install]): `SIGNED`, `fromSeed`, [Freshness.SEED_SIGNED_TIME], generation id `"<ts>/<last placed
      *    record id>"`, `updater.json` with `seedInstalledAtMillis` = now and the watermark at `max(watermark, <ts>)`, or
-     *    at `<ts>` when no generation loaded (§7.1);
-     *    then the prune, as after a sync's install, never in a rule (b) load nor past a newer complete directory.
+     *    at `<ts>` when no generation loaded (§7.1). A seed load never prunes and never deletes (§6.5).
      *
      * Any seed fault is [SeedLoad.Unreadable]; a failed `prepare` or `activate` is too (§6.5: "the corresponding load
-     * failure, `SEED_UNREADABLE` for the seed"). Any directory this load staged is deleted on a failure before the
-     * install. A read interrupted by the thread's interrupt (okio's `InterruptedIOException`) is `SEED_UNREADABLE` as
+     * failure, `SEED_UNREADABLE` for the seed"). A read interrupted by the thread's interrupt (okio's `InterruptedIOException`) is `SEED_UNREADABLE` as
      * well, with the interrupt kept.
      */
     fun load(nowMillis: Long): SeedLoad = Attempt(nowMillis).run()
@@ -295,18 +291,6 @@ internal class SeedLoader(
         return HeaderRead.Read(archive, format)
     }
 
-    /** A store state the load does not write over: it ends as [SeedLoad.Failed] at `STORE`, nothing written. */
-    private class StoreFault(
-        message: String,
-        /** Whether the store read that found this fault already counted it, so it is counted once. */
-        val counted: Boolean = false,
-    ) : Exception(message)
-
-    private fun fault(
-        message: String,
-        counted: Boolean = false,
-    ): Nothing = throw StoreFault(message, counted)
-
     /** The verified fixed entries: the records, `<ts>`, the x5u path, the signature, and the bytes kept. */
     private class Verified(
         val records: List<JsonObject>,
@@ -318,27 +302,21 @@ internal class SeedLoader(
     )
 
     /**
-     * What the store holds for this dataset and channel: the [updater] record, the [pointer] when it read, and every
-     * complete generation directory with its timestamp ([complete]). [trusted] is rule (a) of the seed-load rule (lead,
-     * 2026-11-16): the pointer is valid and its `live` generation's `meta.json` reads, at [liveTimestampMillis].
-     * [pointedUnread] when a directory the pointer names has a `meta.json` that does not read (counted).
+     * What the store holds for this dataset and channel when the load reads it: the [updater] record, the [pointer]
+     * when it read, and its `live` generation through Load's steps 1 and 2 ([live]) when that read too, which makes the
+     * pointer trustworthy (rule (a) of the seed-load rule, spec §6.5). [counted] names each generation file whose
+     * failure this read counted, so the adopt scan does not count it again.
      */
     private class Stored(
         val updater: UpdaterRecord,
         val pointer: Pointer?,
-        val trusted: Boolean,
-        val liveTimestampMillis: Long?,
-        val pointedUnread: Boolean,
-        val complete: Map<String, Long>,
+        val live: StoredGeneration?,
+        val counted: Set<String>,
     ) {
-        /**
-         * Whether an install at [ts] may prune: never in a rule (b) load, nor past a pointed directory whose `meta.json`
-         * does not read or a complete directory newer than the seed.
-         */
-        fun prunable(ts: Long): Boolean = trusted && !pointedUnread && complete.values.none { it > ts }
+        val trusted: Boolean get() = live != null
     }
 
-    /** One load's state: what it staged and what its failure path undoes. */
+    /** One load's state. A seed load never deletes anything (§6.5), so it has nothing to undo. */
     @OptIn(RevoktInternalApi::class)
     private inner class Attempt(
         private val now: Long,
@@ -348,13 +326,13 @@ internal class SeedLoader(
         /** Whether the current step reads or writes the store, so a throw there is a store failure. */
         private var inStore = false
 
-        /** The generation directory this load staged files in, until the install takes it over. */
-        private var staged: String? = null
-
         private var installing = false
 
-        /** Whether this load counted a complete directory as rejected ([verifiesCounted]). */
+        /** Whether this load counted a stored generation as rejected ([adoptable]), whose rotted blobs it then rewrites. */
         private var rejected = false
+
+        /** The generation files whose failure this load counted, so each is counted once. */
+        private val counted = HashSet<String>()
 
         @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable, an OutOfMemoryError too.
         fun run(): SeedLoad =
@@ -366,16 +344,15 @@ internal class SeedLoader(
             }
 
         /**
-         * The load after [t] escaped a step: a seed fault is [SeedLoad.Unreadable]; a [StoreFault], and any other
-         * non-fatal throw while reading or writing the store, is [SeedLoad.Failed] at `STORE` with a store failure;
+         * The load after [t] escaped a step: a seed fault is [SeedLoad.Unreadable]; any non-fatal throw while reading
+         * or writing the store is [SeedLoad.Failed] at `STORE` with a store failure;
          * anything else is unreadable, with a store failure once the install began (§6.5: an `OutOfMemoryError` during an
-         * install counts one). Any staged directory is deleted first.
+         * install counts one). Nothing is deleted.
          */
         private fun thrown(t: Throwable): SeedLoad {
-            discard()
-            val storeFault = t is StoreFault || (inStore && t !is SeedFormatException && !isFatal(t))
+            val storeFault = inStore && t !is SeedFormatException && !isFatal(t)
             if (storeFault) {
-                if (!(t is StoreFault && t.counted)) storeFailures++
+                storeFailures++
                 logger.safeLog(LogLevel.WARN, "${store.root}: the seed load failed at STORE", t)
                 val detail = t.message ?: t.toString()
                 return SeedLoad.Failed(SyncFailure.STORE_FAILED, detail, t, false, storeFailures)
@@ -396,20 +373,6 @@ internal class SeedLoader(
             return value
         }
 
-        /** Deletes the directory this load staged, if any; a failure is a store failure, never the load's. */
-        @Suppress("TooGenericExceptionCaught") // §6.5: the failure path catches every throwable too.
-        private fun discard() {
-            val directory = staged ?: return
-            staged = null
-            try {
-                store.deleteGeneration(directory)
-            } catch (t: Throwable) {
-                restoreInterrupt(t)
-                storeFailures++
-                logger.safeLog(LogLevel.WARN, "deleting ${store.root}/$directory failed", t)
-            }
-        }
-
         private fun steps(): SeedLoad {
             val opened =
                 when (val read = header()) {
@@ -420,7 +383,7 @@ internal class SeedLoader(
             val verified = verify(archive)
             val ts = verified.timestamp
             val crlite =
-                when (val check = CrliteSchema.check(verified.records, channel, RevoktLimits.MAX_CHANGESET_RECORDS)) {
+                when (val check = CrliteSchema.check(verified.records, channel, store.maxChangesetRecords)) {
                     is RecordCheck.Passed -> check.records
                     is RecordCheck.Rejected -> fail("records.json fails the schema: ${check.detail}")
                 }
@@ -437,11 +400,8 @@ internal class SeedLoader(
             }
             val entries = archive.attachments(placed.map { it.record.filename })
             val stored = stored { read() }
-            val generationId = "$ts/${placed.last().record.id}"
-            val directory = GenerationNames.directory(ts, generationId)
             decide(stored, ts, verified.path)?.let { return it }
-            val held = stored { open(directory, stored, verified.path) }
-            val bodies = Bodies(directory, held)
+            val bodies = Bodies()
             val bySeedEntry = entries.zip(signed).toMap()
             val caps = entries.zip(signed) { e, r -> e to minOf(r.attachment.size, RevoktLimits.MAX_FILTER_BYTES) }
             archive.read(caps) { entry, bytes -> bodies.write(bySeedEntry.getValue(entry), bytes) }
@@ -452,19 +412,19 @@ internal class SeedLoader(
                 }
             if (!built.index.contentEquals(verified.index)) fail("the shipped index.bin differs from the rebuilt one")
             bodies.unlisted(placed)?.let { fail("${it.record.id} is in an encoding the engine does not list") }
-            val meta = meta(verified, generationId, bodies.format(placed, opened.filterFormat), bodies.blobs)
-            val pending = PendingGeneration(meta, built.index, bodies.deltas, verified.recordsJson)
-            // §7.1: a seed that installs because no generation loaded (no trusted pointer, nothing live in the engine)
-            // sets the watermark to its <ts>, as the sync's install does; beside a loaded generation it keeps the max.
+            val pending =
+                PendingGeneration(
+                    file(verified),
+                    built.filters,
+                    built.index,
+                    bodies.format(placed, opened.filterFormat),
+                )
+            // §7.1: a seed that installs because no generation loaded (no trustworthy pointer, nothing live in the
+            // engine) sets the watermark to its <ts>, as the sync's install does; beside a loaded generation it keeps the
+            // max.
             val engineLive = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId
             val noneLoaded = !stored.trusted && engineLive == null
-            return installed(
-                pending,
-                stored.updater,
-                stored.prunable(ts),
-                heal = !stored.trusted,
-                noneLoaded = noneLoaded,
-            )
+            return installed(pending, stored.updater, noneLoaded = noneLoaded)
         }
 
         /**
@@ -491,11 +451,11 @@ internal class SeedLoader(
         }
 
         /**
-         * `updater.json`, the pointer, every directory it names, and every complete directory (the decisions on #138 and
-         * the seed-load rule). A read that throws fails the load as a store failure, nothing written ([thrown]). Each
+         * `updater.json`, the pointer, and each generation it names through Load's steps 1 and 2 (the decisions on #138
+         * and the seed-load rule). A read that throws fails the load as a store failure, nothing written ([thrown]). Each
          * fault is counted here, once, where it is found, and the install is told so ([Publication.pointerCounted]): a
          * malformed `updater.json` (read as absent, §6.5; the install writes a fresh one), a malformed pointer, and each
-         * pointed directory whose `meta.json` does not read.
+         * pointed generation that does not read.
          */
         private fun read(): Stored {
             val updater =
@@ -516,48 +476,54 @@ internal class SeedLoader(
                         read.value.record
                     }
                 }
-            val complete =
-                store.directories
-                    .mapNotNull { d ->
-                        store.meta(d)?.let { d to it.sourceTimestampMillis }
-                    }.toMap()
             val pointer =
                 when (val read = store.pointer()) {
                     StoreRead.Absent -> {
-                        return Stored(updater, null, false, null, false, complete)
+                        return Stored(updater, null, null, counted)
                     }
 
                     StoreRead.Malformed -> {
                         storeFailures++
                         logger.safeLog(LogLevel.WARN, "${store.root}: the pointer is malformed")
-                        return Stored(updater, null, false, null, false, complete)
+                        return Stored(updater, null, null, counted)
                     }
 
                     is StoreRead.Found -> {
                         read.value
                     }
                 }
-            val live = (store.readMeta(pointer.live) as? StoreRead.Found)?.value
-            val unread = listOfNotNull(pointer.live, pointer.previous).count { store.readMeta(it) !is StoreRead.Found }
-            if (unread > 0) {
-                storeFailures += unread
-                logger.safeLog(LogLevel.WARN, "${store.root}: $unread pointed meta.json do not read")
+            var live: StoredGeneration? = null
+            for (name in listOfNotNull(pointer.live, pointer.previous)) {
+                when (val read = store.stored(name)) {
+                    is StoreRead.Found -> {
+                        if (name == pointer.live) live = read.value
+                    }
+
+                    else -> {
+                        storeFailures++
+                        counted += name
+                        logger.safeLog(
+                            LogLevel.WARN,
+                            "${store.root}: the pointed generation $name does not read ($read)",
+                        )
+                    }
+                }
             }
-            return Stored(updater, pointer, live != null, live?.sourceTimestampMillis, unread > 0, complete)
+            return Stored(updater, pointer, live, counted)
         }
 
         /**
-         * The seed-load rule (lead, 2026-11-16), or null to install the seed. Every generation is Mozilla-signed (#218),
-         * so no trust class is compared.
-         * - (a) A valid pointer whose `live` reads: the seed is [SeedLoad.Skipped] when that generation, or the one the
-         *   engine holds live, is not older than it; the loader loads it, as today.
-         * - (b) Anything else (no pointer, a malformed one, or a `live` that does not read): the seed must leave a live
-         *   generation behind. The newest complete directory newer than the seed, and not older than the generation the
-         *   engine serves, whose stored files re-verify ([verifies]; each one that does not is counted) is
-         *   [SeedLoad.Adopted]: the pointer is flipped to it, `updater.json` is written from the record read with the
-         *   watermark raised to its `<ts>`, and the seed is not installed. With none, a generation the engine holds live
-         *   that is newer than the seed is [SeedLoad.Skipped] (never rolled back); otherwise the seed installs, a
-         *   same-generation directory of its name as it stands.
+         * The seed-load rule (spec §6.5), or null to install the seed. Every generation is Mozilla-signed (#218), so no
+         * trust class is compared.
+         * - (a) A trustworthy pointer: its `live` reads. The seed is [SeedLoad.Skipped] when that generation, or the one
+         *   the engine holds live, is not older than it; the loader loads it.
+         * - (b) Anything else (no pointer, a malformed one, or a `live` that does not read): the adopt scan. Every
+         *   generation file through Load's step 1 (one that fails counts a store failure); the candidates newer than the
+         *   seed and not older than the generation the engine serves, newest first and ties by name, each through steps 2
+         *   to 4 and the signature check ([adoptable]); the first that passes is [SeedLoad.Adopted]: `updater.json` is
+         *   written from the record read with the watermark raised to its `<ts>`, then the pointer is flipped to it alone.
+         *   With none, a generation the engine holds live that is newer than the seed is [SeedLoad.Skipped] (never rolled
+         *   back); otherwise the seed installs.
          */
         private fun decide(
             stored: Stored,
@@ -569,178 +535,95 @@ internal class SeedLoader(
                     ?.takeIf { it.generationId != null }
                     ?.sourceTimestampMillis
             if (stored.trusted) {
-                val notOlder = listOfNotNull(engineLive, stored.liveTimestampMillis).maxOrNull()?.takeIf { it >= ts }
+                val liveTs = checkNotNull(stored.live).timestampMillis
+                val notOlder = listOfNotNull(engineLive, liveTs).maxOrNull()?.takeIf { it >= ts }
                 return notOlder?.let { SeedLoad.Skipped(ts, it, storeFailures) }
             }
             // Never adopt below the generation the engine serves: that would roll it back (#235's review).
             val floor = maxOf(ts + 1, engineLive ?: Long.MIN_VALUE)
-            val candidates =
-                stored.complete.entries
-                    .filter { it.value >= floor }
-                    .sortedByDescending { it.value }
-            val adoptable = candidates.firstOrNull { stored { verifiesCounted(it.key, seed) } }
-            if (adoptable != null) {
+            val candidates = stored { scan(floor) }
+            val adopted = candidates.firstOrNull { (name, file) -> stored { adoptable(name, file, seed) } }
+            if (adopted != null) {
+                val (name, file) = adopted
                 stored {
                     // The record read (an absent or malformed one replaced), its watermark raised to the adopted <ts>,
                     // before the flip: a failed flip then leaves an honest failure, and the next load adopts again.
-                    val watermark = maxOf(stored.updater.watermarkMillis ?: Long.MIN_VALUE, adoptable.value)
+                    val watermark = maxOf(stored.updater.watermarkMillis ?: Long.MIN_VALUE, file.lastModified)
                     store.writeUpdater(stored.updater.copy(watermarkMillis = watermark), now)
-                    store.point(Pointer(adoptable.key, null))
+                    store.point(Pointer(name, null))
                 }
-                logger.safeLog(LogLevel.INFO, "${store.root}: adopted ${adoptable.key}, newer than the seed's $ts")
-                return SeedLoad.Adopted(adoptable.key, adoptable.value, storeFailures)
+                logger.safeLog(LogLevel.INFO, "${store.root}: adopted $name, newer than the seed's $ts")
+                return SeedLoad.Adopted(name, file.lastModified, storeFailures)
             }
             return engineLive?.takeIf { it > ts }?.let { SeedLoad.Skipped(ts, it, storeFailures) }
         }
 
-        /** [verifies], with a directory that does not re-verify counted once as a store fault (#235's review). */
-        private fun verifiesCounted(
-            directory: String,
+        /**
+         * The adopt scan's candidates (spec §6.5 rule (b)): every generation file through Load's step 1 whose `<ts>` is at
+         * least [floor], newest first, ties broken by name. A file that fails step 1 counts one store failure, unless
+         * [read] counted it already; a file below the floor is not counted.
+         */
+        private fun scan(floor: Long): List<Pair<String, GenerationFile>> {
+            val found = ArrayList<Pair<String, GenerationFile>>()
+            for (name in store.generationNames().sorted()) {
+                when (val read = store.readGeneration(name)) {
+                    is StoreRead.Found -> {
+                        if (read.value.lastModified >= floor) found += name to read.value
+                    }
+
+                    else -> {
+                        if (counted.add(name)) {
+                            storeFailures++
+                            logger.safeLog(LogLevel.WARN, "${store.root}: the generation file $name does not read")
+                        }
+                    }
+                }
+            }
+            return found.sortedWith(compareByDescending<Pair<String, GenerationFile>> { it.second.lastModified })
+        }
+
+        /**
+         * Whether the stored generation [name] ([file], through step 1) re-verifies for adoption: Load's steps 2 to 4
+         * pass (its records place, every blob re-hashes, the index rebuilds) and, when its signer leaf is the [seed]'s
+         * verified leaf, its signature verifies over the canonical serialisation of its records
+         * ([ContentSignature.verifyRawPayload]); a generation signed by another leaf is trusted at the OS level (§6.5).
+         * One that does not counts one store failure, once.
+         */
+        private fun adoptable(
+            name: String,
+            file: GenerationFile,
             seed: X5uPath,
         ): Boolean {
-            val ok = verifies(directory, seed)
+            val ok = reVerifies(name, file, seed)
             if (!ok) {
                 rejected = true
-                storeFailures++
-                logger.safeLog(LogLevel.WARN, "${store.root}: $directory is complete but does not re-verify")
+                if (counted.add(name)) storeFailures++
+                logger.safeLog(LogLevel.WARN, "${store.root}: $name is newer than the seed but does not re-verify")
             }
             return ok
         }
 
-        /**
-         * Whether the complete generation in [directory] re-verifies from its stored files:
-         * - [StoreLayout.readGeneration] reads it (its `index.bin` and every file it names, each blob re-hashed);
-         * - its stored `records.json` is a payload of `<ts>` equal to `meta.json`'s `sourceTimestampMillis` and signed
-         *   changeset timestamp, and the records [placeFilters] places for the channel are exactly the files `index.bin`
-         *   names, each re-hashing to its record's `attachment.hash`;
-         * - when its signer leaf is the [seed]'s verified leaf, its signature verifies over that `records.json`
-         *   ([ContentSignature.verifyRawPayload]); a generation signed by another leaf is trusted at the OS level (§6.5).
-         */
-        private fun verifies(
-            directory: String,
+        private fun reVerifies(
+            name: String,
+            file: GenerationFile,
             seed: X5uPath,
         ): Boolean {
-            val generation = store.readGeneration(directory) ?: return false
-            val meta = generation.meta
-            val signed = meta.signed
-            val bytes = store.file(directory, StoreLayout.RECORDS) ?: return false
-            val (records, lastModified) = storedRecords(bytes) ?: return false
-            if (lastModified != meta.sourceTimestampMillis ||
-                signed.changesetTimestampMillis != lastModified
-            ) {
-                return false
-            }
-            val crlite =
-                (
-                    CrliteSchema.check(
-                        records,
-                        channel,
-                        RevoktLimits.MAX_CHANGESET_RECORDS,
-                    ) as? RecordCheck.Passed
-                )?.records
-                    ?: return false
-            val filterRecords = crlite.map { it.toFilterRecord() }
-            val placed = (placeFilters(filterRecords, channel) as? Placement.Placed)?.filters ?: return false
-            val files = generation.files
-            if (files.names - StoreLayout.INDEX != placed.mapTo(HashSet()) { it.name }) return false
-            val byId = crlite.associateBy { it.id }
-            val hashes =
-                placed.all { p ->
-                    byId
-                        .getValue(p.record.id)
-                        .attachment.sha256
-                        .toByteArray()
-                        .contentEquals(files.sha256(p.name))
-                }
-            if (!hashes) return false
+            val generation = store.place(name, file) ?: return false
+            store.loadFiles(generation) ?: return false
             val seedLeaf =
                 seed.links[0]
                     .der
                     .toByteString()
                     .sha256()
-            if (signed.signerLeafSha256 != seedLeaf) return true
-            val text = signed.signature.base64Url().trimEnd('=')
+            if (file.signerLeafSha256 != seedLeaf) return true
+            val text = file.signature.base64Url().trimEnd('=')
             return ContentSignature
-                .verifyRawPayload(
-                    verifier,
-                    bytes,
-                    text,
-                    ContentSignature.MODE,
-                    seed.leafSpki,
-                ).verified
+                .verifyRawPayload(verifier, file.payload, text, ContentSignature.MODE, seed.leafSpki)
+                .verified
         }
 
-        /** The records under `data` of a stored `records.json` and its `last_modified`, or null when it is not one. */
-        private fun storedRecords(bytes: ByteArray): Pair<List<JsonObject>, Long>? {
-            val root =
-                try {
-                    Json.parse(bytes, RevoktLimits.MAX_JSON_BYTES) as? JsonObject
-                } catch (ignored: JsonParseException) {
-                    null
-                } ?: return null
-            val lastModified = (root["last_modified"] as? JsonString)?.value?.toLongOrNull() ?: return null
-            val records = (root["data"] as? JsonArray)?.items?.map { it as? JsonObject ?: return null } ?: return null
-            return records to lastModified
-        }
-
-        /**
-         * Readies [directory], the seed's own.
-         * - Rule (b): a complete one that re-verifies ([verifies]) is held, installed as it stands when it is this
-         *   generation (the install compares everything but `freshness` and the signed members), else `STORE_FAILED`;
-         *   one that does not is reopened and completed again, its rotted files alone re-staged; one whose `meta.json` is absent or
-         *   present but unreadable is this load's to complete from the verified seed (the lead's Note 1), never a
-         *   complete one deleted, and never the engine's live one, which is a [StoreFault] instead.
-         * - Rule (a), as the sync does: one the engine holds live or the pointer names is held when complete, and a
-         *   [StoreFault] otherwise (counted once: a pointed one's unreadable `meta.json` was counted by [read]); any other
-         *   is this load's, a complete orphan reopened first.
-         *
-         * Whether it is held.
-         */
-        private fun open(
-            directory: String,
-            stored: Stored,
-            seed: X5uPath,
-        ): Boolean {
-            val read = store.readMeta(directory)
-            if (!stored.trusted) {
-                val live = directory == snapshot.liveDirectory()
-                if (read is StoreRead.Found) {
-                    // A complete one that does not re-verify cannot be loaded as it stands; it is this generation by
-                    // name, so it is completed again from the verified seed, only its rotted files re-staged (#235's
-                    // review: a valid seed always leaves a live generation behind). Never the one the engine serves.
-                    if (live || verifiesCounted(directory, seed)) return true
-                    // Not staged: a failed load leaves it incomplete for the next one and never deletes it (#235).
-                    store.reopen(directory, unloadable = true)
-                    return false
-                }
-                // The engine's live directory is never staged into while it is served, whatever its meta.json says.
-                if (live) {
-                    val counted = directory == stored.pointer?.live || directory == stored.pointer?.previous
-                    fault("$directory is the engine's live generation, and its meta.json is not readable", counted)
-                }
-                // Rule (b) never deletes what it found: only a directory this load creates is deleted on a failure. One
-                // already there (an earlier load's reopened rotted directory, say) stays incomplete for the next.
-                if (directory !in store.directories) staged = directory
-                return false
-            }
-            val pointer = checkNotNull(stored.pointer)
-            if (directory == snapshot.liveDirectory() || directory == pointer.live || directory == pointer.previous) {
-                if (read is StoreRead.Found) return true
-                val counted = directory == pointer.live || directory == pointer.previous
-                fault("$directory is live or pointed to, and its meta.json is not readable", counted)
-            }
-            if (read is StoreRead.Found) store.reopen(directory)
-            staged = directory
-            return false
-        }
-
-        /** The bodies of the generation in [directory] ([held] when the engine or the pointer holds it). */
-        private inner class Bodies(
-            private val directory: String,
-            private val held: Boolean,
-        ) {
-            val blobs = LinkedHashMap<String, ByteString>()
-            val deltas = LinkedHashMap<String, ByteString>()
+        /** The bodies of the seed's generation, each written as its blob as it is inflated. */
+        private inner class Bodies {
             private val encodings = HashMap<String, Encoding?>()
 
             /** [bytes], [r]'s attachment as inflated: checked against its signed size and hash, then written. */
@@ -752,34 +635,16 @@ internal class SeedLoader(
                 if (bytes.size.toLong() != r.attachment.size || bytes.toByteString().sha256() != sha256) {
                     fail("attachments/${r.attachment.filename} does not match its signed size and hash")
                 }
-                val name = GenerationNames.derive(r.attachment.filename)
                 stored {
-                    if (!r.incremental) {
-                        // A blob of a directory this load counted as rejected is that fault, counted once (#235).
-                        if (store.putBlob(bytes) == BlobWrite.REWRITTEN && !rejected) storeFailures++
-                        blobs[name] = sha256
-                    } else {
-                        deltas[name] = sha256
-                        if (store.file(directory, name, sha256) == null) {
-                            if (held) fault("$directory holds another generation: $name does not re-hash")
-                            store.stageFile(directory, name, bytes)
-                        }
-                    }
+                    // A blob of a generation this load counted as rejected is that fault, counted once (#235).
+                    if (store.putBlob(bytes) == BlobWrite.REWRITTEN && !rejected) storeFailures++
                 }
             }
 
             /** [r]'s body as written, re-hashed, for [buildIndex]; its encoding is noted. */
             fun read(r: CrliteRecord): ByteArray {
-                val sha256 = r.attachment.sha256
                 val bytes =
-                    stored {
-                        if (r.incremental) {
-                            val name = GenerationNames.derive(r.attachment.filename)
-                            checkNotNull(store.file(directory, name, sha256)) { "$directory/$name is gone" }
-                        } else {
-                            checkNotNull(store.readBlob(sha256)) { "the blob of ${r.id} is gone" }
-                        }
-                    }
+                    stored { checkNotNull(store.readBlob(r.attachment.sha256)) { "the blob of ${r.id} is gone" } }
                 encodings[r.id] =
                     try {
                         ClubcardFilters.encodingOf(bytes)
@@ -793,7 +658,7 @@ internal class SeedLoader(
             fun unlisted(placed: List<PlacedFilter>): PlacedFilter? =
                 placed.firstOrNull { checkNotNull(encodings[it.record.id]).toFilterFormat() !in engine.formats }
 
-            /** The full's encoding, `meta.format`, which `seed.json`'s [filterFormat] must name (§6.5). */
+            /** The full's encoding, the generation's format, which `seed.json`'s [filterFormat] must name (§6.5). */
             fun format(
                 placed: List<PlacedFilter>,
                 filterFormat: FilterFormat,
@@ -806,44 +671,41 @@ internal class SeedLoader(
             }
         }
 
-        private fun meta(
-            verified: Verified,
-            generationId: String,
-            format: FilterFormat,
-            blobs: Map<String, ByteString>,
-        ): GenerationMeta {
+        /**
+         * The seed's generation file (spec §6.5): its verified records and `<ts>`, the signature that verified them and its
+         * leaf's SHA-256, [Freshness.SEED_SIGNED_TIME] and `seedFormat`.
+         */
+        private fun file(verified: Verified): GenerationFile {
             val raw =
                 RawSignature.decode(verified.signature.decodeToString()) ?: fail("the signature is not raw r || s")
-            val leaf =
-                verified.path.links[0]
-                    .der
-                    .toByteString()
-                    .sha256()
-            return GenerationMeta(
+            val records = ContentSignature.payloadRecords(verified.records) ?: fail("records.json is not a payload")
+            return GenerationFile(
                 dataset = Dataset.CRLITE,
                 channel = channel,
-                generationId = generationId,
-                format = format,
                 freshness = Freshness.SEED_SIGNED_TIME,
-                sourceTimestampMillis = verified.timestamp,
-                collection = policy.collection,
-                blobs = blobs,
-                signed = SignedMeta(verified.timestamp, leaf, raw.toByteString()),
+                seedFormat = SEED_FORMAT.toInt(),
+                signature = raw.toByteString(),
+                signerLeafSha256 =
+                    verified.path.links[0]
+                        .der
+                        .toByteString()
+                        .sha256(),
+                records = records,
+                lastModified = verified.timestamp,
             )
         }
 
         /**
-         * Step 9: [install] of [pending] over the [read] record, then the prune. The watermark, written in the install's
-         * own `updater.json` write, is [pending]'s `<ts>` when [noneLoaded], else the higher of it and the stored one.
+         * Step 9: [install] of [pending] over the [read] record; a seed load never prunes (§6.5). The watermark, written in
+         * the install's own `updater.json` write, is [pending]'s `<ts>` when [noneLoaded], else the higher of it and the
+         * stored one.
          */
         private fun installed(
             pending: PendingGeneration,
             read: UpdaterRecord,
-            prunable: Boolean,
-            heal: Boolean,
             noneLoaded: Boolean,
         ): SeedLoad {
-            val ts = pending.meta.sourceTimestampMillis
+            val ts = pending.file.lastModified
             val raised = maxOf(read.watermarkMillis ?: Long.MIN_VALUE, ts)
             val updated =
                 read.copy(
@@ -852,27 +714,15 @@ internal class SeedLoader(
                 )
             // §8: the gate opens once a sync attempt completes after the seed's install, or at once with no fetching source.
             val gateOpen = !policy.fetchingSource || (read.datasetLastAttemptAtMillis ?: Long.MIN_VALUE) >= now
+            // Every generation file this load counted (a pointed one, an adopt candidate) is counted once (#335 review).
             val publication =
-                Publication(
-                    true,
-                    SEED_FORMAT.toInt(),
-                    gateOpen,
-                    now,
-                    pointerCounted = true,
-                    heal = heal,
-                )
+                Publication(true, SEED_FORMAT.toInt(), gateOpen, now, pointerCounted = true, counted = counted.toSet())
             installing = true
             val result = install(pending, engine, store, snapshot, publication, updated, logger)
-            // Under heal the install deletes nothing: on a failure before activation this load deletes only a directory it
-            // staged afresh; after activation, or on success, the directory stays.
-            if (result is InstallResult.Failed && !result.activated) discard() else staged = null
             storeFailures += result.storeFailures
             return when (result) {
                 is InstallResult.Installed -> {
-                    // In a rule (b) load the flip heals the pointer and nothing is pruned: the next install over a
-                    // valid pointer prunes. The prune is the sync's, and a failure never fails the load.
-                    if (prunable) store.pruneAfter(result.directory, logger) { storeFailures++ }
-                    SeedLoad.Installed(result.directory, result.generationId, result.generationEpoch, ts, storeFailures)
+                    SeedLoad.Installed(result.name, result.generationId, result.generationEpoch, ts, storeFailures)
                 }
 
                 is InstallResult.Failed -> {
@@ -981,7 +831,7 @@ internal fun verifySignedRecords(
     return SignedRecords(records, ts, path)
 }
 
-/** The latest timestamp a generation directory name holds (13 digits, §6.5). */
+/** The latest `<ts>` a seed's `records.json` may hold: 13 digits, the width every millisecond timestamp has had since 2001. */
 private const val MAX_TIMESTAMP = 9_999_999_999_999L
 
 /** The records and `<ts>` of the verified [bytes], which must be the canonical payload of both. */

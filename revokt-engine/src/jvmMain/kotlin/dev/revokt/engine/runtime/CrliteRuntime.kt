@@ -80,13 +80,16 @@ public class CrliteRuntime internal constructor(
     private val verifier: SignatureVerifier,
     private val policy: RevoktPolicy,
     pinnedRootSpkis: Set<ByteString>,
-    collection: String?,
     storage: RevoktStorage,
     private val logger: RevoktLogger,
     client: RemoteSettingsClient? = null,
     private val random: Random = Random.Default,
 ) {
-    private val store: StoreLayout? = channel?.let { StoreLayout(storage, Dataset.CRLITE, it) }
+    private val store: StoreLayout? =
+        channel?.let {
+            val limits = client?.limits ?: FetchLimits()
+            StoreLayout(storage, Dataset.CRLITE, it, limits.maxJsonBytes, limits.maxChangesetRecords)
+        }
 
     /** What handshakes and the evaluator read (spec §3): before the start task ends, every configured dataset pending. */
     internal val snapshot: SnapshotRef = SnapshotRef(initial(pending = true, epoch = 0))
@@ -99,7 +102,7 @@ public class CrliteRuntime internal constructor(
                 engine,
                 snapshot,
                 verifier,
-                SeedPolicy(pinnedRootSpkis, collection, fetchingSource),
+                SeedPolicy(pinnedRootSpkis, fetchingSource),
                 logger,
             )
         } else {
@@ -523,7 +526,6 @@ public class CrliteRuntime internal constructor(
                 verifier = verifier,
                 policy = policy,
                 pinnedRootSpkis = source.pinnedRootSpkis,
-                collection = source.collection(Dataset.CRLITE)?.let { source.bucket + "/" + it },
                 storage = storage,
                 logger = logger,
                 client = client,

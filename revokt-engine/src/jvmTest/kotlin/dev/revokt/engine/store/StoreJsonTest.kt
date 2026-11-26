@@ -16,11 +16,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** `meta.json`, `current` and `updater.json` (spec §6.5, #109). */
+/** `current` and `updater.json` (spec §6.5, #109); the generation file is `GenerationFileTest`'s. */
 class StoreJsonTest {
-    private val full = "compat-2026-11-06-full-filter-with-a-very-long-name-012345678.ff"
-    private val blobs = mapOf(GenerationNames.derive(full) to StoreFixtures.sha256(byteArrayOf(1)))
-
     private fun text(bytes: ByteArray): String = bytes.decodeToString()
 
     /** [bytes] with the member `"key":value` text [from] replaced by [to]. */
@@ -35,145 +32,9 @@ class StoreJsonTest {
     }
 
     @Test
-    fun `a meta json round-trips with every member`() {
-        val meta = StoreFixtures.meta(blobs = blobs)
-        val bytes = MetaJson.write(meta)
-        assertEquals(meta, MetaJson.read(bytes))
-        assertEquals(
-            """{"blobs":{"compat-2026-11--decf10cbc971a35f":"blobs/${blobs.values.single().hex()}"},""" +
-                """"changesetTimestampMillis":1762430400001,"channel":"COMPAT",""" +
-                """"collection":"security-state/cert-revocations","dataset":"CRLITE","format":"V3",""" +
-                """"freshness":"RECORD_LAST_MODIFIED","generationId":"g1","metaVersion":1,""" +
-                """"signature":"${"09".repeat(96)}","signerLeafSha256":"${"07".repeat(32)}",""" +
-                """"sourceTimestampMillis":1762430400000}""",
-            text(bytes),
-        )
-    }
-
-    @Test
-    fun `a signature of any even non-empty length round-trips, as the leaf may be on any EC curve`() {
-        // Spec §7.1 (the maintainer's decision on #163): a P-256 leaf signs a 64-byte pair, a P-521 one 132 bytes.
-        for (size in listOf(64, 96, 132)) {
-            val base = StoreFixtures.meta(blobs = blobs)
-            val signed = base.signed.copy(signature = ByteArray(size) { 9 }.toByteString())
-            val meta = base.copy(signed = signed)
-            assertEquals(meta, MetaJson.read(MetaJson.write(meta)))
-        }
-        for (size in listOf(0, 95, 97)) {
-            assertFailsWith<IllegalArgumentException> {
-                SignedMeta(1, ByteArray(32).toByteString(), ByteArray(size).toByteString())
-            }
-        }
-    }
-
-    @Test
-    fun `meta json carries the derived name, never the attachment filename`() {
-        val bytes = text(MetaJson.write(StoreFixtures.meta(blobs = blobs)))
-        assertTrue("compat-2026-11--decf10cbc971a35f" in bytes)
-        assertTrue(full !in bytes)
-    }
-
-    @Test
-    fun `a meta json without its signed members is malformed`() {
-        val bytes = MetaJson.write(StoreFixtures.meta(blobs = blobs))
-        for (member in listOf("changesetTimestampMillis", "signerLeafSha256", "signature")) {
-            val text = text(bytes)
-            val stripped = Regex(""""$member":[^,}]*,?""").replace(text, "").replace(",}", "}")
-            assertNull(MetaJson.read(stripped.encodeToByteArray()), member)
-        }
-    }
-
-    @Test
-    fun `unknown meta json members are ignored`() {
-        val meta = StoreFixtures.meta(blobs = blobs)
-        val bytes = edited(MetaJson.write(meta), "{\"blobs\"", "{\"aFutureMember\":[1,{\"x\":null}],\"blobs\"")
-        assertEquals(meta, MetaJson.read(bytes))
-    }
-
-    @Test
-    fun `a malformed meta json reads as nothing`() {
-        val bytes = MetaJson.write(StoreFixtures.meta(blobs = blobs))
-        val sha = blobs.values.single().hex()
-        for ((from, to) in listOf(
-            "\"metaVersion\":1" to "\"metaVersion\":2",
-            "\"metaVersion\":1" to "\"metaVersion\":\"1\"",
-            "\"dataset\":\"CRLITE\"" to "\"dataset\":0",
-            "\"format\":\"V3\"" to "\"format\":\"V9\"",
-            "\"freshness\":\"RECORD_LAST_MODIFIED\"" to "\"freshness\":null",
-            "\"channel\":\"COMPAT\"" to "\"channel\":\"compat\"",
-            "\"channel\":\"COMPAT\"" to "\"channel\":\"../x\"",
-            "\"generationId\":\"g1\"" to "\"generationId\":\"\"",
-            "\"sourceTimestampMillis\":1762430400000" to "\"sourceTimestampMillis\":-1",
-            "\"sourceTimestampMillis\":1762430400000" to "\"sourceTimestampMillis\":1.5",
-            "\"sourceTimestampMillis\":1762430400000" to "\"sourceTimestampMillis\":18446744073709551615",
-            "\"collection\":\"security-state/cert-revocations\"" to "\"collection\":7",
-            "\"blobs/$sha\"" to "\"blobs/${sha.uppercase()}\"",
-            "\"blobs/$sha\"" to "\"blobs/${sha.dropLast(1)}\"",
-            "\"blobs/$sha\"" to "\"$sha\"",
-            "\"blobs/$sha\"" to "\"blobs/../$sha\"",
-            "\"blobs/$sha\"" to "7",
-            "\"compat-2026-11--decf10cbc971a35f\"" to "\"$full\"",
-            "\"compat-2026-11--decf10cbc971a35f\"" to "\"../x\"",
-            "\"blobs\":{" to "\"blobs\":[],\"x\":{",
-            "\"signerLeafSha256\":\"${"07".repeat(32)}\"" to "\"signerLeafSha256\":\"${"07".repeat(31)}\"",
-            "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"${"09".repeat(95)}0\"",
-            "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"${"09".repeat(95)}\"",
-            "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"${"09".repeat(97)}\"",
-            "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"${"0A".repeat(96)}\"",
-            "\"signature\":\"${"09".repeat(96)}\"" to "\"signature\":\"\"",
-            "\"changesetTimestampMillis\":1762430400001," to "",
-        )) {
-            assertNull(MetaJson.read(edited(bytes, from, to)), "$from -> $to")
-        }
-        for (bad in listOf(
-            "",
-            "[]",
-            "{}",
-            "null",
-            "{\"metaVersion\":1}",
-            "{",
-            "\u0000",
-        )) {
-            assertNull(MetaJson.read(bad.encodeToByteArray()), bad)
-        }
-    }
-
-    @Test
-    fun `a meta value that breaks the layout's rules is refused`() {
-        assertFailsWith<IllegalArgumentException> { StoreFixtures.meta(blobs = mapOf(full to blobs.values.single())) }
-        assertFailsWith<IllegalArgumentException> {
-            StoreFixtures.meta(
-                blobs =
-                    mapOf("a" to byteArrayOf(1).toByteString()),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> { StoreFixtures.meta(sourceTimestampMillis = -1) }
-        for (size in listOf(0, 1, 95, 97)) {
-            assertFailsWith<IllegalArgumentException>("$size") {
-                SignedMeta(1, ByteArray(32).toByteString(), ByteArray(size).toByteString())
-            }
-        }
-        assertFailsWith<IllegalArgumentException> {
-            SignedMeta(
-                1,
-                ByteArray(31).toByteString(),
-                ByteArray(1).toByteString(),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            SignedMeta(
-                1,
-                ByteArray(32).toByteString(),
-                ByteArray(0).toByteString(),
-            )
-        }
-        assertEquals(FilterFormat.V3, StoreFixtures.meta().format)
-    }
-
-    @Test
     fun `the pointer round-trips, with and without previous`() {
-        val live = GenerationNames.directory(2, "b")
-        val previous = GenerationNames.directory(1, "a")
+        val live = "b".repeat(64)
+        val previous = "a".repeat(64)
         for (pointer in listOf(Pointer(live, previous), Pointer(live, null))) {
             assertEquals(pointer, PointerJson.read(PointerJson.write(pointer)))
         }
@@ -183,8 +44,8 @@ class StoreJsonTest {
 
     @Test
     fun `a pointer with an unknown or a duplicate member reads as nothing (#246)`() {
-        val live = GenerationNames.directory(2, "b")
-        val previous = GenerationNames.directory(1, "a")
+        val live = "b".repeat(64)
+        val previous = "a".repeat(64)
         for (bad in listOf(
             // A flipped byte in the member name: a lenient reader would read Pointer(live, null).
             """{"live":"$live","p|evious":"$previous"}""",
@@ -198,13 +59,16 @@ class StoreJsonTest {
     }
 
     @Test
-    fun `a pointer that names anything but generation directories reads as nothing`() {
-        val live = GenerationNames.directory(2, "b")
+    fun `a pointer that names anything but generation file names reads as nothing`() {
+        val live = "b".repeat(64)
         for (bad in listOf(
             """{"live":"../x"}""",
             """{"live":"blobs"}""",
             """{"live":"$live","previous":"$live"}""",
-            """{"live":"$live","previous":"gen-x"}""",
+            """{"live":"$live","previous":"gen-0000000000001-0123456789abcdef"}""",
+            """{"live":"${"B".repeat(64)}"}""",
+            """{"live":"${"b".repeat(63)}"}""",
+            """{"live":"${"b".repeat(65)}"}""",
             """{"live":"$live","previous":3}""",
             """{"previous":"$live"}""",
             """{"live":null}""",

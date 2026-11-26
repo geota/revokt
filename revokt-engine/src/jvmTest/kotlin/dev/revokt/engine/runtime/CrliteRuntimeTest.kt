@@ -66,7 +66,6 @@ internal class CrliteRuntimeTest : SeedFixture() {
             verifier = verifier,
             policy = policy,
             pinnedRootSpkis = pinned,
-            collection = collection,
             storage = storage,
             logger = logger,
         )

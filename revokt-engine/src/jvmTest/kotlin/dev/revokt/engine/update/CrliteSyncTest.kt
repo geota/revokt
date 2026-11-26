@@ -84,18 +84,15 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
             server.fetcher.requests.map { it.url },
         )
         assertFalse(server.fetcher.requests.any { "If-None-Match" in it.headers })
-        val directory = GenerationNames.directory(ts, id)
-        assertEquals(directory, liveDirectory())
+        val name = assertNotNull(liveName())
+        assertEquals(name, live().generationFile)
+        val stored = stored(name)
         val payload = checkNotNull(ContentSignature.recordsJson(server.records.map(::json), ts))
-        assertContentEquals(payload, store.file(directory, StoreLayout.RECORDS))
-        val meta = assertNotNull(store.meta(directory))
-        assertEquals(
-            listOf(FilterFormat.V3, ts, "security-state/cert-revocations"),
-            listOf(meta.format, meta.sourceTimestampMillis, meta.collection),
-        )
-        assertEquals(ts, meta.signed.changesetTimestampMillis)
-        assertEquals(served[0].toByteString().sha256(), meta.signed.signerLeafSha256)
-        assertEquals(96, meta.signed.signature.size)
+        assertContentEquals(payload, stored.file.payload)
+        assertEquals(id, stored.generationId)
+        assertEquals(listOf(FilterFormat.V3, ts), listOf(loaded(name).format, stored.timestampMillis))
+        assertEquals(served[0].toByteString().sha256(), stored.file.signerLeafSha256)
+        assertEquals(96, stored.file.signature.size)
         // The cursor, lastVerified* and the watermark advance after the flip.
         val now = ts + hour
         assertEquals(ts, updater().watermarkMillis)
@@ -162,21 +159,15 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                     },
             )
         sync(server).assert(SyncOutcome.INSTALLED)
-        val directory = assertNotNull(liveDirectory())
+        val name = assertNotNull(liveName())
         val names = listOf(GenerationNames.derive(long33), GenerationNames.derive(long64))
         assertEquals(listOf(32, 32), names.map { it.length })
-        assertEquals(names, C2spIndex.read(assertNotNull(store.file(directory, StoreLayout.INDEX))).filenames)
-        assertEquals(setOf(names[0]), store.meta(directory)?.blobs?.keys)
-        assertEquals(
-            setOf(StoreLayout.INDEX) + names,
-            store
-                .readGeneration(directory)
-                ?.files
-                ?.names
-                ?.toSet(),
-        )
+        val files = loaded(name).files
+        assertEquals(names, C2spIndex.read(files.bytes(StoreLayout.INDEX)).filenames)
+        assertEquals(setOf(StoreLayout.INDEX) + names, files.names.toSet())
+        assertFalse(storage.names().any { key -> names.any { it in key } || long33 in key || long64 in key })
         // The attachment filenames stay in the signed records only.
-        val records = assertNotNull(store.file(directory, StoreLayout.RECORDS)).decodeToString()
+        val records = stored(name).file.payload.decodeToString()
         assertTrue(long33 in records && long64 in records)
     }
 
@@ -294,7 +285,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `a delta is a file of its directory, never a blob, even when its bytes are a stored blob's`() {
+    fun `a delta whose bytes are a stored blob's is that blob, reused without a fetch`() {
         val twin = Rec(delta.id, true, delta.effectiveTimestamp, delta.filename, full.body, parent = full.id)
         store.putBlob(full.body)
         val server =
@@ -307,9 +298,9 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                     },
             )
         sync(server).assert(SyncOutcome.INSTALLED)
-        val meta = assertNotNull(store.meta(assertNotNull(liveDirectory())))
-        assertEquals(setOf(full.filename), meta.blobs.keys)
-        assertEquals(listOf(attachments + twin.location), server.attachmentRequests())
+        // Every attachment is a blob of its signed SHA-256 (spec §6.5), so the twin delta is the stored blob.
+        assertEquals(listOf(full.filename, twin.filename), stored(liveName()).placed.map { it.name })
+        assertEquals(emptyList(), server.attachmentRequests())
     }
 
     @Test
@@ -341,18 +332,11 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `a P-256 leaf's changeset installs, its 64-byte signature in meta json`() {
+    fun `a P-256 leaf's changeset installs, its 64-byte signature in the generation file`() {
         val p256 = ecPair("x5u-leaf-p256", "secp256r1")
         val server = Server(pem = pem(chain(leaf = leaf(spki = p256.public.encoded))), key = p256.private)
         sync(server).assert(SyncOutcome.INSTALLED)
-        assertEquals(
-            64,
-            store
-                .meta(assertNotNull(liveDirectory()))
-                ?.signed
-                ?.signature
-                ?.size,
-        )
+        assertEquals(64, stored(liveName()).file.signature.size)
     }
 
     @Test
@@ -413,16 +397,16 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `each install prunes the store to the directories the pointer names`() {
+    fun `each install over a pointer that reads prunes the store to what the pointer names`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val first = assertNotNull(liveDirectory())
+        val first = assertNotNull(liveName())
         server.ts = ts + 1_000
         sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
         server.ts = ts + 2_000
         sync(server, now = ts + 3 * hour).assert(SyncOutcome.INSTALLED)
-        assertNull(store.meta(first))
-        assertFalse(storage.names().any { "/$first/" in it })
+        assertEquals(StoreRead.Absent, store.readGeneration(first))
+        assertFalse(storage.names().any { first in it })
     }
 
     @Test
@@ -431,6 +415,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
         val engine = TestEngine(formats = setOf(FilterFormat.V3))
         val server = Server()
         sync(server, engine = engine).assert(SyncOutcome.INSTALLED)
+        val previousName = liveName()
         val previous = "$ts/${delta.id}"
         val v4 = UpdateFixtures.v4(listOf(log(1) to (1_000L to 2_000L)))
         val d = Rec("d-v4", true, delta.effectiveTimestamp + 1, "20261022-1-compat.filter.delta", v4, parent = full.id)
@@ -442,7 +427,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
             .assert(SyncFailure.FORMAT_UNSUPPORTED)
         assertEquals(listOf(previous), engine.prepared)
         assertEquals(previous, live().generationId)
-        assertEquals(GenerationNames.directory(ts, previous), liveDirectory())
+        assertEquals(previousName, liveName())
         assertEquals(ts, updater(now).watermarkMillis)
         assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
     }
@@ -459,7 +444,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `a delta in another encoding than the full's installs, meta format the full's`() {
+    fun `a delta in another encoding than the full's installs, the generation's format the full's`() {
         // The maintainer's decision on #137: each filter is read in its own encoding, as Firefox and upki read them.
         val v4 = UpdateFixtures.v4(listOf(log(1) to (1_000L to 2_000L)))
         val d = Rec(delta.id, true, delta.effectiveTimestamp, delta.filename, v4, parent = full.id)
@@ -473,7 +458,7 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
                     },
             )
         sync(server).assert(SyncOutcome.INSTALLED)
-        assertEquals(FilterFormat.V3, store.meta(assertNotNull(liveDirectory()))?.format)
+        assertEquals(FilterFormat.V3, loaded(liveName()).format)
     }
 
     @Test
@@ -489,12 +474,12 @@ internal class CrliteSyncTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `a tombstone in the full changeset is merged away before the schema check, and records json omits it`() {
+    fun `a tombstone in the full changeset is merged away before the schema check, and the generation file omits it`() {
         val tombstone = """{"id":"gone","last_modified":$ts,"deleted":true}"""
         val server = Server(records = listOf(full.json(), tombstone, delta.json()))
         sync(server).assert(SyncOutcome.INSTALLED)
         val payload = checkNotNull(ContentSignature.recordsJson(listOf(full.json(), delta.json()).map(::json), ts))
-        assertContentEquals(payload, store.file(assertNotNull(liveDirectory()), StoreLayout.RECORDS))
+        assertContentEquals(payload, stored(liveName()).file.payload)
     }
 
     @Test

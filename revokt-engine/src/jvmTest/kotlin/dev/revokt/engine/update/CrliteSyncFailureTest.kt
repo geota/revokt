@@ -27,7 +27,9 @@ import dev.revokt.engine.fetch.client
 import dev.revokt.engine.fetch.json
 import dev.revokt.engine.fetch.ok
 import dev.revokt.engine.fetch.response
+import dev.revokt.engine.store.GenerationFileJson
 import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.SourceRecord
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
@@ -221,11 +223,11 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     fun `a prune that throws after the flip leaves the sync INSTALLED and its updater json advanced`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val first = assertNotNull(liveDirectory())
+        val first = assertNotNull(liveName())
         server.ts = ts + 1_000
         sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
         // Only prune deletes in the first directory; the install itself deletes only its own before writing it.
-        storage.failDelete = { if ("/$first/" in it) IllegalStateException("delete") else null }
+        storage.failDelete = { if (first in it) IllegalStateException("delete") else null }
         server.ts = ts + 2_000
         val now = ts + 3 * hour
         val run = sync(server, now = now).assert(SyncOutcome.INSTALLED)
@@ -241,10 +243,10 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         // escapes prune, and only the post-install guard keeps the outcome.
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val first = assertNotNull(liveDirectory())
+        val first = assertNotNull(liveName())
         server.ts = ts + 1_000
         sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
-        storage.failDelete = { if ("/$first/" in it) IllegalStateException("delete") else null }
+        storage.failDelete = { if (first in it) IllegalStateException("delete") else null }
         throwOn = { if (it.startsWith("pruning")) OutOfMemoryError("logger") else null }
         server.ts = ts + 2_000
         val now = ts + 3 * hour
@@ -259,58 +261,201 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     fun `an install that counted store failures still prunes`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val first = assertNotNull(liveDirectory())
+        val first = assertNotNull(liveName())
         server.ts = ts + 1_000
         sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
         storage.inner.write("crlite/compat/updater.json", "{".encodeToByteArray())
         server.ts = ts + 2_000
         sync(server, now = ts + 3 * hour).assert(SyncOutcome.INSTALLED).also { assertEquals(1, it.storeFailures) }
-        assertNull(store.meta(first))
+        assertEquals(StoreRead.Absent, store.readGeneration(first))
     }
 
     @Test
     fun `a pointer that does not read back after the flip is not pruned on, so nothing is deleted`() {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        val first = assertNotNull(liveDirectory())
-        storage.hidden = { it.endsWith("/current") }
+        val first = assertNotNull(liveName())
+        // current reads before the install, and not after its flip: a storage that breaks read-after-write.
+        var flipped = false
+        storage.failWrite = {
+            if (it.endsWith("/current")) flipped = true
+            null
+        }
+        storage.hidden = { flipped && it.endsWith("/current") }
         server.ts = ts + 1_000
         val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.INSTALLED)
         assertEquals(1, run.storeFailures)
-        assertNotNull(store.meta(first))
+        assertIs<StoreRead.Found<*>>(store.readGeneration(first))
     }
 
     @Test
-    fun `UNCHANGED against a live generation the pointer does not name retries the install and flips it`() {
+    fun `UNCHANGED against a served generation the pointer does not name re-flips to it with no fetch or publish`() {
         val server = Server()
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
         sync(server).assert(SyncFailure.STORE_FAILED)
         assertEquals("$ts/${delta.id}", live().generationId)
-        assertNull(liveDirectory())
+        assertNull(liveName())
         assertNull(sourceRecord().lastVerifiedLastModified)
         storage.failWrite = { null }
+        // An unnamed stray generation file: a heal flip is never pruned after (spec §6.5 "the re-flip").
+        val other = UpdateFixtures.pending(store, listOf(fullRecord)).file
+        val stray = store.putGeneration(GenerationFileJson.write(other))
+        val epoch = snapshot.snapshot.generationEpoch
+        server.fetcher.requests.clear()
         val now = ts + 2 * hour
-        sync(server, now = now).assert(SyncOutcome.INSTALLED)
-        assertEquals(GenerationNames.directory(ts, "$ts/${delta.id}"), liveDirectory())
-        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
+        val engine = TestEngine()
+        sync(server, now = now, engine = engine).assert(SyncOutcome.UNCHANGED)
+        assertEquals(StoreRead.Found(Pointer(assertNotNull(live().generationFile), null)), store.pointer())
+        assertEquals(emptyList(), engine.prepared, "the engine already serves it")
+        assertEquals(epoch, snapshot.snapshot.generationEpoch, "nothing is published")
+        assertEquals(emptyList(), server.attachmentRequests())
+        assertIs<StoreRead.Found<*>>(store.readGeneration(stray), "no prune follows")
+        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified, "the cursor at <ts>")
+        assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
         assertEquals(ts, updater(now).watermarkMillis)
+        sync(server, now = now + hour).assert(SyncOutcome.UNCHANGED)
     }
 
     @Test
-    fun `a retried flip over the same ts re-signed installs, then is UNCHANGED, with no STORE_FAILED loop`() {
+    fun `the re-flip keeps the old live generation as previous, by the candidate rule`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val old = assertNotNull(liveName())
+        server.ts = ts + day
+        storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        sync(server, now = ts + day + hour).assert(SyncFailure.STORE_FAILED)
+        storage.failWrite = { null }
+        val served = assertNotNull(live().generationFile)
+        assertNotEquals(old, served)
+        sync(server, now = ts + day + 2 * hour).assert(SyncOutcome.UNCHANGED)
+        assertEquals(StoreRead.Found(Pointer(served, old)), store.pointer())
+    }
+
+    @Test
+    fun `a served file that does not re-hash is not re-flipped to, so the collection installs and rewrites it`() {
         val server = Server()
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
         sync(server).assert(SyncFailure.STORE_FAILED)
         storage.failWrite = { null }
-        val stored = assertNotNull(store.meta(GenerationNames.directory(ts, "$ts/${delta.id}")))
+        val served = assertNotNull(live().generationFile)
+        val key = store.generationKey(served)
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
+        val engine = TestEngine()
+        val epoch = snapshot.snapshot.generationEpoch
+        val now = ts + 2 * hour
+        val run = sync(server, now = now, engine = engine).assert(SyncOutcome.UNCHANGED)
+        assertEquals(listOf("$ts/${delta.id}"), engine.prepared, "a full install")
+        assertEquals("$ts/${delta.id}", live().generationId, "the served generationId kept")
+        assertEquals(epoch + 1, snapshot.snapshot.generationEpoch, "its publish")
+        assertEquals(StoreRead.Found(Pointer(served, null)), store.pointer(), "the same bytes, the same name")
+        assertIs<StoreRead.Found<*>>(store.stored(served), "rewritten")
+        assertEquals(1, run.storeFailures, "the damaged served file, once")
+        assertEquals(ts, sourceRecord(now).lastVerifiedLastModified, "the cursor at <ts>")
+        assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
+        assertEquals(ts, updater(now).watermarkMillis)
+    }
+
+    @Test
+    fun `a heal-install beside a pointer that reads is never pruned after, and stays UNCHANGED`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val old = assertNotNull(liveName())
+        server.ts = ts + day
+        storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        sync(server, now = ts + day + hour).assert(SyncFailure.STORE_FAILED)
+        storage.failWrite = { null }
+        val served = assertNotNull(live().generationFile)
+        val key = store.generationKey(served)
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).let { it.copyOf(it.size - 1) })
+        val stray = store.blobKey(okio.ByteString.of(1, 2, 3).sha256())
+        storage.inner.write(stray, byteArrayOf(1, 2, 3))
+        sync(server, now = ts + day + 2 * hour).assert(SyncOutcome.UNCHANGED)
+        assertEquals(StoreRead.Found(Pointer(served, old)), store.pointer())
+        assertIs<StoreRead.Found<*>>(store.stored(served), "rewritten")
+        assertTrue(stray in storage.inner.names(), "a repair is never pruned after")
+    }
+
+    @Test
+    fun `a served generation with a rotted blob is not re-flipped to, so its blob is fetched again and rewritten`() {
+        val server = Server()
+        storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        sync(server).assert(SyncFailure.STORE_FAILED)
+        storage.failWrite = { null }
+        val served = assertNotNull(live().generationFile)
+        val key = store.blobKey(delta.body.toByteString().sha256())
+        storage.inner.write(key, checkNotNull(storage.inner.read(key)).also { it[0] = (it[0] + 1).toByte() })
+        server.fetcher.requests.clear()
+        val engine = TestEngine()
+        val run = sync(server, now = ts + 2 * hour, engine = engine).assert(SyncOutcome.UNCHANGED)
+        assertEquals(listOf(attachments + delta.location), server.attachmentRequests())
+        assertContentEquals(delta.body, storage.inner.read(key))
+        assertEquals(listOf("$ts/${delta.id}"), engine.prepared, "a full install")
+        assertEquals(StoreRead.Found(Pointer(served, null)), store.pointer())
+        assertEquals(1, run.storeFailures, "the rotted blob, once")
+    }
+
+    /** A sync of [server] whose flip fails after activation: the engine serves a file `current` does not name. */
+    private fun failedFlip(server: Server): String {
+        storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        sync(server).assert(SyncFailure.STORE_FAILED)
+        storage.failWrite = { null }
+        return assertNotNull(live().generationFile)
+    }
+
+    private fun truncate(key: String) {
+        val bytes = checkNotNull(storage.inner.read(key))
+        storage.inner.write(key, bytes.copyOf(bytes.size - 1))
+    }
+
+    @Test
+    fun `S1 - a damaged served file the pointer names is counted on every UNCHANGED sync, once`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val served = assertNotNull(liveName())
+        truncate(store.generationKey(served))
+        for (at in listOf(ts + 2 * hour, ts + 9 * hour)) {
+            val run = sync(server, now = at).assert(SyncOutcome.UNCHANGED)
+            assertEquals(1, run.storeFailures, "the served file that does not load, at $at")
+        }
+    }
+
+    @Test
+    fun `S3 - an absent blob of the served generation is a failed load, counted once by the heal-install`() {
+        val server = Server()
+        failedFlip(server)
+        storage.inner.delete(store.blobKey(delta.body.toByteString().sha256()))
+        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.UNCHANGED)
+        assertEquals(1, run.storeFailures)
+        assertEquals(listOf(attachments + delta.location), server.attachmentRequests().takeLast(1))
+    }
+
+    @Test
+    fun `S5 - a damaged unnamed served file under a re-signed collection is counted once`() {
+        val server = Server()
+        val served = failedFlip(server)
+        truncate(store.generationKey(served))
+        server.signature = Server().sign()
+        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.UNCHANGED)
+        assertEquals(1, run.storeFailures)
+        assertNotEquals(served, liveName(), "the re-signed file, under its own name")
+    }
+
+    @Test
+    fun `a retried flip over the same ts re-signed re-flips to the served file, then is UNCHANGED, with no loop`() {
+        val server = Server()
+        storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        sync(server).assert(SyncFailure.STORE_FAILED)
+        storage.failWrite = { null }
+        val first = assertNotNull(live().generationFile)
         // Remote Settings re-signs the same collection at the same <ts>: a fresh ECDSA signature.
         val resigned = Server().sign()
         assertNotEquals(server.sign(), resigned)
         server.signature = resigned
         val now = ts + 2 * hour
-        sync(server, now = now).assert(SyncOutcome.INSTALLED)
-        assertEquals(GenerationNames.directory(ts, "$ts/${delta.id}"), liveDirectory())
-        assertEquals(stored, store.meta(assertNotNull(liveDirectory())))
+        sync(server, now = now).assert(SyncOutcome.UNCHANGED)
+        // The re-signed collection is UNCHANGED at the same <ts>: the served file, which passes Load, is flipped to.
+        assertEquals(StoreRead.Found(Pointer(first, null)), store.pointer())
+        assertEquals("$ts/${delta.id}", stored(first).generationId)
         assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
         sync(server, now = now + hour).assert(SyncOutcome.UNCHANGED)
     }

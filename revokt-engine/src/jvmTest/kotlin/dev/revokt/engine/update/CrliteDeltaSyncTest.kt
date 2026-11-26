@@ -25,6 +25,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -37,7 +38,7 @@ import kotlin.test.assertTrue
  */
 internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     @Test
-    fun `incremental fixture - a delta changeset with a tombstone installs from the cursor, records json signed`() {
+    fun `incremental fixture - a delta changeset with a tombstone installs from the cursor, its records signed`() {
         val server = installedFirst()
         next(server, listOf(full, delta2), listOf(tombstone))
         val now = ts2 + hour
@@ -53,16 +54,16 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
             listOf(monitor, server.sinceUrl(ts), x5u, "$base/", attachments + delta2.location),
             server.fetcher.requests.map { it.url },
         )
-        val directory = GenerationNames.directory(ts2, id)
-        assertEquals(directory, liveDirectory())
+        val stored = stored(liveName())
+        assertEquals(id, stored.generationId)
         val payload = checkNotNull(ContentSignature.recordsJson(server.records.map(::json), ts2))
-        assertContentEquals(payload, store.file(directory, StoreLayout.RECORDS))
-        assertEquals(setOf(full.filename), store.meta(directory)?.blobs?.keys)
-        assertNull(store.file(directory, delta.filename, delta.body.toByteString().sha256()))
+        assertContentEquals(payload, stored.file.payload)
+        assertEquals(listOf(full.id, delta2.id), stored.placed.map { it.record.id }, "the tombstoned delta is gone")
         assertEquals(ts2, sourceRecord(now).lastVerifiedLastModified)
         assertEquals(ts2, updater(now).watermarkMillis)
-        // The previous generation is kept, as the pointer's previous.
-        assertNotNull(store.meta(directory1))
+        // The previous generation is kept, as the pointer's previous, with its blobs.
+        assertEquals(StoreRead.Found(Pointer(stored.name, assertNotNull(name1))), store.pointer())
+        loaded(name1)
     }
 
     @Test
@@ -115,7 +116,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
             listOf(monitor, server.sinceUrl(ts), x5u, server.changesetUrl),
             server.fetcher.requests.map { it.url },
         )
-        assertEquals(directory1, liveDirectory())
+        assertEquals(name1, liveName())
         assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
         assertEquals(1, sourceRecord(now).consecutiveFailures)
     }
@@ -146,82 +147,66 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `a delta whose file the pointed generation holds is copied, not fetched, and one that does not re-hash is`() {
+    fun `a delta whose blob is stored and re-hashes is reused, not fetched, and one that does not is fetched again`() {
         val server = installedFirst()
         next(server, listOf(full, delta, delta2))
         sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
         assertEquals(listOf(attachments + delta2.location), server.attachmentRequests())
-        val directory2 = assertNotNull(liveDirectory())
-        assertContentEquals(delta.body, store.file(directory2, delta.filename, delta.body.toByteString().sha256()))
-        // A third generation with the live directory's delta corrupted: the previous generation's file re-hashes, so
-        // it is copied from there.
-        storage.inner.write("crlite/compat/$directory2/${delta.filename}", byteArrayOf(1, 2, 3))
+        // A third generation with the delta's blob rotted: fetched again, as Firefox's isFilterOnDisk re-hashes its
+        // files (#201, every blob), and rewritten, a store failure.
+        val key = store.blobKey(delta.body.toByteString().sha256())
+        storage.inner.write(key, byteArrayOf(1, 2, 3))
         server.ts = ts2 + 1_000
         server.fetcher.requests.clear()
-        sync(server, now = server.ts + hour).assert(SyncOutcome.INSTALLED)
-        assertEquals(emptyList(), server.attachmentRequests())
-        val directory3 = assertNotNull(liveDirectory())
-        assertContentEquals(delta.body, store.file(directory3, delta.filename, delta.body.toByteString().sha256()))
-        // A fourth with neither stored file re-hashing: fetched again, as Firefox's isFilterOnDisk re-hashes its files.
-        storage.inner.write("crlite/compat/$directory3/${delta.filename}", byteArrayOf(1, 2, 3))
-        server.ts = ts2 + 2_000
-        server.fetcher.requests.clear()
-        sync(server, now = server.ts + hour).assert(SyncOutcome.INSTALLED)
+        val run = sync(server, now = server.ts + hour).assert(SyncOutcome.INSTALLED)
         assertEquals(listOf(attachments + delta.location), server.attachmentRequests())
-        val directory4 = assertNotNull(liveDirectory())
-        assertContentEquals(delta.body, store.file(directory4, delta.filename, delta.body.toByteString().sha256()))
+        assertEquals(1, run.storeFailures)
+        assertContentEquals(delta.body, storage.inner.read(key))
     }
 
     @Test
-    fun `each delta body is written to the new directory as it arrives, not held until the install`() {
+    fun `each body is written as its blob as it arrives, before the next is fetched`() {
         val server = installedFirst()
-        val corrupt = checkNotNull(storage.inner.read("crlite/compat/$directory1/${delta.filename}")).also { it[0] = 9 }
-        storage.inner.write("crlite/compat/$directory1/${delta.filename}", corrupt)
+        storage.inner.write(store.blobKey(delta.body.toByteString().sha256()), byteArrayOf(9))
         next(server, listOf(full, delta, delta2))
-        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
-        var stagedFirst = false
+        var writtenFirst = false
         server.overrides[attachments + delta2.location] = {
-            stagedFirst = storage.inner.read("crlite/compat/$directory2/${delta.filename}") != null
+            writtenFirst = store.readBlob(delta.body.toByteString().sha256()) != null
             response(200, delta2.body)
         }
         sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
         assertEquals(listOf(attachments + delta.location, attachments + delta2.location), server.attachmentRequests())
-        assertTrue(stagedFirst, "the first delta was staged before the second was fetched")
+        assertTrue(writtenFirst, "the first delta was written before the second was fetched")
     }
 
     @Test
-    fun `a sync that fails after staging deletes the directory it staged, and the live generation stays`() {
+    fun `a sync that fails after writing some bodies deletes nothing, and the retry fetches only the rest`() {
         val server = installedFirst()
-        next(server, listOf(full, delta, delta2))
+        next(server, listOf(full2, delta2))
         server.overrides[attachments + delta2.location] = { response(404) }
+        val before = storage.names()
         sync(server, now = ts2 + hour).assert(SyncFailure.ATTACHMENT_FETCH)
-        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
-        assertEquals(emptyList(), storage.names().filter { "/$directory2/" in it })
-        assertEquals(directory1, liveDirectory())
+        assertEquals(before + store.blobKey(full2.body.toByteString().sha256()), storage.names())
+        assertEquals(name1, liveName())
+        server.overrides.clear()
+        server.fetcher.requests.clear()
+        sync(server, now = ts2 + 2 * hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(listOf(attachments + delta2.location), server.attachmentRequests())
     }
 
     @Test
-    fun `#201 - a retried flip over a held directory whose stored delta was altered holds another generation`() {
+    fun `#201 - a retried flip whose stored delta rotted in between fetches it again in the heal-install`() {
         val server = Server()
         storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
         sync(server).assert(SyncFailure.STORE_FAILED)
         storage.failWrite = { null }
-        val key = "crlite/compat/$directory1/${delta.filename}"
+        val key = store.blobKey(delta.body.toByteString().sha256())
         storage.inner.write(key, delta.body.copyOf().also { it[it.size - 1] = (it.last() + 1).toByte() })
         server.fetcher.requests.clear()
-        val now = ts + 2 * hour
-        val run = sync(server, now = now).assert(SyncFailure.STORE_FAILED)
+        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.UNCHANGED)
         assertEquals(1, run.storeFailures)
-        assertTrue(
-            "holds another generation" in
-                run.result.cause
-                    ?.message
-                    .orEmpty(),
-            "${run.result.cause}",
-        )
-        assertEquals(emptyList(), server.attachmentRequests())
-        assertNull(liveDirectory())
-        assertNotNull(store.meta(directory1))
+        assertEquals(listOf(attachments + delta.location), server.attachmentRequests())
+        assertEquals(live().generationFile, liveName())
     }
 
     @Test
@@ -247,41 +232,30 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `#205 - an orphan with a corrupted delta is completed afresh by the next sync, never a STORE_FAILED loop`() {
-        // The first sync completes the directory, prepare throws and the delete fails: a complete orphan is left. It
-        // holds two deltas; one is then corrupted, and the other stays intact.
+    fun `#205 - an orphan file and a rotted blob never loop, the next sync refetching only the rot`() {
+        // The first sync writes its generation file, then prepare throws: an unnamed generation file is left.
         val records = listOf(full, delta, delta2)
         val bodies = records.associate { it.location to it.body }
         val server = Server(records = records.map { it.json() }, bodies = bodies)
-        val orphan = GenerationNames.directory(ts, "$ts/${delta2.id}")
-        val throwing =
-            UpdateFixtures.TestEngine().apply {
-                onPrepare = {
-                    storage.failDelete = { if ("/$orphan/" in it) IllegalStateException("delete") else null }
-                    throw IllegalArgumentException("corrupt")
-                }
-            }
+        val throwing = UpdateFixtures.TestEngine().apply { onPrepare = { throw IllegalArgumentException("corrupt") } }
         sync(server, engine = throwing).assert(SyncFailure.ENGINE_FAILED)
-        storage.failDelete = { null }
-        assertNotNull(store.meta(orphan))
-        assertNull(liveDirectory())
-        val key = "crlite/compat/$orphan/${delta.filename}"
+        val orphan = store.generationNames().single()
+        assertNull(liveName())
+        val key = store.blobKey(delta.body.toByteString().sha256())
         storage.inner.write(key, checkNotNull(storage.inner.read(key)).also { it[0] = (it[0] + 1).toByte() })
-        // The same collection, served by another signer, so this sync's verified leaf differs from the orphan's.
+        // The same collection, served by another signer: another generation file under another name.
         val p256 = ecPair("x5u-leaf-p256", "secp256r1")
         val chain2 = chain(leaf = leaf(spki = p256.public.encoded))
         val resigned = Server(records = server.records, bodies = bodies, pem = pem(chain2), key = p256.private)
-        val now = ts + 8 * hour
-        val run = sync(resigned, now = now).assert(SyncOutcome.INSTALLED)
-        assertEquals(0, run.storeFailures)
-        // Only the corrupted delta is fetched: the full's blob and the intact delta re-hash and are kept.
+        val run = sync(resigned, now = ts + 8 * hour).assert(SyncOutcome.INSTALLED)
+        assertEquals(1, run.storeFailures, "the rotted blob, rewritten")
+        // Only the rotted delta is fetched: the full's blob and the intact delta re-hash and are reused.
         assertEquals(listOf(attachments + delta.location), resigned.attachmentRequests())
-        assertEquals(orphan, liveDirectory())
-        assertContentEquals(delta.body, store.file(orphan, delta.filename, delta.body.toByteString().sha256()))
-        assertContentEquals(delta2.body, store.file(orphan, delta2.filename, delta2.body.toByteString().sha256()))
-        // This sync's verified signer, not the orphan's stored one.
-        assertEquals(chain2[0].toByteString().sha256(), store.meta(orphan)?.signed?.signerLeafSha256)
-        assertFalse(served[0].toByteString().sha256() == store.meta(orphan)?.signed?.signerLeafSha256)
+        val live = stored(liveName())
+        assertEquals(chain2[0].toByteString().sha256(), live.file.signerLeafSha256)
+        assertTrue(live.name != orphan)
+        // No prune after an install over an absent pointer: the orphan stays for the next prune.
+        assertIs<StoreRead.Found<*>>(store.readGeneration(orphan))
     }
 
     @Test
@@ -292,8 +266,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         storage.failWrite = { if (it.endsWith("updater.json")) IllegalStateException("updater") else null }
         sync(server, now = ts2 + hour).assert(SyncFailure.STORE_FAILED)
         storage.failWrite = { null }
-        val directory2 = GenerationNames.directory(ts2, "$ts2/${delta2.id}")
-        assertEquals(directory2, liveDirectory())
+        assertEquals("$ts2/${delta2.id}", stored(liveName()).generationId)
         assertEquals(ts, sourceRecord(ts2 + hour).lastVerifiedLastModified)
         // A third. The cursor is not the live generation's <ts>, so it is not sent (#147, §7.1): the whole collection.
         val delta3 =
@@ -410,7 +383,7 @@ internal class CrliteDeltaSyncTest : CrliteDeltaFixture() {
         assertFalse(recording.messages.any { "fetching the whole collection" in it.second })
         assertEquals(ts, sourceRecord(now).lastVerifiedLastModified)
         assertEquals(1, sourceRecord(now).consecutiveFailures)
-        assertEquals(directory1, liveDirectory())
+        assertEquals(name1, liveName())
     }
 
     @Test

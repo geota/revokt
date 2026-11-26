@@ -30,15 +30,10 @@ import dev.revokt.engine.fetch.ClientResult
 import dev.revokt.engine.fetch.CrliteRecord
 import dev.revokt.engine.fetch.RemoteSettingsClient
 import dev.revokt.engine.fetch.resets
-import dev.revokt.engine.json.Json
-import dev.revokt.engine.json.JsonArray
 import dev.revokt.engine.json.JsonObject
-import dev.revokt.engine.json.JsonParseException
 import dev.revokt.engine.store.BlobState
 import dev.revokt.engine.store.BlobWrite
-import dev.revokt.engine.store.GenerationMeta
-import dev.revokt.engine.store.GenerationNames
-import dev.revokt.engine.store.SignedMeta
+import dev.revokt.engine.store.GenerationFile
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
@@ -96,7 +91,7 @@ internal class CrliteSync(
      *    fields written.
      * 2. Poll `monitor/changes`, then fetch the collection's changeset at its `_expected`: from the cursor
      *    (`_since=<cursor>` and `If-None-Match: "<cursor>"`) when `updater.json` holds one, it is the live generation's
-     *    `<ts>` (#147) and the pointed generation's `records.json` reads, else the whole collection. A 304 is
+     *    `<ts>` (#147) and the served generation's file loads (spec §6.5 Load), else the whole collection. A 304 is
      *    `UNCHANGED`.
      * 3. Verify it ([ChangesetVerifier]) over the stored records with its changes merged, tombstones first
      *    ([ContentSignature.merge]); everything after reads only the verified records and `<ts>`
@@ -111,23 +106,30 @@ internal class CrliteSync(
      * 7. The cap before any body: a signed record over `MAX_FILTER_BYTES` is `ATTACHMENT_OVER_CAP`, and nothing is
      *    fetched. There is no per-sync total, as neither Firefox nor upki has one (the maintainer's decision on #137;
      *    `MAX_SYNC_BYTES` is dropped).
-     * 8. Each body, one at a time, checked against its signed size and hash and written: a full as a blob, reused without
-     *    a fetch when its blob is stored and re-hashes (§6.5; a mismatch is fetched and rewritten, `storeFailures++`); a
-     *    delta staged as a file of the generation directory, copied without a fetch from a pointed generation whose file
-     *    of that name re-hashes to it, as Firefox and upki reuse a filter on disk whose hash matches.
+     * 8. Each body, one at a time, full or delta: reused without a fetch when its blob is stored and re-hashes (§6.5,
+     *    #201), as Firefox and upki reuse a filter on disk whose hash matches; otherwise fetched, checked against its
+     *    signed size and hash and written as its blob (a stored blob that did not re-hash is rewritten,
+     *    `storeFailures++`).
      * 9. [buildIndex], then [install] in §6.5's order, which writes `updater.json` after the pointer flip; on success
-     *    the store is pruned to what the pointer names, unless the flip healed a malformed pointer (#256).
+     *    the store is pruned ([pruneAfter]) when the pointer read `Found` before the install with every generation it
+     *    named reading, which a flip that healed a malformed pointer never does (#256).
      *
-     * Every outcome but `INSTALLED` writes `updater.json` itself ([UpdaterTransitions.after]) and deletes any directory
-     * this sync staged: the cursor, `lastVerified*` and the watermark advance only through an install. Every throwable is
+     * Every outcome but `INSTALLED` writes `updater.json` itself ([UpdaterTransitions.after]), and none deletes anything:
+     * a failed install's blobs and generation file are reused by the next attempt. The cursor, `lastVerified*` and the
+     * watermark advance only through an install, or through a repair at the live generation's `<ts>`: the re-flip, the
+     * heal-install, or an `UNCHANGED` whose `updater.json` was behind it (spec §6.5). Every throwable is
      * caught, an `OutOfMemoryError` included: `STORE_FAILED` for a non-fatal one in a store access, else
      * `INTERNAL_ERROR` (§6.5: "every loader task catches `Throwable`"). A body, record count or response above half its
      * `RevoktLimits` constant is a `CAP_NEAR_LIMIT` warning on whatever result the sync ends with (§4), and the sync
      * goes on.
      *
-     * `UNCHANGED`-by-timestamp against a generation the snapshot holds live but the pointer does not name (an install
-     * whose flip or `updater.json` failed after `activate`, #184) is not the end: the install is retried, which reuses
-     * the already-written directory and flips the pointer (#137's notes from #184 and #190).
+     * `UNCHANGED`-by-timestamp against a generation the snapshot holds live but the pointer does not name as `live` (an
+     * install whose flip or `updater.json` failed after `activate`, #184, or a pointer that does not read) is not the
+     * end: spec §6.5's re-flip points `current` at the served file, once it and its blobs pass Load's steps 1 to 3, and
+     * writes `updater.json` as the install of that `<ts>` would, with no fetch, no `prepare` and no prune ([reflip]).
+     * When the served file does not pass, the heal-install installs the collection as served, every stored blob that
+     * re-hashes reused. Both are store repairs: the sync stays `UNCHANGED`, as the served generation does not change,
+     * and neither is pruned after (#137's notes from #184 and #190).
      */
     fun syncOnce(nowMillis: Long): SyncRun = Attempt(nowMillis).run()
 
@@ -175,9 +177,6 @@ internal class CrliteSync(
 
         private val reads = Reads()
         private val gates = Gates()
-
-        /** The generation directory this sync staged delta files in, until an install takes it over. */
-        private var staged: String? = null
 
         /** Set once the first body fetch starts: from there on the sync is an *install* (§6.5's order). */
         private var installing = false
@@ -245,10 +244,12 @@ internal class CrliteSync(
             val cursor = record.sources[source.sourceId]?.lastVerifiedLastModified
             // The stored records are the merge base of a _since changeset only: the whole collection, fetched when there is
             // no cursor (an absent or malformed updater.json) or no stored records to merge with, merges over nothing (#236).
-            // The cursor is sent only while it is the live generation's <ts> (§7.1, #147 from #205's review): a 304 to it
-            // must speak for what is served, as Firefox's `_since` is its local data's own timestamp. After a fallback
-            // (the seed, or `previous`, live while the cursor names a newer generation) the whole collection is fetched.
-            val since = cursor?.takeIf { base != null && it == reads.liveTimestamp() }
+            // The cursor is sent only while it is the live generation's <ts> (§7.1, #147 from #205's review) and the
+            // pointer names that generation: a 304 to it must speak for what is served and stored, as Firefox's `_since`
+            // is its local data's own timestamp. After a fallback (the seed, or `previous`, live while the cursor names a
+            // newer generation) or beside a pointer that does not name what is served (a flip that failed or a malformed
+            // pointer, which the reflip of the whole collection heals) the whole collection is fetched.
+            val since = cursor?.takeIf { base != null && it == reads.liveTimestamp() && reads.pointed() }
             val merged = if (since != null) base.orEmpty() else emptyList()
             val verified =
                 when (val fetched = Changesets().verified(expected, since, merged)) {
@@ -365,12 +366,36 @@ internal class CrliteSync(
             // The live generation's install activated but its flip did not land: retry it, never stop (#190).
             val reflip = decision == SyncDecision.UNCHANGED && !reads.pointed()
             if (!reflip) decided(decision, ts)?.let { return it }
-            return fetched(verified, crlite, records, placed, noneLoaded = live == null)
+            if (reflip) reflipped(ts)?.let { return it }
+            return fetched(verified, crlite, records, placed, noneLoaded = live == null, repair = reflip)
+        }
+
+        /**
+         * Spec §6.5's re-flip of the served generation at [ts], or null when its file or a blob does not pass Load's
+         * steps 1 to 3, so the collection is installed instead (the heal-install). A file that fails steps 1 and 2 was
+         * counted by [Reads.deltaBase]; a failed step 3 is counted here: each once.
+         */
+        private fun reflipped(ts: Long): SyncResult? {
+            val served = snapshot.servedFile() ?: return null
+            val stored = (stored { store.stored(served) } as? StoreRead.Found)?.value ?: return null
+            val generationId = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId
+            if (stored.generationId != generationId || stored.timestampMillis != ts) return null
+            if (!stored { store.blobsMatch(stored) }) {
+                // Step 3 failed: a failed load, counted once, here; the heal-install's rewrite of its blobs is not
+                // counted again, and neither is its read of the served file as a candidate (#335 review).
+                reads.count(served)
+                reads.countedBlobs += stored.blobNames
+                return null
+            }
+            return installed(ts, noneLoaded = false, repair = true) { publication, updated ->
+                reflip(stored, store, snapshot, publication, updated)
+            }
         }
 
         /**
          * Steps 7 to 9 for the [placed] filters of [records] (the channel's [crlite] records); [noneLoaded] when no
-         * generation was live at the decision, so the install sets the watermark to `<ts>` (§7.1).
+         * generation was live at the decision, so the install sets the watermark to `<ts>` (§7.1); [repair] for the
+         * heal-install of the served generation (spec §6.5), which stays `UNCHANGED` and is never pruned after.
          */
         private fun fetched(
             verified: ChangesetVerification.Verified,
@@ -378,18 +403,15 @@ internal class CrliteSync(
             records: List<FilterRecord>,
             placed: List<PlacedFilter>,
             noneLoaded: Boolean,
+            repair: Boolean,
         ): SyncResult {
             val ts = verified.timestamp
             val byId = crlite.associateBy { it.id }
             val attachments = placed.map { byId.getValue(it.record.id) }
-            val full = attachments.single { !it.incremental }
-            val reuse = stored { store.blob(full.attachment.sha256) } == BlobState.MATCH
             gates.cap(attachments)?.let { return it }
             installing = true
-            val generationId = "$ts/${placed.last().record.id}"
-            val bodies = Bodies(GenerationNames.directory(ts, generationId))
-            bodies.open()?.let { return it }
-            for (r in attachments) bodies.fetch(r, reuse)?.let { return it }
+            val bodies = Bodies()
+            for (r in attachments) bodies.fetch(r)?.let { return it }
             val built =
                 when (val build = buildIndex(records, channel) { bodies.bytes(byId.getValue(it.id)) }) {
                     is IndexBuild.Built -> build
@@ -399,45 +421,62 @@ internal class CrliteSync(
                 val detail = "${filter.record.id} is in an encoding the engine does not list (${engine.formats})"
                 return end(Ended(SyncFailure.FORMAT_UNSUPPORTED, detail))
             }
-            val pending = pending(verified, generationId, built, bodies, bodies.format(placed))
-            return installed(pending, noneLoaded)
+            val pending = pending(verified, built, bodies.format(placed))
+            return installed(pending, noneLoaded, repair)
         }
 
         /**
-         * The generation to install: id [generationId], `"<ts>/<last placed record id>"` (spec §4
-         * `DataState.generationId`), its `meta.json`, [built]'s index, the staged deltas and `records.json`, the verified
-         * payload without its prefix.
+         * The generation to install: its generation file (spec §6.5), the verified payload's records and `<ts>` with the
+         * signature that verified them and its leaf's SHA-256, and [built]'s index and placed filters. Its id,
+         * `"<ts>/<last placed record id>"` (spec §4 `DataState.generationId`), is derived from them.
          */
         private fun pending(
             verified: ChangesetVerification.Verified,
-            generationId: String,
             built: IndexBuild.Built,
-            bodies: Bodies,
             format: FilterFormat,
         ): PendingGeneration {
-            val ts = verified.timestamp
-            val meta =
-                GenerationMeta(
+            val raw = checkNotNull(verified.entry.signature?.let(RawSignature::decode)) { "a verified signature" }
+            val records = checkNotNull(ContentSignature.payloadRecords(verified.records)) { "verified records" }
+            val file =
+                GenerationFile(
                     dataset = Dataset.CRLITE,
                     channel = channel,
-                    generationId = generationId,
-                    format = format,
                     freshness = Freshness.RECORD_LAST_MODIFIED,
-                    sourceTimestampMillis = ts,
-                    collection = source.bucket + "/" + source.collection(Dataset.CRLITE),
-                    blobs = bodies.blobs,
-                    signed = signedMeta(verified),
+                    seedFormat = null,
+                    signature = raw.toByteString(),
+                    signerLeafSha256 =
+                        verified.path.links[0]
+                            .der
+                            .toByteString()
+                            .sha256(),
+                    records = records,
+                    lastModified = verified.timestamp,
                 )
-            val recordsJson = checkNotNull(ContentSignature.recordsJson(verified.records, ts)) { "verified records" }
-            return PendingGeneration(meta, built.index, bodies.deltas, recordsJson)
+            return PendingGeneration(file, built.filters, built.index, format)
         }
 
         /** Runs [install] for [pending] and ends the sync with its outcome; a successful install is then pruned to. */
         private fun installed(
             pending: PendingGeneration,
             noneLoaded: Boolean,
+            repair: Boolean,
+        ): SyncResult =
+            installed(pending.file.lastModified, noneLoaded, repair) { publication, updated ->
+                install(pending, engine, store, snapshot, publication, updated, logger)
+            }
+
+        /**
+         * Ends the sync with the outcome of [flip] (an install, or the re-flip) of a generation at [ts], given its
+         * publication and the `updater.json` to write: `INSTALLED`, pruned to when [InstallResult.Installed.prunable];
+         * for a [repair] of the served generation (the re-flip or the heal-install, spec §6.5), `UNCHANGED` and never
+         * pruned to.
+         */
+        private inline fun installed(
+            ts: Long,
+            noneLoaded: Boolean,
+            repair: Boolean,
+            flip: (Publication, UpdaterRecord) -> InstallResult,
         ): SyncResult {
-            val ts = pending.meta.sourceTimestampMillis
             val updated =
                 UpdaterTransitions.after(
                     record,
@@ -448,23 +487,29 @@ internal class CrliteSync(
                     serverBackoffMillis = backoff,
                     noneLoaded = noneLoaded,
                 )
-            val publication = Publication(fromSeed = false, seedFormat = null, staleGateOpen = true, nowMillis = now)
-            return when (val result = install(pending, engine, store, snapshot, publication, updated, logger)) {
+            val publication =
+                Publication(
+                    fromSeed = false,
+                    seedFormat = null,
+                    staleGateOpen = true,
+                    nowMillis = now,
+                    counted = reads.counted.toSet(),
+                )
+            return when (val result = flip(publication, updated)) {
                 is InstallResult.Installed -> {
-                    staged = null
                     written = updated
                     storeFailures += result.storeFailures
-                    val installed =
-                        result(SyncOutcome.INSTALLED, null, emptyList(), mapOf(Dataset.CRLITE to result.generationId))
+                    val outcome = if (repair) SyncOutcome.UNCHANGED else SyncOutcome.INSTALLED
+                    val generations = if (repair) emptyMap() else mapOf(Dataset.CRLITE to result.generationId)
+                    val installed = result(outcome, null, emptyList(), generations)
                     done = installed
-                    // A heal is never pruned: the malformed pointer it replaced may have named any directory (#256).
-                    if (!result.healed) store.pruneAfter(result.directory, logger) { storeFailures++ }
+                    // Only over a pointer that read, every generation it named reading: never after a heal (#256) or a
+                    // repair, and never beside a pointed generation that did not read (§6.5, fail closed).
+                    if (result.prunable && !repair) store.pruneAfter(result.name, logger) { storeFailures++ }
                     installed
                 }
 
                 is InstallResult.Failed -> {
-                    // An activated generation's directory is live in the engine: it stays for the retried flip (#184).
-                    if (result.activated) staged = null
                     storeFailures += result.storeFailures
                     end(Ended(result.failure, "the install failed", cause = result.cause))
                 }
@@ -478,7 +523,7 @@ internal class CrliteSync(
         ): SyncResult? =
             when (decision) {
                 SyncDecision.INSTALL -> null
-                SyncDecision.UNCHANGED -> end(Ended(null, "$ts is live"))
+                SyncDecision.UNCHANGED -> end(Ended(null, "$ts is live", verifiedAt = ts.takeIf(reads::behind)))
                 SyncDecision.ROLLBACK_REFUSED -> end(Ended(SyncFailure.ROLLBACK_REFUSED, "$ts rolls back"))
             }
 
@@ -539,107 +584,29 @@ internal class CrliteSync(
         }
 
         /**
-         * The bodies of one generation in [directory], fetched one at a time and written as each arrives: a full as its
-         * blob, a delta as a file staged in [directory] (§6.5: "write …, drop the body"). Neither stays here.
+         * The bodies of one generation, fetched one at a time and each written as its blob as it arrives (§6.5: "write …,
+         * drop the body"); none stays here. A body whose blob is stored and re-hashes is not fetched.
          */
-        private inner class Bodies(
-            private val directory: String,
-        ) {
-            val blobs = LinkedHashMap<String, ByteString>()
-            val deltas = LinkedHashMap<String, ByteString>()
+        private inner class Bodies {
             private val encodings = HashMap<String, Encoding?>()
 
             /**
-             * Whether [directory] is held and complete, read as it stands: the engine holds it live, the pointer names it,
-             * or it sits beside a malformed pointer, which may name it (#236).
+             * [r]'s blob: kept without a fetch when it is stored and re-hashes (#201: every stored filter is re-hashed
+             * before it is reused), else fetched and written, a rewrite of one that did not re-hash counting a store
+             * failure. The failure that ends the sync, or null.
              */
-            private var held = false
-
-            /** The live and pointed generations' directories, which a delta of the same name and hash is copied from. */
-            private var pointed: List<String> = emptyList()
-
-            /**
-             * Readies [directory]. A held one is never written. It is held when the engine holds it live or the pointer
-             * names it, or when the pointer is malformed (it may name any directory) and [directory]'s `meta.json` is
-             * present (#236, fail closed). A held directory that is complete is read as it stands, and [install] then
-             * compares it with this generation. One whose `meta.json` is malformed or (when live or pointed) missing
-             * fails the sync as [install] would, `STORE_FAILED`, and a new `<ts>` heals it.
-             *
-             * Any other directory is referenced by nothing. Beside a malformed pointer, that means one with no `meta.json`
-             * at all. It is completed afresh: a complete orphan's `meta.json` is deleted ([StoreLayout.reopen]), each of
-             * its files is reused only when it re-hashes to a placed delta, and [install] deletes the rest. So neither a
-             * corrupted delta nor another generation's `meta.json` or `index.bin` there fails every sync of this `<ts>`
-             * (the #205 review). The failure that ends the sync, or null.
-             */
-            fun open(): SyncResult? {
-                val pointerRead = stored { store.pointer() }
-                val pointer = (pointerRead as? StoreRead.Found)?.value
-                val live = snapshot.liveDirectory()
-                val holders = listOfNotNull(live, pointer?.live, pointer?.previous).distinct()
-                pointed = holders.filter { it != directory }
-                val metaRead = stored { store.readMeta(directory) }
-                val complete = metaRead is StoreRead.Found
-                // #236, fail closed: a malformed pointer may name a directory whose meta.json is present (complete, or
-                // malformed as a torn write or a newer binary leaves it), so it is held, never reopened, rewritten or
-                // deleted; only one with no meta.json is staged.
-                if (directory in holders || (pointerRead is StoreRead.Malformed && metaRead !is StoreRead.Absent)) {
-                    held = complete
-                    if (held) return null
-                    return storeFailed("$directory is held, and its meta.json is not readable")
-                }
-                // A complete orphan is reopened; an incomplete one needs nothing before its deltas are staged.
-                if (complete) stored { store.reopen(directory) }
-                // Only once reopen accepted it: a directory the pointer names is never deleted on a failure.
-                staged = directory
+            fun fetch(r: CrliteRecord): SyncResult? {
+                if (stored { store.blob(r.attachment.sha256) } == BlobState.MATCH) return null
+                val bytes = attachment(r) { return it }
+                val write = stored { store.putBlob(bytes) }
+                if (write == BlobWrite.REWRITTEN && r.attachment.sha256.hex() !in reads.countedBlobs) storeFailures++
                 return null
             }
 
-            /**
-             * Fetches [r]'s body and writes it, or for a [reuse]d full only names its stored blob; the failure that ends
-             * the sync, or null. A delta is read from a held [directory]; otherwise it is kept when [directory] already
-             * holds it re-hashing, else copied from a pointed generation's file of its name that re-hashes to its signed
-             * hash, else fetched, and staged in [directory].
-             */
-            fun fetch(
-                r: CrliteRecord,
-                reuse: Boolean,
-            ): SyncResult? {
-                val name = GenerationNames.derive(r.attachment.filename)
-                val sha256 = r.attachment.sha256
-                if (!r.incremental) {
-                    if (!reuse) {
-                        val bytes = attachment(r) { return it }
-                        if (stored { store.putBlob(bytes) } == BlobWrite.REWRITTEN) storeFailures++
-                    }
-                    blobs[name] = sha256
-                    return null
-                }
-                deltas[name] = sha256
-                // #201: a stored delta is re-hashed against its signed record before it is reused.
-                if (stored { store.file(directory, name, sha256) } != null) return null
-                if (held) return storeFailed("$directory holds another generation: $name does not re-hash")
-                val bytes =
-                    stored { pointed.firstNotNullOfOrNull { store.file(it, name, sha256) } }
-                        ?: attachment(r) { return it }
-                stored { store.stageFile(directory, name, bytes) }
-                return null
-            }
-
-            /**
-             * [r]'s body for [buildIndex], which reads each once: a delta's from [directory], a full's from its blob, each
-             * re-hashed. Its encoding is noted for [format] and [unlisted].
-             */
+            /** [r]'s body for [buildIndex], which reads each once, from its blob, re-hashed. Its encoding is noted. */
             fun bytes(r: CrliteRecord): ByteArray {
-                val sha256 = r.attachment.sha256
                 val bytes =
-                    stored {
-                        if (r.incremental) {
-                            val name = GenerationNames.derive(r.attachment.filename)
-                            checkNotNull(store.file(directory, name, sha256)) { "$directory/$name is gone" }
-                        } else {
-                            checkNotNull(store.readBlob(sha256)) { "the blob of ${r.id} is gone" }
-                        }
-                    }
+                    stored { checkNotNull(store.readBlob(r.attachment.sha256)) { "the blob of ${r.id} is gone" } }
                 encodings[r.id] = encoding(bytes)
                 return bytes
             }
@@ -655,9 +622,9 @@ internal class CrliteSync(
                 }
 
             /**
-             * The generation's `meta.format`: the full's encoding. A delta may be in another one the engine lists, and
-             * each is read as served (the maintainer's decision on #137, as Firefox's `cert_storage` and upki read each
-             * filter). Called after [buildIndex] decoded every placed filter.
+             * The generation's format: the full's encoding. A delta may be in another one the engine lists, and each is
+             * read as served (the maintainer's decision on #137, as Firefox's `cert_storage` and upki read each filter).
+             * Called after [buildIndex] decoded every placed filter.
              */
             fun format(placed: List<PlacedFilter>): FilterFormat =
                 checkNotNull(encodings[placed.first { it.full }.record.id]) { "decoded" }.toFilterFormat()
@@ -672,35 +639,48 @@ internal class CrliteSync(
 
         /** What this sync reads of the store and the snapshot beyond `updater.json`, and the prune after an install. */
         private inner class Reads {
-            /**
-             * The pointed generation's verified records, which a `_since` changeset is merged with (spec §6.5: "so a `_since`
-             * changeset can be verified against it (tombstones merged) without a full re-fetch"), or null when there is none
-             * to merge with: no pointer, no complete generation, or a `records.json` that does not read.
-             *
-             * Only the last counts a store failure here: it is the one store fault no other step of the sync reads. A
-             * malformed pointer, or a pointed `meta.json` that is malformed, is counted by the install when it reads the
-             * pointer for its new `previous` (`Install.previous`), so counting it here too would count it twice.
-             */
-            fun deltaBase(): List<JsonObject>? {
-                val live = (store.pointer() as? StoreRead.Found)?.value?.live ?: return null
-                store.meta(live) ?: return null
-                val records = store.file(live, StoreLayout.RECORDS)?.let(::recordsOf)
-                if (records == null) {
-                    storeFailures++
-                    logger.safeLog(LogLevel.WARN, "${store.root}: $live/records.json does not read; fetching in full")
-                }
-                return records
+            /** The generation files whose failure this sync counted, for the install ([Publication.counted]). */
+            val counted = HashSet<String>()
+
+            /** The blobs of a served generation whose step 3 failed and was counted: rewriting one counts nothing more. */
+            val countedBlobs = HashSet<String>()
+
+            /** Counts [name]'s failure, once. */
+            fun count(name: String) {
+                if (counted.add(name)) storeFailures++
             }
 
-            /** The records under `data` of a `records.json`, or null when it is not one. */
-            private fun recordsOf(bytes: ByteArray): List<JsonObject>? {
-                val root =
-                    try {
-                        Json.parse(bytes, client.limits.maxJsonBytes) as? JsonObject
-                    } catch (ignored: JsonParseException) {
-                        null
-                    }
-                return (root?.get("data") as? JsonArray)?.items?.map { it as? JsonObject ?: return null }
+            /**
+             * Whether `updater.json`'s cursor or watermark is behind [ts], the live generation's: an `UNCHANGED` sync then
+             * writes it as the install of [ts] does (spec §6.5, the repair of a crash between a flip and its write).
+             */
+            fun behind(ts: Long): Boolean {
+                val cursor = record.sources[source.sourceId]?.lastVerifiedLastModified
+                val watermark = record.watermarkMillis
+                return cursor == null || cursor < ts || watermark == null || watermark < ts
+            }
+
+            /**
+             * The served generation's verified records, which a `_since` changeset is merged with (spec §6.5: "a `_since`
+             * changeset is merged over the served generation's `records`"), or null when there is none to merge with: no
+             * generation served, or its file does not load through Load's steps 1 and 2. The served file is the one the
+             * engine holds, which may not be the pointer's `live` after a flip that failed after activation, so the merge is
+             * always over what is served, as Firefox merges over its local data.
+             *
+             * A served file that does not read means the sync fetches the whole collection. It counts a store failure
+             * here, whatever the sync then does, and is noted in [counted] so the install's reads of the pointer's
+             * generations and of its `previous` candidates do not count it again (#335 review): each fault once.
+             */
+            fun deltaBase(): List<JsonObject>? {
+                val served = snapshot.servedFile() ?: return null
+                val read = store.stored(served)
+                if (read is StoreRead.Found) return read.value.file.records
+                count(served)
+                logger.safeLog(
+                    LogLevel.WARN,
+                    "${store.root}: the served generation $served does not load; fetching in full",
+                )
+                return null
             }
 
             /**
@@ -714,11 +694,14 @@ internal class CrliteSync(
             }
 
             /**
-             * Whether the pointer names the live generation's directory ([SnapshotRef.liveDirectory]) as `live`. Asked
-             * only for an `UNCHANGED` decision, which needs a live generation, so that directory is never null here.
+             * Whether the pointer names the served generation's file ([servedFile]) as `live`. Asked only for an
+             * `UNCHANGED` decision, which needs a live generation; one with no stored file (none was ever written for it)
+             * is never pointed to, and its install is retried.
              */
-            fun pointed(): Boolean =
-                (stored { store.pointer() } as? StoreRead.Found)?.value?.live == snapshot.liveDirectory()
+            fun pointed(): Boolean {
+                val served = snapshot.servedFile() ?: return false
+                return (stored { store.pointer() } as? StoreRead.Found)?.value?.live == served
+            }
         }
 
         /** This sync's attachment base, read before its first attachment fetch ([RemoteSettingsClient.attachmentBase]). */
@@ -767,33 +750,17 @@ internal class CrliteSync(
         private fun refused(refusal: IndexBuild.Refused): SyncResult =
             end(Ended(refusal.failure, refusal.detail, refusal.cause))
 
-        /** `STORE_FAILED` for a directory that cannot be this generation, as [install] fails it. */
-        private fun storeFailed(detail: String): SyncResult {
-            storeFailures++
-            return end(Ended(SyncFailure.STORE_FAILED, detail, IllegalStateException(detail)))
-        }
-
         private fun backoff(millis: Long?) {
             if (millis != null) backoff = maxOf(backoff ?: millis, millis)
         }
 
         /**
-         * Ends the sync as [ended] without an install: deletes the directory this sync staged, then writes
-         * `updater.json` ([UpdaterTransitions.after]; a delete or write that fails is a store failure and leaves the
-         * outcome) unless its read never returned (#209), then the result.
+         * Ends the sync as [ended] without an install, deleting nothing: writes `updater.json`
+         * ([UpdaterTransitions.after]; a write that fails is a store failure and leaves the outcome) unless its read
+         * never returned (#209), then the result.
          */
         @Suppress("TooGenericExceptionCaught") // §6.5: the failure path catches every throwable too.
         private fun end(ended: Ended): SyncResult {
-            staged?.let {
-                staged = null
-                try {
-                    store.deleteGeneration(it)
-                } catch (t: Throwable) {
-                    restoreInterrupt(t)
-                    storeFailures++
-                    logger.safeLog(LogLevel.WARN, "deleting ${store.root}/$it failed", t)
-                }
-            }
             try {
                 // #209: a sync whose read of updater.json did not return writes nothing, leaving the file as it is.
                 read?.let {
@@ -803,6 +770,7 @@ internal class CrliteSync(
                             source.sourceId,
                             ended.failure,
                             now,
+                            signedTimestampMillis = ended.verifiedAt,
                             serverBackoffMillis = backoff,
                         )
                     store.writeUpdater(next, now)
@@ -840,19 +808,6 @@ internal class CrliteSync(
                 .build()
     }
 
-    /** `meta.json`'s `SIGNED` members: `<ts>`, the x5u leaf's SHA-256 and the verified entry's raw signature. */
-    private fun signedMeta(verified: ChangesetVerification.Verified): SignedMeta {
-        val raw = checkNotNull(verified.entry.signature?.let(RawSignature::decode)) { "a verified signature" }
-        return SignedMeta(
-            verified.timestamp,
-            verified.path.links[0]
-                .der
-                .toByteString()
-                .sha256(),
-            raw.toByteString(),
-        )
-    }
-
     private fun warning(
         code: WarningCode,
         message: String,
@@ -866,12 +821,14 @@ internal class CrliteSync(
 
     /**
      * How a sync that installs nothing ended: `UNCHANGED` when [failure] is null, else its outcome, `SKIPPED` or
-     * `FAILED`.
+     * `FAILED`. [verifiedAt] is the `<ts>` an `UNCHANGED` sync writes `updater.json` at as its install would, when the
+     * file's cursor or watermark was behind it (spec §6.5); null writes the attempt fields only.
      */
     private class Ended(
         val failure: SyncFailure?,
         val detail: String,
         val cause: Throwable? = null,
+        val verifiedAt: Long? = null,
     ) {
         val outcome: SyncOutcome get() = if (failure != null) failure.outcome else SyncOutcome.UNCHANGED
     }

@@ -44,6 +44,9 @@ internal class GenerationSnapshot(
  * - [staleGateOpen]: §8's persisted `STALE` gate for a seed generation, evaluated by the loader when it writes
  *   `updater.json` (`datasetLastAttemptAtMillis ≥ seedInstalledAtMillis`, or no fetching source), so the handshake
  *   never reads the store. Read only when [fromSeed].
+ * - [generationFile]: the name of the stored generation file the engine was given this generation from (spec §6.5: the
+ *   loader keeps the served generation's name beside the snapshot), null when it has none. A hash name cannot be
+ *   derived from [generationId], so the next install's `previous`, the delta base and a retried flip read it here.
  */
 internal data class DatasetGeneration(
     val generationId: String?,
@@ -53,4 +56,5 @@ internal data class DatasetGeneration(
     val seedFormat: Int?,
     val pending: Boolean,
     val staleGateOpen: Boolean,
+    val generationFile: String? = null,
 )

@@ -11,6 +11,7 @@ import dev.revokt.Freshness
 import dev.revokt.RevoktStorage
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
+import dev.revokt.engine.store.GenerationFileJson
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
@@ -21,13 +22,26 @@ import kotlin.test.assertSame
 
 /** The storage, store, engine, snapshot and helpers of [InstallTest] (#130), split out so it stays one readable class. */
 internal open class InstallFixture {
-    /** A storage whose writes a test can fail or observe, key by key. */
+    /** A storage whose writes and deletes a test can fail or observe, key by key. */
     protected class Faulty(
         val inner: RevoktStorage = RevoktStorage.inMemory(),
     ) : RevoktStorage by inner {
         var fail: (String) -> Throwable? = { null }
+        var failRead: (String) -> Throwable? = { null }
+        var failNames: () -> Throwable? = { null }
         var onWrite: (String) -> Unit = {}
         val writes = mutableListOf<String>()
+        val deletes = mutableListOf<String>()
+
+        override fun read(name: String): ByteArray? {
+            failRead(name)?.let { throw it }
+            return inner.read(name)
+        }
+
+        override fun names(): Set<String> {
+            failNames()?.let { throw it }
+            return inner.names()
+        }
 
         override fun write(
             name: String,
@@ -37,6 +51,11 @@ internal open class InstallFixture {
             onWrite(name)
             writes += name.removePrefix("crlite/compat/")
             inner.write(name, bytes)
+        }
+
+        override fun delete(name: String) {
+            deletes += name.removePrefix("crlite/compat/")
+            inner.delete(name)
         }
     }
 
@@ -61,29 +80,32 @@ internal open class InstallFixture {
         updater: UpdaterRecord? = UpdaterRecord(watermarkMillis = 1),
     ): InstallResult = install(pending, engine, store, snapshot, publication, updater, logger)
 
+    /** A generation of the fixture full and delta at [timestamp], its bodies stored as blobs. */
     protected fun pending(
-        id: String = "g1",
-        timestamp: Long = 1_792_587_631_204,
+        timestamp: Long = TS,
         freshness: Freshness = Freshness.RECORD_LAST_MODIFIED,
-    ) = UpdateFixtures.pending(store, freshness = freshness, generationId = id, sourceTimestampMillis = timestamp)
+        signature: ByteArray = ByteArray(96) { 9 },
+    ) = UpdateFixtures.pending(store, freshness = freshness, sourceTimestampMillis = timestamp, signature = signature)
+
+    /** The name [p]'s generation file has. */
+    protected fun nameOf(p: PendingGeneration): String = GenerationFileJson.name(GenerationFileJson.write(p.file))
 
     protected fun failed(result: InstallResult): InstallResult.Failed = assertIs<InstallResult.Failed>(result)
 
-    /** [p]'s delta files, each the fixture body of its name (every fixture filename is its own derived name). */
-    protected fun bytesOf(p: PendingGeneration): Map<String, ByteArray> =
-        p.deltas.mapValues { (name, _) -> UpdateFixtures.bodies.getValue(name) }
+    protected fun installed(result: InstallResult): InstallResult.Installed = assertIs<InstallResult.Installed>(result)
 
-    protected fun keysOf(directory: String): List<String> = storage.names().filter { it.contains("/$directory/") }
-
-    /** The engine, the snapshot and the pointer are as they were, and [directory] is gone. */
+    /** The engine, the snapshot and the pointer are as they were, and nothing was deleted. */
     protected fun assertUntouched(
-        directory: String,
         live: String? = null,
         published: GenerationSnapshot = empty,
     ) {
         assertEquals(live, engine.live)
         assertSame(published, snapshot.snapshot)
-        assertEquals(emptyList(), keysOf(directory))
+        assertEquals(emptyList(), storage.deletes)
         if (live == null) assertEquals(StoreRead.Absent, store.pointer())
+    }
+
+    protected companion object {
+        const val TS = 1_792_587_631_204L
     }
 }

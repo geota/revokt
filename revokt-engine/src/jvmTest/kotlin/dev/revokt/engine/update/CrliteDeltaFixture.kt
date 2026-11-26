@@ -11,7 +11,6 @@ import dev.revokt.engine.fetch.ok
 import dev.revokt.engine.fetch.response
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
-import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
@@ -55,7 +54,8 @@ internal open class CrliteDeltaFixture : CrliteSyncFixture() {
             UpdateFixtures.v4(listOf(log(3) to (1_000L to 2_000L))),
         )
 
-    protected val directory1 = GenerationNames.directory(ts, "$ts/${delta.id}")
+    /** The first generation's file name, once [installedFirst] installed it. */
+    protected var name1: String? = null
 
     /** [server] after the first generation installed, moved to `ts2` with [records] and [tombstones]. */
     protected fun next(
@@ -73,7 +73,8 @@ internal open class CrliteDeltaFixture : CrliteSyncFixture() {
     protected fun installedFirst(): Server {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
-        assertEquals(directory1, liveDirectory())
+        name1 = assertNotNull(liveName())
+        assertEquals("$ts/${delta.id}", stored(name1).generationId)
         return server
     }
 
