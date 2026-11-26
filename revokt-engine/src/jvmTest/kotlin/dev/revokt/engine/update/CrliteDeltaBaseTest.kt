@@ -44,17 +44,34 @@ internal class CrliteDeltaBaseTest : CrliteDeltaFixture() {
     }
 
     @Test
-    fun `#236 - with no cursor the whole collection is verified alone, never merged over the stored records`() {
+    fun `#236 - the whole collection is verified alone, never merged over the stored records`() {
         val server = installedFirst()
-        // A malformed updater.json loses the cursor; the served generation's file still reads.
-        storage.inner.write("crlite/compat/updater.json", "{".encodeToByteArray())
+        // A malformed pointer names no served file, so the whole collection is fetched; the served file still reads.
+        malformPointer()
         // The next collection drops the first delta: merged over the stored records, it would keep it and fail.
         next(server, listOf(full, delta2), listOf(tombstone))
         val now = ts2 + hour
         val run = sync(server, now = now).assert(SyncOutcome.INSTALLED)
-        assertEquals(1, run.storeFailures)
+        assertEquals(1, run.storeFailures, "the malformed pointer")
         assertEquals(server.changesetUrl, server.fetcher.requests[1].url)
         assertEquals("$ts2/${delta2.id}", live().generationId)
+    }
+
+    @Test
+    fun `with no cursor the served ts is sent with no If-None-Match, and its tombstone merges`() {
+        val server = installedFirst()
+        // A malformed updater.json loses the cursor and the watermark; the served generation's file still reads.
+        storage.inner.write("crlite/compat/updater.json", "{".encodeToByteArray())
+        next(server, listOf(full, delta2), listOf(tombstone))
+        val now = ts2 + hour
+        val run = sync(server, now = now).assert(SyncOutcome.INSTALLED)
+        assertEquals(1, run.storeFailures, "the malformed updater.json")
+        // _since is the served file's own <ts> (§7.1); updater.json is behind it, so no If-None-Match.
+        assertEquals(server.sinceUrl(ts), server.fetcher.requests[1].url)
+        assertFalse("If-None-Match" in server.fetcher.requests[1].headers)
+        assertEquals(1, server.fetcher.requests.count { it.url.startsWith(server.changesetUrl) }, "no reset")
+        assertEquals("$ts2/${delta2.id}", live().generationId)
+        assertEquals(ts2, sourceRecord(now).lastVerifiedLastModified)
     }
 
     @Test

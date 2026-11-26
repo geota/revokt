@@ -156,6 +156,18 @@ class RemoteSettingsClientTest {
     }
 
     @Test
+    fun `a changeset fetch since a ts with no If-None-Match sends _since alone, and a 304 to it is FAILED`() {
+        val fetcher = ScriptedFetcher { response(304) }
+        client(fetcher)
+            .fetchChangeset(1793980622465, 1793900000000, ifNoneMatch = false)
+            .assertFailed(SyncFailure.CHANGESET_FETCH, "status 304")
+        val request = fetcher.requests.single()
+        assertEquals("$changesetUrl?_expected=1793980622465&_since=1793900000000", request.url)
+        assertEquals(mapOf("User-Agent" to "revokt"), request.headers)
+        assertFailsWith<IllegalArgumentException> { client(fetcher).fetchChangeset(1, null, ifNoneMatch = true) }
+    }
+
+    @Test
     fun `a 304 to a request without If-None-Match is FAILED`() {
         client(ScriptedFetcher { response(304) })
             .fetchChangeset(1, null)

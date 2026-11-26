@@ -409,16 +409,29 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     }
 
     @Test
-    fun `an UNCHANGED whose watermark alone is behind the live ts writes it as the install would`() {
+    fun `an UNCHANGED whose watermark alone is behind the live ts writes it as the install would`() =
+        watermarkBehind(ts - 1)
+
+    @Test
+    fun `an UNCHANGED whose watermark alone is absent writes it as the install would`() = watermarkBehind(null)
+
+    /**
+     * The cursor at the live ts and the watermark at [watermark], behind it: `_since=ts` goes with no `If-None-Match`
+     * (§7.1), so this server, which 304s an `If-None-Match` at its ts, answers in full, and the verified changeset writes
+     * the repair.
+     */
+    private fun watermarkBehind(watermark: Long?) {
         val server = Server()
         sync(server).assert(SyncOutcome.INSTALLED)
         val r = updater()
         assertEquals(ts, sourceRecord().lastVerifiedLastModified)
-        store.writeUpdater(r.copy(watermarkMillis = ts - 1), ts + hour)
-        // The cursor is at the live ts, so a _since is sent; this server answers it in full, not with a 304.
-        server.overrides[server.sinceUrl(ts)] = { server.sinceResponse(ts) }
+        store.writeUpdater(r.copy(watermarkMillis = watermark), ts + hour)
+        server.fetcher.requests.clear()
         val now = ts + 2 * hour
         sync(server, now = now).assert(SyncOutcome.UNCHANGED)
+        val changeset = server.fetcher.requests.single { it.url.startsWith(server.changesetUrl) }
+        assertEquals(server.sinceUrl(ts), changeset.url)
+        assertFalse("If-None-Match" in changeset.headers, "updater.json is behind")
         assertEquals(ts, updater(now).watermarkMillis)
         assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
     }
