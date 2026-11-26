@@ -28,6 +28,7 @@ internal open class InstallFixture {
     ) : RevoktStorage by inner {
         var fail: (String) -> Throwable? = { null }
         var failRead: (String) -> Throwable? = { null }
+        var failNames: () -> Throwable? = { null }
         var onWrite: (String) -> Unit = {}
         val writes = mutableListOf<String>()
         val deletes = mutableListOf<String>()
@@ -35,6 +36,11 @@ internal open class InstallFixture {
         override fun read(name: String): ByteArray? {
             failRead(name)?.let { throw it }
             return inner.read(name)
+        }
+
+        override fun names(): Set<String> {
+            failNames()?.let { throw it }
+            return inner.names()
         }
 
         override fun write(

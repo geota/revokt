@@ -51,7 +51,9 @@ internal class PendingGeneration(
  * the seed's `seedFormat`, the seed `STALE` gate ([DatasetGeneration.staleGateOpen]), and the clock reading
  * `updater.json` is written at. [pointerCounted] when the caller has already counted a malformed pointer and each
  * pointed generation that fails Load's steps 1 and 2 (the seed load, which reads them first, #138), so the install's
- * own read of them does not count them again: each store fault is counted once.
+ * own read of them does not count them again: each store fault is counted once. [counted] names the generation files
+ * whose failure the caller has counted (the sync's served file, the seed load's rejected candidates), so neither the
+ * install's read of the pointer's generations nor a `previous` candidate counts them again.
  */
 internal class Publication(
     val fromSeed: Boolean,
@@ -59,6 +61,7 @@ internal class Publication(
     val staleGateOpen: Boolean,
     val nowMillis: Long,
     val pointerCounted: Boolean = false,
+    val counted: Set<String> = emptySet(),
 ) {
     init {
         require(fromSeed == (seedFormat != null)) { "seedFormat is set exactly for a seed" }
@@ -178,7 +181,7 @@ private open class PointerFlip(
      * Reads the pointer and, when it reads, each generation it names through Load's steps 1 and 2, once, before anything
      * is written: whether a sync may prune after this install (spec §6.5 "Prune") and the `previous` candidates. A
      * malformed pointer and each named generation that does not read count a store failure, unless the caller counted
-     * them ([Publication.pointerCounted]).
+     * them ([Publication.pointerCounted], [Publication.counted]).
      */
     protected fun readBefore() {
         pointerBefore = store.pointer()
@@ -188,7 +191,7 @@ private open class PointerFlip(
         for (n in listOfNotNull(read.value.live, read.value.previous)) {
             val stored = store.stored(n)
             pointedBefore[n] = stored
-            if (stored !is StoreRead.Found && !publication.pointerCounted) storeFailures++
+            if (stored !is StoreRead.Found && !publication.pointerCounted && n !in publication.counted) storeFailures++
         }
     }
 
@@ -217,11 +220,11 @@ private open class PointerFlip(
         val stored = (read ?: store.stored(candidate)) as? StoreRead.Found
         if (stored == null) {
             // A pointed one that does not read was counted by readBefore (or by the caller).
-            if (read == null) storeFailures++
+            if (read == null && candidate !in publication.counted) storeFailures++
             return false
         }
         if (!store.blobsMatch(stored.value)) {
-            storeFailures++
+            if (candidate !in publication.counted) storeFailures++
             return false
         }
         return true

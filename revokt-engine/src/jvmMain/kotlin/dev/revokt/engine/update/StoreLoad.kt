@@ -209,13 +209,14 @@ internal fun StoreLayout.pruneAfter(
         val kept = LinkedHashMap<String, StoredGeneration>()
         for (n in named) kept[n] = (stored(n) as? StoreRead.Found)?.value ?: return refuse("$n does not read")
         val live = kept.getValue(pointer.live)
-        val others = generationNames() - named.toSet()
-        for (n in others) {
+        // One listing: a name only a second listing showed would be deleted without its steps 1 and 2 read (#335 review).
+        val listed = generationNames()
+        for (n in listed - named.toSet()) {
             val newer = (stored(n) as? StoreRead.Found)?.value?.takeIf { it.timestampMillis > live.timestampMillis }
             if (newer != null) kept[n] = newer
         }
         val blobs = kept.values.flatMapTo(HashSet()) { it.blobNames }
-        val doomedGenerations = generationNames() - kept.keys
+        val doomedGenerations = listed - kept.keys
         val doomedBlobs = blobNames() - blobs
         doomedGenerations.forEach(::deleteGeneration)
         doomedBlobs.forEach(::deleteBlob)

@@ -383,7 +383,7 @@ internal class SeedLoader(
             val verified = verify(archive)
             val ts = verified.timestamp
             val crlite =
-                when (val check = CrliteSchema.check(verified.records, channel, RevoktLimits.MAX_CHANGESET_RECORDS)) {
+                when (val check = CrliteSchema.check(verified.records, channel, store.maxChangesetRecords)) {
                     is RecordCheck.Passed -> check.records
                     is RecordCheck.Rejected -> fail("records.json fails the schema: ${check.detail}")
                 }
@@ -714,7 +714,9 @@ internal class SeedLoader(
                 )
             // §8: the gate opens once a sync attempt completes after the seed's install, or at once with no fetching source.
             val gateOpen = !policy.fetchingSource || (read.datasetLastAttemptAtMillis ?: Long.MIN_VALUE) >= now
-            val publication = Publication(true, SEED_FORMAT.toInt(), gateOpen, now, pointerCounted = true)
+            // Every generation file this load counted (a pointed one, an adopt candidate) is counted once (#335 review).
+            val publication =
+                Publication(true, SEED_FORMAT.toInt(), gateOpen, now, pointerCounted = true, counted = counted.toSet())
             installing = true
             val result = install(pending, engine, store, snapshot, publication, updated, logger)
             storeFailures += result.storeFailures

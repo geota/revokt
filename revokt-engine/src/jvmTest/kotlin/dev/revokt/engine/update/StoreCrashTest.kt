@@ -172,9 +172,18 @@ internal class StoreCrashTest : SeedFixture() {
         val name = checkNotNull(liveName())
         assertEquals("$ts2/d3", stored(name).generationId, "every key it needs was durable before the flip")
         assertEquals(ts, updater(ts2 + hour).watermarkMillis, "the watermark stayed")
-        // The running loader serves it; the cursor is stale, so the whole collection is fetched, UNCHANGED.
-        sync(server, now = ts2 + 2 * hour).assert(SyncOutcome.UNCHANGED)
-        assertEquals(ts2 + 2 * hour, updater(ts2 + 2 * hour).datasetLastAttemptAtMillis)
+        // The running loader serves it; the cursor is stale, so the whole collection is fetched, UNCHANGED, and
+        // updater.json is written as the install of ts2 would have written it (spec §6.5).
+        val now = ts2 + 2 * hour
+        sync(server, now = now).assert(SyncOutcome.UNCHANGED)
+        assertEquals(now, updater(now).datasetLastAttemptAtMillis)
+        assertEquals(ts2, sourceRecord(now).lastVerifiedLastModified, "the cursor")
+        assertEquals(now, sourceRecord(now).lastVerifiedAtMillis)
+        assertEquals(ts2, updater(now).watermarkMillis, "the watermark")
+        // Caught up, the next sync sends the cursor: a 304.
+        server.fetcher.requests.clear()
+        sync(server, now = now + hour).assert(SyncOutcome.UNCHANGED)
+        assertTrue(server.fetcher.requests.any { "_since" in it.url || "If-None-Match" in it.headers })
         // The floor is max(watermark, the live <ts>): the stale watermark reopens no rollback.
         server.ts = ts2 - 1
         sync(server, now = ts2 + 3 * hour).assert(SyncFailure.ROLLBACK_REFUSED)

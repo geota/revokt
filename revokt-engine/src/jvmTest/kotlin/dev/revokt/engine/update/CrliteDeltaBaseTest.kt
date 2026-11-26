@@ -107,9 +107,9 @@ internal class CrliteDeltaBaseTest : CrliteDeltaFixture() {
         damage(name1)
         next(server, listOf(full, delta, delta2))
         val run = sync(server, now = ts2 + hour).assert(SyncOutcome.INSTALLED)
-        // One for the malformed pointer, one for the served file: no delta base (counted here, as the pointer does not
-        // name it), so no previous either, which reads it once more without counting it again.
-        assertEquals(3, run.storeFailures)
+        // One for the malformed pointer, one for the served file: no delta base (counted there, once), so no previous
+        // either, which reads it once more without counting it again.
+        assertEquals(2, run.storeFailures)
         assertEquals(StoreRead.Found(Pointer(stored(liveName()).name, null)), store.pointer())
         assertTrue(store.generationKey(assertNotNull(name1)) in storage.inner.names(), "the damaged file is kept")
     }

@@ -116,7 +116,8 @@ internal class CrliteSync(
      *
      * Every outcome but `INSTALLED` writes `updater.json` itself ([UpdaterTransitions.after]), and none deletes anything:
      * a failed install's blobs and generation file are reused by the next attempt. The cursor, `lastVerified*` and the
-     * watermark advance only through an install. Every throwable is
+     * watermark advance only through an install, or through a repair at the live generation's `<ts>`: the re-flip, the
+     * heal-install, or an `UNCHANGED` whose `updater.json` was behind it (spec §6.5). Every throwable is
      * caught, an `OutOfMemoryError` included: `STORE_FAILED` for a non-fatal one in a store access, else
      * `INTERNAL_ERROR` (§6.5: "every loader task catches `Throwable`"). A body, record count or response above half its
      * `RevoktLimits` constant is a `CAP_NEAR_LIMIT` warning on whatever result the sync ends with (§4), and the sync
@@ -371,15 +372,21 @@ internal class CrliteSync(
 
         /**
          * Spec §6.5's re-flip of the served generation at [ts], or null when its file or a blob does not pass Load's
-         * steps 1 to 3, so the collection is installed instead. A fault found here is counted by that install, which
-         * reads the served file as its first `previous` candidate, or by [Reads.deltaBase]: each once.
+         * steps 1 to 3, so the collection is installed instead (the heal-install). A file that fails steps 1 and 2 was
+         * counted by [Reads.deltaBase]; a failed step 3 is counted here: each once.
          */
         private fun reflipped(ts: Long): SyncResult? {
             val served = snapshot.servedFile() ?: return null
             val stored = (stored { store.stored(served) } as? StoreRead.Found)?.value ?: return null
             val generationId = snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId
             if (stored.generationId != generationId || stored.timestampMillis != ts) return null
-            if (!stored { store.blobsMatch(stored) }) return null
+            if (!stored { store.blobsMatch(stored) }) {
+                // Step 3 failed: a failed load, counted once, here; the heal-install's rewrite of its blobs is not
+                // counted again, and neither is its read of the served file as a candidate (#335 review).
+                reads.count(served)
+                reads.countedBlobs += stored.blobNames
+                return null
+            }
             return installed(ts, noneLoaded = false, repair = true) { publication, updated ->
                 reflip(stored, store, snapshot, publication, updated)
             }
@@ -480,7 +487,14 @@ internal class CrliteSync(
                     serverBackoffMillis = backoff,
                     noneLoaded = noneLoaded,
                 )
-            val publication = Publication(fromSeed = false, seedFormat = null, staleGateOpen = true, nowMillis = now)
+            val publication =
+                Publication(
+                    fromSeed = false,
+                    seedFormat = null,
+                    staleGateOpen = true,
+                    nowMillis = now,
+                    counted = reads.counted.toSet(),
+                )
             return when (val result = flip(publication, updated)) {
                 is InstallResult.Installed -> {
                     written = updated
@@ -509,7 +523,7 @@ internal class CrliteSync(
         ): SyncResult? =
             when (decision) {
                 SyncDecision.INSTALL -> null
-                SyncDecision.UNCHANGED -> end(Ended(null, "$ts is live"))
+                SyncDecision.UNCHANGED -> end(Ended(null, "$ts is live", verifiedAt = ts.takeIf(reads::behind)))
                 SyncDecision.ROLLBACK_REFUSED -> end(Ended(SyncFailure.ROLLBACK_REFUSED, "$ts rolls back"))
             }
 
@@ -584,7 +598,8 @@ internal class CrliteSync(
             fun fetch(r: CrliteRecord): SyncResult? {
                 if (stored { store.blob(r.attachment.sha256) } == BlobState.MATCH) return null
                 val bytes = attachment(r) { return it }
-                if (stored { store.putBlob(bytes) } == BlobWrite.REWRITTEN) storeFailures++
+                val write = stored { store.putBlob(bytes) }
+                if (write == BlobWrite.REWRITTEN && r.attachment.sha256.hex() !in reads.countedBlobs) storeFailures++
                 return null
             }
 
@@ -624,6 +639,27 @@ internal class CrliteSync(
 
         /** What this sync reads of the store and the snapshot beyond `updater.json`, and the prune after an install. */
         private inner class Reads {
+            /** The generation files whose failure this sync counted, for the install ([Publication.counted]). */
+            val counted = HashSet<String>()
+
+            /** The blobs of a served generation whose step 3 failed and was counted: rewriting one counts nothing more. */
+            val countedBlobs = HashSet<String>()
+
+            /** Counts [name]'s failure, once. */
+            fun count(name: String) {
+                if (counted.add(name)) storeFailures++
+            }
+
+            /**
+             * Whether `updater.json`'s cursor or watermark is behind [ts], the live generation's: an `UNCHANGED` sync then
+             * writes it as the install of [ts] does (spec §6.5, the repair of a crash between a flip and its write).
+             */
+            fun behind(ts: Long): Boolean {
+                val cursor = record.sources[source.sourceId]?.lastVerifiedLastModified
+                val watermark = record.watermarkMillis
+                return cursor == null || cursor < ts || watermark == null || watermark < ts
+            }
+
             /**
              * The served generation's verified records, which a `_since` changeset is merged with (spec §6.5: "a `_since`
              * changeset is merged over the served generation's `records`"), or null when there is none to merge with: no
@@ -632,15 +668,14 @@ internal class CrliteSync(
              * always over what is served, as Firefox merges over its local data.
              *
              * A served file that does not read means the sync fetches the whole collection. It counts a store failure
-             * here unless the pointer names it, in which case the install counts it when it reads the pointer's
-             * generations (`Install.readBefore`): each store fault is counted once.
+             * here, whatever the sync then does, and is noted in [counted] so the install's reads of the pointer's
+             * generations and of its `previous` candidates do not count it again (#335 review): each fault once.
              */
             fun deltaBase(): List<JsonObject>? {
                 val served = snapshot.servedFile() ?: return null
                 val read = store.stored(served)
                 if (read is StoreRead.Found) return read.value.file.records
-                val pointer = (store.pointer() as? StoreRead.Found)?.value
-                if (served != pointer?.live && served != pointer?.previous) storeFailures++
+                count(served)
                 logger.safeLog(
                     LogLevel.WARN,
                     "${store.root}: the served generation $served does not load; fetching in full",
@@ -735,6 +770,7 @@ internal class CrliteSync(
                             source.sourceId,
                             ended.failure,
                             now,
+                            signedTimestampMillis = ended.verifiedAt,
                             serverBackoffMillis = backoff,
                         )
                     store.writeUpdater(next, now)
@@ -785,12 +821,14 @@ internal class CrliteSync(
 
     /**
      * How a sync that installs nothing ended: `UNCHANGED` when [failure] is null, else its outcome, `SKIPPED` or
-     * `FAILED`.
+     * `FAILED`. [verifiedAt] is the `<ts>` an `UNCHANGED` sync writes `updater.json` at as its install would, when the
+     * file's cursor or watermark was behind it (spec §6.5); null writes the attempt fields only.
      */
     private class Ended(
         val failure: SyncFailure?,
         val detail: String,
         val cause: Throwable? = null,
+        val verifiedAt: Long? = null,
     ) {
         val outcome: SyncOutcome get() = if (failure != null) failure.outcome else SyncOutcome.UNCHANGED
     }

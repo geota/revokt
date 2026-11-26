@@ -1296,11 +1296,11 @@ channel are lowercase enum names; persisted enum values are names, never ordinal
   `consecutiveFailures`; written atomically. A sync whose read of `updater.json` throws
   writes nothing to it: no attempt is recorded, `consecutiveFailures` does not rise and no backoff is written;
   `storeFailures` is the only persisted signal (the sync still returns `STORE_FAILED`). **The cursor, `lastVerified*`
-  and the watermark advance only after the pointer flip of a successful install**; a failure-path
-  write (`consecutiveFailures`, `backoffUntilMillis`) leaves those three untouched; [0.3] `UNCHANGED`
-  against the served generation rewrites the file (repairing a crash between flip and write); in 0.2, whose store is
-  in memory, `UNCHANGED` writes only the attempt fields, the `consecutiveFailures` reset and the backoff headers'
-  effect (§7.1). The
+  and the watermark advance only after the pointer flip of a successful install**, or in a repair at that install's
+  `<ts>`; a failure-path write (`consecutiveFailures`, `backoffUntilMillis`) leaves those three untouched. `UNCHANGED`
+  against the served generation, when the file's cursor or watermark is behind `<ts>`, rewrites it as the install of
+  `<ts>` does (repairing a crash between flip and write; `StoreCrashTest` row 4); otherwise `UNCHANGED` writes only the
+  attempt fields, the `consecutiveFailures` reset and the backoff headers' effect (§7.1). The
   delta base and parent are the served generation's file, read through Load at each sync, never this file;
   when it does not load, the sync fetches the whole collection, `storeFailures++`.
 
@@ -1347,7 +1347,8 @@ Else the **heal-install** installs the collection as served, reusing every store
 (Firefox re-imports a full changeset alike, Appendix A); its publish keeps the served `generationId`. Both are store
 repairs that stay `UNCHANGED` (the served generation does not change) and write `updater.json` as the install of that
 `<ts>` does (cursor, `lastVerified*` and watermark at `<ts>`), and heal flips: no prune follows
-(`CrliteSyncFailureTest`'s re-flip cases assert `UNCHANGED`; `CrliteDeltaBaseTest`, `StoreModelTest`'s I2). A sync-time `prepare()`/`activate()` throw increments `storeFailures` and is `SyncOutcome.FAILED`
+(`CrliteSyncFailureTest`'s re-flip cases assert `UNCHANGED`; `CrliteDeltaBaseTest`, `StoreModelTest`'s I2). A repair
+that fails is `FAILED` with its failure, as an install's is. A sync-time `prepare()`/`activate()` throw increments `storeFailures` and is `SyncOutcome.FAILED`
 with `ENGINE_FAILED` (cursor and watermark do not advance, so the same changeset is retried under backoff); a store
 write or pointer-flip failure during an install is `FAILED` with `STORE_FAILED` (`storeFailures++`). Decision step 7
 never queries an engine for a dataset whose snapshot has no generation; `CrliteQueryResult.NO_DATA` from an engine
@@ -1582,7 +1583,8 @@ from, §7.1: a live sync's envelope `timestamp`, a seed's `records.json` value; 
 `last_modified`), persisted per dataset and channel in `updater.json` (§6.5) and raised by every install to the
 higher of it and `<ts>` in the same write as the install. A verified changeset whose `<ts>` equals the live generation's `sourceTimestampMillis` is
 `UNCHANGED`, updating the attempt fields only; when the pointer does not name it, §6.5's re-flip or heal-install also
-writes the cursor, `lastVerified*` and the watermark at `<ts>`. While a generation is live (stored or seed), the **floor** is the
+writes the cursor, `lastVerified*` and the watermark at `<ts>`, and so does an `UNCHANGED` whose cursor or watermark is
+behind `<ts>` (§6.5). While a generation is live (stored or seed), the **floor** is the
 higher of the stored watermark and the live `sourceTimestampMillis`, so a malformed or absent `updater.json`
 beside a live generation cannot reopen a rollback to anything older than what is installed; a changeset older
 than the floor is `SKIPPED` with `ROLLBACK_REFUSED`, decided before any body is fetched, and one equal to it installs. With no

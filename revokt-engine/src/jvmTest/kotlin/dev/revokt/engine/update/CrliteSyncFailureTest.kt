@@ -394,6 +394,52 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
         assertEquals(1, run.storeFailures, "the rotted blob, once")
     }
 
+    /** A sync of [server] whose flip fails after activation: the engine serves a file `current` does not name. */
+    private fun failedFlip(server: Server): String {
+        storage.failWrite = { if (it.endsWith("/current")) IllegalStateException("flip") else null }
+        sync(server).assert(SyncFailure.STORE_FAILED)
+        storage.failWrite = { null }
+        return assertNotNull(live().generationFile)
+    }
+
+    private fun truncate(key: String) {
+        val bytes = checkNotNull(storage.inner.read(key))
+        storage.inner.write(key, bytes.copyOf(bytes.size - 1))
+    }
+
+    @Test
+    fun `S1 - a damaged served file the pointer names is counted on every UNCHANGED sync, once`() {
+        val server = Server()
+        sync(server).assert(SyncOutcome.INSTALLED)
+        val served = assertNotNull(liveName())
+        truncate(store.generationKey(served))
+        for (at in listOf(ts + 2 * hour, ts + 9 * hour)) {
+            val run = sync(server, now = at).assert(SyncOutcome.UNCHANGED)
+            assertEquals(1, run.storeFailures, "the served file that does not load, at $at")
+        }
+    }
+
+    @Test
+    fun `S3 - an absent blob of the served generation is a failed load, counted once by the heal-install`() {
+        val server = Server()
+        failedFlip(server)
+        storage.inner.delete(store.blobKey(delta.body.toByteString().sha256()))
+        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.UNCHANGED)
+        assertEquals(1, run.storeFailures)
+        assertEquals(listOf(attachments + delta.location), server.attachmentRequests().takeLast(1))
+    }
+
+    @Test
+    fun `S5 - a damaged unnamed served file under a re-signed collection is counted once`() {
+        val server = Server()
+        val served = failedFlip(server)
+        truncate(store.generationKey(served))
+        server.signature = Server().sign()
+        val run = sync(server, now = ts + 2 * hour).assert(SyncOutcome.UNCHANGED)
+        assertEquals(1, run.storeFailures)
+        assertNotEquals(served, liveName(), "the re-signed file, under its own name")
+    }
+
     @Test
     fun `a retried flip over the same ts re-signed re-flips to the served file, then is UNCHANGED, with no loop`() {
         val server = Server()

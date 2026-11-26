@@ -201,6 +201,43 @@ internal class StoreLoadTest : InstallFixture() {
         assertEquals(StoreRead.Absent, store.readGeneration(garbage))
     }
 
+    /**
+     * Three generation files no pointer names, two older than the live one (prune's to delete) and one newer (kept),
+     * with the live one installed over them: the names of the three, and of the live one.
+     */
+    private fun unnamedBesideLive(): Pair<List<String>, String> {
+        val files = listOf(TS, TS + 1, TS + 5).map { store.putGeneration(GenerationFileJson.write(pending(it).file)) }
+        val live = installed(install(pending(TS + 3)))
+        assertEquals(StoreRead.Found(Pointer(live.name, null)), store.pointer())
+        return files to live.name
+    }
+
+    @Test
+    fun `P1 - a read that throws on any generation file prune reads deletes nothing`() {
+        val (files, live) = unnamedBesideLive()
+        for (thrower in files) {
+            val before = storage.inner.names()
+            storage.failRead = { if (it == store.generationKey(thrower)) IllegalStateException("disk") else null }
+            assertEquals(0, prune(live), "a throw on $thrower")
+            assertEquals(before, storage.inner.names(), "nothing deleted on a throw on $thrower")
+        }
+        assertEquals(files.size, pruneFailures)
+        storage.failRead = { null }
+        // Once nothing throws: the two older files go (their blobs are the live one's), the newer one stays.
+        assertEquals(2, prune(live))
+        assertEquals(setOf(files[2], live), store.generationNames())
+    }
+
+    @Test
+    fun `P1 - a listing that throws deletes nothing`() {
+        val (_, live) = unnamedBesideLive()
+        val before = storage.inner.names()
+        storage.failNames = { IllegalStateException("disk") }
+        assertEquals(0, prune(live))
+        assertEquals(1, pruneFailures)
+        assertEquals(before, storage.inner.names())
+    }
+
     @Test
     fun `a throw during prune is a store failure and a warning, never the caller's`() {
         installed(install(pending()))
