@@ -127,7 +127,8 @@ tests; **live checks** are informational.
   [0.3] `JvmStorage` fsyncs every store directory at open and the parent of each directory it creates, and deletes its
   temp files at open;
   a `current` with a flipped hex digit at `start()` → `storeFailures = 1`, no `STORE_UNREADABLE` warning (which means
-  only the in-memory fallback, and stays until `close()`), and the next install heals it (`CrliteRuntimeStartTest`);
+  only the in-memory fallback, and stays until `close()`), and the next install heals it (`CrliteRuntimeStartTest`;
+  the count in `SeedLoaderStoreTest`);
   a sync against the served generation's `<ts>` while `current` does not name it → `UNCHANGED`, with §6.5's re-flip
   (no fetch, no `prepare`, no publish) or, when the served file or a blob fails Load's steps 1 to 3, its heal-install
   (the served `generationId` kept, `generationEpoch` + 1); either lands the cursor, `lastVerified*` and the watermark at
