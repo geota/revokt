@@ -692,10 +692,16 @@ Appendix A of the spec: what was verified against live sources and reference cod
     `If-None-Match` (`_fetchChangeset`, lines 1350 to 1365). The records it merges over come from the same database
     (lines 747 to 749), and with no local data it imports the dump and reads the timestamp again (lines 756 to 769), so
     after a dump import `_since` is the dump's timestamp; local data with no signature metadata is verified from
-    `_fetchChangeset(expectedTimestamp, expectedTimestamp)` (lines 787 to 790); read 2026-11-26 at the same commit. `RemoteSecuritySettings.sys.mjs` then reinstalls, on each
-    `remote-settings:changes-poll-end`, the CRLite filters whose hashes cert_storage has not loaded (lines 645 to 700).
-    No sync starts while the browser shuts down (`maybeSync`, line 720), and one cut off by it reports `SHUTDOWN_ERROR`
-    (line 934).
+    `_fetchChangeset(expectedTimestamp, expectedTimestamp)` (lines 787 to 790); read 2026-11-26 at the same commit.
+    `RemoteSecuritySettings.sys.mjs` then reinstalls, on each `remote-settings:changes-poll-end`, the CRLite filters
+    whose hashes cert_storage has not loaded (lines 645 to 700). No sync starts while the browser shuts down
+    (`maybeSync`, line 720), and one cut off by it reports `SHUTDOWN_ERROR` (line 934).
+  - **The production changeset and `If-None-Match`** (checked 2026-11-26, the #319 review, with a generic
+    `User-Agent`): `cert-revocations/changeset?_expected=<ts>&_since=<ts>` answers 200 with `timestamp` `<ts>`,
+    `changes: []` and one signature entry, both with no `If-None-Match` and with `If-None-Match: "<ts>"` at the current
+    `<ts>`: never a 304, and with no `ETag` header (served through Google and varnish, `cache-control: max-age=3600`).
+    So against production every caught-up sync is a verified 200 that writes the attempt fields only, and the 304 arm
+    of §3 is reached only by a server that honours the header.
   - **upki:** no loop and no thread; `PACKAGING.md` asks packagers to run `upki fetch` "every two hours or so" and
     "shortly after network-up events". `revocation/fetch.rs` sends `If-Modified-Since` (the local manifest's
     modification time) only when the local manifest parses (lines 64 to 80), and on a 304 still re-hashes every listed

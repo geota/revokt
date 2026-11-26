@@ -149,9 +149,9 @@ internal class RemoteSettingsClient(
      * the changes after [since], the served generation's `<ts>` (`_since=<since>`, bare, as Firefox's
      * `RemoteSettingsClient` sends it at `cac25a6fa321b0051932359b84c4e2fe3caabdc5`), with `If-None-Match: "<since>"`,
      * quoted, as §3 says, when [ifNoneMatch] (a 304 is then [ClientResult.Unchanged]; without it a 304 is `FAILED`).
-     * The body is parsed with the engine's JSON tree under `MAX_JSON_BYTES`; its `changes`
-     * are objects and its `timestamp` an integer from 0 to `Long.MAX_VALUE`, else `CHANGESET_MALFORMED`. Nothing in it
-     * is trusted until [ChangesetVerifier] verifies it.
+     * The body is parsed with the engine's JSON tree under `MAX_JSON_BYTES`; its `changes` are objects and its
+     * `timestamp` an integer from 0 to `Long.MAX_VALUE`, else `CHANGESET_MALFORMED`. Nothing in it is trusted until
+     * [ChangesetVerifier] verifies it.
      */
     fun fetchChangeset(
         expected: Long,

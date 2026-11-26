@@ -273,11 +273,11 @@ internal class CrliteSync(
         private inner class Changesets {
             /**
              * The changeset at [expected], verified: from [since] over [base] (the served generation's records) when
-             * [since] is set, with `If-None-Match` when [conditional], and the whole collection when it is null. A `_since`
-             * changeset is fetched once more as the
-             * whole collection when its changes do not merge with [base] or its signature fails with a failure that
-             * [SignatureFailure.resets] (§7.1, Firefox's retry of an `InvalidSignatureError`); never on an x5u failure,
-             * which the shared [ChangesetVerifier] would reuse (one x5u result per URL per sync, §7.1).
+             * [since] is set, with `If-None-Match` when [conditional], and the whole collection when it is null. A
+             * `_since` changeset is fetched once more as the whole collection, never conditional, when its changes do not
+             * merge with [base] or its signature fails with a failure that [SignatureFailure.resets] (§7.1, Firefox's
+             * retry of an `InvalidSignatureError`); never on an x5u failure, which the shared [ChangesetVerifier] would
+             * reuse (one x5u result per URL per sync, §7.1).
              */
             fun verified(
                 expected: Long,
@@ -316,9 +316,9 @@ internal class CrliteSync(
 
             /**
              * One changeset at [expected] from [since] (null: the whole collection), `If-None-Match` when [conditional],
-             * verified over [base] merged with it;
-             * [Fetched.Unmergeable] when [since] is set and its changes do not merge. The whole collection merges over
-             * nothing, and when even that is null (a record with no string `id`), its changes are verified as served.
+             * verified over [base] merged with it; [Fetched.Unmergeable] when [since] is set and its changes do not
+             * merge. The whole collection merges over nothing, and when even that is null (a record with no string
+             * `id`), its changes are verified as served.
              */
             private fun changeset(
                 signatures: ChangesetVerifier,

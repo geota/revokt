@@ -362,8 +362,24 @@ internal class CrliteRuntimePollTest : SeedFixture() {
 
     @Test
     fun `a served file whose ts is not the snapshot's sends no _since, and the whole collection reinstalls`() {
-        // A sync installed the server's <ts>; then the snapshot says an older <ts> for the same served file, which no
-        // install publishes: _since and the merge base come from one file only while it agrees (§7.1).
+        val runtime = servedFileAt(snapshotTs = ts - hour)
+        assertEquals("$ts/${delta.id}", runtime.crlite().generationId, "the served file's generation is live again")
+        assertEquals(ts, (store.updater(ts) as StoreRead.Found).value.record.watermarkMillis)
+    }
+
+    @Test
+    fun `a served file older than the snapshot's ts sends no _since either`() {
+        // The whole collection at ts is behind the snapshot's ts + 1 h: the floor refuses it, and nothing installs.
+        val runtime = servedFileAt(snapshotTs = ts + hour)
+        assertEquals("older", runtime.crlite().generationId)
+    }
+
+    /**
+     * A sync installs the server's <ts>; then the snapshot says [snapshotTs] for the same served file, which no install
+     * publishes: `_since` and the merge base come from one file only while it agrees (§7.1), so the next sync fetches
+     * the whole collection, with no `_since` and no `If-None-Match`.
+     */
+    private fun servedFileAt(snapshotTs: Long): CrliteRuntime {
         val server = Server()
         val runtime = runtime(seed = null, server = server)
         runtime.startTask(loadSeed = false) { ts + hour }
@@ -372,7 +388,7 @@ internal class CrliteRuntimePollTest : SeedFixture() {
         runtime.snapshot.publish(
             GenerationSnapshot(
                 runtime.epoch() + 1,
-                mapOf(Dataset.CRLITE to live.copy(generationId = "older", sourceTimestampMillis = ts - hour)),
+                mapOf(Dataset.CRLITE to live.copy(generationId = "older", sourceTimestampMillis = snapshotTs)),
                 null,
             ),
         )
@@ -380,8 +396,7 @@ internal class CrliteRuntimePollTest : SeedFixture() {
         runtime.sync(ts + 7 * hour)
         assertTrue(server.fetcher.requests.none { "_since" in it.url || "If-None-Match" in it.headers })
         assertTrue(server.fetcher.requests.any { it.url == server.changesetUrl })
-        assertEquals("$ts/${delta.id}", runtime.crlite().generationId, "the cursor's generation is live again")
-        assertEquals(ts, (store.updater(ts) as StoreRead.Found).value.record.watermarkMillis)
+        return runtime
     }
 
     @Test
