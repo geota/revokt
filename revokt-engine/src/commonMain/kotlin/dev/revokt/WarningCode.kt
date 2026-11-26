@@ -17,4 +17,19 @@ internal enum class WarningCode {
 
     /** The seed's channel is not the configured one (§6.5); `start()` throws on it. */
     SEED_CHANNEL_MISMATCH,
+
+    /**
+     * `start()` could not open the store (§3, §6.5): ownership, an I/O failure in `lock()`, or a `store.version` that is
+     * absent beside other entries, malformed or unreadable. The instance runs in memory and the store is left untouched.
+     */
+    STORE_UNREADABLE,
+
+    /** `store.version` was lower than this engine's: the store was rebuilt, `store.version` first (§6.5). */
+    STORE_MIGRATED,
+
+    /** `store.version` was higher than this engine's: run in memory, or rebuilt, per the storage's `NewerLayout` (§6.5). */
+    STORE_NEWER_LAYOUT,
+
+    /** Another process holds the store's lock (§3): the instance runs in memory for the life of the process. */
+    STORE_LOCKED,
 }

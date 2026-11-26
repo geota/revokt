@@ -109,14 +109,19 @@ internal class SystemFsync(
  *   tried every [lockPollMillis] for [lockWaitMillis]; then it deletes every temp file under the root and fsyncs every
  *   directory under the root, the root included, so a key another process renamed into place before its parent's fsync
  *   is durable before a pointer names it.
- * - [identity] is the absolute normalised root, computed with no I/O: the constructor touches no file.
+ * - [identity], the registry's key, creates the root as [lock] does and is the root's file key (device and inode), or
+ *   its real path where the file system has none, so a link, a bind mount or another spelling of the path meets one
+ *   entry. The constructor touches no file.
+ * - [isEmpty] lists the root itself: no entry there but `.lock` and temp files.
  *
- * Reads run concurrently; [write], [delete] and [lock]'s sweep run alone. [platform], [fsync], [owner] and the lock
- * timings are test seams.
+ * Reads run concurrently; [write], [delete] and [lock]'s sweep run alone. [onNewerLayout] is what a higher
+ * `store.version` gets (spec §6.5). [platform], [fsync], [owner] and the lock timings are test seams.
  */
+@Suppress("TooManyFunctions") // The RevoktStorage members, then one function per step of a write and of lock().
 internal class JvmStorage(
     dir: Path,
     private val ownership: OwnershipCheck = OwnershipCheck.STRICT,
+    val onNewerLayout: NewerLayout = NewerLayout.IN_MEMORY,
     private val platform: StoragePlatform = StoragePlatform.of(dir.fileSystem),
     private val fsync: Fsync = SystemFsync(platform),
     private val owner: (Path) -> Any? = defaultOwner(dir),
@@ -130,7 +135,25 @@ internal class JvmStorage(
     /** The root's real path, resolved once it exists and again by every [lock]; below it, no link is followed. */
     @Volatile private var real: Path? = null
 
-    override fun identity(): String = root.toString()
+    override fun identity(): Any =
+        try {
+            ensureDirectory(root)
+            val base = resolveBase()
+            Files.readAttributes(base, BasicFileAttributes::class.java).fileKey() ?: base
+        } catch (e: IOException) {
+            throw unreadable(e)
+        }
+
+    override fun isEmpty(): Boolean =
+        guard.read {
+            val base = existingBase() ?: return@read true
+            Files.newDirectoryStream(base).use { entries ->
+                entries.none { entry ->
+                    val name = entry.fileName.toString()
+                    name != StoreKeys.LOCK && !(TEMP.matches(name) && attributes(entry)?.isRegularFile == true)
+                }
+            }
+        }
 
     override fun read(name: String): ByteArray? {
         StoreKeys.requireKey(name)

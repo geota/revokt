@@ -35,7 +35,9 @@ import dev.revokt.engine.policy.startDiagnostics
 import dev.revokt.engine.seed.SeedLoad
 import dev.revokt.engine.seed.SeedLoader
 import dev.revokt.engine.seed.SeedPolicy
+import dev.revokt.engine.store.OpenedStore
 import dev.revokt.engine.store.StoreLayout
+import dev.revokt.engine.store.StoreOpen
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
 import dev.revokt.engine.update.CrliteSync
@@ -63,8 +65,8 @@ import kotlin.random.Random
  * The data side of one `Revokt` (spec §4, §5.1 "Lifecycle", §11's 0.2 row): the store over [storage], the one published
  * generation reference, the seed's start steps, the S diagnostics, the anchor index build and the [Evaluator]. The JVM
  * binding (revokt-jsse) keeps the lifecycle, the start lock, the loader thread and the join, and calls these in the order
- * §5.1 gives: [startSeed] under its lock on the `start()` caller, [startTask] and each scheduled [sync] on the loader,
- * [clear] and [closeEngine] from `close()`. Never two of them at once, so the reference has one writer at a time (spec
+ * §5.1 gives: [openStore] and [startSeed] under its lock on the `start()` caller, [startTask] and each scheduled [sync] on
+ * the loader, [closeStore], [clear] and [closeEngine] from `close()`. Never two of them at once, so the reference has one writer at a time (spec
  * §3 "Purity gate"). `@RevoktInternalApi`: the binding's plumbing, outside the public API.
  *
  * - [seed] is the resolved seed (null: no local data source), [channel] the configured one (set whenever a CRLite
@@ -75,7 +77,9 @@ import kotlin.random.Random
  *   schedule's jitter source (#147).
  */
 @RevoktInternalApi
-@Suppress("LongParameterList") // One per configuration value the data side reads; `of` is the binding's entry.
+// One parameter per configuration value the data side reads (`of` is the binding's entry), one function per step of
+// spec §5.1 the binding drives.
+@Suppress("LongParameterList", "TooManyFunctions")
 public class CrliteRuntime internal constructor(
     private val seed: SeedSource?,
     channel: CrliteChannel?,
@@ -85,16 +89,23 @@ public class CrliteRuntime internal constructor(
     private val verifier: SignatureVerifier,
     private val policy: RevoktPolicy,
     pinnedRootSpkis: Set<ByteString>,
-    storage: RevoktStorage,
+    private val storage: RevoktStorage,
     private val logger: RevoktLogger,
     client: RemoteSettingsClient? = null,
     private val random: Random = Random.Default,
 ) {
+    /** What the store's layout reads and writes: [storage] until [openStore] falls back to a fresh in-memory store. */
+    private val active = ActiveStorage(storage)
+
     private val store: StoreLayout? =
         channel?.let {
             val limits = client?.limits ?: FetchLimits()
-            StoreLayout(storage, Dataset.CRLITE, it, limits.maxJsonBytes, limits.maxChangesetRecords)
+            StoreLayout(active, Dataset.CRLITE, it, limits.maxJsonBytes, limits.maxChangesetRecords)
         }
+
+    /** The store [openStore] opened, held until [closeStore]; a fallback is kept, so it is never retried. */
+    @Volatile
+    private var opened: OpenedStore? = null
 
     /** What handshakes and the evaluator read (spec §3): before the start task ends, every configured dataset pending. */
     internal val snapshot: SnapshotRef = SnapshotRef(initial(pending = true, epoch = 0))
@@ -177,6 +188,39 @@ public class CrliteRuntime internal constructor(
             logger.safeLog(LogLevel.WARN, "no anchor snapshot: Evaluator.evaluate throws until one exists", t)
             null
         }
+
+    /**
+     * `start()`'s store step (spec §5.1, §6.5), on the caller's thread after the anchor snapshot and before [startSeed]:
+     * the identity registered, the lock taken and held until [closeStore], then `store.version` read ([StoreOpen]). A
+     * second instance on one store in this process throws [IllegalStateException], with nothing held. On
+     * `STORE_LOCKED`, `STORE_UNREADABLE` or `STORE_NEWER_LAYOUT` under `IN_MEMORY` the instance runs on a fresh
+     * in-memory store for the life of the process: the lock is released, the identity deregistered and the warning
+     * logged (0.2 has no `state`), and a later call keeps that store, so the lock is never tried again.
+     */
+    public fun openStore() {
+        val previous = opened
+        if (previous != null) {
+            check(previous.fallback) { "the store is already open" }
+            return
+        }
+        val open = StoreOpen.open(storage, logger)
+        active.target = open.storage
+        opened = open
+    }
+
+    /**
+     * Releases the store's lock, then deregisters its identity (spec §5.1 `close()`, and a `start()` that throws after
+     * [openStore]); a no-op when nothing is held. A fallback stays in place.
+     */
+    public fun closeStore() {
+        val open = opened ?: return
+        if (open.fallback) return
+        opened = null
+        open.close()
+    }
+
+    /** Whether the instance runs in memory instead of on its storage (spec §4 `RevoktState.storageFallback`, in 0.3). */
+    internal val storageFallback: Boolean get() = opened?.fallback == true
 
     /**
      * The synchronous seed steps of `start()` (spec §4 S bullet, §5.1), on the caller's thread, before the flip:
@@ -647,4 +691,27 @@ public class CrliteRuntime internal constructor(
         public val maxX5uBytes: Long,
         public val maxChangesetRecords: Int,
     )
+}
+
+/**
+ * The storage a runtime's layout runs on (spec §3): [target], the configured one until `openStore()` replaces it with
+ * the in-memory fallback. Only `openStore()` locks the configured one; this one has no lock and no identity of its own.
+ */
+private class ActiveStorage(
+    @Volatile var target: RevoktStorage,
+) : RevoktStorage {
+    override fun read(name: String): ByteArray? = target.read(name)
+
+    override fun write(
+        name: String,
+        bytes: ByteArray,
+    ) = target.write(name, bytes)
+
+    override fun delete(name: String) = target.delete(name)
+
+    override fun names(): Set<String> = target.names()
+
+    override fun isEmpty(): Boolean = target.isEmpty()
+
+    override fun lock(): AutoCloseable = error("the runtime's store is locked by openStore() only")
 }

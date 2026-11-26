@@ -32,8 +32,17 @@ public interface RevoktStorage {
     /** Every key that holds a file, excluding the lock and temporary keys. */
     public fun names(): Set<String>
 
-    /** The key for the per-process single-instance registry; null means not registered ([inMemory]). */
-    public fun identity(): String? = null
+    /**
+     * Whether the store holds nothing (spec §6.5 "empty"): no key, and for a directory no entry at all but the lock and
+     * temp files, so a directory holding files that are not keys is not empty. A read that fails throws.
+     */
+    public fun isEmpty(): Boolean = names().isEmpty()
+
+    /**
+     * The key for the per-process single-instance registry, read by `start()`, never by `build()`; null means not
+     * registered ([inMemory]). One store reached through two paths has one key. A read that fails throws.
+     */
+    public fun identity(): Any? = null
 
     /**
      * Takes the store's exclusive lock, held until the result is closed: acquired in `start()` and held to `close()`,

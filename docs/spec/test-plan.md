@@ -142,6 +142,19 @@ tests; **live checks** are informational.
   group-writable root or subdirectory under `STRICT`, an other-writable one always and one whose uid is not a probe
   file's; a root with the wrong mode never gets a probe written, and a temp file in a subdirectory that fails stays; the contract tests run over both stores, refusing uppercase keys `.LOCK` and `.Lock`
   (`JvmStorageContractTest`);
+  [0.3] `start()`'s store step (`StoreOpenTest` over `JvmStorage` on real directories, `CrliteRuntimeStoreTest`,
+  `RevoktStoreTest`): an absent root, or one holding only `.lock` and a temp file (a crash in the first `store.version`
+  write, swept before the read), gets `1` written, silently; a root with a key, a non-key file or an empty directory and
+  no `store.version`, a malformed `store.version` (empty, `0`, `01`, `1\n`, ` 1`, ten digits), one that is a
+  directory, a link, or whose read throws → `STORE_UNREADABLE`, nothing written or deleted; higher under `IN_MEMORY` →
+  `STORE_NEWER_LAYOUT`, the directory untouched, and the seed installs in memory; higher under `REBUILD` and lower (the
+  current version given as a test parameter) → rebuilt, `store.version` written before any delete, every other key
+  deleted, a non-key file kept; a rebuild whose delete throws → `STORE_UNREADABLE`; a lock held elsewhere →
+  `STORE_LOCKED`, nothing written, and the fallback is never retried; after every fallback and every throw the lock is
+  free and the identity deregistered; a second instance on one root in the process, through another spelling or a
+  symbolic link to the root, throws `IllegalStateException` and takes no lock; `start()` registers and locks before the
+  seed's header, a `start()` that throws releases both, and `close()` releases the lock after the loader's exit and
+  before `engine.close()`; a seed installed into the directory is served from it after a restart;
   a `current` with a flipped hex digit at `start()` → `storeFailures = 1`, no `STORE_UNREADABLE` warning (which means
   only the in-memory fallback, and stays until `close()`), and the next install heals it (`CrliteRuntimeStartTest`;
   the count in `SeedLoaderStoreTest`);
@@ -440,8 +453,8 @@ round trip; JSON and canonical JSON (differential against `canonical_json`); the
 SCT list (§9.2); DER ECDSA conversion and `AlgorithmIdentifier`/PSS parameters; seed archive and x5u
 PEM; the nameConstraints and subjectAltName readers of the walker's issuer rules, with the directoryName comparison,
 the mailbox grammar, and the subject's emailAddress and CN-ID reader (`NameConstraintsFuzzTest`, #237); the store
-readers of what a disk can rot: `current`, `updater.json` and the generation file, size cap and re-hash included
-(`StoreJsonFuzzTest`, `GenerationFileFuzzTest`);
+readers of what a disk can rot: `current`, `updater.json`, the generation file and `store.version`, size cap and
+re-hash included (`StoreJsonFuzzTest`, `GenerationFileFuzzTest`, `StoreVersionFuzzTest`);
 the path walker (below); [M2] CRX3, zip, `crl-set`, OneCRL, preload DER; [M3] precert TBS, log
 list. **Harness**: Jazzer `@FuzzTest` methods with a static `fuzzerTestOneInput` wrapper;
 `-Xmx256m -rss_limit_mb=2560 -timeout=10` (the §9.2 parser target overrides with `-timeout=1`); `-max_len` = each target's cap + 1 (filters:

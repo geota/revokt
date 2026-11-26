@@ -21,6 +21,7 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktLoggers
 import dev.revokt.RevoktPolicy
+import dev.revokt.RevoktStorage
 import dev.revokt.Rule
 import dev.revokt.SeedSource
 import dev.revokt.Severity
@@ -99,12 +100,16 @@ public class Revokt private constructor(
      * 1. `validate(enforcement)`: an `ERROR` throws [IllegalStateException], as [validateOrThrow] does;
      * 2. the anchor snapshot over the default trust manager and its index; when it cannot be built `start()` goes on with
      *    none, and [evaluator] throws until one exists (§11's 0.2 row);
-     * 3. the seed's `seed.json` header: a seed for another channel throws [IllegalStateException]
+     * 3. the store (§5.1, §6.5): its identity registered, where a second instance on one store in this process throws
+     *    [IllegalStateException], its lock taken and held until [close], and `store.version` read; a lock another
+     *    process holds, a store that cannot be opened or one of a newer layout runs the instance in memory for the life
+     *    of the process, with the warning logged (`STORE_LOCKED`, `STORE_UNREADABLE`, `STORE_NEWER_LAYOUT`);
+     * 4. the seed's `seed.json` header: a seed for another channel throws [IllegalStateException]
      *    (`SEED_CHANNEL_MISMATCH`);
-     * 4. under `ENFORCE` with `NO_DATA` rejecting, where the seed is the only local data source, the seed's whole load
+     * 5. under `ENFORCE` with `NO_DATA` rejecting, where the seed is the only local data source, the seed's whole load
      *    on this thread: a seed that is absent, unreadable, or does not install throws [IllegalStateException]
      *    (`SEED_UNREADABLE`) instead of every handshake being rejected;
-     * 5. the flip to `STARTED`, and one task on the loader thread `revokt-loader-<n>`: the seed's load unless step 4 ran
+     * 6. the flip to `STARTED`, and one task on the loader thread `revokt-loader-<n>`: the seed's load unless step 5 ran
      *    it, then, with a fetching source, the first sync, then the data's `pending` cleared. The loader then syncs on
      *    its schedule (spec §5.1, §7.1, #147): 6 h plus a jitter of up to 36 min after a poll that did not fail, the
      *    source's backoff after one that did, every wait between 60 s and 24 h.
@@ -117,7 +122,7 @@ public class Revokt private constructor(
      * public value with the 0.3 `state`.
      *
      * Idempotent: in `STARTED` it returns the diagnostics at once, without waiting. After [close] it throws
-     * [IllegalStateException]; one whose wait sees [close] returns normally. Called from the thread of step 4 (an
+     * [IllegalStateException]; one whose wait sees [close] returns normally. Called from the thread of step 5 (an
      * engine, a seed source or a verifier calling back) it throws [IllegalStateException].
      */
     public fun start(): List<PolicyDiagnostic> {
@@ -133,9 +138,12 @@ public class Revokt private constructor(
             // Every step below may call consumer code (the logger, the trust store, the seed source, the engine), and
             // the lock is re-entrant: a call back into start() or close() from this thread throws instead.
             startThread = Thread.currentThread()
+            var started = false
             try {
                 validateOrThrow(config.enforcement)
                 val index = runtime.anchorIndex(config.platformTrust, config.defaultDelegate, nowMillis())
+                // The registry, the store lock and store.version (spec §5.1); released below if start() throws after.
+                runtime.openStore()
                 val loadSeed = runtime.startSeed(soleSeed(), nowMillis())
                 done = CountDownLatch(1)
                 val executor = newLoader()
@@ -168,7 +176,10 @@ public class Revokt private constructor(
                 startTaskDone = done
                 lifecycle = RevoktLifecycle.STARTED
                 flipped = config.timeSource.markNow()
+                started = true
             } finally {
+                // A start() that throws holds nothing: the store's lock released and its identity deregistered.
+                if (!started) releaseStore()
                 startThread = null
             }
         }
@@ -181,7 +192,8 @@ public class Revokt private constructor(
      * finished. In order: the flip to `CLOSED` (under the start lock, so a `close()` racing [start] waits for its
      * synchronous part); the loader cancelled, and an in-flight install and the loader thread's exit awaited, without a
      * deadline, so the engine is never closed while it prepares or activates a generation and no loader thread outlives
-     * `close()`; the generation reference cleared; then `engine.close()`,
+     * `close()`; the store's lock released and its identity deregistered; the generation reference cleared; then
+     * `engine.close()`,
      * always, last, in `CREATED` too (`Revokt` owns the engine). A throw from `engine.close()` is rethrown once every
      * other step has run, so an engine that did not close is never hidden (`try`-with-resources and `use {}` attach it
      * as suppressed when their body threw); a second `close()` is then a no-op. Throws [IllegalStateException] on the
@@ -211,8 +223,13 @@ public class Revokt private constructor(
         var failure: Throwable? = null
         try {
             executor?.let(::stop)
-            runtime.clear()
-            indexed = null
+            // Once the loader has stopped, so nothing writes after (spec §5.1 close()): then the reference is cleared.
+            try {
+                runtime.closeStore()
+            } finally {
+                runtime.clear()
+                indexed = null
+            }
         } catch (
             // Rethrown below, after engine.close(), which always runs; with engine.close()'s own throw suppressed in it.
             @Suppress("TooGenericExceptionCaught") t: Throwable,
@@ -253,6 +270,20 @@ public class Revokt private constructor(
     /** `validate()`'s `WARNING`s for the configured enforcement, then the S diagnostics (spec §4). */
     private fun startDiagnostics(): List<PolicyDiagnostic> =
         validate(config.enforcement).filter { it.severity == Severity.WARNING } + runtime.diagnostics(nowMillis())
+
+    /**
+     * The store's lock released and its identity deregistered after a `start()` that threw (spec §5.1: it holds
+     * nothing); a release that throws is logged, so the start's own throwable is the one that propagates.
+     */
+    private fun releaseStore() {
+        try {
+            runtime.closeStore()
+        } catch (
+            @Suppress("TooGenericExceptionCaught") e: Exception,
+        ) {
+            runtime.log(LogLevel.WARN, "releasing the store after a failed start() threw", e)
+        }
+    }
 
     /**
      * The sole-seed `ENFORCE` configuration (spec §4 S bullet): `ENFORCE`, `NO_DATA` rejecting, and a seed, which in 0.2
@@ -443,6 +474,12 @@ public class Revokt private constructor(
 
         /** The sync schedule's jitter source (#147); internal, a test seam. */
         internal var random: Random = Random.Default
+
+        /**
+         * The store (spec §3, §6.5); null means a fresh `RevoktStorage.inMemory()` at [build]. Internal, a test seam: the
+         * §4 `storage(…)` member comes with `JvmStorage.directory(…)` (#340).
+         */
+        internal var storage: RevoktStorage? = null
 
         /** The platform trust (spec §3, §5.3): `JvmPlatformTrust()`; internal, a test seam (the §4 member is [0.3]). */
         internal var platformTrust: PlatformTrust = JvmPlatformTrust()
