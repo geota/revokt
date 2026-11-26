@@ -244,6 +244,97 @@ class JvmStorageTest {
             assertFalse(Files.exists(dir.resolve("s/a")), "a directory left empty is removed")
             assertTrue(Files.isDirectory(dir.resolve("s")), "the root stays")
             assertEquals(emptySet(), JvmStorage(dir.resolve("absent")).names())
+            val absent = JvmStorage(dir.resolve("absent"))
+            assertNull(absent.read("k"))
+            absent.delete("k")
+            assertFalse(Files.exists(dir.resolve("absent")), "a read or a delete creates no root")
+        }
+
+    private fun linkOrAbort(
+        link: Path,
+        target: Path,
+    ): Path =
+        try {
+            Files.createSymbolicLink(link, target)
+        } catch (e: IOException) {
+            Assumptions.abort<Path>("cannot create symbolic links here: $e")
+        } catch (e: UnsupportedOperationException) {
+            Assumptions.abort<Path>("cannot create symbolic links here: $e")
+        }
+
+    @Test
+    fun `a key file that is a symbolic link is not a key - never listed, never followed, every access throws`() =
+        withDir { dir ->
+            val outside = Files.write(dir.resolve("outside"), byteArrayOf(7))
+            val store = JvmStorage(dir.resolve("s"))
+            store.lock().use {
+                store.write("a/k", byteArrayOf(1))
+                linkOrAbort(dir.resolve("s/a/current"), outside)
+                assertEquals(setOf("a/k"), store.names())
+                assertFailsWith<IOException> { store.read("a/current") }
+                assertFailsWith<IOException> { store.write("a/current", byteArrayOf(2)) }
+                assertFailsWith<IOException> { store.delete("a/current") }
+                assertContentEquals(byteArrayOf(7), Files.readAllBytes(outside))
+                assertTrue(Files.isSymbolicLink(dir.resolve("s/a/current")), "the link itself stays")
+                assertEquals(
+                    listOf("current", "k"),
+                    Files.list(dir.resolve("s/a")).use { l ->
+                        l.map { it.fileName.toString() }.sorted().toList()
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `a directory segment that is a symbolic link is not followed - its keys are not keys`() =
+        withDir { dir ->
+            val outside = Files.createDirectory(dir.resolve("outside"))
+            Files.write(outside.resolve("b"), byteArrayOf(7))
+            val store = JvmStorage(dir.resolve("s"))
+            store.lock().use {
+                store.write("x", byteArrayOf(1))
+                linkOrAbort(dir.resolve("s/blobs"), outside)
+                assertEquals(setOf("x"), store.names())
+                assertFailsWith<IOException> { store.read("blobs/b") }
+                assertFailsWith<IOException> { store.read("blobs/new") }
+                assertFailsWith<IOException> { store.write("blobs/new", byteArrayOf(2)) }
+                assertFailsWith<IOException> { store.write("blobs/deeper/new", byteArrayOf(2)) }
+                assertFailsWith<IOException> { store.delete("blobs/b") }
+                assertEquals(listOf("b"), Files.list(outside).use { l -> l.map { it.fileName.toString() }.toList() })
+                assertContentEquals(byteArrayOf(7), Files.readAllBytes(outside.resolve("b")))
+            }
+            // The open's sweep and directory walk do not follow it either.
+            Files.write(outside.resolve(JvmStorage.tempName("b")), byteArrayOf(8))
+            store.lock().close()
+            assertEquals(2L, Files.list(outside).use { it.count() })
+        }
+
+    @Test
+    fun `a lock file that is a symbolic link is unreadable and is not followed`() =
+        withDir { dir ->
+            val outside = Files.write(dir.resolve("outside"), byteArrayOf(7))
+            Files.createDirectory(dir.resolve("s"))
+            linkOrAbort(dir.resolve("s/.lock"), outside)
+            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("s")).lock() }
+            assertContentEquals(byteArrayOf(7), Files.readAllBytes(outside))
+            // A dangling link is not created through either.
+            Files.delete(dir.resolve("s/.lock"))
+            linkOrAbort(dir.resolve("s/.lock"), dir.resolve("made"))
+            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("s")).lock() }
+            assertFalse(Files.exists(dir.resolve("made"), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+            // Released: once the link goes, the store opens.
+            Files.delete(dir.resolve("s/.lock"))
+            JvmStorage(dir.resolve("s"), lockWaitMillis = 0).lock().close()
+        }
+
+    @Test
+    fun `ownership is checked before the lock file is opened`() =
+        withDir { dir ->
+            Assumptions.assumeTrue(posix, "POSIX permissions")
+            val root = Files.createDirectory(dir.resolve("s"))
+            Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwx---rwx"))
+            assertFailsWith<StoreUnreadableException> { JvmStorage(root).lock() }
+            assertFalse(Files.exists(root.resolve(".lock"), java.nio.file.LinkOption.NOFOLLOW_LINKS))
         }
 
     @Test
@@ -421,7 +512,7 @@ class JvmStorageTest {
             Assumptions.assumeTrue(posix, "POSIX permissions")
             val root = dir.resolve("s")
             val probes = ArrayList<Path>()
-            val owner = { p: Path -> if (p == root.toAbsolutePath().normalize()) 0 else 1.also { probes.add(p) } }
+            val owner = { p: Path -> if (p == root.toRealPath()) 0 else 1.also { probes.add(p) } }
             assertFailsWith<StoreUnreadableException> { JvmStorage(root, owner = owner).lock() }
             assertEquals(1, probes.size)
             assertTrue(JvmStorage.TEMP.matches(probes.single().fileName.toString()))

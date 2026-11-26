@@ -130,8 +130,10 @@ tests; **live checks** are informational.
   fsyncs every directory under it, the root included, and a failed fsync fails the write with the key as it was; a
   second `lock()` in the process, and a child JVM holding the lock, are `StoreLockedException` after the 1 s wait, the
   failed attempt leaves the holder's lock in place, and a killed holder leaves no stale lock; `names()` lists no lock,
-  temp file, non-key entry or link; the ownership check refuses a group-writable root under `STRICT`, an
-  other-writable one always and a root whose uid is not a probe file's; the contract tests run over both stores
+  temp file, non-key entry or link; a key file or a directory segment that is a symbolic link is never followed:
+  `read`, `write` and `delete` of it throw and its target is untouched; `.lock` as a link is `STORE_UNREADABLE`, and
+  the ownership check runs before `.lock` is opened; the ownership check refuses a group-writable root under `STRICT`,
+  an other-writable one always and a root whose uid is not a probe file's; the contract tests run over both stores
   (`JvmStorageContractTest`);
   a `current` with a flipped hex digit at `start()` → `storeFailures = 1`, no `STORE_UNREADABLE` warning (which means
   only the in-memory fallback, and stays until `close()`), and the next install heals it (`CrliteRuntimeStartTest`;
