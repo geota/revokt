@@ -432,7 +432,7 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   - **Conditional requests:** `_since` and `If-None-Match` are sent only when the cursor equals the live
     generation's timestamp; otherwise the whole collection is fetched. This closes the #205 review's case of a 304
     keeping an instance on a fallback. Firefox keys `_since` on its own database, and upki sends
-    `If-Modified-Since` only when its local manifest parses.
+    `If-Modified-Since` only when its local manifest parses. *Superseded 2026-11-26 by #319 (PR #341), below.*
   - **STALE gate:** after the first completed attempt, the seed generation is republished with the gate open (§8).
   - **close():** it blocks the reschedule and interrupts the running sync. A sync waiting on a fetch ends `FAILED`
     and installs nothing, and one in prepare or activate is waited for (#143's residual).
@@ -624,3 +624,46 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     the pool's termination, which the JDK signals first. The remaining wait on consumer code is the JVM's
     uncaught-exception handler, after a JDK-internal `Error` kills the worker. That is a residual, since no revokt
     path reaches it.
+- 2026-11-26 (maintainer, #338): B19 is confirmed as built. When the pointed `live` fails to load at `start()`, the
+  seed's install lowers the watermark to the seed's `<ts>`, as Firefox's floor drops after a dump import
+  (RSC:1292-1300). Once the store is durable, that lowered floor persists. This is the intended behaviour, not a
+  residual.
+- 2026-11-26 (lead, #319, PR #341; independent review, one fix round): `_since` is the served file's own `<ts>`, read
+  from the same file that is the merge base. It is sent only while that file loads, its `<ts>` equals the snapshot's
+  live `<ts>`, and the pointer names it. The `updater.json` cursor is never sent, so the #205 hazard cannot occur.
+  `If-None-Match` is sent only while `updater.json`'s cursor and watermark are at or past that `<ts>`, so an unsigned
+  304 never stands in for B18's repair, which is written only from a changeset that verified. The first sync after
+  every seed install is now a delta. Firefox keys `_since` on its local data's own timestamp, the dump's after an
+  import (RSC:744-769, 1164). upki keys `If-Modified-Since` on its local manifest (`fetch.rs:64-80`). The review's
+  live check found that production answers `If-None-Match` with a 200 and no `ETag` (Appendix A).
+- 2026-11-26 (lead, #330, PRs #342 and #344; independent review of each, with three fix rounds on #342 and two on
+  #344): the durable `JvmStorage` and its start integration. The public surface is #340.
+  - **Durability:** stricter than both references, neither of which fsyncs (upki `fetch.rs:430-447`; Firefox's rkv
+    SafeMode writes and renames with no fsync). Each write goes to a temp file, which is forced, atomically renamed
+    and followed by a fsync of its parent. Every directory under the root is fsynced at open, and the parent of each
+    directory created. The Windows rename retry is bounded at 1 s.
+  - **Temp files:** `<segment>~<32 hex>`, with no pid, since `ProcessHandle` is missing from the API-26 signature.
+    `lock()` sweeps them before `store.version` is read.
+  - **The lock:** `FileChannel.tryLock` on `.lock`, tried every 100 ms for 1 s and never deleted, as Firefox keeps
+    `.parentlock` (`nsProfileLock.cpp:206-241`). A second process runs in memory with `STORE_LOCKED`, where Firefox
+    refuses to start. `.lock` is checked with lstat and must be a regular file, then opened for reading and writing,
+    which closes a FIFO race. The in-process lock table and the store registry key on `.lock`'s `fileKey()`, so a
+    hard link or a bind mount cannot drop a held lock.
+  - **Trust:** the root's mode, then its owner, are checked before the probe is written. Every directory under the
+    root follows the same rule and is checked before it is swept. Any other failure in `lock()` is
+    `STORE_UNREADABLE`. Below the root's real path no link is followed, and a read through one throws (#236). Keys
+    are lowercase only. A directory that holds a `.lock` is another store: `names()` and the sweep skip it, and every
+    read, write or delete through it throws. Residual: a check-then-use window that only the owner, or the group
+    under `OWNER_OR_GROUP`, can race.
+  - **`store.version` (fail closed, #230):** an empty root gets `1` written. A non-empty root with no
+    `store.version`, or with one that is malformed or cannot be read, is `STORE_UNREADABLE`, and the store is left
+    untouched. The spec's earlier rebuild would have deleted files in a caller's directory that is not revokt's.
+    Higher is `STORE_NEWER_LAYOUT`, then `IN_MEMORY` or `REBUILD`. Lower is `STORE_MIGRATED`. A rebuild deletes the
+    other keys first and writes the version last, so an interrupted rebuild runs again at the next start. Firefox
+    opens a newer IndexedDB as unusable and reads its dump (IDB:189, RSC:571-597). upki's `index.bin` magic refuses
+    an unknown version without deleting anything (`index.rs:84-94`).
+  - **Lifecycle:** once the loader has started, only `close()` releases the store, after the loader has stopped. If
+    the loader's stop throws, the lock stays held. 0.3 has no read-only, promotion or storage-fallback modes: the
+    in-memory fallback covers a second instance.
+  - **CI:** every test's result is printed in the CI logs (#343), so a matrix leg shows which tests ran. Builders
+    never pass `--no-verify` (#345).
