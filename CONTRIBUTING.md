@@ -153,7 +153,7 @@ Appendix C, and a reading list into `docs/` (`docs/spec/`, `docs/adr/`, `docs/de
 twice, it is added to `AGENTS.md` in that PR.** Module-level `AGENTS.md` files exist only where a module's
 commands or boundaries differ (`revokt-clubcard/AGENTS.md` for the MPL port rules, `native/AGENTS.md`).
 
-**Toolchain (pinned; the scaffold facts).** Gradle 9.7 wrapper with `distributionSha256Sum` (the newest fully supported by the Kotlin Gradle plugin); Kotlin 2.4.21;
+**Toolchain (pinned; the scaffold facts).** Gradle 9.9.2 wrapper with `distributionSha256Sum` (ahead of KGP 2.4.21's tested range, whose newest is 9.7.0; no compatibility warning; revisit at Kotlin 2.5); Kotlin 2.4.21;
 AGP 8.13.2 (Kotlin 2.4 supports up to AGP 9.3; the Android modules arrive in 0.3); JDKs from `actions/setup-java`, never
 auto-provisioned (`org.gradle.java.installations.auto-download=false`, no foojay resolver); `jvmToolchain(21)`
 to build, `-Xjdk-release=17` and `jvmTarget = 17` on every jvm module (spec revision 38; Android consumers dex it with

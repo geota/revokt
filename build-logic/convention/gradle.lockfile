@@ -1,7 +1,7 @@
 # This is a Gradle generated file for dependency locking.
 # Manual edits can break the build and are not advised.
 # This file is expected to be part of source control.
-# To regenerate this file, run: ./gradlew :convention:dependencies --write-locks
+# To regenerate this file, run: ./gradlew :build-logic:convention:dependencies --write-locks
 com.google.code.gson:gson:2.11.0=runtimeClasspath,testRuntimeClasspath
 com.google.errorprone:error_prone_annotations:2.27.0=runtimeClasspath,testRuntimeClasspath
 commons-io:commons-io:2.19.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
@@ -42,7 +42,7 @@ org.jetbrains.kotlin:kotlin-klib-commonizer-api:2.4.21=runtimeClasspath,testRunt
 org.jetbrains.kotlin:kotlin-klib-commonizer-embeddable:2.4.21=kotlinKlibCommonizerClasspath
 org.jetbrains.kotlin:kotlin-native-utils:2.4.21=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
 org.jetbrains.kotlin:kotlin-reflect:1.6.10=kotlinAbiValidationCompatClasspath,kotlinBuildToolsApiClasspath,kotlinCompilerClasspath,kotlinKlibCommonizerClasspath
-org.jetbrains.kotlin:kotlin-reflect:2.4.0=compileClasspath,embeddedKotlin,testCompileClasspath,testRuntimeClasspath
+org.jetbrains.kotlin:kotlin-reflect:2.4.21=compileClasspath,embeddedKotlin,testCompileClasspath,testRuntimeClasspath
 org.jetbrains.kotlin:kotlin-sam-with-receiver-compiler-plugin-embeddable:2.4.21=kotlinCompilerPluginClasspathMain,kotlinCompilerPluginClasspathTest
 org.jetbrains.kotlin:kotlin-script-runtime:2.4.0=kotlinAbiValidationCompatClasspath
 org.jetbrains.kotlin:kotlin-script-runtime:2.4.21=compilePluginsBlocksPluginClasspathElements,kotlinBuildToolsApiClasspath,kotlinCompilerClasspath,kotlinCompilerPluginClasspathMain,kotlinCompilerPluginClasspathTest,kotlinKlibCommonizerClasspath
@@ -51,8 +51,8 @@ org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable:2.4.21=compilePluginsB
 org.jetbrains.kotlin:kotlin-scripting-compiler-impl-embeddable:2.4.21=compilePluginsBlocksPluginClasspathElements,kotlinCompilerPluginClasspathMain,kotlinCompilerPluginClasspathTest
 org.jetbrains.kotlin:kotlin-scripting-jvm:2.4.21=compilePluginsBlocksPluginClasspathElements,kotlinCompilerPluginClasspathMain,kotlinCompilerPluginClasspathTest
 org.jetbrains.kotlin:kotlin-stdlib:2.2.0=runtimeClasspath
-org.jetbrains.kotlin:kotlin-stdlib:2.4.0=compileClasspath,embeddedKotlin,kotlinAbiValidationCompatClasspath
-org.jetbrains.kotlin:kotlin-stdlib:2.4.21=compilePluginsBlocksPluginClasspathElements,kotlinBuildToolsApiClasspath,kotlinCompilerClasspath,kotlinCompilerPluginClasspathMain,kotlinCompilerPluginClasspathTest,kotlinKlibCommonizerClasspath,testCompileClasspath,testRuntimeClasspath
+org.jetbrains.kotlin:kotlin-stdlib:2.4.0=kotlinAbiValidationCompatClasspath
+org.jetbrains.kotlin:kotlin-stdlib:2.4.21=compileClasspath,compilePluginsBlocksPluginClasspathElements,embeddedKotlin,kotlinBuildToolsApiClasspath,kotlinCompilerClasspath,kotlinCompilerPluginClasspathMain,kotlinCompilerPluginClasspathTest,kotlinKlibCommonizerClasspath,testCompileClasspath,testRuntimeClasspath
 org.jetbrains.kotlin:kotlin-test-junit5:2.4.21=testCompileClasspath,testRuntimeClasspath
 org.jetbrains.kotlin:kotlin-test:2.4.21=testCompileClasspath,testRuntimeClasspath
 org.jetbrains.kotlin:kotlin-tooling-core:2.4.21=compileClasspath,kotlinAbiValidationCompatClasspath,kotlinBuildToolsApiClasspath,kotlinCompilerClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
