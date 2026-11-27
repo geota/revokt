@@ -36,6 +36,7 @@ import dev.revokt.engine.seed.SeedLoad
 import dev.revokt.engine.seed.SeedLoader
 import dev.revokt.engine.seed.SeedPolicy
 import dev.revokt.engine.store.OpenedStore
+import dev.revokt.engine.store.StorageBackend
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreOpen
 import dev.revokt.engine.store.StoreRead
@@ -89,7 +90,7 @@ public class CrliteRuntime internal constructor(
     private val verifier: SignatureVerifier,
     private val policy: RevoktPolicy,
     pinnedRootSpkis: Set<ByteString>,
-    private val storage: RevoktStorage,
+    private val storage: StorageBackend,
     private val logger: RevoktLogger,
     client: RemoteSettingsClient? = null,
     private val random: Random = Random.Default,
@@ -675,7 +676,7 @@ public class CrliteRuntime internal constructor(
                 verifier = verifier,
                 policy = policy,
                 pinnedRootSpkis = source.pinnedRootSpkis,
-                storage = storage,
+                storage = storage.backend,
                 logger = logger,
                 client = client,
                 random = random,
@@ -698,8 +699,8 @@ public class CrliteRuntime internal constructor(
  * the in-memory fallback. Only `openStore()` locks the configured one; this one has no lock and no identity of its own.
  */
 private class ActiveStorage(
-    @Volatile var target: RevoktStorage,
-) : RevoktStorage {
+    @Volatile var target: StorageBackend,
+) : StorageBackend {
     override fun read(name: String): ByteArray? = target.read(name)
 
     override fun write(

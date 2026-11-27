@@ -6,15 +6,15 @@
 package dev.revokt.engine.store
 
 import dev.revokt.RevoktInternalApi
-import dev.revokt.RevoktStorage
 
 /**
  * `RevoktStorage.inMemory()` (spec §3): a map from key to a private copy of the bytes, behind a reader-writer lock, so a
  * [read] sees a write whole or not at all. Directories exist only as key prefixes, as on a file system: a key cannot be
  * written under a key that holds a file, nor where keys sit beneath it, so code tested here meets the conflicts
- * `JvmStorage` would. There is no lock key and there are no temporary keys, so [names] lists every key.
+ * `DirectoryStorage` would. There is no lock key and there are no temporary keys, so [names] lists every key. The
+ * registry's key is the instance itself, so two started instances on one in-memory store throw as on one directory.
  */
-internal class InMemoryStorage : RevoktStorage {
+internal class InMemoryStorage : StorageBackend {
     private val guard = ReadWriteGuard()
     private val files = HashMap<String, ByteArray>()
 
@@ -47,6 +47,8 @@ internal class InMemoryStorage : RevoktStorage {
     }
 
     override fun names(): Set<String> = guard.read { files.keys.toSet() }
+
+    override fun identity(): Any = this
 
     override fun lock(): AutoCloseable = AutoCloseable { }
 }

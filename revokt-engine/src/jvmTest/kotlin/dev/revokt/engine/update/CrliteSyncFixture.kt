@@ -15,7 +15,6 @@ import dev.revokt.LogLevel
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
-import dev.revokt.RevoktStorage
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
@@ -32,7 +31,9 @@ import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.json.JsonInteger
 import dev.revokt.engine.store.GenerationNames
+import dev.revokt.engine.store.InMemoryStorage
 import dev.revokt.engine.store.SourceRecord
+import dev.revokt.engine.store.StorageBackend
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
@@ -234,8 +235,8 @@ internal open class CrliteSyncFixture : X5uChainFixture() {
 
     /** A storage whose reads and writes a test can fail, key by key. */
     protected class Faulty(
-        val inner: RevoktStorage = RevoktStorage.inMemory(),
-    ) : RevoktStorage by inner {
+        val inner: StorageBackend = InMemoryStorage(),
+    ) : StorageBackend by inner {
         var failWrite: (String) -> Throwable? = { null }
         var failRead: (String) -> Throwable? = { null }
         var failDelete: (String) -> Throwable? = { null }

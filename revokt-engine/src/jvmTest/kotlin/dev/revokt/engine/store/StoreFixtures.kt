@@ -10,7 +10,6 @@ import dev.revokt.Dataset
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
 import dev.revokt.RevoktInternalApi
-import dev.revokt.RevoktStorage
 import dev.revokt.engine.c2sp.C2spIndex
 import dev.revokt.engine.c2sp.Window
 import okio.ByteString
@@ -35,8 +34,8 @@ internal object StoreFixtures {
 
     /** A storage that records every write and delete, in order, over an in-memory one. */
     class Recording(
-        private val inner: RevoktStorage = RevoktStorage.inMemory(),
-    ) : RevoktStorage by inner {
+        private val inner: StorageBackend = InMemoryStorage(),
+    ) : StorageBackend by inner {
         val writes = mutableListOf<String>()
         val deletes = mutableListOf<String>()
 

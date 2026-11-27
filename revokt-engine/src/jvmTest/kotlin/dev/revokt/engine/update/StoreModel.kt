@@ -11,7 +11,6 @@ package dev.revokt.engine.update
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.GenerationFiles
-import dev.revokt.RevoktStorage
 import dev.revokt.SeedSource
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncFailure
@@ -27,6 +26,7 @@ import dev.revokt.engine.seed.SeedLoader
 import dev.revokt.engine.store.GenerationFileJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.PointerJson
+import dev.revokt.engine.store.StorageBackend
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.update.UpdateFixtures.log
@@ -62,7 +62,7 @@ internal fun interface Choices {
  * and the code's own iteration over the store then replay for one seed whatever the keys' names are (a generation file
  * is named by its bytes, which hold the x5u leaf's hash, and the fixture signs a fresh leaf in every JVM).
  */
-internal class OrderedStorage : RevoktStorage {
+internal class OrderedStorage : StorageBackend {
     private val files = LinkedHashMap<String, ByteArray>()
 
     @Synchronized
@@ -158,8 +158,8 @@ internal class ModelViolation(
  */
 internal class StoreModel : SeedFixture() {
     /** The storage of one run: every operation counted, faults injected on cue, and the I2, I3 and I6 checks. */
-    inner class ModelStorage : RevoktStorage {
-        val inner: RevoktStorage = OrderedStorage()
+    inner class ModelStorage : StorageBackend {
+        val inner: StorageBackend = OrderedStorage()
         private var ops = 0
 
         /** The operation of this step that throws, or -1. */

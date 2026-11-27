@@ -9,7 +9,6 @@ import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
-import dev.revokt.RevoktStorage
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonObject
 import okio.ByteString
@@ -189,7 +188,7 @@ class StoreLayoutTest {
 
     @Test
     fun `the layout reads and writes through any RevoktStorage`() {
-        val plain = StoreLayout(RevoktStorage.inMemory(), Dataset.CRLITE, CrliteChannel.COMPAT)
+        val plain = StoreLayout(InMemoryStorage(), Dataset.CRLITE, CrliteChannel.COMPAT)
         val bytes = GenerationFileJson.write(Generations.sync())
         val read = assertIs<StoreRead.Found<GenerationFile>>(plain.readGeneration(plain.putGeneration(bytes)))
         assertContentEquals(bytes, GenerationFileJson.write(read.value))

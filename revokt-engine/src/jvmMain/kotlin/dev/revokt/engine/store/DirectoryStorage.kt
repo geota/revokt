@@ -5,8 +5,9 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.NewerLayout
+import dev.revokt.OwnershipCheck
 import dev.revokt.RevoktInternalApi
-import dev.revokt.RevoktStorage
 import okio.buffer
 import okio.source
 import java.io.IOException
@@ -28,15 +29,6 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
-
-/** Which group bits `JvmStorage`'s ownership check tolerates on the store's root (spec §3); growable. */
-internal enum class OwnershipCheck {
-    /** The root is owned by the process's uid and neither group- nor other-writable. */
-    STRICT,
-
-    /** As [STRICT], but group-writable is tolerated: the Kubernetes `fsGroup` case. */
-    OWNER_OR_GROUP,
-}
 
 /** Why `lock()` could not open the store (spec §3); never an [IOException], which `lock()` maps to the second kind. */
 internal sealed class StoreOpenException(
@@ -60,8 +52,8 @@ internal class StoreUnreadableException(
 ) : StoreOpenException(message, cause)
 
 /**
- * The durability operations `JvmStorage` performs, a seam so that tests over a real directory can record which paths
- * were forced and in what order. [SystemFsync] is the real one.
+ * The durability operations `DirectoryStorage` performs, a seam so that tests over a real directory can record which
+ * paths were forced and in what order. [SystemFsync] is the real one.
  */
 internal interface Fsync {
     /** Forces [channel], open on [path], to the device. */
@@ -94,7 +86,8 @@ internal class SystemFsync(
 }
 
 /**
- * The durable `RevoktStorage` over directory [root] (spec §3, §6.5). A key's segments are its path under the root.
+ * `JvmStorage.directory(…)`'s store over directory [root] (spec §3, §6.5). A key's segments are its path under the
+ * root.
  *
  * - [write] writes a temp file in the key's directory, forces it, renames it over the key ([Files.move] with
  *   `ATOMIC_MOVE`), then fsyncs the key's directory, new key or not; every directory it creates is created rwx------ and
@@ -120,10 +113,10 @@ internal class SystemFsync(
  * Reads run concurrently; [write], [delete] and [lock]'s sweep run alone. [onNewerLayout] is what a higher
  * `store.version` gets (spec §6.5). [platform], [fsync], [owner] and the lock timings are test seams.
  */
-@Suppress("TooManyFunctions") // The RevoktStorage members, then one function per step of a write and of lock().
-internal class JvmStorage(
+@Suppress("TooManyFunctions") // The StorageBackend members, then one function per step of a write and of lock().
+internal class DirectoryStorage(
     dir: Path,
-    private val ownership: OwnershipCheck = OwnershipCheck.STRICT,
+    val ownership: OwnershipCheck = OwnershipCheck.STRICT,
     val onNewerLayout: NewerLayout = NewerLayout.IN_MEMORY,
     private val platform: StoragePlatform = StoragePlatform.of(dir.fileSystem),
     private val fsync: Fsync = SystemFsync(platform),
@@ -131,7 +124,7 @@ internal class JvmStorage(
     private val lockWaitMillis: Long = LOCK_WAIT_MILLIS,
     private val lockPollMillis: Long = LOCK_POLL_MILLIS,
     private val moveRetryMillis: Long = platform.moveRetryMillis,
-) : RevoktStorage {
+) : StorageBackend {
     private val root: Path = dir.toAbsolutePath().normalize()
     private val guard = ReadWriteGuard()
 

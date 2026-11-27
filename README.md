@@ -113,6 +113,40 @@ Ktor gets one adapter per engine: OkHttp, CIO, Java and Android. A revoked certi
 `RevoktCertificateException` carrying the `Verdict`: which rule fired, the path revokt verified and the findings
 behind it.
 
+### Storage
+
+revokt keeps its filters in a store. On the JVM, give it a directory of its own:
+
+```kotlin
+val revokt = Revokt {
+    channel = CrliteChannel.COMPAT
+    storage = JvmStorage.directory(Path.of("/var/lib/myapp/revokt"))   // Java: .storage(JvmStorage.directory(path))
+    sources { remoteSettings(MozillaRemoteSettings.DEFAULT) }
+}
+```
+
+Without `storage`, the store is in memory: every restart downloads the filters again, and `validate()` warns once a
+fetching source is configured. `start()` creates the directory (rwx------); building the instance touches no file.
+
+- **One directory per process, and per channel.** A second process on the same directory gets `STORE_LOCKED` and
+  runs in memory for its whole life, with no retry: it downloads the filters in full, and each start begins again
+  from its seed. A second instance on the same directory in one process makes `start()` throw.
+- **A dedicated subdirectory, never a mount point.** A directory that already holds files and no `store.version` is
+  not a revokt store, so revokt leaves it untouched and runs in memory (`STORE_UNREADABLE`). A volume's root is
+  never empty: a fresh ext4 volume has `lost+found`, and Finder adds `.DS_Store`. On a Kubernetes volume, point
+  `directory(…)` at a subdirectory of the mount.
+- **Ownership.** On Linux and macOS the directory and everything in it must belong to the process's user and be
+  writable by no one else (`OwnershipCheck.STRICT`, the default), or the instance runs in memory.
+  `OwnershipCheck.OWNER_OR_GROUP` also accepts a group-writable directory, the Kubernetes `fsGroup` case: every member
+  of that group is then inside the store's trust boundary, so use a group that holds nothing else.
+- **The directories above it.** revokt checks the directory and everything under it, not the path leading to it.
+  Whoever can write a parent can swap the directory after revokt has resolved it, so every ancestor must be writable
+  only by the owner (or root).
+- **What the checks cannot close.** The JDK cannot open a path relative to a directory it has already checked, so
+  between revokt's check of a path (no symbolic links, no other store nested inside) and its use there is a window.
+  Only someone the ownership check already trusts can race it: the owner, or the group under `OWNER_OR_GROUP`.
+- **Never share a directory across hosts.** The lock is an advisory `fcntl` lock, which does not hold over NFS.
+
 ## Features
 
 | | Feature | Milestone |

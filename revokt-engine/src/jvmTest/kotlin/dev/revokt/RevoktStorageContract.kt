@@ -5,6 +5,7 @@
 
 package dev.revokt
 
+import dev.revokt.engine.store.StorageBackend
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -16,7 +17,7 @@ import kotlin.test.assertNull
  * and `JvmStorage` (`JvmStorageContractTest`). A new instance, and so a new [store], per test.
  */
 abstract class RevoktStorageContract {
-    protected abstract val store: RevoktStorage
+    protected abstract val store: StorageBackend
 
     @Test
     fun `a written key reads back and is listed, a deleted one is gone`() {

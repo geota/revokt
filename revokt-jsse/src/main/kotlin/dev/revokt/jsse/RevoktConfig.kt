@@ -52,9 +52,11 @@ internal class RevoktConfig(
             if (it.isNone) null else it.resolve(checkNotNull(channel))
         }
 
-    /** The store: `RevoktStorage.inMemory()` unless the builder's internal seam set one (spec §11; `storage(…)` is #340). */
+    /** The store (spec §3, §4): the builder's, else a fresh `RevoktStorage.inMemory()` for this build. */
     val storage: RevoktStorage = builder.storage ?: RevoktStorage.inMemory()
-    val inMemoryStore: Boolean = builder.storage == null
+
+    /** Whether the store is in memory, the default or an explicit `inMemory()` (spec §4 V). */
+    val inMemoryStore: Boolean = storage.isInMemory
 
     val signatureVerifier = builder.signatureVerifier
     val clock = builder.clock

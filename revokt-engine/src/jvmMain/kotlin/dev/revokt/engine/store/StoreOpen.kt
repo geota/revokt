@@ -6,25 +6,16 @@
 package dev.revokt.engine.store
 
 import dev.revokt.LogLevel
+import dev.revokt.NewerLayout
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLogger
-import dev.revokt.RevoktStorage
 import dev.revokt.WarningCode
 import dev.revokt.safeLog
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** What a store whose `store.version` is higher than this engine's gets (spec §3, §6.5); growable. */
-internal enum class NewerLayout {
-    /** Left untouched, the lock released: the instance runs in memory for the life of the process (`JvmStorage`'s). */
-    IN_MEMORY,
-
-    /** Rebuilt as a lower version is: one package owns its directory, so a higher version is a rollback (Android's). */
-    REBUILD,
-}
-
 /**
  * The per-process single-instance registry (spec §5.1): one entry per store a `Revokt` in this process has opened, keyed
- * on [RevoktStorage.identity], so that a second instance on one store throws instead of sharing it: two instances on
+ * on [StorageBackend.identity], so that a second instance on one store throws instead of sharing it: two instances on
  * one root would let one's open sweep delete the other's temp files in flight.
  */
 internal object StoreRegistry {
@@ -48,7 +39,7 @@ internal object StoreRegistry {
  * identity, once; a fallback holds neither.
  */
 internal class OpenedStore(
-    val storage: RevoktStorage,
+    val storage: StorageBackend,
     val warning: WarningCode?,
     val fallback: Boolean,
     private val lock: AutoCloseable?,
@@ -70,9 +61,9 @@ internal class OpenedStore(
  * `start()`'s store step (spec §5.1, §6.5): register the identity, take the lock, then read `store.version`.
  *
  * - A second instance on one store in this process throws [IllegalStateException] before anything else is done.
- * - `lock()` failing with [StoreLockedException] is `STORE_LOCKED`; any other failure, of [RevoktStorage.identity] or
+ * - `lock()` failing with [StoreLockedException] is `STORE_LOCKED`; any other failure, of [StorageBackend.identity] or
  *   `lock()`, is `STORE_UNREADABLE`.
- * - `store.version` absent in an empty store ([RevoktStorage.isEmpty]): [StoreVersion.CURRENT] is written, silently.
+ * - `store.version` absent in an empty store ([StorageBackend.isEmpty]): [StoreVersion.CURRENT] is written, silently.
  *   Absent beside other entries, malformed, or a read that throws: `STORE_UNREADABLE`, the store untouched (fail
  *   closed: a directory without `store.version` is not a revokt store, and the caller's directory is the root).
  * - Equal: the store as it is. Lower: `STORE_MIGRATED`, rebuilt ([rebuild]: every other key deleted, then the
@@ -86,7 +77,7 @@ internal object StoreOpen {
     // Any failure to open is a fallback (fail closed), one return each.
     @Suppress("TooGenericExceptionCaught", "ReturnCount")
     fun open(
-        storage: RevoktStorage,
+        storage: StorageBackend,
         logger: RevoktLogger,
         current: Int = StoreVersion.CURRENT,
     ): OpenedStore {
@@ -135,7 +126,7 @@ internal object StoreOpen {
 
     @Suppress("TooGenericExceptionCaught", "ReturnCount") // A store read or write that throws is STORE_UNREADABLE.
     private fun version(
-        storage: RevoktStorage,
+        storage: StorageBackend,
         current: Int,
         onNewer: NewerLayout,
     ): Step {
@@ -183,14 +174,14 @@ internal object StoreOpen {
     }
 
     /**
-     * The rebuild (spec §6.5): every key [RevoktStorage.names] lists but `store.version` deleted, then `store.version`
+     * The rebuild (spec §6.5): every key [StorageBackend.names] lists but `store.version` deleted, then `store.version`
      * written, and the start task then runs as on an empty store. A rebuild that fails or is interrupted keeps the old
      * version, so the next start runs the same arm and finishes it, and no old-layout `current` or `updater.json` ever
      * sits under the new version. A delete or write that throws is `STORE_UNREADABLE`: the instance runs in memory.
      */
     @Suppress("TooGenericExceptionCaught") // A store write or delete that throws is STORE_UNREADABLE.
     private fun rebuild(
-        storage: RevoktStorage,
+        storage: StorageBackend,
         current: Int,
         code: WarningCode,
         found: Int,
@@ -203,9 +194,9 @@ internal object StoreOpen {
             Step.Fallback(WarningCode.STORE_UNREADABLE, "the rebuild from store.version $found failed", e)
         }
 
-    /** The storage's [NewerLayout]: `JvmStorage`'s own; `inMemory()` starts empty, so it never meets a higher version. */
-    private fun newerLayout(storage: RevoktStorage): NewerLayout =
-        (storage as? JvmStorage)?.onNewerLayout ?: NewerLayout.IN_MEMORY
+    /** The storage's [NewerLayout]: `DirectoryStorage`'s own; `inMemory()` starts empty, so it never meets a higher version. */
+    private fun newerLayout(storage: StorageBackend): NewerLayout =
+        (storage as? DirectoryStorage)?.onNewerLayout ?: NewerLayout.IN_MEMORY
 
     /** Logs [code] with [message] and returns the in-memory fallback, which holds no lock and no registration. */
     private fun fallback(

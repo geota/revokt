@@ -15,7 +15,6 @@ import dev.revokt.LogLevel
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
-import dev.revokt.RevoktStorage
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome

@@ -8,10 +8,11 @@ package dev.revokt.engine.update
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.Freshness
-import dev.revokt.RevoktStorage
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.store.GenerationFileJson
+import dev.revokt.engine.store.InMemoryStorage
+import dev.revokt.engine.store.StorageBackend
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
@@ -24,8 +25,8 @@ import kotlin.test.assertSame
 internal open class InstallFixture {
     /** A storage whose writes and deletes a test can fail or observe, key by key. */
     protected class Faulty(
-        val inner: RevoktStorage = RevoktStorage.inMemory(),
-    ) : RevoktStorage by inner {
+        val inner: StorageBackend = InMemoryStorage(),
+    ) : StorageBackend by inner {
         var fail: (String) -> Throwable? = { null }
         var failRead: (String) -> Throwable? = { null }
         var failNames: () -> Throwable? = { null }

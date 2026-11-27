@@ -15,7 +15,6 @@ import dev.revokt.KotlinRevocationEngine
 import dev.revokt.MozillaRemoteSettings
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktPolicy
-import dev.revokt.RevoktStorage
 import dev.revokt.SeedSource
 import dev.revokt.SignatureVerifier
 import dev.revokt.SyncFailure
@@ -25,6 +24,7 @@ import dev.revokt.engine.fetch.ClientResult
 import dev.revokt.engine.fetch.RemoteSettingsClient
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
+import dev.revokt.engine.store.InMemoryStorage
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.update.FilterRecord
 import dev.revokt.engine.update.IndexBuild
@@ -200,7 +200,7 @@ internal class SeedJob(
         val loader =
             SeedLoader(
                 SeedSource.of { ByteArrayInputStream(bytes) },
-                StoreLayout(RevoktStorage.inMemory(), Dataset.CRLITE, channel),
+                StoreLayout(InMemoryStorage(), Dataset.CRLITE, channel),
                 engine,
                 snapshot,
                 verifier,

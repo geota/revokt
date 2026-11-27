@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.OwnershipCheck
 import java.nio.channels.FileChannel
 import java.nio.file.FileSystem
 import java.nio.file.Files
@@ -14,7 +15,7 @@ import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
 
 /**
- * What `JvmStorage` does differently where the file system is POSIX (spec §3), chosen once per store, so that the
+ * What `DirectoryStorage` does differently where the file system is POSIX (spec §3), chosen once per store, so that the
  * decisions themselves ([ownershipFault]) are plain functions tested on every OS.
  */
 internal enum class StoragePlatform {
@@ -43,7 +44,7 @@ internal enum class StoragePlatform {
             base: Path,
             owner: (Path) -> Any?,
         ): Any? {
-            val probe = base.resolve(JvmStorage.tempName("probe"))
+            val probe = base.resolve(DirectoryStorage.tempName("probe"))
             createFile(probe)
             try {
                 return owner(probe)
@@ -85,7 +86,7 @@ internal enum class StoragePlatform {
             // Skipped: FileChannel cannot open a directory here (spec §3).
         }
 
-        override val moveRetryMillis: Long = JvmStorage.MOVE_RETRY_MILLIS
+        override val moveRetryMillis: Long = DirectoryStorage.MOVE_RETRY_MILLIS
 
         override fun processOwner(
             base: Path,

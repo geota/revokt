@@ -12,18 +12,22 @@ import dev.revokt.Dataset
 import dev.revokt.DiagnosticCode
 import dev.revokt.Enforcement
 import dev.revokt.FilterFormat
+import dev.revokt.JvmStorage
 import dev.revokt.Outcome
 import dev.revokt.PolicyDiagnostic
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktPolicy
+import dev.revokt.RevoktStorage
 import dev.revokt.Rule
 import dev.revokt.SeedSource
 import dev.revokt.Severity
 import kotlinx.coroutines.Dispatchers
+import java.nio.file.Files
 import java.util.concurrent.Executor
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -191,6 +195,36 @@ class RevoktValidateTest {
                     },
                 ).seen(Enforcement.ENFORCE),
         )
+    }
+
+    @Test
+    fun `IN_MEMORY_STORE_WITH_FETCHING_SOURCE fires for the default and an explicit inMemory, never for a directory`() {
+        val dir = Files.createTempDirectory("revokt-validate")
+        try {
+            for (enforcement in Enforcement.entries) {
+                val fetching = { quiet().remoteSettings(remoteSettings()) }
+                assertEquals(listOf(inMemory), fetching().seen(enforcement), "default $enforcement")
+                assertEquals(
+                    listOf(inMemory),
+                    fetching().storage(RevoktStorage.inMemory()).seen(enforcement),
+                    "explicit $enforcement",
+                )
+                assertEquals(
+                    emptyList(),
+                    fetching().storage(JvmStorage.directory(dir.resolve("store"))).seen(enforcement),
+                    "directory $enforcement",
+                )
+                // No fetching source: nothing to download again, so no warning for either store.
+                assertEquals(
+                    listOf(Seen(DiagnosticCode.NO_FETCHING_SOURCE, Severity.WARNING, Dataset.CRLITE)),
+                    quiet().storage(RevoktStorage.inMemory()).seen(enforcement),
+                )
+            }
+            // validate() did no I/O: building and validating a directory store creates nothing.
+            assertFalse(Files.exists(dir.resolve("store")))
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
     }
 
     @Test

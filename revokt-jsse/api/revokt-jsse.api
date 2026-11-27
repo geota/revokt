@@ -30,6 +30,7 @@ public final class dev/revokt/jsse/Revokt$Builder {
 	public final synthetic fun getLogger ()Ldev/revokt/RevoktLogger;
 	public final synthetic fun getPolicy ()Ldev/revokt/RevoktPolicy;
 	public final synthetic fun getSignatureVerifier ()Ldev/revokt/SignatureVerifier;
+	public final synthetic fun getStorage ()Ldev/revokt/RevoktStorage;
 	public final fun http (Ldev/revokt/HttpFetcher;)Ldev/revokt/jsse/Revokt$Builder;
 	public final fun ioExecutor (Ljava/util/concurrent/Executor;)Ldev/revokt/jsse/Revokt$Builder;
 	public final synthetic fun limits (Lkotlin/jvm/functions/Function1;)Ldev/revokt/jsse/Revokt$Builder;
@@ -50,8 +51,10 @@ public final class dev/revokt/jsse/Revokt$Builder {
 	public final synthetic fun setLogger (Ldev/revokt/RevoktLogger;)V
 	public final synthetic fun setPolicy (Ldev/revokt/RevoktPolicy;)V
 	public final synthetic fun setSignatureVerifier (Ldev/revokt/SignatureVerifier;)V
+	public final synthetic fun setStorage (Ldev/revokt/RevoktStorage;)V
 	public final fun signatureVerifier (Ldev/revokt/SignatureVerifier;)Ldev/revokt/jsse/Revokt$Builder;
 	public final synthetic fun sources (Lkotlin/jvm/functions/Function1;)Ldev/revokt/jsse/Revokt$Builder;
+	public final fun storage (Ldev/revokt/RevoktStorage;)Ldev/revokt/jsse/Revokt$Builder;
 }
 
 public final class dev/revokt/jsse/Revokt$Companion {

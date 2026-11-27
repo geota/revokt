@@ -9,7 +9,6 @@ import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLimits
-import dev.revokt.RevoktStorage
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
@@ -36,7 +35,7 @@ internal enum class BlobState { ABSENT, MATCH, MISMATCH }
 internal enum class BlobWrite { WRITTEN, REUSED, REWRITTEN }
 
 /**
- * Spec §6.5's content-addressed layout over a [RevoktStorage] for one [dataset] and [channel], under the key prefix
+ * Spec §6.5's content-addressed layout over a [StorageBackend] for one [dataset] and [channel], under the key prefix
  * `<dataset>/<channel>/`, both lowercase enum names:
  * - `blobs/<sha256>`: every attachment, full or delta, under the SHA-256 its signed record gives;
  * - `generations/<sha256>`: one [GenerationFile] per generation, under the SHA-256 of its own bytes;
@@ -52,7 +51,7 @@ internal enum class BlobWrite { WRITTEN, REUSED, REWRITTEN }
  * what prune keeps are `dev.revokt.engine.update`'s, beside the install.
  */
 internal class StoreLayout(
-    private val storage: RevoktStorage,
+    private val storage: StorageBackend,
     val dataset: Dataset,
     val channel: CrliteChannel,
     val maxJsonBytes: Long = RevoktLimits.MAX_JSON_BYTES,

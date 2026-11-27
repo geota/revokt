@@ -140,8 +140,17 @@ tests; **live checks** are informational.
   followed: `read`, `write` and `delete` of it throw and its target is untouched; `.lock` as a link is
   `STORE_UNREADABLE`, and the ownership check runs before `.lock` is opened; the ownership check refuses a
   group-writable root or subdirectory under `STRICT`, an other-writable one always and one whose uid is not a probe
-  file's; a root with the wrong mode never gets a probe written, and a temp file in a subdirectory that fails stays; the contract tests run over both stores, refusing uppercase keys `.LOCK` and `.Lock`
+  file's; a root with the wrong mode never gets a probe written, and a temp file in a subdirectory that fails stays;
+  `lock()`'s sweep deletes every temp file outside a nested root, the ones the walk meets after leaving one included,
+  and none inside one; the contract tests run over both stores, refusing uppercase keys `.LOCK` and `.Lock`
   (`JvmStorageContractTest`);
+  [0.3] the public storage (`RevoktStorageTest`, `RevoktStoreTest`, `RevoktValidateTest`, `RevoktBuilderTest`):
+  `JvmStorage.directory(…)` does no I/O and carries `STRICT` and `IN_MEMORY` unless given others, in each Java overload;
+  `inMemory()`'s identity is the instance, so one value given to two instances throws at the second `start()` until
+  the first closes; the builder default is a fresh `inMemory()` at each `build()`, so two builds from one builder both
+  start; a directory store is created and holds `store.version` from `start()`, a second instance through another
+  spelling of the path throws, and it starts once the first closes; `IN_MEMORY_STORE_WITH_FETCHING_SOURCE` fires for
+  the default and an explicit `inMemory()` with a fetching source, under every enforcement, and never for a directory;
   [0.3] `start()`'s store step (`StoreOpenTest` over `JvmStorage` on real directories, `CrliteRuntimeStoreTest`,
   `RevoktStoreTest`): an absent root, or one holding only `.lock` and a temp file (a crash in the first `store.version`
   write, swept before the read), gets `1` written, silently; a root with a key, a non-key file or an empty directory and
@@ -243,7 +252,8 @@ tests; **live checks** are informational.
   read → `INVALID`; a valid signature rewritten to its high s (n − s) → `VERIFIED`; a throwing provider → `INVALID` plus `VerifierError`; PQ chain matrix.
 - **Parser corpus** and the §9.2 differential parser oracle; **Android instrumented** (API 26, 31,
   34, 36) including the PKIX fallback (the jvmMain `PkixPathBuilderFallback` through ojluni, JVM-tested in 0.2), the
-  null-host extension-call probe and the §9.2 corpus replay against the
+  null-host extension-call probe, the default file system listing the `unix` attribute view (so `JvmStorage`'s
+  ownership check reads `unix:uid` there and is never skipped), and the §9.2 corpus replay against the
   platform `CertificateFactory` (a 0.3 gate; pinned system-image revisions, Conscrypt APEX version logged); **live checks**; **benchmarks** on a physical ARM device including
   verifications per honest handshake.
 - **Walker fixtures**, schema `id | presented (ordered) | snapshot | preload | verifier.unsupported |
