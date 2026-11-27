@@ -1,7 +1,7 @@
 # This is a Gradle generated file for dependency locking.
 # Manual edits can break the build and are not advised.
 # This file is expected to be part of source control.
-# To regenerate this file, run: ./gradlew :revokt-detekt-rules:dependencies --write-locks
+# To regenerate this file, run: ./gradlew :build-logic:revokt-detekt-rules:dependencies --write-locks
 dev.drewhamilton.poko:poko-annotations-jvm:0.17.1=testRuntimeClasspath
 dev.drewhamilton.poko:poko-annotations:0.17.1=testRuntimeClasspath
 io.github.davidburstrom.contester:contester-breakpoint:0.2.0=testRuntimeClasspath
