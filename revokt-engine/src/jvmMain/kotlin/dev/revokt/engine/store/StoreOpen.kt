@@ -25,7 +25,8 @@ internal object StoreRegistry {
     fun register(key: Any): AutoCloseable {
         synchronized(held) {
             check(held.add(key)) {
-                "another Revokt in this process holds this store: give each instance its own directory (spec §3, §5.1)"
+                "another Revokt in this process holds this store: give each instance its own storage " +
+                    "(a directory, or its own inMemory()) (spec §3, §5.1)"
             }
         }
         val done = AtomicBoolean(false)
@@ -64,11 +65,11 @@ internal class OpenedStore(
  * - `lock()` failing with [StoreLockedException] is `STORE_LOCKED`; any other failure, of [StorageBackend.identity] or
  *   `lock()`, is `STORE_UNREADABLE`.
  * - `store.version` absent in an empty store ([StorageBackend.isEmpty]): [StoreVersion.CURRENT] is written, silently.
- *   Absent beside other entries, malformed, or a read that throws: `STORE_UNREADABLE`, the store untouched (fail
- *   closed: a directory without `store.version` is not a revokt store, and the caller's directory is the root).
+ *   Absent beside other entries, malformed, or a read that throws: `STORE_UNREADABLE`, the store untouched but for
+ *   `.lock`, which `lock()` created (fail closed: a directory without `store.version` is not a revokt store, and the caller's directory is the root).
  * - Equal: the store as it is. Lower: `STORE_MIGRATED`, rebuilt ([rebuild]: every other key deleted, then the
  *   version written). Higher: `STORE_NEWER_LAYOUT`, then per the storage's [NewerLayout], run in memory with the store
- *   untouched, or rebuilt.
+ *   untouched but for `.lock`, or rebuilt.
  *
  * Each fallback releases the lock and deregisters the identity before it returns, so does any throw, and the instance
  * then runs on a fresh in-memory store. [current] is this engine's version, a test seam.

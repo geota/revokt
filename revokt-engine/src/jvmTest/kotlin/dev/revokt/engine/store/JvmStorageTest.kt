@@ -229,11 +229,12 @@ class JvmStorageTest {
     fun `the open sweeps every temp file the walk meets after leaving a nested root, and none inside one`() =
         withDir { dir ->
             // G5: a walk that never pops its nested-root stack skips the sweep of everything after the first nested
-            // root it leaves. Many siblings around three nested roots put some sibling after a nested root in any
-            // listing order; the assumption below checks that this listing does.
+            // root it leaves. The nested roots sort before the siblings and are created after them, so a name-ordered
+            // listing (NTFS) and a newest-first one (tmpfs) both put a sibling after one; for a hash-ordered listing
+            // the twenty siblings make that near-certain, and the assumption below checks that this listing does.
             val root = dir.resolve("s")
             val siblings = (0 until 20).map { "d%02d".format(it) }
-            val nested = listOf("n0", "n1", "n2")
+            val nested = listOf("a0", "a1", "a2")
             val siblingTemps = siblings.map { d -> "$d/" + DirectoryStorage.tempName("k") }
             val outerTemps = siblingTemps + DirectoryStorage.tempName("store.version")
             for (d in siblings) Files.createDirectories(root.resolve(d))

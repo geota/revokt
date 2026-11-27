@@ -83,7 +83,8 @@ flowchart LR
 ## Planned usage
 
 > [!NOTE]
-> This is the API the [spec](docs/spec/revokt-spec.md) (§4) designs. **None of it exists yet.**
+> This is the API the [spec](docs/spec/revokt-spec.md) (§4) designs. The storage API (`JvmStorage.directory(…)`,
+> `Revokt.Builder.storage`) exists on `main`; the rest does not yet.
 
 ```kotlin
 // Gradle: the binding plus a seed for the channel, so SeedSource.bundled() finds a filter on first launch.
@@ -132,11 +133,11 @@ fetching source is configured. `start()` creates the directory (rwx------); buil
   runs in memory for its whole life, with no retry: it downloads the filters in full, and each start begins again
   from its seed. A second instance on the same directory in one process makes `start()` throw.
 - **A dedicated subdirectory, never a mount point.** A directory that already holds files and no `store.version` is
-  not a revokt store, so revokt leaves it untouched and runs in memory (`STORE_UNREADABLE`). A volume's root is
-  never empty: a fresh ext4 volume has `lost+found`, and Finder adds `.DS_Store`. On a Kubernetes volume, point
+  not a revokt store: revokt writes nothing there but its own `.lock` file, deletes nothing of yours, and runs in
+  memory (`STORE_UNREADABLE`). A volume's root is never empty: a fresh ext4 volume has `lost+found`, and Finder adds `.DS_Store`. On a Kubernetes volume, point
   `directory(…)` at a subdirectory of the mount.
-- **Ownership.** On Linux and macOS the directory and everything in it must belong to the process's user and be
-  writable by no one else (`OwnershipCheck.STRICT`, the default), or the instance runs in memory.
+- **Ownership.** On Linux and macOS the directory and every directory under it must belong to the process's user and
+  be writable by no one else (`OwnershipCheck.STRICT`, the default), or the instance runs in memory.
   `OwnershipCheck.OWNER_OR_GROUP` also accepts a group-writable directory, the Kubernetes `fsGroup` case: every member
   of that group is then inside the store's trust boundary, so use a group that holds nothing else.
 - **The directories above it.** revokt checks the directory and everything under it, not the path leading to it.
