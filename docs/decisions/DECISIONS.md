@@ -667,3 +667,12 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     in-memory fallback covers a second instance.
   - **CI:** every test's result is printed in the CI logs (#343), so a matrix leg shows which tests ran. Builders
     never pass `--no-verify` (#345).
+- 2026-11-27 (maintainer, PR #348; independent supply-chain review, two nits): Gradle 9.7.0 → 9.9.2. Kotlin stays at
+  2.4.21, the latest stable. Gradle Inc.'s new signing subkey `F3FF33E96F18AA62DD580F9651FBF517CE6D6B80` (primary
+  `EA96F38569C044AAEF7FCF732887F479B0B9771A`, created 2026-08-14) is trusted, scoped to
+  `org.gradle.kotlin:gradle-kotlin-dsl-plugins:6.7.13`. The old key `1BD97A6A…` is revoked as superseded (gradle/gradle
+  `KEYS.md`). Because the trust is version-scoped, each later bump that moves `kotlin-dsl` needs a new version entry and
+  a key check. The build runs ahead of KGP 2.4.21's tested range, whose newest is 9.7.0, with no compatibility warning;
+  revisit at Kotlin 2.5. The stale 6.7.3 and Kotlin 2.4.0 verification entries are pruned, after a regeneration from
+  empty on both versions. 9.9.2's embedded Kotlin 2.4.21 also removes the Kotlin 2.4.0 behind Dependabot alert #1,
+  which #275's constraint had already fixed.
