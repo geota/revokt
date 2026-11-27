@@ -437,7 +437,7 @@ public class Revokt private constructor(
      * `SeedSource.bundled()` resolved for the channel at [build], `JcaSignatureVerifier()`, the Kotlin revocation
      * engine, `Clock.System`, `RevoktLoggers.jul()`, [RevoktPolicy.DEFAULT], [Enforcement.ENFORCE], a 2 s readiness
      * deadline (spec §5.1: fixed on the JVM), `Dispatchers.IO`, the `RevoktLimits` caps, `JdkHttpFetcher()` and the PKIX
-     * fallback enabled. The store is `RevoktStorage.inMemory()`.
+     * fallback enabled, and a fresh `RevoktStorage.inMemory()` store at each [build].
      */
     @Suppress("TooManyFunctions") // One method per spec §4 builder member.
     public class Builder internal constructor() {
@@ -482,10 +482,13 @@ public class Revokt private constructor(
         internal var random: Random = Random.Default
 
         /**
-         * The store (spec §3, §6.5); null means a fresh `RevoktStorage.inMemory()` at [build]. Internal, a test seam: the
-         * §4 `storage(…)` member comes with `JvmStorage.directory(…)` (#340).
+         * Where the instance keeps its store (spec §3, §6.5): `JvmStorage.directory(…)` for a durable one. Null, the
+         * default, means a fresh `RevoktStorage.inMemory()` at each [build], so two builds never share a store; with a
+         * fetching source, `validate()` warns for any in-memory store (`IN_MEMORY_STORE_WITH_FETCHING_SOURCE`). One
+         * storage serves one started instance at a time: a second `start()` on it in the process throws.
          */
-        internal var storage: RevoktStorage? = null
+        @get:JvmSynthetic @set:JvmSynthetic
+        public var storage: RevoktStorage? = null
 
         /** The platform trust (spec §3, §5.3): `JvmPlatformTrust()`; internal, a test seam (the §4 member is [0.3]). */
         internal var platformTrust: PlatformTrust = JvmPlatformTrust()
@@ -538,6 +541,9 @@ public class Revokt private constructor(
         public fun seed(source: SeedSource): Builder = apply { seed = source }
 
         public fun signatureVerifier(verifier: SignatureVerifier): Builder = apply { signatureVerifier = verifier }
+
+        /** Where the instance keeps its store (Kotlin: the `storage` property); see it for the rules. */
+        public fun storage(storage: RevoktStorage): Builder = apply { this.storage = storage }
 
         /**
          * Injects the revocation engine (spec §3.2 "Seam"), which the built `Revokt` then owns and closes. An instance

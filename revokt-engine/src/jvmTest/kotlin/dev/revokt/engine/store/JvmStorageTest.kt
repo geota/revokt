@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.OwnershipCheck
 import org.junit.jupiter.api.Assumptions
 import java.io.FileInputStream
 import java.io.IOException
@@ -24,7 +25,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * `JvmStorage` on real directories (spec §3, §6.5; test-plan.md (e)): the fsyncs of a write, of a created directory
+ * `DirectoryStorage` on real directories (spec §3, §6.5; test-plan.md (e)): the fsyncs of a write, of a created directory
  * and of the open, the temp sweep, what `names()` lists, the lock against this JVM and another process, and the
  * ownership check. [Recording] wraps the real [SystemFsync], so every fsync also runs against the file system.
  */
@@ -65,7 +66,8 @@ class JvmStorageTest {
 
         override fun directory(dir: Path) {
             events += "dir:" + rel(dir)
-            heldTemp += Files.list(dir).use { s -> s.anyMatch { JvmStorage.TEMP.matches(it.fileName.toString()) } }
+            heldTemp +=
+                Files.list(dir).use { s -> s.anyMatch { DirectoryStorage.TEMP.matches(it.fileName.toString()) } }
             failDirectory?.let { throw it }
             delegate.directory(dir)
         }
@@ -98,10 +100,10 @@ class JvmStorageTest {
     @Test
     fun `a write forces its temp file, renames it into place, then fsyncs the key's directory, new key or not`() =
         withDir { dir ->
-            val store = JvmStorage(dir.resolve("s"))
+            val store = DirectoryStorage(dir.resolve("s"))
             store.write("a/x", byteArrayOf(0))
             val fsync = recording(dir)
-            val recorded = JvmStorage(dir.resolve("s"), fsync = fsync)
+            val recorded = DirectoryStorage(dir.resolve("s"), fsync = fsync)
             recorded.write("a/k", byteArrayOf(1, 2))
             recorded.write("a/k", byteArrayOf(3))
             assertEquals(2, fsync.events.size / 2)
@@ -126,7 +128,7 @@ class JvmStorageTest {
     fun `every directory a write creates is created rwx------ and its parent fsynced, one at a time`() =
         withDir { dir ->
             val fsync = recording(dir)
-            val store = JvmStorage(dir.resolve("s"), fsync = fsync)
+            val store = DirectoryStorage(dir.resolve("s"), fsync = fsync)
             store.write("crlite/compat/blobs/b", byteArrayOf(1))
             assertEquals(
                 listOf("dir:", "dir:s", "dir:s/crlite", "dir:s/crlite/compat"),
@@ -155,7 +157,7 @@ class JvmStorageTest {
     @Test
     fun `lock creates the root and fsyncs its parent, then fsyncs every directory under the root after the sweep`() =
         withDir { dir ->
-            val plain = JvmStorage(dir.resolve("s"))
+            val plain = DirectoryStorage(dir.resolve("s"))
             plain.write("crlite/compat/blobs/b", byteArrayOf(1))
             plain.write("crlite/compat/generations/g", byteArrayOf(2))
             plain.write("store.version", byteArrayOf('1'.code.toByte()))
@@ -166,7 +168,7 @@ class JvmStorageTest {
             for (t in temps) {
                 Files.write(
                     dir.resolve(
-                        JvmStorage.tempName(t.substringAfterLast('/')).let {
+                        DirectoryStorage.tempName(t.substringAfterLast('/')).let {
                             t.substringBeforeLast('/') +
                                 "/" +
                                 it
@@ -184,7 +186,7 @@ class JvmStorageTest {
                 )
             for (k in kept) Files.write(dir.resolve(k), byteArrayOf(8))
             val fsync = recording(dir)
-            val store = JvmStorage(dir.resolve("s"), fsync = fsync)
+            val store = DirectoryStorage(dir.resolve("s"), fsync = fsync)
             store.lock().use {
                 assertEquals(
                     setOf(
@@ -211,23 +213,59 @@ class JvmStorageTest {
                     ),
                     store.names(),
                 )
-                Files.walk(dir).use { s -> assertTrue(s.noneMatch { JvmStorage.TEMP.matches(it.fileName.toString()) }) }
+                Files.walk(dir).use { s ->
+                    assertTrue(s.noneMatch { DirectoryStorage.TEMP.matches(it.fileName.toString()) })
+                }
             }
             withDir { other ->
                 val created = recording(other)
-                JvmStorage(other.resolve("a/b"), fsync = created).lock().close()
+                DirectoryStorage(other.resolve("a/b"), fsync = created).lock().close()
                 // The root and its missing parent are created one at a time, each parent fsynced; then the open's walk.
                 assertEquals(listOf("dir:", "dir:a", "dir:a/b"), created.events)
             }
         }
 
     @Test
+    fun `the open sweeps every temp file the walk meets after leaving a nested root, and none inside one`() =
+        withDir { dir ->
+            // G5: a walk that never pops its nested-root stack skips the sweep of everything after the first nested
+            // root it leaves. The nested roots sort before the siblings and are created after them, so a name-ordered
+            // listing (NTFS) and a newest-first one (tmpfs) both put a sibling after one; for a hash-ordered listing
+            // the twenty siblings make that near-certain, and the assumption below checks that this listing does.
+            val root = dir.resolve("s")
+            val siblings = (0 until 20).map { "d%02d".format(it) }
+            val nested = listOf("a0", "a1", "a2")
+            val siblingTemps = siblings.map { d -> "$d/" + DirectoryStorage.tempName("k") }
+            val outerTemps = siblingTemps + DirectoryStorage.tempName("store.version")
+            for (d in siblings) Files.createDirectories(root.resolve(d))
+            for (t in outerTemps) Files.write(root.resolve(t), byteArrayOf(1))
+            val innerTemps = nested.map { n -> "$n/" + DirectoryStorage.tempName("k") }
+            for (n in nested) {
+                Files.createDirectories(root.resolve(n))
+                Files.write(root.resolve("$n/.lock"), byteArrayOf())
+                Files.write(root.resolve("$n/k"), byteArrayOf(2))
+            }
+            for (t in innerTemps) Files.write(root.resolve(t), byteArrayOf(3))
+            val order = Files.newDirectoryStream(root).use { s -> s.map { it.fileName.toString() } }
+            val firstNested = order.indexOfFirst { it in nested }
+            Assumptions.assumeTrue(
+                order.drop(firstNested + 1).any { it in siblings },
+                "this listing visits every sibling before the first nested root: $order",
+            )
+            DirectoryStorage(root).lock().use {
+                for (t in outerTemps) assertFalse(Files.exists(root.resolve(t)), "$t was not swept")
+                for (t in innerTemps) assertTrue(Files.exists(root.resolve(t)), "$t, inside a nested root, was swept")
+                for (n in nested) assertTrue(Files.exists(root.resolve("$n/k")))
+            }
+        }
+
+    @Test
     fun `names lists only keys, never the lock, temp files, other entries or links`() =
         withDir { dir ->
-            val store = JvmStorage(dir.resolve("s"))
+            val store = DirectoryStorage(dir.resolve("s"))
             store.write("a/k", byteArrayOf(1))
             store.lock().use {
-                val temp = Files.write(dir.resolve("s/a/" + JvmStorage.tempName("k")), byteArrayOf(2))
+                val temp = Files.write(dir.resolve("s/a/" + DirectoryStorage.tempName("k")), byteArrayOf(2))
                 Files.write(dir.resolve("s/a b"), byteArrayOf(3))
                 Files.createDirectories(dir.resolve("s/d/sub"))
                 try {
@@ -249,12 +287,12 @@ class JvmStorageTest {
             }
             assertTrue(Files.exists(dir.resolve("s/.lock")), "closing the lock never deletes .lock")
             // A fresh instance over the existing root reads before it writes or locks.
-            assertContentEquals(byteArrayOf(1), JvmStorage(dir.resolve("s")).read("a/k"))
+            assertContentEquals(byteArrayOf(1), DirectoryStorage(dir.resolve("s")).read("a/k"))
             store.delete("a/k")
             assertFalse(Files.exists(dir.resolve("s/a")), "a directory left empty is removed")
             assertTrue(Files.isDirectory(dir.resolve("s")), "the root stays")
-            assertEquals(emptySet(), JvmStorage(dir.resolve("absent")).names())
-            val absent = JvmStorage(dir.resolve("absent"))
+            assertEquals(emptySet(), DirectoryStorage(dir.resolve("absent")).names())
+            val absent = DirectoryStorage(dir.resolve("absent"))
             assertNull(absent.read("k"))
             absent.delete("k")
             assertFalse(Files.exists(dir.resolve("absent")), "a read or a delete creates no root")
@@ -276,7 +314,7 @@ class JvmStorageTest {
     fun `a key file that is a symbolic link is not a key - never listed, never followed, every access throws`() =
         withDir { dir ->
             val outside = Files.write(dir.resolve("outside"), byteArrayOf(7))
-            val store = JvmStorage(dir.resolve("s"))
+            val store = DirectoryStorage(dir.resolve("s"))
             store.lock().use {
                 store.write("a/k", byteArrayOf(1))
                 linkOrAbort(dir.resolve("s/a/current"), outside)
@@ -300,7 +338,7 @@ class JvmStorageTest {
         withDir { dir ->
             val outside = Files.createDirectory(dir.resolve("outside"))
             Files.write(outside.resolve("b"), byteArrayOf(7))
-            val store = JvmStorage(dir.resolve("s"))
+            val store = DirectoryStorage(dir.resolve("s"))
             store.lock().use {
                 store.write("x", byteArrayOf(1))
                 linkOrAbort(dir.resolve("s/blobs"), outside)
@@ -314,7 +352,7 @@ class JvmStorageTest {
                 assertContentEquals(byteArrayOf(7), Files.readAllBytes(outside.resolve("b")))
             }
             // The open's sweep and directory walk do not follow it either.
-            Files.write(outside.resolve(JvmStorage.tempName("b")), byteArrayOf(8))
+            Files.write(outside.resolve(DirectoryStorage.tempName("b")), byteArrayOf(8))
             store.lock().close()
             assertEquals(2L, Files.list(outside).use { it.count() })
         }
@@ -325,16 +363,16 @@ class JvmStorageTest {
             val outside = Files.write(dir.resolve("outside"), byteArrayOf(7))
             Files.createDirectory(dir.resolve("s"))
             linkOrAbort(dir.resolve("s/.lock"), outside)
-            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("s")).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(dir.resolve("s")).lock() }
             assertContentEquals(byteArrayOf(7), Files.readAllBytes(outside))
             // A dangling link is not created through either.
             Files.delete(dir.resolve("s/.lock"))
             linkOrAbort(dir.resolve("s/.lock"), dir.resolve("made"))
-            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("s")).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(dir.resolve("s")).lock() }
             assertFalse(Files.exists(dir.resolve("made"), java.nio.file.LinkOption.NOFOLLOW_LINKS))
             // Released: once the link goes, the store opens.
             Files.delete(dir.resolve("s/.lock"))
-            JvmStorage(dir.resolve("s"), lockWaitMillis = 0).lock().close()
+            DirectoryStorage(dir.resolve("s"), lockWaitMillis = 0).lock().close()
         }
 
     @Test
@@ -343,7 +381,7 @@ class JvmStorageTest {
             Assumptions.assumeTrue(posix, "POSIX permissions")
             val root = Files.createDirectory(dir.resolve("s"))
             Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwx---rwx"))
-            assertFailsWith<StoreUnreadableException> { JvmStorage(root).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(root).lock() }
             assertFalse(Files.exists(root.resolve(".lock"), java.nio.file.LinkOption.NOFOLLOW_LINKS))
         }
 
@@ -357,7 +395,7 @@ class JvmStorageTest {
                 } catch (e: IOException) {
                     Assumptions.abort<Path>("cannot create symbolic links here: $e")
                 }
-            val store = JvmStorage(link)
+            val store = DirectoryStorage(link)
             store.write("a/k", byteArrayOf(1))
             assertEquals(setOf("a/k"), store.names())
             store.lock().close()
@@ -367,7 +405,7 @@ class JvmStorageTest {
     fun `a failed file fsync fails the write with the key as it was, a failed directory fsync after the rename`() =
         withDir { dir ->
             val fsync = recording(dir)
-            val store = JvmStorage(dir.resolve("s"), fsync = fsync)
+            val store = DirectoryStorage(dir.resolve("s"), fsync = fsync)
             store.write("a/k", byteArrayOf(1))
             fsync.failFile = IOException("injected file fsync")
             assertFailsWith<IOException> { store.write("a/k", byteArrayOf(2)) }
@@ -395,7 +433,7 @@ class JvmStorageTest {
     fun `a read that fails throws, it never returns null`() =
         withDir { dir ->
             Assumptions.assumeTrue(posix, "POSIX permissions")
-            val store = JvmStorage(dir.resolve("s"))
+            val store = DirectoryStorage(dir.resolve("s"))
             store.write("k", byteArrayOf(1))
             val file = dir.resolve("s/k")
             Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("---------"))
@@ -409,14 +447,14 @@ class JvmStorageTest {
             Assumptions.assumeTrue(posix, "POSIX permissions")
             val root = Files.createDirectory(dir.resolve("s"))
             Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwxrwx---"))
-            assertFailsWith<StoreUnreadableException> { JvmStorage(root).lock() }
-            JvmStorage(root, OwnershipCheck.OWNER_OR_GROUP).lock().close()
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(root).lock() }
+            DirectoryStorage(root, OwnershipCheck.OWNER_OR_GROUP).lock().close()
             Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwx---rwx"))
-            assertFailsWith<StoreUnreadableException> { JvmStorage(root, OwnershipCheck.OWNER_OR_GROUP).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(root, OwnershipCheck.OWNER_OR_GROUP).lock() }
             assertEquals("rwx---rwx", PosixFilePermissions.toString(Files.getPosixFilePermissions(root)))
             // The failed opens released the lock.
             Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwx------"))
-            JvmStorage(root, lockWaitMillis = 0).lock().close()
+            DirectoryStorage(root, lockWaitMillis = 0).lock().close()
         }
 
     @Test
@@ -427,21 +465,21 @@ class JvmStorageTest {
             // The owner seam swaps the probe for a non-empty directory of its name, once, so its delete throws.
             var swapped = false
             val owner = { p: Path ->
-                if (!swapped && JvmStorage.TEMP.matches(p.fileName.toString())) {
+                if (!swapped && DirectoryStorage.TEMP.matches(p.fileName.toString())) {
                     swapped = true
                     Files.delete(p)
                     Files.createDirectories(p.resolve("x"))
                 }
                 501
             }
-            val thrown = assertFailsWith<StoreUnreadableException> { JvmStorage(root, owner = owner).lock() }
+            val thrown = assertFailsWith<StoreUnreadableException> { DirectoryStorage(root, owner = owner).lock() }
             assertTrue(thrown.cause is java.nio.file.DirectoryNotEmptyException, "cause ${thrown.cause}")
             // Released: a normal open goes on to succeed once the leftover is gone.
             Files
                 .walk(root)
-                .use { w -> w.filter { JvmStorage.TEMP.matches(it.fileName.toString()) }.toList() }
+                .use { w -> w.filter { DirectoryStorage.TEMP.matches(it.fileName.toString()) }.toList() }
                 .forEach { it.toFile().deleteRecursively() }
-            JvmStorage(root, lockWaitMillis = 0).lock().close()
+            DirectoryStorage(root, lockWaitMillis = 0).lock().close()
         }
 
     @Test
@@ -453,7 +491,7 @@ class JvmStorageTest {
             val owner = { p: Path -> asked.add(p).let { 501 } }
             for (mode in listOf("rwx---rwx", "rwxrwx---")) {
                 Files.setPosixFilePermissions(root, PosixFilePermissions.fromString(mode))
-                assertFailsWith<StoreUnreadableException> { JvmStorage(root, owner = owner).lock() }
+                assertFailsWith<StoreUnreadableException> { DirectoryStorage(root, owner = owner).lock() }
             }
             assertEquals(emptyList(), asked, "a probe was written before the mode check")
             assertEquals(emptyList(), Files.list(root).use { it.toList() })
@@ -466,13 +504,13 @@ class JvmStorageTest {
             val root = dir.resolve("s")
             val probes = ArrayList<Path>()
             val owner = { p: Path -> if (p == root.toRealPath()) 0 else 1.also { probes.add(p) } }
-            assertFailsWith<StoreUnreadableException> { JvmStorage(root, owner = owner).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(root, owner = owner).lock() }
             assertEquals(1, probes.size)
-            assertTrue(JvmStorage.TEMP.matches(probes.single().fileName.toString()))
+            assertTrue(DirectoryStorage.TEMP.matches(probes.single().fileName.toString()))
             assertFalse(Files.exists(probes.single()))
-            JvmStorage(root, owner = { 7 }).lock().close()
-            JvmStorage(root, owner = { null }).lock().close()
-            JvmStorage(root).lock().close()
+            DirectoryStorage(root, owner = { 7 }).lock().close()
+            DirectoryStorage(root, owner = { null }).lock().close()
+            DirectoryStorage(root).lock().close()
         }
 
     @Test
@@ -480,70 +518,71 @@ class JvmStorageTest {
         withDir { dir ->
             val fsync = recording(dir)
             fsync.failDirectory = IOException("injected directory fsync")
-            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("s"), fsync = fsync).lock() }
-            JvmStorage(dir.resolve("s"), lockWaitMillis = 0).lock().close()
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(dir.resolve("s"), fsync = fsync).lock() }
+            DirectoryStorage(dir.resolve("s"), lockWaitMillis = 0).lock().close()
             fsync.events.clear()
-            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("s"), fsync = fsync).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(dir.resolve("s"), fsync = fsync).lock() }
             assertEquals(listOf("dir:s"), fsync.events)
-            JvmStorage(dir.resolve("s"), lockWaitMillis = 0).lock().close()
+            DirectoryStorage(dir.resolve("s"), lockWaitMillis = 0).lock().close()
             Files.createDirectory(dir.resolve("d"))
             Files.createDirectory(dir.resolve("d/.lock"))
-            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("d")).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(dir.resolve("d")).lock() }
             Files.delete(dir.resolve("d/.lock"))
-            JvmStorage(dir.resolve("d"), lockWaitMillis = 0).lock().close()
+            DirectoryStorage(dir.resolve("d"), lockWaitMillis = 0).lock().close()
             Files.write(dir.resolve("file"), byteArrayOf(1))
-            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("file")).lock() }
-            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("file/s")).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(dir.resolve("file")).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(dir.resolve("file/s")).lock() }
         }
 
     @Test
     fun `building one touches no file, and identity creates the root and is one key through any path to it`() =
         withDir { dir ->
-            val store = JvmStorage(dir.resolve("a/../s"))
+            val store = DirectoryStorage(dir.resolve("a/../s"))
             assertFalse(Files.exists(dir.resolve("s")))
             assertFalse(Files.exists(dir.resolve("a")))
             val key = store.identity()
             assertTrue(Files.isDirectory(dir.resolve("s")))
-            assertEquals(key, JvmStorage(dir.resolve("s")).identity())
+            assertEquals(key, DirectoryStorage(dir.resolve("s")).identity())
             if (posix) {
                 assertEquals(
                     key,
-                    JvmStorage(Files.createSymbolicLink(dir.resolve("link"), dir.resolve("s"))).identity(),
+                    DirectoryStorage(Files.createSymbolicLink(dir.resolve("link"), dir.resolve("s"))).identity(),
                 )
             }
-            assertFalse(key == JvmStorage(dir.resolve("t")).identity(), "another root, another key")
+            assertFalse(key == DirectoryStorage(dir.resolve("t")).identity(), "another root, another key")
             // A root that cannot be created is STORE_UNREADABLE.
             Files.write(dir.resolve("file"), byteArrayOf(1))
-            assertFailsWith<StoreUnreadableException> { JvmStorage(dir.resolve("file/s")).identity() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(dir.resolve("file/s")).identity() }
         }
 
     @Test
     fun `isEmpty sees only the lock and temp files as nothing`() =
         withDir { dir ->
             val root = dir.resolve("s")
-            assertTrue(JvmStorage(root).isEmpty(), "an absent root")
-            JvmStorage(root).lock().close()
+            assertTrue(DirectoryStorage(root).isEmpty(), "an absent root")
+            DirectoryStorage(root).lock().close()
             Files.write(root.resolve("current~" + "0".repeat(32)), byteArrayOf(1))
-            assertTrue(JvmStorage(root).isEmpty(), "the lock and a temp file")
+            assertTrue(DirectoryStorage(root).isEmpty(), "the lock and a temp file")
             for (entry in listOf("notes.txt", "README", "store.version", "x~1")) {
                 Files.write(root.resolve(entry), byteArrayOf(1))
-                assertFalse(JvmStorage(root).isEmpty(), entry)
+                assertFalse(DirectoryStorage(root).isEmpty(), entry)
                 Files.delete(root.resolve(entry))
             }
             // A directory, even an empty one or one named as a temp file, is an entry.
             for (entry in listOf("crlite", "current~" + "1".repeat(32))) {
                 Files.createDirectory(root.resolve(entry))
-                assertFalse(JvmStorage(root).isEmpty(), entry)
+                assertFalse(DirectoryStorage(root).isEmpty(), entry)
                 Files.delete(root.resolve(entry))
             }
-            assertTrue(JvmStorage(root).isEmpty())
+            assertTrue(DirectoryStorage(root).isEmpty())
         }
 
     @Test
     fun `off POSIX no mode is set and no directory is fsynced`() =
         withDir { dir ->
             val fsync = recording(dir)
-            val store = JvmStorage(dir.resolve("s"), platform = StoragePlatform.OTHER, fsync = fsync, owner = { null })
+            val store =
+                DirectoryStorage(dir.resolve("s"), platform = StoragePlatform.OTHER, fsync = fsync, owner = { null })
             store.write("a/k", byteArrayOf(1))
             store.lock().close()
             assertContentEquals(byteArrayOf(1), store.read("a/k"))
@@ -554,7 +593,7 @@ class JvmStorageTest {
     fun `the Windows rename retries a target held open, within its bound`() =
         withDir { dir ->
             Assumptions.assumeFalse(posix, "Windows only")
-            val store = JvmStorage(dir.resolve("s"))
+            val store = DirectoryStorage(dir.resolve("s"))
             store.write("current", byteArrayOf(1))
             val open = FileInputStream(dir.resolve("s/current").toFile())
             val closer =
@@ -572,7 +611,7 @@ class JvmStorageTest {
             }
             // The rename waited for the reader to close at 200 ms: it was retried, within the 1 s bound.
             val waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-            assertTrue(waited in 150 until JvmStorage.MOVE_RETRY_MILLIS, "the write took $waited ms")
+            assertTrue(waited in 150 until DirectoryStorage.MOVE_RETRY_MILLIS, "the write took $waited ms")
             assertContentEquals(byteArrayOf(2), store.read("current"))
         }
 
@@ -589,7 +628,7 @@ class JvmStorageTest {
             clock += ms * 1_000_000
         }
         val p = Path.of("x")
-        JvmStorage.moveWithRetry(p, p, 1_000, move(3), sleep) { clock }
+        DirectoryStorage.moveWithRetry(p, p, 1_000, move(3), sleep) { clock }
         assertEquals(4, calls)
         assertEquals(listOf(10L, 10L, 10L), sleeps)
         calls = 0
@@ -598,25 +637,25 @@ class JvmStorageTest {
         assertSame(
             denied,
             assertFailsWith<AccessDeniedException> {
-                JvmStorage.moveWithRetry(p, p, 1_000, move(Int.MAX_VALUE), sleep) { clock }
+                DirectoryStorage.moveWithRetry(p, p, 1_000, move(Int.MAX_VALUE), sleep) { clock }
             },
         )
         assertEquals(100, sleeps.size)
         calls = 0
-        assertFailsWith<AccessDeniedException> { JvmStorage.moveWithRetry(p, p, 0, move(1), sleep) { clock } }
+        assertFailsWith<AccessDeniedException> { DirectoryStorage.moveWithRetry(p, p, 0, move(1), sleep) { clock } }
         assertEquals(1, calls)
         val other = IOException("other")
         assertSame(
             other,
             assertFailsWith<IOException> {
-                JvmStorage.moveWithRetry(p, p, 1_000, { _, _ -> throw other }, sleep) { clock }
+                DirectoryStorage.moveWithRetry(p, p, 1_000, { _, _ -> throw other }, sleep) { clock }
             },
         )
         calls = 0
         val interrupting = { _: Long -> throw InterruptedException() }
         val thrown =
             assertFailsWith<AccessDeniedException> {
-                JvmStorage.moveWithRetry(
+                DirectoryStorage.moveWithRetry(
                     p,
                     p,
                     1_000,
@@ -660,10 +699,10 @@ class JvmStorageTest {
 
     @Test
     fun `temp names are a key segment, a tilde and 32 hex digits, never a key, never twice the same`() {
-        val names = (1..100).map { JvmStorage.tempName("x".repeat(96)) }
+        val names = (1..100).map { DirectoryStorage.tempName("x".repeat(96)) }
         assertEquals(100, names.toSet().size)
         for (n in names) {
-            assertTrue(JvmStorage.TEMP.matches(n))
+            assertTrue(DirectoryStorage.TEMP.matches(n))
             assertFalse(StoreKeys.isKey(n))
         }
     }

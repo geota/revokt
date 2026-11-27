@@ -1,62 +1,48 @@
 // SPDX-FileCopyrightText: 2026 revokt contributors
 // SPDX-License-Identifier: Apache-2.0
 
+@file:OptIn(RevoktInternalApi::class)
+
 package dev.revokt
 
 import dev.revokt.engine.store.InMemoryStorage
+import dev.revokt.engine.store.StorageBackend
 import kotlin.jvm.JvmStatic
 
 /**
- * A flat key space the engine keeps its store in; the engine owns the layout (spec §3, §6.5). A key is segments of
- * `[a-z0-9._-]{1,96}` joined by `/`, never `.` or `..`, so no key resolves outside the root; every method throws
- * [IllegalArgumentException] for any other name, and for the reserved key `.lock`, which only [lock] uses. Methods
- * are thread-safe, reads concurrently.
+ * Where an instance keeps its store (spec §3, §6.5): built only by [inMemory] and `JvmStorage.directory(…)`, never
+ * implemented by a consumer. The engine owns the layout inside it. Set it with `Revokt.Builder.storage`; one storage
+ * serves one started instance at a time, and a second `start()` on it in the process throws.
  */
-@RevoktInternalApi
-public interface RevoktStorage {
-    /**
-     * The content of [name], or null when no file has that key. A read that fails throws; it never returns null, which
-     * the loader takes to mean the file is absent (spec §6.5, #236).
-     */
-    public fun read(name: String): ByteArray?
+public sealed class RevoktStorage {
+    /** The key space this storage is. */
+    internal abstract val backend: StorageBackend
 
-    /** Replaces [name] with [bytes] atomically and durably before returning; [read] sees it only when complete. */
-    public fun write(
-        name: String,
-        bytes: ByteArray,
-    )
-
-    /** Removes [name] and any directory it leaves empty; a key that holds nothing is a no-op. */
-    public fun delete(name: String)
-
-    /** Every key that holds a file, excluding the lock and temporary keys. */
-    public fun names(): Set<String>
-
-    /**
-     * Whether the store holds nothing (spec §6.5 "empty"): no key, and for a directory no entry at all but the lock and
-     * temp files, so a directory holding files that are not keys is not empty. A read that fails throws.
-     */
-    public fun isEmpty(): Boolean = names().isEmpty()
-
-    /**
-     * The key for the per-process single-instance registry, read by `start()`, never by `build()`; null means not
-     * registered ([inMemory]). One store reached through two paths has one key. A read that fails throws.
-     */
-    public fun identity(): Any? = null
-
-    /**
-     * Takes the store's exclusive lock, held until the result is closed: acquired in `start()` and held to `close()`,
-     * never per write. The 0.3 store bounds the wait (spec §3); [inMemory] holds nothing.
-     */
-    public fun lock(): AutoCloseable
-
+    /** Whether this is an [inMemory] store, for revokt-jsse's `IN_MEMORY_STORE_WITH_FETCHING_SOURCE` check (spec §4). */
     @RevoktInternalApi
+    public abstract val isInMemory: Boolean
+
     public companion object {
         /**
-         * A store held in memory for the process's lifetime (the builder default; meant for tests and 0.2): nothing is
-         * durable, [identity] is null and [lock] holds nothing.
+         * A store held in memory for as long as this value is reachable (the builder default, meant for tests): nothing
+         * is durable, so every restart downloads the data again. Its identity is the instance, so two started instances
+         * cannot share one.
          */
         @JvmStatic
-        public fun inMemory(): RevoktStorage = InMemoryStorage()
+        public fun inMemory(): RevoktStorage = BackedStorage(InMemoryStorage(), isInMemory = true)
+
+        /** A storage over [backend], for revokt's own tests across modules; in memory only when it is one. */
+        @RevoktInternalApi
+        @JvmStatic
+        public fun of(backend: StorageBackend): RevoktStorage =
+            BackedStorage(backend, isInMemory = backend is InMemoryStorage)
     }
+}
+
+/** The one shape of [RevoktStorage]: a [backend] and whether it is in memory. */
+internal class BackedStorage(
+    override val backend: StorageBackend,
+    override val isInMemory: Boolean,
+) : RevoktStorage() {
+    override fun toString(): String = "RevoktStorage($backend)"
 }

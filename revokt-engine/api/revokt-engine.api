@@ -287,6 +287,14 @@ public final class dev/revokt/JvmSeedSource {
 	public static final fun fromPath (Ljava/nio/file/Path;)Ldev/revokt/SeedSource;
 }
 
+public final class dev/revokt/JvmStorage {
+	public static final field INSTANCE Ldev/revokt/JvmStorage;
+	public static final fun directory (Ljava/nio/file/Path;)Ldev/revokt/RevoktStorage;
+	public static final fun directory (Ljava/nio/file/Path;Ldev/revokt/OwnershipCheck;)Ldev/revokt/RevoktStorage;
+	public static final fun directory (Ljava/nio/file/Path;Ldev/revokt/OwnershipCheck;Ldev/revokt/NewerLayout;)Ldev/revokt/RevoktStorage;
+	public static synthetic fun directory$default (Ljava/nio/file/Path;Ldev/revokt/OwnershipCheck;Ldev/revokt/NewerLayout;ILjava/lang/Object;)Ldev/revokt/RevoktStorage;
+}
+
 public final class dev/revokt/Layer : java/lang/Enum {
 	public static final field CRLITE Ldev/revokt/Layer;
 	public static final field PATH Ldev/revokt/Layer;
@@ -332,12 +340,28 @@ public final class dev/revokt/MozillaRemoteSettings$Builder {
 public final class dev/revokt/MozillaRemoteSettings$Companion {
 }
 
+public final class dev/revokt/NewerLayout : java/lang/Enum {
+	public static final field IN_MEMORY Ldev/revokt/NewerLayout;
+	public static final field REBUILD Ldev/revokt/NewerLayout;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/NewerLayout;
+	public static fun values ()[Ldev/revokt/NewerLayout;
+}
+
 public final class dev/revokt/Outcome : java/lang/Enum {
 	public static final field ALLOW Ldev/revokt/Outcome;
 	public static final field REJECT Ldev/revokt/Outcome;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/Outcome;
 	public static fun values ()[Ldev/revokt/Outcome;
+}
+
+public final class dev/revokt/OwnershipCheck : java/lang/Enum {
+	public static final field OWNER_OR_GROUP Ldev/revokt/OwnershipCheck;
+	public static final field STRICT Ldev/revokt/OwnershipCheck;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/OwnershipCheck;
+	public static fun values ()[Ldev/revokt/OwnershipCheck;
 }
 
 public final class dev/revokt/PathReason : java/lang/Enum {
@@ -452,6 +476,15 @@ public final class dev/revokt/RevoktPolicy$Companion {
 public final class dev/revokt/RevoktPolicyDurations {
 	public static final synthetic fun rejectStaleAfter-moChb0s (Ldev/revokt/RevoktPolicy$Builder;Ldev/revokt/Dataset;Lkotlin/time/Duration;)Ldev/revokt/RevoktPolicy$Builder;
 	public static final synthetic fun signedSourceFailingAfter-HG0u8IE (Ldev/revokt/RevoktPolicy$Builder;J)Ldev/revokt/RevoktPolicy$Builder;
+}
+
+public abstract class dev/revokt/RevoktStorage {
+	public static final field Companion Ldev/revokt/RevoktStorage$Companion;
+	public static final fun inMemory ()Ldev/revokt/RevoktStorage;
+}
+
+public final class dev/revokt/RevoktStorage$Companion {
+	public final fun inMemory ()Ldev/revokt/RevoktStorage;
 }
 
 public abstract interface annotation class dev/revokt/RevoktTestingApi : java/lang/annotation/Annotation {

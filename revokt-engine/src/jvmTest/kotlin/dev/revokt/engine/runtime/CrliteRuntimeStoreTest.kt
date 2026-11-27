@@ -9,11 +9,11 @@ import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.LogLevel
 import dev.revokt.RevoktPolicy
-import dev.revokt.RevoktStorage
 import dev.revokt.WarningCode
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.seed.SeedFixture
-import dev.revokt.engine.store.JvmStorage
+import dev.revokt.engine.store.DirectoryStorage
+import dev.revokt.engine.store.StorageBackend
 import dev.revokt.engine.store.StoreKeys
 import dev.revokt.engine.store.StoreLockedException
 import dev.revokt.engine.update.UpdateFixtures.TestEngine
@@ -29,7 +29,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * The runtime's store step over `JvmStorage` on a real directory (spec §5.1, §6.5; test-plan.md (e)): `openStore()`
+ * The runtime's store step over `DirectoryStorage` on a real directory (spec §5.1, §6.5; test-plan.md (e)): `openStore()`
  * before the seed steps and `closeStore()` at close, a seed installed into the directory and served from it after a
  * restart, and the in-memory fallback, where the seed installs in memory, the directory is untouched and unlocked, and
  * the lock is never tried again.
@@ -48,7 +48,7 @@ internal class CrliteRuntimeStoreTest : SeedFixture() {
     }
 
     private fun runtime(
-        storage: RevoktStorage,
+        storage: StorageBackend,
         engine: TestEngine = TestEngine(),
     ): CrliteRuntime {
         val bytes = Seed(ts = ts).bytes()
@@ -90,7 +90,7 @@ internal class CrliteRuntimeStoreTest : SeedFixture() {
 
     private fun locked(root: Path): Boolean =
         try {
-            JvmStorage(root, lockWaitMillis = 0).lock().close()
+            DirectoryStorage(root, lockWaitMillis = 0).lock().close()
             false
         } catch (_: StoreLockedException) {
             true
@@ -102,7 +102,7 @@ internal class CrliteRuntimeStoreTest : SeedFixture() {
     @Test
     fun `the seed installs into the directory under the lock, and a restart serves it from there`() =
         withRoot { root ->
-            val first = runtime(JvmStorage(root))
+            val first = runtime(DirectoryStorage(root))
             first.start()
             assertFalse(first.storageFallback)
             assertTrue(locked(root), "held from openStore() to closeStore()")
@@ -114,7 +114,7 @@ internal class CrliteRuntimeStoreTest : SeedFixture() {
             assertFalse(locked(root))
 
             val engine = TestEngine()
-            val second = runtime(JvmStorage(root), engine)
+            val second = runtime(DirectoryStorage(root), engine)
             second.start()
             assertEquals(served, second.crlite().generationFile)
             assertEquals(files, tree(root), "a live not older than the seed is served, and nothing is written")
@@ -130,7 +130,7 @@ internal class CrliteRuntimeStoreTest : SeedFixture() {
             Files.write(root.resolve("store.version"), "2".encodeToByteArray())
             Files.write(root.resolve("crlite/compat/current"), byteArrayOf(1))
             val before = tree(root)
-            val runtime = runtime(JvmStorage(root))
+            val runtime = runtime(DirectoryStorage(root))
             runtime.start()
             assertTrue(runtime.storageFallback)
             assertTrue(warned(WarningCode.STORE_NEWER_LAYOUT), "${recording.messages}")
@@ -143,8 +143,8 @@ internal class CrliteRuntimeStoreTest : SeedFixture() {
     @Test
     fun `a lock another holder has runs in memory with STORE_LOCKED, never tried again`() =
         withRoot { root ->
-            val runtime = runtime(JvmStorage(root, lockWaitMillis = 0))
-            JvmStorage(root).lock().use { runtime.start() }
+            val runtime = runtime(DirectoryStorage(root, lockWaitMillis = 0))
+            DirectoryStorage(root).lock().use { runtime.start() }
             assertTrue(runtime.storageFallback)
             assertTrue(warned(WarningCode.STORE_LOCKED), "${recording.messages}")
             assertTrue(runtime.crlite().generationId != null, "the seed is live, in memory")
@@ -160,10 +160,10 @@ internal class CrliteRuntimeStoreTest : SeedFixture() {
     @Test
     fun `closeStore releases the lock and the registry, so a start retried opens the store again`() =
         withRoot { root ->
-            val runtime = runtime(JvmStorage(root, lockWaitMillis = 0))
+            val runtime = runtime(DirectoryStorage(root, lockWaitMillis = 0))
             runtime.openStore()
             assertFailsWith<IllegalStateException> { runtime.openStore() }
-            val other = runtime(JvmStorage(root, lockWaitMillis = 0))
+            val other = runtime(DirectoryStorage(root, lockWaitMillis = 0))
             assertFailsWith<IllegalStateException> { other.openStore() }
             runtime.closeStore()
             runtime.closeStore()

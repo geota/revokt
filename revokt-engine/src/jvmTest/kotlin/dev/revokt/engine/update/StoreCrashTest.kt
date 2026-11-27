@@ -29,7 +29,7 @@ import kotlin.test.assertTrue
  * The crash table of the content-addressed store (design note section 8, spec §6.5 "Crash recovery"), one test per row:
  * a process stop at a chosen write or delete, after which nothing more lands, then a fresh loader over the same store.
  * `StoreModelTest` stops at every operation; these pin each row's outcome down. Lost write durability (a rename the
- * parent directory's fsync did not cover) is `JvmStorage`'s, out of reach of an in-memory store.
+ * parent directory's fsync did not cover) is `DirectoryStorage`'s, out of reach of an in-memory store.
  */
 internal class StoreCrashTest : SeedFixture() {
     /** Thrown by every write and delete once the process has stopped. */

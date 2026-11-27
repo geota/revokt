@@ -88,7 +88,8 @@ private fun inMemoryStoreWithFetchingSource(config: RevoktConfig): List<PolicyDi
                 DiagnosticCode.IN_MEMORY_STORE_WITH_FETCHING_SOURCE,
                 Severity.WARNING,
                 null,
-                "the store is in memory and a fetching source is configured: every restart downloads the data again",
+                "the store is in memory and a fetching source is configured: every restart downloads the data again, " +
+                    "with no crash recovery; set storage = JvmStorage.directory(…) to keep it",
             ),
         )
     } else {

@@ -18,6 +18,7 @@ import dev.revokt.RevoktLimits
 import dev.revokt.RevoktLogger
 import dev.revokt.RevoktLoggers
 import dev.revokt.RevoktPolicy
+import dev.revokt.RevoktStorage
 import dev.revokt.Rule
 import dev.revokt.SeedSource
 import dev.revokt.verify.JcaSignatureVerifier
@@ -74,7 +75,7 @@ class RevoktBuilderTest {
         assertSame(config.platformTrust.defaultDelegate(), config.defaultDelegate)
         assertSame(config.platformTrust.pathBuilder(), config.pathBuilder)
         assertTrue(config.inMemoryStore)
-        assertNull(config.storage.identity())
+        assertNull(Revokt.builder().storage, "unset: a fresh inMemory() at each build")
     }
 
     @Test
@@ -134,9 +135,11 @@ class RevoktBuilderTest {
         val strict = RevoktPolicy.STRICT
         val dispatcher = Dispatchers.Default
         val fixed = Instant.parse("2026-11-22T00:00:00Z")
+        val storage = RevoktStorage.inMemory()
         val dsl =
             Revokt {
                 channel = CrliteChannel.DEFAULT
+                this.storage = storage
                 signatureVerifier = verifier
                 clock = JavaClock(java.time.Clock.fixed(fixed, ZoneOffset.UTC))
                 sources {
@@ -161,6 +164,7 @@ class RevoktBuilderTest {
             Revokt
                 .builder()
                 .channel(CrliteChannel.DEFAULT)
+                .storage(storage)
                 .signatureVerifier(verifier)
                 .clock(java.time.Clock.fixed(fixed, ZoneOffset.UTC))
                 .remoteSettings(source)
@@ -180,6 +184,7 @@ class RevoktBuilderTest {
                 .config
         for (config in listOf(dsl, java)) {
             assertEquals(CrliteChannel.DEFAULT, config.channel)
+            assertSame(storage, config.storage)
             assertSame(verifier, config.signatureVerifier)
             assertEquals(fixed.toEpochMilli(), config.clock.now().toEpochMilliseconds())
             assertSame(source, config.remoteSettings)

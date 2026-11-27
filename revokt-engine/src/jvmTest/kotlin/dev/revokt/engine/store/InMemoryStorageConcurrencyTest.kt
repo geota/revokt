@@ -6,7 +6,6 @@
 package dev.revokt.engine.store
 
 import dev.revokt.RevoktInternalApi
-import dev.revokt.RevoktStorage
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -15,7 +14,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * `RevoktStorage.inMemory()` is thread-safe (spec §3, #109). What this catches is the map itself: without the lock,
+ * `InMemoryStorage()` is thread-safe (spec §3, #109). What this catches is the map itself: without the lock,
  * `names()` iterating while writers add keys throws `ConcurrentModificationException` (every run of five, measured), and
  * concurrent puts can lose keys. A read cannot tear, since each write swaps in a whole private copy; the check that
  * every read is uniform stays as a guard on that.
@@ -23,7 +22,7 @@ import kotlin.test.assertTrue
 class InMemoryStorageConcurrencyTest {
     @Test
     fun `concurrent names, reads and writes neither throw nor lose a key`() {
-        val store = RevoktStorage.inMemory()
+        val store = InMemoryStorage()
         val size = 64 * 1024
         store.write("shared", ByteArray(size))
         val threads = 8

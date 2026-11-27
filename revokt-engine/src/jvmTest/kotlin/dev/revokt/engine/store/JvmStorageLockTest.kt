@@ -3,6 +3,7 @@
 
 package dev.revokt.engine.store
 
+import dev.revokt.OwnershipCheck
 import org.junit.jupiter.api.Assumptions
 import java.io.BufferedReader
 import java.io.FileInputStream
@@ -21,7 +22,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * `JvmStorage.lock()` on real directories (spec §3; test-plan.md (e)): the bounded wait against this JVM and a child
+ * `DirectoryStorage.lock()` on real directories (spec §3; test-plan.md (e)): the bounded wait against this JVM and a child
  * JVM ([LockHolder]), one table entry per `.lock` file key, a FIFO at `.lock`, and the check of every directory at open.
  */
 @OptIn(ExperimentalPathApi::class)
@@ -52,12 +53,12 @@ class JvmStorageLockTest {
     @Test
     fun `a second lock in this JVM waits its bound and is locked, then succeeds once the first is closed`() =
         withDir { dir ->
-            val first = JvmStorage(dir.resolve("s")).lock()
-            val second = JvmStorage(dir.resolve("s/../s"))
+            val first = DirectoryStorage(dir.resolve("s")).lock()
+            val second = DirectoryStorage(dir.resolve("s/../s"))
             val started = System.nanoTime()
             assertFailsWith<StoreLockedException> { second.lock() }
             val waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-            assertTrue(waited >= JvmStorage.LOCK_WAIT_MILLIS - 50, "waited only $waited ms")
+            assertTrue(waited >= DirectoryStorage.LOCK_WAIT_MILLIS - 50, "waited only $waited ms")
             assertTrue(waited < 3_000, "waited $waited ms, past the 1 s bound")
             // The failed attempt closed its own channel on `.lock`: the first instance's lock must survive it.
             assertEquals(LockHolder.BUSY, tryFromAnotherProcess(dir.resolve("s")))
@@ -93,7 +94,7 @@ class JvmStorageLockTest {
     @Test
     fun `a lock held through another link to the same lock file is locked`() =
         withDir { dir ->
-            JvmStorage(dir.resolve("a")).lock().close()
+            DirectoryStorage(dir.resolve("a")).lock().close()
             Files.createDirectory(dir.resolve("b"))
             try {
                 Files.createLink(dir.resolve("b/.lock"), dir.resolve("a/.lock"))
@@ -102,8 +103,13 @@ class JvmStorageLockTest {
             } catch (e: UnsupportedOperationException) {
                 Assumptions.abort<Unit>("cannot create hard links here: $e")
             }
-            JvmStorage(dir.resolve("a")).lock().use {
-                assertFailsWith<StoreLockedException> { JvmStorage(dir.resolve("b"), lockWaitMillis = 200).lock() }
+            DirectoryStorage(dir.resolve("a")).lock().use {
+                assertFailsWith<StoreLockedException> {
+                    DirectoryStorage(
+                        dir.resolve("b"),
+                        lockWaitMillis = 200,
+                    ).lock()
+                }
                 // One entry per file key: the attempt through `b` never opened its own channel, so its failure cannot
                 // drop the holder's fcntl lock.
                 assertEquals(LockHolder.BUSY, tryFromAnotherProcess(dir.resolve("a")))
@@ -114,7 +120,7 @@ class JvmStorageLockTest {
     @Test
     fun `a lock released during the wait is taken within one poll`() =
         withDir { dir ->
-            val held = JvmStorage(dir.resolve("s")).lock()
+            val held = DirectoryStorage(dir.resolve("s")).lock()
             val releaser =
                 Thread {
                     Thread.sleep(300)
@@ -123,7 +129,7 @@ class JvmStorageLockTest {
             val started = System.nanoTime()
             releaser.start()
             try {
-                JvmStorage(dir.resolve("s"), lockWaitMillis = 5_000).lock().close()
+                DirectoryStorage(dir.resolve("s"), lockWaitMillis = 5_000).lock().close()
             } finally {
                 releaser.join()
             }
@@ -135,7 +141,7 @@ class JvmStorageLockTest {
     fun `closing a lock from two threads at once closes it once`() =
         withDir { dir ->
             repeat(20) {
-                val held = JvmStorage(dir.resolve("s")).lock()
+                val held = DirectoryStorage(dir.resolve("s")).lock()
                 val start = java.util.concurrent.CountDownLatch(1)
                 val failures = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
                 val closers =
@@ -150,8 +156,13 @@ class JvmStorageLockTest {
                 // Only one close() runs: a second would release a closed lock (ClosedChannelException) and leave the
                 // table a second time, which could let a newer holder's entry go.
                 assertEquals(emptyList(), failures.toList())
-                JvmStorage(dir.resolve("s"), lockWaitMillis = 0).lock().use {
-                    assertFailsWith<StoreLockedException> { JvmStorage(dir.resolve("s"), lockWaitMillis = 0).lock() }
+                DirectoryStorage(dir.resolve("s"), lockWaitMillis = 0).lock().use {
+                    assertFailsWith<StoreLockedException> {
+                        DirectoryStorage(
+                            dir.resolve("s"),
+                            lockWaitMillis = 0,
+                        ).lock()
+                    }
                 }
             }
         }
@@ -174,7 +185,7 @@ class JvmStorageLockTest {
             val attempt =
                 pool.submit<Throwable?> {
                     runCatching {
-                        JvmStorage(
+                        DirectoryStorage(
                             dir.resolve("s"),
                         ).lock().close()
                     }.exceptionOrNull()
@@ -196,29 +207,39 @@ class JvmStorageLockTest {
         withDir { dir ->
             Assumptions.assumeTrue(posix, "POSIX permissions")
             val root = dir.resolve("s")
-            JvmStorage(root).write("crlite/compat/current", byteArrayOf(1))
+            DirectoryStorage(root).write("crlite/compat/current", byteArrayOf(1))
             val sub = root.resolve("crlite")
-            val temp = Files.write(sub.resolve(JvmStorage.tempName("current")), byteArrayOf(9))
+            val temp = Files.write(sub.resolve(DirectoryStorage.tempName("current")), byteArrayOf(9))
             Files.setPosixFilePermissions(sub, PosixFilePermissions.fromString("rwxrwxrwx"))
-            assertFailsWith<StoreUnreadableException> { JvmStorage(root).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(root).lock() }
             // The directory is checked before its temp files are swept: nothing in a directory that fails is deleted.
             assertTrue(Files.exists(temp), "the sweep ran in a directory that failed its check")
-            assertFailsWith<StoreUnreadableException> { JvmStorage(root, OwnershipCheck.OWNER_OR_GROUP).lock() }
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(root, OwnershipCheck.OWNER_OR_GROUP).lock() }
             assertEquals("rwxrwxrwx", PosixFilePermissions.toString(Files.getPosixFilePermissions(sub)), "never chmod")
             Files.setPosixFilePermissions(sub, PosixFilePermissions.fromString("rwxrwx---"))
-            assertFailsWith<StoreUnreadableException> { JvmStorage(root).lock() }
-            JvmStorage(root, OwnershipCheck.OWNER_OR_GROUP).lock().close()
+            assertFailsWith<StoreUnreadableException> { DirectoryStorage(root).lock() }
+            DirectoryStorage(root, OwnershipCheck.OWNER_OR_GROUP).lock().close()
             Files.setPosixFilePermissions(sub, PosixFilePermissions.fromString("rwx------"))
             val deep = root.resolve("crlite/compat").toRealPath()
-            assertFailsWith<StoreUnreadableException> { JvmStorage(root, owner = { if (it == deep) 0 else 1 }).lock() }
-            JvmStorage(root, lockWaitMillis = 0).lock().close()
+            assertFailsWith<StoreUnreadableException> {
+                DirectoryStorage(root, owner = {
+                    if (it ==
+                        deep
+                    ) {
+                        0
+                    } else {
+                        1
+                    }
+                }).lock()
+            }
+            DirectoryStorage(root, lockWaitMillis = 0).lock().close()
         }
 
     @Test
     fun `a lock wait that is interrupted is locked and keeps the interrupt`() =
         withDir { dir ->
-            JvmStorage(dir.resolve("s")).lock().use {
-                val waiter = JvmStorage(dir.resolve("s"), lockWaitMillis = 60_000)
+            DirectoryStorage(dir.resolve("s")).lock().use {
+                val waiter = DirectoryStorage(dir.resolve("s"), lockWaitMillis = 60_000)
                 Thread.currentThread().interrupt()
                 assertFailsWith<StoreLockedException> { waiter.lock() }
                 assertTrue(Thread.interrupted())
@@ -233,16 +254,16 @@ class JvmStorageLockTest {
                 val child = startHolder(root)
                 try {
                     val started = System.nanoTime()
-                    assertFailsWith<StoreLockedException> { JvmStorage(root).lock() }
+                    assertFailsWith<StoreLockedException> { DirectoryStorage(root).lock() }
                     val waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-                    assertTrue(waited >= JvmStorage.LOCK_WAIT_MILLIS - 50, "waited only $waited ms")
+                    assertTrue(waited >= DirectoryStorage.LOCK_WAIT_MILLIS - 50, "waited only $waited ms")
                     assertTrue(waited < 3_000, "waited $waited ms, past the 1 s bound")
                     if (kill) child.destroyForcibly() else child.outputStream.close()
                     assertTrue(child.waitFor(30, TimeUnit.SECONDS))
                 } finally {
                     child.destroyForcibly()
                 }
-                JvmStorage(root, lockWaitMillis = 5_000).lock().close()
+                DirectoryStorage(root, lockWaitMillis = 5_000).lock().close()
             }
         }
 

@@ -10,8 +10,8 @@ import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.FilterFormat
 import dev.revokt.KotlinRevocationEngine
-import dev.revokt.RevoktStorage
 import dev.revokt.engine.store.GenerationFileJson
+import dev.revokt.engine.store.InMemoryStorage
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import okio.Buffer
@@ -125,7 +125,7 @@ internal object StoreLoadTime {
         full: ByteArray,
         deltaWords: Int,
     ): Triple<StoreLayout, String, Long> {
-        val store = StoreLayout(RevoktStorage.inMemory(), Dataset.CRLITE, channel)
+        val store = StoreLayout(InMemoryStorage(), Dataset.CRLITE, channel)
         val wire = channel.wireName
         val records = ArrayList<FilterRecord>()
         val bodies = LinkedHashMap<String, ByteArray>()

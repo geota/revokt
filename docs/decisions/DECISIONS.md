@@ -657,7 +657,7 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     under `OWNER_OR_GROUP`, can race.
   - **`store.version` (fail closed, #230):** an empty root gets `1` written. A non-empty root with no
     `store.version`, or with one that is malformed or cannot be read, is `STORE_UNREADABLE`, and the store is left
-    untouched. The spec's earlier rebuild would have deleted files in a caller's directory that is not revokt's.
+    untouched but for `.lock`. The spec's earlier rebuild would have deleted files in a caller's directory that is not revokt's.
     Higher is `STORE_NEWER_LAYOUT`, then `IN_MEMORY` or `REBUILD`. Lower is `STORE_MIGRATED`. A rebuild deletes the
     other keys first and writes the version last, so an interrupted rebuild runs again at the next start. Firefox
     opens a newer IndexedDB as unusable and reads its dump (IDB:189, RSC:571-597). upki's `index.bin` magic refuses
