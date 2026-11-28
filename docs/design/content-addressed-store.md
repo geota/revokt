@@ -157,7 +157,8 @@ One function, used by `start()`'s recovery chain and by step 4 of every install.
 2. schema-check `records` for the channel (`CrliteSchema.check`, capped at `MAX_CHANGESET_RECORDS`), then place
    the filters (the install's `placeFilters`);
 3. read each placed filter's blob and re-hash it against its record;
-4. rebuild `index.bin` with `buildIndex` and build `GenerationFiles` under the derived names.
+4. rebuild `index.bin` with `buildIndex` and build `GenerationFiles` under the derived names (at `start()`, from
+   each filter's coverage alone; section 16).
 
 Any failure is a failed load, counted once (`storeFailures++`). The §6.5 chain at `start()` is unchanged:
 `live` → `previous` → seed → nothing. The delta base of a `_since` sync is the live generation's `records`. The delta
@@ -566,10 +567,14 @@ and the model must pass at its default seed budget before review.
 
 - **Load decodes every filter twice:** `buildIndex` decodes each placed filter to read its coverage, then `prepare`
   decodes it again. Today a stored generation's load decodes once (it reads the stored `index.bin`). The
-  implementation PR measures `start()` against §6.4's load columns and reports the numbers. If it is over, two
-  fallbacks exist: a coverage-only clubcard read, which is a new decoder in the MPL port and needs its own fuzz
-  target; or storing `index.bin` as a blob that the generation file names, as upki persists it. Either is a
-  follow-up, not part of this design.
+  implementation PR measured `start()` against §6.4's load columns, and it was over. Of the two fallbacks, #333 took
+  the first: Load at `start()` reads each filter's coverage alone, through a coverage-only read in revokt-clubcard's
+  Apache glue (the port's own `CRLiteCoverage` reader for v4, the v3 reader's coverage map for v3), with its own fuzz
+  target (`ClubcardCoverageFuzzTest`, differential against the whole decode). `prepare` is then the one decode, and a
+  filter that does not decode past its coverage fails there. Installs and the adopt scan keep the whole decode, since
+  they write before anything is prepared. The second fallback, storing `index.bin` as a blob that the generation file
+  names, as upki persists it, was not taken: `index.bin` stays derived, as Firefox derives coverage from each filter.
+  §6.4's load columns are the emulator measurement of the result (DECISIONS B27).
 - **More hashing at load:** today only the full filter's blob is re-hashed at load (`readGeneration`). Now every
   delta is too, which is about 12.6 MB more on `default` at 52 deltas (§6.4's measured column less the 6 MB full).
 - **Fewer writes per install:** a daily delta install writes its new deltas, one generation file and the pointer.

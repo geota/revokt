@@ -85,8 +85,8 @@ internal sealed interface IndexBuild {
      * The record set builds no generation: [failure] is `INDEX_INCONSISTENT` (not exactly one full filter, two placed
      * attachments that map to one name or one that maps to a reserved name, or an index over
      * [C2spIndex.MAX_BYTES], spec §3.2 and §6.5), or `FILTER_UNREADABLE` (a placed filter does not decode under §6.3,
-     * so its coverage cannot be read). A sync fails with [failure]; a seed loader maps it to `SEED_UNREADABLE` (spec
-     * §6.5).
+     * or, read for its coverage alone, its coverage does not read). A sync fails with [failure]; a seed loader maps it
+     * to `SEED_UNREADABLE` (spec §6.5).
      */
     class Refused(
         val failure: SyncFailure,
@@ -122,20 +122,36 @@ internal fun placeFilters(
     return Placement.Placed(placed)
 }
 
+/** How [buildIndex] reads each placed filter for its coverage (spec §6.5). */
+internal enum class FilterRead {
+    /**
+     * The whole filter decoded under §6.3 ([ClubcardFilters.decode]): a sync's install, the seed's and the adopt scan,
+     * which refuse a filter that does not decode before anything is written or adopted.
+     */
+    WHOLE,
+
+    /**
+     * The coverage alone ([ClubcardFilters.coverage]): Load at `start()`, over blobs an install wrote and re-hashed,
+     * which `prepare` then decodes whole, failing the load there when one does not decode.
+     */
+    COVERAGE,
+}
+
 /**
  * Builds a Remote Settings generation's `index.bin` (spec §3.2, §6.5 seed archive): the one function a sync and the seed
  * loader share, so its output bytes are frozen per `seedFormat` (1 today) and a seed's shipped index is rebuilt and
  * byte-compared with it.
  *
  * The generation is [placeFilters]' records of [records] for [channel], refused as there before any [body] is read.
- * Then each placed filter's [body] is read once, in order, and its coverage decoded with the clubcard decoders; the
- * index is laid out by [C2spIndex.index] and refused when over [C2spIndex.MAX_BYTES], before a generation file could
- * be written.
+ * Then each placed filter's [body] is read once, in order, and its coverage read as [read] says (the whole filter
+ * decoded, or the coverage alone, which gives the same coverage for every filter that decodes); the index is laid out
+ * by [C2spIndex.index] and refused when over [C2spIndex.MAX_BYTES], before a generation file could be written.
  */
 @OptIn(RevoktInternalApi::class)
 internal fun buildIndex(
     records: List<FilterRecord>,
     channel: CrliteChannel,
+    read: FilterRead = FilterRead.WHOLE,
     body: (FilterRecord) -> ByteArray,
 ): IndexBuild {
     val placed =
@@ -145,16 +161,17 @@ internal fun buildIndex(
         }
     val coverage = ArrayList<Pair<String, Map<ByteString, Window>>>(placed.size)
     for (p in placed) {
-        val decoded =
+        val logs =
             try {
-                ClubcardFilters.decode(body(p.record))
+                val bytes = body(p.record)
+                when (read) {
+                    FilterRead.WHOLE -> ClubcardFilters.decode(bytes).universe
+                    FilterRead.COVERAGE -> ClubcardFilters.coverage(bytes)
+                }.logs
             } catch (e: ClubcardFormatException) {
                 return IndexBuild.Refused(SyncFailure.FILTER_UNREADABLE, "${p.record.id}: ${e.message}", e)
             }
-        coverage +=
-            p.name to
-            decoded.universe.logs.entries
-                .associate { (log, interval) -> log.bytes to window(interval) }
+        coverage += p.name to logs.entries.associate { (log, interval) -> log.bytes to window(interval) }
     }
     val index = C2spIndex.index(coverage)
     val size = C2spIndex.byteSize(index)

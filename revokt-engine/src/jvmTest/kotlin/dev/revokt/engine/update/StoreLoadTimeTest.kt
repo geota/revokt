@@ -23,9 +23,10 @@ import kotlin.test.assertEquals
 
 /**
  * The measurement #287 asks for, not a gate: `start()`'s load of a stored generation (Load's steps 1 to 4, which
- * re-hash the file and every blob and decode every filter for `buildIndex`, then `prepare`, which decodes them again)
- * against §6.4's load columns. Run with `REVOKT_LOAD_TIME=1` in the environment (`--rerun`); it prints the medians, JIT-compiled in this JVM and
- * interpreted in a child JVM under `-Xint`, and writes them to `build/load-time.txt`.
+ * re-hash the file and every blob and read every filter's coverage for `buildIndex`, then `prepare`, the one decode of
+ * each filter) on HotSpot. §6.4's load columns are the same shapes measured on ART (an emulator), which this test does
+ * not reproduce. Run with `REVOKT_LOAD_TIME=1` in the environment (`--rerun`); it prints the medians, JIT-compiled in
+ * this JVM and interpreted in a child JVM under `-Xint`, and writes them to `build/load-time.txt`.
  *
  * `compat` is the corpus's real 1.5 MB full filter beside 52 synthetic deltas of §6.4's measured mean size (134 KB);
  * `default` is wholly synthetic (a 6 MB full and 52 deltas of 242 KB), since no default filter is committed and the

@@ -44,6 +44,7 @@ import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
+import dev.revokt.engine.update.FilterRead
 import dev.revokt.engine.update.IndexBuild
 import dev.revokt.engine.update.InstallResult
 import dev.revokt.engine.update.PendingGeneration
@@ -632,7 +633,9 @@ internal class SeedLoader(
             seed: X5uPath,
         ): Boolean {
             val generation = store.place(name, file) ?: return false
-            store.loadFiles(generation) ?: return false
+            // The whole of every filter decoded (§6.5): an adopt writes updater.json and flips the pointer before any
+            // prepare, so a filter whose coverage reads and whose rest does not decode is never adopted.
+            store.loadFiles(generation, read = FilterRead.WHOLE) ?: return false
             val seedLeaf =
                 seed.links[0]
                     .der
