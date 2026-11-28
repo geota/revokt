@@ -22,6 +22,7 @@ import dev.revokt.engine.fetch.response
 import dev.revokt.engine.generation.DatasetGeneration
 import dev.revokt.engine.generation.GenerationSnapshot
 import dev.revokt.engine.seed.SeedFixture
+import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.SourceRecord
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
@@ -31,6 +32,7 @@ import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import dev.revokt.engine.walker.FixtureCert
 import dev.revokt.engine.walker.Honest
 import dev.revokt.engine.walker.WalkerHarness
+import okio.ByteString.Companion.toByteString
 import java.io.IOException
 import kotlin.random.Random
 import kotlin.test.Test
@@ -280,7 +282,8 @@ internal class CrliteRuntimePollTest : SeedFixture() {
         runtime.sync(now)
         assertFalse(runtime.storeReadUnresolved)
         assertTrue(server.fetcher.requests.any { it.url == monitor }, "the sync runs once it resolves")
-        // A read left unresolved again backs off from 15 min, not from where the last one stopped.
+        // A read left unresolved again backs off from 15 min, not from where the last one stopped. A seam: the binding
+        // runs startTask once per runtime, so in production nothing is unresolved again after the read resolves.
         failing = true
         reset(keepStore = true)
         assertEquals(now + 15 * minute, runtime.startTask(loadSeed = false) { now })
@@ -302,6 +305,44 @@ internal class CrliteRuntimePollTest : SeedFixture() {
         val restart = runtime(null, Server(ts = ts + 30 * minute), policy = RevoktPolicy.STRICT)
         restart.startTask(loadSeed = false) { past }
         assertEquals("${ts + 30 * minute}/${delta.id}", restart.crlite().generationId)
+        assertEquals(
+            emptyList(),
+            restart.diagnostics(past).filter { it.code == DiagnosticCode.SEED_PAST_REJECT_THRESHOLD },
+        )
+        assertTrue(recording.messages.none { "SEED_PAST_REJECT_THRESHOLD" in it.second }, "${recording.messages}")
+    }
+
+    @Test
+    fun `a restart serving a seed previous, then adopting a synced generation, reports no seed age`() {
+        // P: a stored seed generation at ts. S: a synced generation at ts + 30 min, which the first runtime installs.
+        val previous = installedAt(ts)
+        val first = runtime(null, Server(ts = ts + 30 * minute))
+        first.startTask(loadSeed = false) { ts + hour }
+        val synced = assertNotNull(first.crlite().generationFile)
+        assertFalse(first.crlite().fromSeed)
+        // L: a live at ts + 2 h whose own blob rots (Load's step 3 fails), pointed beside P, so S is unpointed.
+        val extra =
+            Rec(
+                "d2",
+                true,
+                delta.effectiveTimestamp + 1,
+                "d2.filter.delta",
+                UpdateFixtures.v4(listOf(UpdateFixtures.log(2) to (1L to 2L))),
+                parent = full.id,
+            )
+        val live = installed(load(Seed(records = listOf(full, delta, extra), ts = ts + 2 * hour))).name
+        store.point(Pointer(live, previous))
+        storage.inner.write(store.blobKey(extra.body.toByteString().sha256()), byteArrayOf(1))
+        reset(keepStore = true)
+        recording.messages.clear()
+        val past = ts + 31 * 24 * hour
+        val engine = TestEngine()
+        val restart = runtime(source(Seed()), Server(ts = ts + 30 * minute), engine, RevoktPolicy.STRICT)
+        restart.startTask(restart.startSeed(soleSeed = false, nowMillis = past)) { past }
+        // The chain serves P after L fails, then the seed's second pass adopts S, which is what stays served.
+        assertEquals(listOf("$ts/${delta.id}", "${ts + 30 * minute}/${delta.id}"), engine.prepared.take(2))
+        assertEquals(synced, restart.crlite().generationFile)
+        assertFalse(restart.crlite().fromSeed)
         assertEquals(
             emptyList(),
             restart.diagnostics(past).filter { it.code == DiagnosticCode.SEED_PAST_REJECT_THRESHOLD },

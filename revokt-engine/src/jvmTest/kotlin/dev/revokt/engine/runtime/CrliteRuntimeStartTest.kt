@@ -19,6 +19,8 @@ import dev.revokt.engine.update.UpdateFixtures
 import dev.revokt.engine.update.UpdateFixtures.TestEngine
 import dev.revokt.engine.update.stored
 import okio.ByteString.Companion.toByteString
+import java.io.IOException
+import java.io.InterruptedIOException
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -419,7 +421,8 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
 
     @Test
     fun `a restart serving a stored seed generation past rejectStaleAfter reports SEED_PAST_REJECT_THRESHOLD`() {
-        installedAt(ts)
+        val stored = installedAt(ts)
+        val installedAt = updater(now).seedInstalledAtMillis
         val past = ts + 31 * 24 * hour
         for (seed in listOf(null, source(Seed()))) {
             reset(keepStore = true)
@@ -429,6 +432,8 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
             runtime.startTask(runtime.startSeed(soleSeed = false, nowMillis = past)) { past }
             // The stored seed generation is served, not the seed re-installed: a restart is a first start (spec §4).
             assertEquals(listOf(seedId()), engine.prepared)
+            assertEquals(stored, runtime.crlite().generationFile)
+            assertEquals(installedAt, updater(now).seedInstalledAtMillis, "the seed did not install again")
             assertTrue(runtime.crlite().fromSeed)
             val fired = runtime.diagnostics(past).single { it.code == DiagnosticCode.SEED_PAST_REJECT_THRESHOLD }
             assertEquals(Dataset.CRLITE, fired.dataset)
@@ -442,6 +447,34 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
                 "measured from the stored generation's signed ts",
             )
         }
+    }
+
+    @Test
+    fun `a restart reports SEED_PAST_REJECT_THRESHOLD from a stored seed generation the chain reaches as previous`() {
+        val previous = installedAt(ts)
+        withExtra(ts + hour)
+        rotExtra()
+        reset(keepStore = true)
+        val past = ts + 31 * 24 * hour
+        val runtime = runtime(null, policy = RevoktPolicy.STRICT)
+        runtime.startTask(false) { past }
+        assertEquals(previous, runtime.crlite().generationFile)
+        assertEquals(1, runtime.diagnostics(past).count { it.code == DiagnosticCode.SEED_PAST_REJECT_THRESHOLD })
+    }
+
+    @Test
+    fun `a restart reports SEED_PAST_REJECT_THRESHOLD from an adopted stored seed generation, at its own ts`() {
+        val newer = installedAt(ts + hour)
+        storage.inner.delete(pointerKey)
+        reset(keepStore = true)
+        val past = ts + 31 * 24 * hour
+        val runtime = runtime(source(Seed()), policy = RevoktPolicy.STRICT)
+        runtime.startTask(runtime.startSeed(soleSeed = false, nowMillis = past)) { past }
+        assertEquals(newer, runtime.crlite().generationFile, "adopted under rule (b)")
+        val code = DiagnosticCode.SEED_PAST_REJECT_THRESHOLD
+        assertEquals(1, runtime.diagnostics(past).count { it.code == code })
+        // 30 d and 30 min after the seed's ts, but under 30 d after the adopted generation's.
+        assertEquals(0, runtime.diagnostics(ts + 30 * 24 * hour + 30 * minute).count { it.code == code })
     }
 
     @Test
@@ -469,6 +502,38 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
         start(other)
         assertEquals(null, other.crlite().generationId)
         assertEquals(emptyList(), recording.messages.filter { it.first == LogLevel.ERROR })
+    }
+
+    @Test
+    fun `a sole-seed start whose store read throws on the loader logs SEED_UNREADABLE, unless it is interrupted`() {
+        installedAt(ts)
+        for (interrupted in listOf(false, true)) {
+            reset(keepStore = true)
+            recording.messages.clear()
+            var reads = 0
+            // The calling thread's check reads the pointer; the loader's reads throw.
+            storage.failRead = { name ->
+                if (name != pointerKey || reads++ == 0) {
+                    null
+                } else if (interrupted) {
+                    Thread.currentThread().interrupt()
+                    InterruptedIOException("close() stops the loader")
+                } else {
+                    IOException("the pointer read")
+                }
+            }
+            val runtime = runtime(source(Seed(ts = ts - hour)))
+            try {
+                assertTrue(runtime.startSeed(soleSeed = true, nowMillis = now))
+                runtime.startTask(true) { now }
+            } finally {
+                Thread.interrupted()
+            }
+            assertTrue(runtime.storeReadUnresolved)
+            assertEquals(null, runtime.crlite().generationId)
+            val errors = recording.messages.filter { it.first == LogLevel.ERROR && "SEED_UNREADABLE" in it.second }
+            assertEquals(if (interrupted) 0 else 1, errors.size, "interrupted=$interrupted: ${recording.messages}")
+        }
     }
 
     @Test

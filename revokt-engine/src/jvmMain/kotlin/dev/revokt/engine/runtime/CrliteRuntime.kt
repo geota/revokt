@@ -285,10 +285,9 @@ public class CrliteRuntime internal constructor(
      * [loadSeed], then, when a fetching source is configured ([polls]), the first sync, as [sync] runs it, then
      * `pending` cleared for every configured dataset (§8): a dataset the task left without a generation is published
      * with `pending = false` and `generationEpoch++`, so `NO_DATA` can fire. In the sole-seed configuration a store step
-     * that leaves no generation served (a stored `live` that passes Load's steps 1 and 2 but not 3 or 4, beside a seed
-     * that does not install: spec §4 S bullet) is logged at `ERROR`, naming `SEED_UNREADABLE` and `NO_DATA`, since
-     * `start()` has already returned. Returns when the loader syncs next (a
-     * wall-clock time on [nowMillis]'s clock, for [delayMillis]), or null when nothing polls. Never throws: a throwable
+     * that leaves no generation is logged at `ERROR` ([reportNoData]), since `start()` has already returned. Returns
+     * when the loader syncs next (a wall-clock time on [nowMillis]'s clock, for [delayMillis]), or null when nothing
+     * polls. Never throws: a throwable
      * from any step is logged and the task still clears `pending`, as §5.1 has every loader task catch `Throwable`; a
      * fatal error is rethrown after that.
      */
@@ -386,17 +385,18 @@ public class CrliteRuntime internal constructor(
 
     /**
      * In the sole-seed configuration, after the start task's store step (not run when `start()` installed the seed): a
-     * step that left no generation served (spec §4 S bullet: a stored `live` that passes Load's steps 1 and 2 but not 3
-     * or 4, beside a seed that does not install) is logged at `ERROR`, naming `SEED_UNREADABLE` and `NO_DATA`, since
-     * `start()` has returned (0.2 has no `state`).
+     * step that left no generation (spec §4 S bullet: a stored `live` that passes Load's steps 1 and 2 but not 3 or 4
+     * beside a seed that does not install, or a store read that threw and stays unresolved) is logged at `ERROR`, naming
+     * `SEED_UNREADABLE` and `NO_DATA`, since `start()` has returned (0.2 has no `state`). Not while the loader thread is
+     * interrupted: `close()` is stopping it, and the reference is about to be cleared.
      */
     private fun reportNoData() {
-        if (!soleSeed || seededSynchronously) return
+        if (!soleSeed || seededSynchronously || Thread.currentThread().isInterrupted) return
         if (snapshot.snapshot.datasets[Dataset.CRLITE]?.generationId != null) return
         logger.safeLog(
             LogLevel.ERROR,
-            "SEED_UNREADABLE: the stored generation does not load and the seed does not install, so NO_DATA rejects " +
-                "every handshake until a sync installs a generation (spec §4)",
+            "SEED_UNREADABLE: the start task left no generation (the stored one does not load or its read failed, " +
+                "and the seed does not install), so NO_DATA rejects every handshake until one installs (spec §4)",
         )
     }
 
@@ -446,10 +446,6 @@ public class CrliteRuntime internal constructor(
                 for (name in failed - before) {
                     (store.stored(name) as? StoreRead.Found)?.value?.let { faults += it.blobNames }
                 }
-                // A stored seed generation an earlier process installed is live as if this one had (spec §4).
-                val served = snapshot.snapshot.datasets[store.dataset]?.takeIf { g -> g.fromSeed }
-                val servedAt = served?.sourceTimestampMillis
-                if (it != StartChain.NONE && servedAt != null) seedLive(servedAt, nowMillis)
             }
         }
 
@@ -459,6 +455,8 @@ public class CrliteRuntime internal constructor(
             // Noted for [startStoreFailures], and logged: §11's 0.2 row has no `state`.
             startStoreFailures = counted
             if (counted > 0) logger.safeLog(LogLevel.WARN, "the start task counted $counted store failures")
+            // Once, from the generation the step leaves served: a later pass may replace one it served first.
+            noteServedSeed(store.dataset) { nowMillis }
             return Recovery(unresolved, counted)
         }
         return try {
@@ -471,11 +469,11 @@ public class CrliteRuntime internal constructor(
                 counted += load.storeFailures
                 when (load) {
                     is SeedLoad.Installed, is SeedLoad.Failed -> {
-                        return done(loaded(load) { nowMillis })
+                        return done(loaded(load))
                     }
 
                     is SeedLoad.Absent, is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch -> {
-                        loaded(load) { nowMillis }
+                        loaded(load)
                         if (served == null) chain()
                         return done(unresolved = false)
                     }
@@ -546,19 +544,13 @@ public class CrliteRuntime internal constructor(
     }
 
     /**
-     * What the loader does with a seed load's end: the live seed's `<ts>` and its diagnostics, or the warning for a load
-     * that did not install. Returns whether the store read stays unresolved: after an install that failed before
-     * `activate`. `Skipped` and `Adopted` are [recover]'s, which then loads the stored generation.
+     * What the loader does with a seed load's end: the warning for a load that did not install. Returns whether the
+     * store read stays unresolved: after an install that failed before `activate`. The live seed's `<ts>` is
+     * [noteServedSeed]'s, from the generation [recover] leaves served. `Skipped` and `Adopted` are [recover]'s, which
+     * then loads the stored generation.
      */
-    private fun loaded(
-        load: SeedLoad,
-        nowMillis: () -> Long,
-    ): Boolean {
+    private fun loaded(load: SeedLoad): Boolean {
         when (load) {
-            is SeedLoad.Installed -> {
-                seedLive(load.timestampMillis, nowMillis())
-            }
-
             is SeedLoad.Failed -> {
                 return !load.activated
             }
@@ -568,7 +560,9 @@ public class CrliteRuntime internal constructor(
             }
 
             // Logged by the loader; the stored ones are recover's.
-            is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch, is SeedLoad.Skipped, is SeedLoad.Adopted -> {
+            is SeedLoad.Installed, is SeedLoad.Unreadable, is SeedLoad.ChannelMismatch, is SeedLoad.Skipped,
+            is SeedLoad.Adopted,
+            -> {
                 return false
             }
         }
@@ -576,16 +570,22 @@ public class CrliteRuntime internal constructor(
     }
 
     /**
-     * A seed generation at the signed [timestampMillis] is live, installed now or stored by an earlier process: its
-     * `<ts>` for [diagnostics], and `SEED_PAST_REJECT_THRESHOLD` logged as well as returned, since the start task may
-     * end after `start()` returned (spec §4; 0.2 has no `state`).
+     * The seed's `<ts>` for [diagnostics] from the generation of [dataset] that [recover] leaves served (spec §4
+     * `SEED_PAST_REJECT_THRESHOLD`): a seed generation's signed `<ts>`, whether this start installed it or an earlier
+     * process stored it, with `SEED_PAST_REJECT_THRESHOLD` logged as well as returned, since the start task may end after
+     * `start()` returned (0.2 has no `state`); none for a synced generation, even after a pass served a seed generation
+     * first. Nothing served leaves it as it was.
      */
-    private fun seedLive(
-        timestampMillis: Long,
-        nowMillis: Long,
+    private fun noteServedSeed(
+        dataset: Dataset,
+        nowMillis: () -> Long,
     ) {
-        seedTimestampMillis = timestampMillis
-        seedPastRejectThreshold(policy.form, timestampMillis, nowMillis).forEach {
+        val served = snapshot.snapshot.datasets[dataset]
+        if (served?.generationId == null) return
+        val at = served.sourceTimestampMillis?.takeIf { served.fromSeed }
+        seedTimestampMillis = at
+        if (at == null) return
+        seedPastRejectThreshold(policy.form, at, nowMillis()).forEach {
             logger.safeLog(LogLevel.WARN, "${it.code}: ${it.message}")
         }
     }

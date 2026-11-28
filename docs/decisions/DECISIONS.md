@@ -679,9 +679,11 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
 - 2026-11-27 (maintainer, #338, PR #350): the start chain's three follow-ups from #336's review, each as the builder
   recommended. upki is `9821cce`; Firefox is `cac25a6` (CS = `security/manager/ssl/cert_storage/src/lib.rs`, RSC =
   `services/settings/RemoteSettingsClient.sys.mjs`).
-  - **A restart is a first start for the seed's age (B24):** when the recovery chain serves a stored `fromSeed`
-    generation, its signed `<ts>` becomes the seed's for `SEED_PAST_REJECT_THRESHOLD`, which `start()` returns and the
-    loader logs, as for a seed this start installed. A stored synced generation does not trigger it; `STALE` covers it.
+  - **A restart is a first start for the seed's age (B24):** when the start task's store step ends on a stored
+    `fromSeed` generation (`live`, `previous` or adopted), its signed `<ts>` becomes the seed's for
+    `SEED_PAST_REJECT_THRESHOLD`, which `start()` returns and the loader logs, as for a seed this start installed. It
+    is taken once, from the generation the step leaves served, so a step that serves a seed `previous` and then adopts
+    a synced generation reports none (r350's review). A stored synced generation does not trigger it; `STALE` covers it.
     Firefox checks CRLite's freshness on every query against the stored time of its last update (`is_crlite_fresh`,
     CS:464-483, 10 days), so a restart behaves as a first start, and it has no start-up diagnostic. upki has no age
     rule and logs the manifest's `generated_at` at `INFO` (`upki/src/revocation/mod.rs:124-141`).
@@ -699,7 +701,9 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     filter it consults on each check (`index.rs:69-155`, 311-323).
   - **The sole-seed `ENFORCE` cost stays (B26, B5):** a `live` that passes Load's steps 1 and 2 on the calling thread
     but fails step 3 or 4 on the loader, beside a seed that does not install, leaves no generation after `start()`
-    returned. The start task logs one `ERROR` naming `SEED_UNREADABLE` and `NO_DATA`. With 0.3's `state` it is
+    returned. The start task logs one `ERROR` naming `SEED_UNREADABLE` and `NO_DATA`, also when its store read threw
+    and stays unresolved (r350's review: `NO_DATA` rejects there too), but not while `close()` interrupts the loader.
+    With 0.3's `state` it is
     `SEED_UNREADABLE` on `RevoktState.warnings` beside `generationId == null` and `pending == false`, the triple
     `NO_DATA_AT_FLIP` already reads, so no new code value. With a fetching source the first sync installs the collection
     and heals it. Reading steps 3 and 4 on the calling thread (undoing B5 and B16) and a JVM `start()` that throws after
