@@ -849,7 +849,8 @@ pointer and its `live` generation file through §6.5 Load's steps 1 and 2 (a fai
 in memory, §3; test-plan.md (e), `CrliteRuntimeStartTest`), and the `seed.json` header (`SEED_CHANNEL_MISMATCH` →
 `IllegalStateException`). **When the sole-seed `ENFORCE` configuration finds no pointer and `live` that pass Load's
 steps 1 and 2** (§4 S bullet) the factory lock is now released, the seed is verified, rebuilt, prepared
-and activated on the calling thread (150–300 ms interpreted on the default channel, §6.4),
+and activated on the calling thread (more than §6.4's interpreted load on the default channel, since the seed's
+bodies are also inflated, hashed and decoded for `buildIndex`),
 the lock is re-taken, snapshots are built for any trust manager created in the gap (it saw `CREATED`
 and built nothing), and the flip follows; a `trustManager(d)` racing this therefore blocks only for the
 lock's short holds, never for the decode. **The other two racers in the gap, stated**: a second `start()`
@@ -1235,10 +1236,10 @@ per decoder; filenames validated against `^(?!\.{1,2}$)[A-Za-z0-9._-]{1,64}$` (t
 ### 6.4 Filter storage
 `LongArray` columns padded with one zero word in an immutable `Generation`. No mmap.
 
-| Channel | Full | Resident, 8 deltas | Resident, 52 deltas (measured) | Load, JIT-compiled | Load, interpreted |
+| Channel | Full | Resident, 8 deltas | Resident, 52 deltas (measured) | Load, JIT-compiled (emulator, lower bound) | Load, interpreted (emulator, lower bound) |
 |---|---|---|---|---|---|
-| `compat` | 1.57 MB | ~2.5 MB | 8.56 MB (8,558,354 B) | ~5–10 ms | ~50–100 ms plus seed verification |
-| `default` | 6.0 MB | ~7.8 MB | 18.59 MB (18,593,366 B) | ~15–30 ms | ~150–300 ms plus seed verification |
+| `compat` | 1.57 MB | ~2.5 MB | 8.56 MB (8,558,354 B) | 73 ms cold, 28 ms warm | 190 ms plus seed verification |
+| `default` | 6.0 MB | ~7.8 MB | 18.59 MB (18,593,366 B) | 86 ms cold, 51 ms warm | 332 ms plus seed verification |
 
 The measured column is the sum of the signed `attachment.size` values per channel in the live
 `cert-revocations` changeset of 2026-11-12 (`timestamp` 1794499022363, 106 records: per channel 1 full and 52 deltas;
@@ -1246,6 +1247,15 @@ deltas average 134 KB on `compat` and 242 KB on `default`; Appendix A). The delt
 2026-10-21, 52 per channel on 2026-11-12.
 `MAX_CHANGESET_RECORDS` (1,024) admits a full and 1,023 deltas, about 254 MB at `default`'s 6 MB full and ~242 KB a delta; no per-sync
 total caps it, only the count and the per-file caps.
+The load columns are `start()`'s load of a stored generation of 1 full filter and 52 deltas (§6.5 Load's steps 1 to 4,
+then `prepare`), measured on ART: an API 31 arm64 emulator with 4 cores on an Apple M3 Max host, the code run under
+`dalvikvm` from a d8 build at min-api 26. Cold is the median first load of 14 fresh processes and warm the median of
+each process's 6th to 15th, with the JIT on; interpreted is the median of 24 loads with app code interpreted
+(`-Xusejit:false`). `compat` is the corpus's real full filter beside 52 synthetic deltas of the measured mean size;
+`default` is synthetic, a 6 MB full and 52 deltas of 242 KB: the shapes `StoreLoadTimeTest` measures on HotSpot.
+An emulator on a fast host is a lower bound for the physical API 26 device below. Of each interpreted load, `prepare`'s
+decode is about 168 ms on `compat` and 296 ms on `default`, and steps 1 to 4 about 21 and 34 ms, of which re-hashing
+the generation file and every blob alone takes about 11 and 18 ms.
 
 Baseline Profile covering the decoder, seed verification, the TBS parser, the walker and `evaluate`,
 with `androidx.profileinstaller` as `api`. `AWAIT_DATA_<CHANNEL>` from a physical ARM device at API
@@ -1337,7 +1347,12 @@ generation `H`:
 2. schema-check `records` for the channel (`CrliteSchema`, capped at `MAX_CHANGESET_RECORDS`) and place the filters
    (`buildIndex`'s placement, Seed archive below);
 3. read each placed filter's blob and re-hash it against its record's `attachment.hash`;
-4. rebuild `index.bin` with `buildIndex` (≤ 1 MiB, §3.2) and build `GenerationFiles` under the derived names.
+4. rebuild `index.bin` with `buildIndex` (≤ 1 MiB, §3.2) and build `GenerationFiles` under the derived names. At
+   `start()` `buildIndex` reads each placed filter's coverage alone, the first field after the 2-byte prefix in v3
+   and v4 (§6.3), under §6.3's rules for it, which gives the index the whole decode gives for every filter that decodes
+   (`BuildIndexTest`, `ClubcardCoverageFuzzTest`); `prepare` is then the one decode of each filter, and a filter whose
+   coverage reads but whose rest does not decode fails the `prepare` (`StoreLoadTest`). The adopt scan decodes every
+   filter whole (rule (b), below), and an install keeps the index it built from its own whole decodes.
 
 Any failure is a failed load, counted once (`storeFailures++`; `StoreLoadTest`). Steps 1 and 3 make what a load returns (the
 `GenerationFiles` handed to `prepare`, the `records` used as a delta base) byte-equal to a generation file and blobs
@@ -1349,7 +1364,9 @@ enforces ownership and owner-only write permission on POSIX, a temp file sits in
 followed, and one in a key's path fails closed (§3), and only the lock holder reads or writes the store.
 **Order of an install** (an *install* anywhere in this document means this whole sequence): the bodies, **one at a
 time** (for each placed attachment a stored blob that re-hashes is reused; otherwise the body is fetched, or read from
-the seed archive, hashed against its signed record, written and dropped) → build `index.bin` (≤ 1 MiB, §3.2) → the
+the seed archive, hashed against its signed record, written and dropped) → build `index.bin` (≤ 1 MiB, §3.2; every
+placed filter decoded whole, so one that does not decode fails a sync with `FILTER_UNREADABLE` and a seed with
+`SEED_UNREADABLE` before the generation file is written, `CrliteSyncFailureTest`, `SeedLoaderTest`) → the
 format check (on every placed filter, the full and each delta, each in its own encoding; a filter whose encoding the
 engine does not list fails the install, `FAILED` with `FORMAT_UNSUPPORTED`, §3.2, the previous generation stays live,
 and nothing is offered to `prepare`) → write the generation file (the cap first; not written again when its key holds a
@@ -1407,7 +1424,8 @@ every install, the seed load and prune, so no prune falls between an install's f
 never reads the store after `prepare` (§6.4: no mmap), so deleting a served generation's keys cannot break serving.
 **Crash recovery at `start()`**: `live` → `previous` → seed (per the §5.1 rule and the seed-load rule, below) →
 nothing, each failure counted once (`StoreCrashTest`, one test per crash point; `StoreModelTest`'s I1). The chain decides on Load's step 1, each candidate's `<ts>` against the seed's, and
-loads in full only the generation it serves, falling down the chain when that load fails; a stored generation older
+loads in full only the generation it serves, falling down the chain when that load, or the `prepare` after it, fails
+(a filter that does not decode past its coverage, `StoreLoadTest`); a stored generation older
 than the seed is therefore not decoded at `start()`, and damage to it is counted only when the seed's install reads
 it as a `previous` candidate. A blob or generation file is durable before the pointer names it, and only prune
 deletes, so a `current` that reads names a generation whose file and blobs are on disk; only damage breaks that, and
@@ -1465,7 +1483,8 @@ malformed `updater.json` reads as absent. Each store fault is counted once, wher
   fails it counts one store failure, unless the same start already counted it (a `live` or `previous` the chain failed
   to load is passed over, never counted twice). The candidates are the files whose `<ts>` is newer than the seed's and not older
   than the generation the engine serves, the `previous` the chain fell back to apart (it stays
-  served, and the scan passes over it without counting it); from the newest down, ties broken by name, each runs Load's steps 2 to 4 and,
+  served, and the scan passes over it without counting it); from the newest down, ties broken by name, each runs Load's steps 2 to 4, every filter decoded whole rather than read for its
+  coverage alone, so no generation `prepare` would refuse is adopted (`SeedAdoptTest`), and,
   when its `signerLeafSha256` is the SHA-256 of the seed's verified leaf, its `signature` must verify over the
   canonical serialisation of its `records` (a generation signed by another leaf is trusted at the OS level, as every
   stored generation is). The first that passes is adopted: `updater.json` is written from the record read (an absent or

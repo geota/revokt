@@ -6,6 +6,7 @@
 package dev.revokt.engine.seed
 
 import dev.revokt.ClubcardCorpus
+import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
 import dev.revokt.FilterFormat
 import dev.revokt.Freshness
@@ -21,8 +22,11 @@ import dev.revokt.engine.seed.parse.TestZip
 import dev.revokt.engine.store.GenerationNames
 import dev.revokt.engine.store.StoreLayout
 import dev.revokt.engine.store.StoreRead
+import dev.revokt.engine.update.FilterRead
+import dev.revokt.engine.update.IndexBuild
 import dev.revokt.engine.update.UpdateFixtures
 import dev.revokt.engine.update.UpdateFixtures.TestEngine
+import dev.revokt.engine.update.buildIndex
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -67,6 +71,22 @@ internal class SeedLoaderTest : SeedFixture() {
         assertEquals(ts, stored.timestampMillis)
         assertContentEquals(seed.payload(), stored.file.payload)
         assertContentEquals(seed.index(), loaded(load.name).files.bytes(StoreLayout.INDEX))
+    }
+
+    @Test
+    fun `a seed install decodes every filter whole, so one whose coverage alone reads is SEED_UNREADABLE, unwritten`() {
+        // A v4 trailing byte (§6.3 rejects it) behind a coverage that reads, its record's hash over those bytes, and a
+        // shipped index.bin built from coverage alone, so only the install's whole decode refuses it, before any file.
+        val body = UpdateFixtures.v4(listOf(UpdateFixtures.log(2) to (1L to 2L))) + byteArrayOf(0)
+        val bad = Rec("d2", true, delta.effectiveTimestamp + 1, "d2.filter.delta", body, parent = full.id)
+        val seed = Seed(records = listOf(full, delta, bad))
+        val coverageIndex =
+            buildIndex(seed.filterRecords(), CrliteChannel.COMPAT, FilterRead.COVERAGE) { r ->
+                seed.body(seed.records.single { it.id == r.id })
+            }
+        seed.index = assertIs<IndexBuild.Built>(coverageIndex).index
+        assertUnreadable(load(seed), "index.bin cannot be rebuilt")
+        assertIs<StoreRead.Absent>(store.pointer())
     }
 
     @Test

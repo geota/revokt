@@ -499,7 +499,8 @@ tests; **live checks** are informational.
 ### 9.1 Fuzzing requirement
 
 Mandatory for every component that parses bytes it did not produce; measured by coverage and bug
-yield. **Targets**: v3/v4 filter decoders (differential against `clubcard-crlite`); `index.bin`
+yield. **Targets**: v3/v4 filter decoders (differential against `clubcard-crlite`), and the coverage-only read
+§6.5's Load uses (`ClubcardCoverageFuzzTest`, differential against the whole decode); `index.bin`
 round trip; JSON and canonical JSON (differential against `canonical_json`); the TBS/DER parser and
 SCT list (§9.2); DER ECDSA conversion and `AlgorithmIdentifier`/PSS parameters; seed archive and x5u
 PEM; the nameConstraints and subjectAltName readers of the walker's issuer rules, with the directoryName comparison,

@@ -350,6 +350,90 @@ class ClubcardFiltersTest {
     }
 
     @Test
+    fun `coverage reads what decode reads as the universe, entry for entry and in order`() {
+        for ((name, bytes) in both(wellFormed)) {
+            val coverage = ClubcardFilters.coverage(bytes)
+            assertEquals(
+                ClubcardFilters
+                    .decode(bytes)
+                    .universe.logs
+                    .toList(),
+                coverage.logs.toList(),
+                name,
+            )
+            assertEquals(listOf(LogId(log0), LogId(log1)), coverage.logs.keys.toList(), name)
+        }
+        for ((name, bytes) in both(TestFilter())) assertEquals(0, ClubcardFilters.coverage(bytes).logs.size, name)
+    }
+
+    @Test
+    fun `coverage reads nothing after the coverage, so a filter that fails decode there still has one`() {
+        val badIndex = TestFilter(coverage = wellFormed.coverage, index = listOf(TestIndexEntry(issuerA, inverted = 2)))
+        val afterCoverage =
+            both(badIndex) + ("v4 trailing" to TestFilterWriter.v4(wellFormed, trailing = byteArrayOf(0)))
+        for ((name, bytes) in afterCoverage) {
+            assertFailsWith<ClubcardFormatException>(name) { ClubcardFilters.decode(bytes) }
+            assertEquals(2, ClubcardFilters.coverage(bytes).logs.size, name)
+        }
+        for ((name, whole) in both(wellFormed)) {
+            val end = coverageEnd(name, whole)
+            ClubcardFilters.coverage(whole.copyOf(end))
+            for (len in end until whole.size) {
+                assertFailsWith<ClubcardFormatException>("$name to $len") { ClubcardFilters.decode(whole.copyOf(len)) }
+                assertEquals(2, ClubcardFilters.coverage(whole.copyOf(len)).logs.size, "$name truncated to $len")
+            }
+        }
+    }
+
+    @Test
+    fun `coverage applies decode's rules to the prefix and the coverage`() {
+        for ((name, whole) in both(wellFormed)) {
+            for (len in 0 until coverageEnd(name, whole)) {
+                assertFailsWith<ClubcardFormatException>("$name truncated to $len") {
+                    ClubcardFilters.coverage(whole.copyOf(len))
+                }
+            }
+            val reserved = whole.copyOf().also { it[1] = 1 }
+            assertFailsWith<ClubcardFormatException>(name) { ClubcardFilters.coverage(reserved) }
+            val cascade = whole.copyOf().also { it[0] = 2 }
+            assertFailsWith<ClubcardFormatException>(name) { ClubcardFilters.coverage(cascade) }
+        }
+        val twice = TestFilter(coverage = listOf(TestCoverage(log0, 1, 2), TestCoverage(log0, 3, 4)))
+        for ((name, bytes) in both(twice)) {
+            val e = assertFailsWith<ClubcardFormatException>(name) { ClubcardFilters.coverage(bytes) }
+            assertContains(e.message.orEmpty(), "twice", message = name)
+        }
+        // A count that lies about the bytes behind it, and one whose byte length would wrap a signed product.
+        val v4 =
+            Buffer()
+                .writeByte(4)
+                .writeByte(0)
+                .writeShort(0xFFFF)
+                .readByteArray()
+        val v3 =
+            Buffer()
+                .writeByte(3)
+                .writeByte(0)
+                .writeLongLe(1L shl 40)
+                .readByteArray()
+        val v3wrap =
+            Buffer()
+                .writeByte(3)
+                .writeByte(0)
+                .writeLongLe(-1L)
+                .readByteArray()
+        for (bytes in listOf(v4, v3, v3wrap)) {
+            assertFailsWith<ClubcardFormatException> { ClubcardFilters.coverage(bytes) }
+        }
+    }
+
+    /** The length of [whole]'s prefix and coverage: its two entries of 48 bytes after a v4 `u16` or v3 `u64` count. */
+    private fun coverageEnd(
+        name: String,
+        whole: ByteArray,
+    ): Int = 2 + (if (name == "v4") 2 else 8) + 2 * 48
+
+    @Test
     fun `reader shares one empty ByteString for zero-length reads and rejects a bad start`() {
         val reader = ByteReader(ByteArray(4))
         assertSame(ByteString.EMPTY, reader.bytes(0, "empty"))

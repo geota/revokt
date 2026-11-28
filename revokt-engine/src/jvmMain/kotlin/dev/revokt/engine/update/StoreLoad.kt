@@ -115,8 +115,10 @@ internal fun StoreLayout.blobsMatch(generation: StoredGeneration): Boolean =
 
 /**
  * Load's steps 3 and 4 for [generation]: each placed filter's blob read and re-hashed against its record, then
- * `index.bin` rebuilt with [buildIndex] and the [GenerationFiles] built under the derived names; null when a blob is
- * missing or does not re-hash, a filter does not decode, or the index is refused.
+ * `index.bin` rebuilt with [buildIndex], each filter read as [read] says, and the [GenerationFiles] built under the
+ * derived names; null when a blob is missing or does not re-hash, a filter does not read (decode, or its coverage, per
+ * [read]), or the index is refused. The adopt scan reads each filter whole ([FilterRead.WHOLE], the default), since it
+ * writes `updater.json` and flips the pointer before anything is prepared; [load] reads coverage alone.
  *
  * An install's load-back passes [index] and [format], which it built in step 2 from the same records and the same
  * bytes, re-hashed here, so the install decodes its filters once beside that build (spec §6.5: "keeping the `index.bin`
@@ -126,13 +128,21 @@ internal fun StoreLayout.loadFiles(
     generation: StoredGeneration,
     index: ByteArray? = null,
     format: FilterFormat? = null,
+    read: FilterRead = FilterRead.WHOLE,
 ): LoadedGeneration? {
     require((index == null) == (format == null)) { "the index and the format are given together" }
     val bodies = LinkedHashMap<String, ByteArray>()
     for (p in generation.placed) bodies[p.record.id] = readBlob(generation.sha256(p)) ?: return null
     val built =
         index
-            ?: when (val build = buildIndex(generation.placed.map { it.record }, channel) { bodies.getValue(it.id) }) {
+            ?: when (
+                val build =
+                    buildIndex(
+                        generation.placed.map { it.record },
+                        channel,
+                        read,
+                    ) { bodies.getValue(it.id) }
+            ) {
                 is IndexBuild.Built -> build.index
                 is IndexBuild.Refused -> return null
             }
@@ -156,8 +166,9 @@ internal fun StoreLayout.loadFiles(
 }
 
 /**
- * Load (spec §6.5), steps 1 to 4, for the generation file [name]: one function for the `start()` recovery chain and the
- * adopt scan. A failure is the caller's to count, once.
+ * Load (spec §6.5), steps 1 to 4, for the generation file [name], as the `start()` recovery chain serves it: step 4 reads
+ * each filter's coverage alone ([FilterRead.COVERAGE]), so a filter is decoded once, by the `prepare` that follows,
+ * which fails the serve when one does not decode. A failure is the caller's to count, once.
  */
 internal fun StoreLayout.load(name: String): GenerationLoad {
     val generation =
@@ -172,7 +183,8 @@ internal fun StoreLayout.load(name: String): GenerationLoad {
             is StoreRead.Found -> read.value
         }
     val loaded =
-        loadFiles(generation) ?: return GenerationLoad.Failed(false, "a blob of $name is missing or does not decode")
+        loadFiles(generation, read = FilterRead.COVERAGE)
+            ?: return GenerationLoad.Failed(false, "a blob of $name is missing or its coverage does not read")
     return GenerationLoad.Loaded(loaded)
 }
 

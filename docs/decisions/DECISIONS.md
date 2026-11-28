@@ -711,6 +711,34 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     `ServerVerifier::new` reads only `index.bin`'s header and fails only on `NoData` (`rustls-upki/src/lib.rs:70-75`),
     and a damaged filter fails each check as a hard error (`index.rs:311-323`, `lib.rs:132-136`). Firefox drops a
     filter that does not decode with no log (CS:527-532) and answers `STATE_NO_FILTER` (CS:557-563).
+- 2026-11-28 (maintainer, #333): `start()`'s load after the store switch, measured on ART and brought down. upki is
+  v1.0.1 `9821cce`; Firefox is main `86c8e13` (CS = `security/manager/ssl/cert_storage/src/lib.rs`).
+  - **Load reads coverage alone (B27, fallback (a) of design note §16):** on an API 31 arm64 emulator, #287's Load,
+    which decoded every filter for `buildIndex` and again in `prepare`, ran 86 ms cold and 360 ms interpreted on
+    `compat` and 112 and 621 ms on `default` (the 2026-11-27 measurement: 91, 370, 113 and 631; before #287 61, 199,
+    76 and 338), over §6.4's estimate. Load at `start()` now reads each filter's coverage alone, the first field after
+    the 2-byte prefix in v3 and v4, through a coverage-only read in revokt-clubcard's Apache glue that reuses the
+    port's v4 `CRLiteCoverage` reader and the v3 reader's coverage map, so no MPL file changes. It has its own Jazzer
+    target, `ClubcardCoverageFuzzTest`, differential against the whole decode. `prepare` is the one decode; a body
+    that does not decode past its coverage fails there, in the `Failed` arm `serveStored` already had, and the chain
+    falls down as for a failed load. The result, the same shapes measured interleaved with the old Load: `compat` 73
+    ms cold, 28 warm, 190 interpreted; `default` 86, 51 and 332. §6.4's load columns are these numbers, labelled
+    emulator lower bounds. HotSpot's JIT total drops from 25 to 18 ms on `compat` and 43 to 31 ms on `default`
+    (`StoreLoadTimeTest`). Fallback (b), storing `index.bin` as a blob the generation file names, was not taken, so
+    `index.bin` stays derived. upki persists an unhashed `index.bin` built by fully decoding each filter at fetch
+    (`Index::write`, `index.rs:156-235`; `PlanStep::SaveIndex`, `fetch.rs:337-376`) and has no start load:
+    `Store::check` (`mod.rs:75-78`) reopens `index.bin` per check, reads its header (`index.rs:69-150`) and decodes
+    only the filters that match (`index.rs:245-350`). Firefox keeps no index: `Filter::load` decodes each filter once
+    (CS:132-149) and reads coverage from the decoded filter at query time (`in_universe(clubcard.universe())`,
+    CS:151-178), loading the full filter at database open (CS:247, 520-533) and the deltas on a background queue
+    (`BackgroundReadDeltasTask`, CS:1084-1135, 1152-1167); its per-filter SHA-256 is for reporting only
+    (`get_crlite_filter_hashes`, CS:335).
+  - **The adopt scan and installs decode whole (B27, adopt scan (i)):** the adopt scan writes `updater.json` and flips
+    `current` before anything is prepared, so it keeps the whole-decode `buildIndex` and never adopts a generation
+    `prepare` would refuse. Installs (sync, seed, heal) keep it too, so this binary never writes a generation whose
+    filter does not decode; such a filter fails a sync with `FILTER_UNREADABLE`, and a seed with `SEED_UNREADABLE`,
+    before the generation file is written, as upki builds its `index.bin` only from filters it has fully decoded
+    (`index.rs:156-235`).
 - 2026-11-28 (maintainer, #354): the 0.3 scope of the trust manager, sync and state, D1 to D7 of #354, which #356 to
   #362 build. upki is `9821cce`, where the `rustls-upki/src/lib.rs` and `upki/src/revocation/mod.rs` line numbers
   below were checked for this entry. The Firefox points marked "fetch summary" come from summaries of mozilla-central's

@@ -194,6 +194,19 @@ internal class CrliteSyncFailureTest : CrliteSyncFixture() {
     }
 
     @Test
+    fun `an install decodes every filter whole, so one whose coverage alone reads is FILTER_UNREADABLE, unwritten`() {
+        // §6.5: only Load at start() reads coverage alone; the install's buildIndex refuses before any generation file.
+        val body = UpdateFixtures.v4(listOf(log(2) to (1L to 2L))) + byteArrayOf(0)
+        val bad = Rec("d2", true, delta.effectiveTimestamp + 1, "d2.filter.delta", body, parent = full.id)
+        val server = Server()
+        server.records = listOf(full, delta, bad).map { it.json() }
+        server.bodies = listOf(full, delta, bad).associate { it.location to it.body }
+        sync(server).assert(SyncFailure.FILTER_UNREADABLE)
+        assertEquals(StoreRead.Absent, store.pointer())
+        assertTrue(store.generationNames().isEmpty(), "no generation file written")
+    }
+
+    @Test
     fun `a server root that fails or names a base outside allowedDomains is ATTACHMENT_BASE, nothing advanced`() {
         val roots =
             listOf<(FetchRequest) -> FetchResponse>(

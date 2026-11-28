@@ -57,7 +57,11 @@ internal object BincodeV3 {
         return Clubcard(universe, index, approxFilter, exactFilter)
     }
 
-    private fun readCoverage(buf: ByteReader): CrliteCoverage {
+    /**
+     * The coverage map, the body's first field, alone: [readClubcard] reads it first with the same checks, so the two
+     * agree on it, and [ClubcardFilters.coverage] reads only it (spec §6.5 Load).
+     */
+    fun readCoverage(buf: ByteReader): CrliteCoverage {
         val count = readCount(buf, "coverage", perItemBytes = COVERAGE_ENTRY_BYTES)
         val map = LinkedHashMap<LogId, TimestampInterval>(count.toInt())
         repeat(count.toInt()) {
