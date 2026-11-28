@@ -29,8 +29,9 @@ Certificates.
 
 > [!WARNING]
 > **revokt is not production ready.** Nothing is published to Maven Central, and the API below is a design sketch
-> that may change in any 0.x release; binary compatibility is promised from 1.0. Milestone 0.1, the engine's
-> foundations, is done. The first `Revokt` facade lands in 0.2, and the OkHttp, Ktor and Android bindings in 0.3. See the [roadmap](ROADMAP.md) for progress.
+> that may change in any 0.x release; binary compatibility is promised from 1.0. Milestones 0.1, the engine's
+> foundations, and 0.2, the first working `Revokt` facade, are built; neither is released yet. 0.3 is in progress: the
+> durable store is in, and the OkHttp, Ktor and Android bindings come next. See the [roadmap](ROADMAP.md) for progress.
 
 ## Why
 
@@ -83,8 +84,9 @@ flowchart LR
 ## Planned usage
 
 > [!NOTE]
-> This is the API the [spec](docs/spec/revokt-spec.md) (§4) designs. The storage API (`JvmStorage.directory(…)`,
-> `Revokt.Builder.storage`) exists on `main`; the rest does not yet.
+> This is the API the [spec](docs/spec/revokt-spec.md) (§4) designs. On `main`, `revokt-jsse` has
+> `Revokt.Builder`, `build()`, `validate()`, `start()`, `close()` and the storage API (`JvmStorage.directory(…)`,
+> `Revokt.Builder.storage`). The bindings, Android and the rest of this sketch are 0.3.
 
 ```kotlin
 // Gradle: the binding plus a seed for the channel, so SeedSource.bundled() finds a filter on first launch.
@@ -157,8 +159,9 @@ fetching source is configured. `start()` creates the directory (rwx------); buil
 | ✅ | Rule model, the two presets' tables and the growability contract (the public policy builder is 0.2) | 0.1 |
 | ✅ | The C2SP `index.bin` reader and writer, and `GenerationFiles` | 0.1 |
 | ✅ | `RevocationEngine` and the Kotlin engine, JSON and canonical JSON, the walker's test infrastructure | 0.1 |
-| ⏳ | Path walker, Mozilla Remote Settings with content-signature verification, in-memory updater | 0.2 |
-| ⏳ | Durable store, OkHttp and Ktor bindings, Android support, WorkManager sync | 0.3 |
+| ✅ | Path walker, Mozilla Remote Settings with content-signature verification, in-memory updater, seeds (not released yet) | 0.2 |
+| ✅ | Durable store: crash-safe, locked between processes, content-addressed | 0.3 |
+| ⏳ | OkHttp and Ktor bindings, Android support, WorkManager sync, `state` and `status()` | 0.3 |
 | ⏳ | Intermediate preloading, OneCRL, Chrome CRLSets | M2 (0.4 → 1.0) |
 | ⏳ | Certificate Transparency policy | M3 |
 | ⏳ | Per-anchor distrust | M4 |
@@ -189,9 +192,10 @@ fetching source is configured. `start()` creates the directory (rwx------); buil
 
 ## Progress
 
-0.1 is complete. Its parser's bar is a **differential oracle** (spec §9.2): every certificate is parsed by
-revokt and by independent implementations, and a disagreement that could change a revocation answer fails the build
-unless it is recorded with a written justification.
+0.1 and 0.2 are built, and 0.3's durable store is in; nothing is released yet. 0.1's parser's bar is a
+**differential oracle** (spec §9.2): every certificate is parsed by revokt and by independent implementations, and a
+disagreement that could change a revocation answer fails the build unless it is recorded with a written
+justification.
 
 - **Oracles:**
   - the JDK on 17, 21, 25 and 27;
