@@ -9,8 +9,12 @@
 # - it pins the JDK: Temurin's exact tarball, checked against its SHA-256, is the only JDK Gradle sees, because the
 #   archive's deflated bytes are that JDK's zlib's;
 # - it fetches and verifies Mozilla's cert-revocations changeset for each channel, builds and self-loads the archive,
-#   packs the jar and smoke-loads it through the public API (`smokeLoadSeed<Channel>`). In 0.2 the oldest supported
-#   engine minor is this commit's, since only the latest 0.x minor is supported and none is released yet;
+#   packs the jar and smoke-loads it through the public API, with this commit (`smokeLoadSeed<Channel>`) and with the
+#   oldest supported engine minor (`smokeLoadOldestSeed<Channel>`): the release gradle.properties names
+#   (revokt.oldestSupportedVersion), from Maven Central under dependency verification. While it names none and no vX.Y.Z
+#   tag exists, nothing is released and the oldest supported minor is this commit's; a tag it does not match, or a
+#   release that does not resolve or verify, fails the job (CONTRIBUTING §9). Both load the same jar, whose SHA-256 the
+#   publish job requires of the released asset;
 # - it reads the attestation facts out of each jar (seed_predicate.sh);
 # - it runs the monotonic freshness check against the last seed release (seed_floor.sh), whose jars it verifies again
 #   by their attestations and by Mozilla's content signature (seed_verify.sh, the engine's seed load; no network).
@@ -144,14 +148,33 @@ jobs:
         with:
           cache-disabled: true   # never a cache in release or reproducibility jobs (CONTRIBUTING §3)
           validate-wrappers: true
+      # The newest vX.Y.Z tag (only the release workflow creates one, CONTRIBUTING §9), empty when there is none: with
+      # it, checkOldestSupportedVersion tells "nothing released" from "a release gradle.properties does not name".
+      # Any API error fails the step.
+      - name: the newest code release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" --jq '.[].ref' >| "$RUNNER_TEMP/release-tags.txt"
+          newest=$(sed -n 's|^refs/tags/v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' "$RUNNER_TEMP/release-tags.txt" |
+            sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+          echo "newest=$newest" >> "$GITHUB_OUTPUT"
+          echo "the newest code release: ${newest:-none}"
       # Toolchain detection off and the one installation path: the job's JVM is the pinned JDK, never the image's
-      # own Temurin 21 (DataArtifactPlugin.jobLauncher asks for any Temurin 21).
+      # own Temurin 21 (DataArtifactPlugin.jobLauncher asks for any Temurin 21). Dependency verification strict, so no
+      # property can relax it for the oldest minor's release.
       - name: fetch, verify, build and smoke-load both channels
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          NEWEST_RELEASE: ${{ steps.release.outputs.newest }}
         run: >
           ./gradlew :revokt-seed:smokeLoadSeedCompat :revokt-seed:smokeLoadSeedDefault
+          :revokt-seed:smokeLoadOldestSeedCompat :revokt-seed:smokeLoadOldestSeedDefault
           -Prevokt.seedVersion="$VERSION"
+          -Prevokt.newestRelease="$NEWEST_RELEASE"
+          --dependency-verification=strict
           -Porg.gradle.java.installations.auto-detect=false
           -Porg.gradle.java.installations.paths="$JAVA_HOME"
           --no-daemon --no-build-cache --no-configuration-cache

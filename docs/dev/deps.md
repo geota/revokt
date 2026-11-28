@@ -31,6 +31,17 @@ command on the Renovate branch and pushes.
 
 The dependency ingress files are protected paths (CODEOWNERS).
 
+## The seed job's oldest supported release
+
+`revokt.oldestSupportedVersion` in `gradle.properties` (CONTRIBUTING §9) adds a `smokeOldest` source set to
+`:revokt-seed` that depends on `dev.revokt:revokt-jsse:<that version>` from Maven Central, and so on its revokt-engine and
+revokt-clubcard and their dependencies. The PR that sets or bumps it runs the two commands above with the property set:
+they lock the `smokeOldest*` configurations and add a SHA-256 for each `dev.revokt` artifact of that version. Once the
+release key exists, the first command also adds it as a trusted key for the `dev.revokt` group; check its fingerprint
+against `SECURITY.md` and `MAINTAINERS.md` before committing it. Nothing is trusted by pattern for `dev.revokt`, so a
+version with no entries fails the weekly job. While the property is empty the source set does not exist and nothing is
+resolved.
+
 ## Keys added after the bootstrap
 
 | Key | Owner (key server uid) | Checked against | Added |

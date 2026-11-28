@@ -57,8 +57,19 @@ own keys, never a real or Mozilla key, and its filters are the committed `corpus
 revokt-engine's `SeedCheckFixtureWriter`.
 
 **The weekly job** (`.github/workflows/release-seed.yml`, CONTRIBUTING §9). It runs every Monday at 05:41 UTC and on
-dispatch. It runs both channels' `smokeLoadSeed<Channel>` with the run's UTC date. Each jar is smoke-loaded with the
-oldest supported engine minor, which is the run's own commit until a minor is released.
+dispatch. It runs both channels' `smokeLoadSeed<Channel>` and `smokeLoadOldestSeed<Channel>` with the run's UTC date.
+The second smoke-loads each jar with the oldest supported engine minor. `revokt.oldestSupportedVersion` in
+`gradle.properties` names that minor's release, and the smoke sources are then compiled and run against
+`dev.revokt:revokt-jsse:<that version>` from Maven Central, under dependency verification, with the jar alone. While it
+is empty, nothing is released, so the oldest supported minor is the run's own commit and the task is
+`smokeLoadSeed<Channel>`. The job passes the newest `vX.Y.Z` tag as `-Prevokt.newestRelease`, and
+`checkOldestSupportedVersion` fails the run when a release exists that the property does not name, or names a minor no
+longer supported. A named release that does not resolve or verify fails the run too; neither falls back to the run's
+commit.
+
+```
+./gradlew :revokt-seed:smokeLoadOldestSeedCompat -Prevokt.newestRelease= -Prevokt.seedVersion=YYYY.MM.DD   # empty: no release yet
+```
 
 The job then refuses a seed whose signed `<ts>` is older than the last seed release's for that channel. That release's
 jar must verify by its attestation, and again by Mozilla's content signature. `seedTimestamp<Channel>` checks only what

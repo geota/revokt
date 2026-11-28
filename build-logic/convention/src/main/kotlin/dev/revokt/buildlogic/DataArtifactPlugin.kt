@@ -68,7 +68,13 @@ abstract class SeedTimestampExec : JavaExec() {
  * - `seedJar<Channel>`: the jar an app bundles, holding that archive, stored, as `revokt/seed-<channel>.zip`, the
  *   data licence text as `META-INF/LICENSE-DATA` and in the manifest, and nothing else;
  * - `verifySeedJar<Channel>` ([VerifySeedJarTask]) and `smokeLoadSeed<Channel>`, which starts a `Revokt` on the jar
- *   alone through the public builder (the sole-seed `ENFORCE` configuration, so an unreadable seed throws).
+ *   alone through the public builder (the sole-seed `ENFORCE` configuration, so an unreadable seed throws);
+ * - `smokeLoadOldestSeed<Channel>`: the same smoke load with the oldest supported engine minor ([OldestSupported]).
+ *   While `gradle.properties` names that minor's release, the `smoke` sources are compiled again, as the `smokeOldest`
+ *   source set, against that release's revokt-jsse from Maven Central, under dependency verification, and run on its
+ *   class path and the jar alone. While it names none, the task is `smokeLoadSeed<Channel>`: nothing is released, so the
+ *   oldest supported minor is this commit's. Both depend on `checkOldestSupportedVersion`
+ *   ([CheckOldestSupportedTask]), which fails when a release exists that the property does not name.
  * - `seedTimestamp<Channel>` (#308): the weekly job's floor check re-verifies the content signature of the last
  *   released seed jar, `-Prevokt.seedJar=<absolute path>`, under Mozilla's pins with the x5u valid at its signed
  *   `<ts>` (the engine's `verifySeedSignature`), and writes that `<ts>` to `-Prevokt.seedTimestampOut=<file>`
@@ -92,6 +98,21 @@ class DataArtifactPlugin : Plugin<Project> {
         }
         val sourceSets = extensions.getByType<SourceSetContainer>()
         val smoke = sourceSets.create("smoke")
+        // The oldest supported minor's release, when gradle.properties names one: the smoke sources again, compiled and
+        // run against it. A malformed value fails every build, so it never reaches a release job.
+        val oldestVersion = providers.gradleProperty(OldestSupported.PROPERTY).getOrElse("").trim()
+        if (oldestVersion.isNotEmpty() && OldestSupported.parse(oldestVersion) == null) {
+            throw GradleException("${OldestSupported.PROPERTY}='$oldestVersion' in gradle.properties is not an X.Y.Z version.")
+        }
+        val smokeOldest =
+            if (oldestVersion.isEmpty()) {
+                null
+            } else {
+                sourceSets.create(SMOKE_OLDEST).also { set ->
+                    extensions.getByType<KotlinJvmProjectExtension>().sourceSets.getByName(set.name).kotlin.srcDir("src/smoke/kotlin")
+                    dependencies.add(set.implementationConfigurationName, "${OldestSupported.MODULE}:$oldestVersion")
+                }
+            }
 
         // The job's entry and its check-path test call the engine's internals: friends of revokt-engine's jvm classes, exactly
         // as they sit on each compile classpath (the KGP mechanism a test compilation uses for its main).
@@ -117,7 +138,15 @@ class DataArtifactPlugin : Plugin<Project> {
             baseline = null
         }
         tasks.named("check") {
-            dependsOn(tasks.withType<Detekt>().matching { !it.name.startsWith("detektBaseline") && it.name != "detektGenerateConfig" })
+            dependsOn(
+                tasks.withType<Detekt>().matching {
+                    !it.name.startsWith("detektBaseline") && it.name != "detektGenerateConfig" && !it.name.endsWith(SMOKE_OLDEST_SUFFIX)
+                },
+            )
+        }
+        // The smokeOldest sources are the smoke ones, linted there; its detekt would also resolve the release in check.
+        tasks.named { (it.startsWith("detekt") && it.endsWith(SMOKE_OLDEST_SUFFIX)) || "${SMOKE_OLDEST_SUFFIX}SourceSet" in it }.configureEach {
+            enabled = false
         }
         dependencies {
             "detektPlugins"(Conventions.DETEKT_RULES)
@@ -139,6 +168,18 @@ class DataArtifactPlugin : Plugin<Project> {
                 description = "Writes the data licence text (spec §3) that every seed jar carries as ${DataArtifacts.LICENSE_ENTRY}."
                 output.set(layout.buildDirectory.file("data-license/${DataArtifacts.LICENSE_ENTRY.substringAfterLast('/')}"))
             }
+
+        val guard =
+            tasks.register<CheckOldestSupportedTask>("checkOldestSupportedVersion") {
+                description = "Fails unless ${OldestSupported.PROPERTY} names the oldest supported minor's release, given the newest " +
+                    "release tag (-P${OldestSupported.NEWEST_RELEASE_PROPERTY})."
+                group = "revokt"
+                oldest.set(oldestVersion)
+                newest.set(providers.gradleProperty(OldestSupported.NEWEST_RELEASE_PROPERTY))
+            }
+        if (smokeOldest != null) {
+            tasks.named(smokeOldest.getCompileTaskName("kotlin")) { dependsOn(guard) }
+        }
 
         for (channel in DataArtifacts.CHANNELS) {
             val suffix = channel.replaceFirstChar { it.uppercase() }
@@ -164,18 +205,40 @@ class DataArtifactPlugin : Plugin<Project> {
                     outputs.upToDateWhen { false }
                     outputs.cacheIf { false }
                     notCompatibleWithConfigurationCache("fetches from the network at execution; never cached")
+                    // A release the property does not name fails the job before it fetches anything.
+                    mustRunAfter(guard)
                 }
             val jar = seedJar("seedJar$suffix", channel, write.flatMap { it.archive }, licence, jarVersion, "seed")
             val verify = verifySeedJar("verifySeedJar$suffix", channel, jar, write.flatMap { it.archive })
-            tasks.register<JavaExec>("smokeLoadSeed$suffix") {
-                description = "Starts a Revokt on the $channel seed jar alone, through the public builder, under Mozilla's pins."
-                group = "revokt"
-                dependsOn(verify)
-                javaLauncher.set(launcher)
-                classpath = smoke.runtimeClasspath + files(jar)
-                mainClass.set(SMOKE_MAIN)
-                args("--channel", channel)
-                notCompatibleWithConfigurationCache("runs after the network write")
+            val sameCommit =
+                tasks.register<JavaExec>("smokeLoadSeed$suffix") {
+                    description = "Starts a Revokt on the $channel seed jar alone, through the public builder, under Mozilla's pins."
+                    group = "revokt"
+                    dependsOn(verify)
+                    javaLauncher.set(launcher)
+                    classpath = smoke.runtimeClasspath + files(jar)
+                    mainClass.set(SMOKE_MAIN)
+                    args("--channel", channel)
+                    notCompatibleWithConfigurationCache("runs after the network write")
+                }
+            if (smokeOldest == null) {
+                tasks.register("smokeLoadOldestSeed$suffix") {
+                    description = "No engine minor is released, so the oldest supported one is this commit's: smokeLoadSeed$suffix."
+                    group = "revokt"
+                    dependsOn(guard, sameCommit)
+                }
+            } else {
+                tasks.register<JavaExec>("smokeLoadOldestSeed$suffix") {
+                    description = "Starts a Revokt on the $channel seed jar alone with ${OldestSupported.MODULE}:$oldestVersion " +
+                        "from Maven Central, through its public builder, under Mozilla's pins."
+                    group = "revokt"
+                    dependsOn(guard, verify)
+                    javaLauncher.set(launcher)
+                    classpath = smokeOldest.runtimeClasspath + files(jar)
+                    mainClass.set(SMOKE_MAIN)
+                    args("--channel", channel)
+                    notCompatibleWithConfigurationCache("runs after the network write")
+                }
             }
             tasks.register<SeedTimestampExec>("seedTimestamp$suffix") {
                 description = "Re-verifies a released $channel seed jar (-P${DataArtifacts.SEED_JAR_PROPERTY}) under Mozilla's pins and writes its signed <ts>."
@@ -340,6 +403,10 @@ class DataArtifactPlugin : Plugin<Project> {
         const val SMOKE_MAIN = "dev.revokt.seed.smoke.SmokeLoadKt"
         const val TEST_SMOKE_MAIN = "dev.revokt.seed.smoke.TestPinSmokeLoad"
         const val TIMESTAMP_MAIN = "dev.revokt.seed.SeedTimestampMain"
+
+        /** The source set of the oldest supported minor's smoke load: the `smoke` sources against that release. */
+        const val SMOKE_OLDEST = "smokeOldest"
+        const val SMOKE_OLDEST_SUFFIX = "SmokeOldest"
 
         /** The jars' version without `-Prevokt.seedVersion`: only the network tasks, which refuse to run, need one. */
         const val UNSET_VERSION = "unset"

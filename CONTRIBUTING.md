@@ -710,6 +710,13 @@ PGP fingerprint, a Gradle `trusted-key` snippet, `gh attestation verify`).
   starts afresh only in the PR whose base is on the previous major, so changes a new major makes to the fixture go in the
   PR that bumps the major. The same PR sets `PolicyTable.CURRENT_MINOR` (revokt-engine) to the new `major.minor`: the
   `flippedIn` grace rules read it, and `RevoktPolicyTest` fails while the two disagree.
+- **The oldest supported release** is `revokt.oldestSupportedVersion` in `gradle.properties`: the `X.Y.Z` of the
+  oldest supported minor's newest release, which the weekly seed job smoke-loads with, empty until the first release.
+  It is the one place that names it: STRICT locking and dependency verification name the exact version anyway, so a
+  tag-derived version would still need a commit for each release. Set it in a `chore(release)` PR once a release is
+  on Maven Central, and in that PR run `docs/dev/deps.md`'s commands for its lockfile and verification entries. After
+  the first release, or in `0.x` a new minor's, the weekly job fails until that PR merges, by design: the tag says a
+  release exists. After a patch release it keeps loading with the earlier patch of the same minor until then.
 - **Release workflow** (never by hand): `workflow_dispatch` by a maintainer on `main` → build on the pinned
   toolchain → `apiCheck` and the golden-fixture diff rule (§4 growability) → reproducible-build check → SBOM →
   **`release` environment**, whose required reviewers are both maintainers with "Prevent self-review" on
@@ -741,8 +748,14 @@ PGP fingerprint, a Gradle `trusted-key` snippet, `gh attestation verify`).
     - it installs the pinned Temurin 21 build from its tarball, checked against a SHA-256 in the workflow, with
       Gradle's toolchain detection off, since the archive bytes are that JDK's (§6.5);
     - it verifies Mozilla's content signature before packaging (§7.1 verification, §6.5 archive layout);
-    - it smoke-loads each jar through the public API with the oldest supported engine minor. Until a minor is
-      released, that is the run's own commit, as only the latest `0.x` minor is supported;
+    - it smoke-loads each jar through the public API with the run's own commit and with the oldest supported engine
+      minor (`smokeLoadSeed<Channel>`, `smokeLoadOldestSeed<Channel>`). For the second, the smoke sources are compiled
+      and run against `dev.revokt:revokt-jsse:<revokt.oldestSupportedVersion>` from Maven Central, under dependency
+      verification, with the jar alone. Until a minor is released, the property is empty and the oldest supported minor
+      is the run's own commit, as only the latest `0.x` minor is supported. The job passes the newest `vX.Y.Z` tag
+      (`-Prevokt.newestRelease`), and fails when a release exists that the property does not name, when it names a
+      version not released, or, in `0.x`, a release of an older minor; a named release that does not resolve or verify
+      fails it too, never falling back to the run's commit. The publish job's SHA-256 check covers the jar both loaded;
     - it refuses a seed whose signed `<ts>` is older than the last seed release's for that channel (§7.2). That
       release's jar must verify by its attestation, as this workflow's on `main`, and again by Mozilla's content
       signature (`seed_verify.sh`, `:revokt-seed:seedTimestamp<Channel>`: the engine's format-independent

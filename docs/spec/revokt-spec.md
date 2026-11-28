@@ -1659,7 +1659,12 @@ where Firefox imports the older changeset; `SeedSignatureTest`, `SeedTimestampTe
 `FloorTest`),
 weekly, attested, not in the BOM, no build-time plugin for a consumer (`data-artifact` is
 revokt's own build's): a jar holding only the manifest, `META-INF/LICENSE-DATA` and the stored
-`/revokt/seed-<channel>.zip` (`DataArtifactPluginFunctionalTest`). **In 0.2 a seed is a GitHub release asset with
+`/revokt/seed-<channel>.zip` (`DataArtifactPluginFunctionalTest`). Before a release the weekly job smoke-loads each
+jar alone through the public API, in the sole-seed `ENFORCE` configuration, with its own commit and with the oldest
+supported minor: that minor's `revokt-jsse` release from Maven Central under dependency verification, or the job's own
+commit while no minor is released. A release the build does not name as the oldest supported one, or one that does not
+resolve or verify, fails the job; it never falls back to the job's commit (`OldestSupportedTest`,
+`DataArtifactPluginFunctionalTest`). **In 0.2 a seed is a GitHub release asset with
 attestations, not on Maven Central** (the maintainer's decision, 2026-11-23): an app bundles the jar itself, and Maven
 publishing, with its separate namespace and Portal account, is a later decision. **Freshness per dataset** (`Freshness`, reported on `DataState`; a dataset's value joins the enum with the dataset): CRLite ages from the filter
 record's `last_modified`; OneCRL and intermediates (M2) age from the last **verified poll**, since
