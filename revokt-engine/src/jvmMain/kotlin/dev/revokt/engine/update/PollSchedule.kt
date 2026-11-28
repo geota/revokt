@@ -14,8 +14,11 @@ import kotlin.random.Random
  * once ([delayMillis]) and waits it on its monotonic timer.
  *
  * After a sync that started at `now`:
- * - it wrote no `updater.json` (its read or its write threw, or the store read the start task left unresolved is still
- *   unresolved): `now + 15 min`, the first failure backoff, held in memory only, since nothing persisted says more;
+ * - it wrote no `updater.json` (its read or its write threw): `now + 15 min`, the first failure backoff, held in memory
+ *   only, since nothing persisted says more;
+ * - the store read the start task left unresolved is still unresolved: the computed failure backoff after the
+ *   consecutive re-reads that left it so ([unresolvedRetryAtMillis]), 15 min doubled per re-read up to 6 h, held in
+ *   memory only;
  * - `FAILED`: the source's `backoffUntilMillis` as the sync wrote it (the server's `Backoff`/`Retry-After` when sent,
  *   else 15 min × 2^(n − 1) up to 6 h, #131), exact, with no jitter;
  * - `SKIPPED` with `BACKOFF`: the persisted `backoffUntilMillis` it honoured;
@@ -55,6 +58,16 @@ internal object PollSchedule {
 
     /** The wait for a sync that ran nothing (no record to read a backoff from): the first failure backoff, 15 min. */
     fun retryAtMillis(nowMillis: Long): Long = saturatingAdd(nowMillis, UpdaterTransitions.FIRST_FAILURE_BACKOFF_MILLIS)
+
+    /**
+     * The wait after the [reReads]-th consecutive re-read (at least 1) of a store read that stays unresolved (spec §5.1
+     * "The sync schedule"): §7.1's computed failure backoff, 15 min doubled per re-read up to the 6 h poll interval.
+     * Firefox retries a sync whose local read threw at its next 24 h poll; upki keeps no retry of its own.
+     */
+    fun unresolvedRetryAtMillis(
+        nowMillis: Long,
+        reReads: Int,
+    ): Long = saturatingAdd(nowMillis, UpdaterTransitions.failureBackoffMillis(reReads))
 
     /** The jitter: uniform in `[0, POLL_JITTER)`. */
     fun jitterMillis(random: Random): Long = random.nextLong(RevoktLimits.POLL_JITTER)
