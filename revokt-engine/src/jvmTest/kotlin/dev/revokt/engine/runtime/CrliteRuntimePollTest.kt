@@ -9,6 +9,7 @@ import dev.revokt.CrliteChannel
 import dev.revokt.CrliteQuery
 import dev.revokt.CrliteQueryResult
 import dev.revokt.Dataset
+import dev.revokt.DiagnosticCode
 import dev.revokt.EvaluationRequest
 import dev.revokt.EvaluatorRig
 import dev.revokt.LogLevel
@@ -60,6 +61,7 @@ internal class CrliteRuntimePollTest : SeedFixture() {
         seed: SeedSource?,
         server: Server,
         engine: RevocationEngine = TestEngine(),
+        policy: RevoktPolicy = RevoktPolicy.DEFAULT,
     ): CrliteRuntime =
         CrliteRuntime(
             seed = seed,
@@ -68,7 +70,7 @@ internal class CrliteRuntimePollTest : SeedFixture() {
             fetchingSource = true,
             engine = engine,
             verifier = verifier,
-            policy = RevoktPolicy.DEFAULT,
+            policy = policy,
             pinnedRootSpkis = pinned,
             storage = storage,
             logger = logger,
@@ -225,7 +227,7 @@ internal class CrliteRuntimePollTest : SeedFixture() {
     }
 
     @Test
-    fun `while the store read stays unresolved nothing is fetched or written and the next try is in 15 min`() {
+    fun `while the store read stays unresolved nothing is fetched or written and the first retry is in 15 min`() {
         installedAt(ts)
         reset(keepStore = true)
         storage.failRead = { name -> if (name == pointerKey) IOException("the generation read") else null }
@@ -241,12 +243,70 @@ internal class CrliteRuntimePollTest : SeedFixture() {
         assertEquals(now + 15 * minute, next)
         assertFalse(runtime.crlite().pending)
         assertNull(runtime.crlite().generationId)
-        // A later sync re-reads again, and syncs once the read resolves.
-        assertEquals(now + 2 * hour + 15 * minute, runtime.sync(now + 2 * hour))
+        // A later sync re-reads again, after the second re-read's backoff, and syncs once the read resolves.
+        assertEquals(now + 2 * hour + 30 * minute, runtime.sync(now + 2 * hour))
         storage.failRead = { null }
         runtime.sync(now + 3 * hour)
         assertFalse(runtime.storeReadUnresolved)
         assertTrue(server.fetcher.requests.any { it.url == monitor })
+    }
+
+    @Test
+    fun `each unresolved re-read waits the failure backoff, up to 6 h, reset once the read resolves`() {
+        installedAt(ts)
+        reset(keepStore = true)
+        var failing = true
+        var pointerReads = 0
+        storage.failRead = { name ->
+            if (name == pointerKey) pointerReads++
+            if (failing && name == pointerKey) IOException("the generation read") else null
+        }
+        val server = Server(ts = ts + 30 * minute)
+        val runtime = runtime(null, server)
+        var now = ts + hour
+        // The start task's read, then its first sync's re-read: the first re-read waits 15 min.
+        assertEquals(now + 15 * minute, runtime.startTask(loadSeed = false) { now })
+        assertEquals(2, pointerReads)
+        val waits = mutableListOf<Long>()
+        repeat(7) {
+            val at = runtime.sync(now)
+            waits += (at - now) / minute
+            now = at
+        }
+        assertEquals(listOf(30L, 60, 120, 240, 360, 360, 360), waits, "15 min doubled per re-read, capped at 6 h")
+        assertEquals(9, pointerReads, "every retry still re-reads the store")
+        assertTrue(server.fetcher.requests.isEmpty(), "no sync while unresolved")
+        failing = false
+        runtime.sync(now)
+        assertFalse(runtime.storeReadUnresolved)
+        assertTrue(server.fetcher.requests.any { it.url == monitor }, "the sync runs once it resolves")
+        // A read left unresolved again backs off from 15 min, not from where the last one stopped.
+        failing = true
+        reset(keepStore = true)
+        assertEquals(now + 15 * minute, runtime.startTask(loadSeed = false) { now })
+        assertTrue(runtime.storeReadUnresolved)
+    }
+
+    @Test
+    fun `a restart serving a stored synced generation reports no SEED_PAST_REJECT_THRESHOLD`() {
+        installedAt(ts)
+        reset(keepStore = true)
+        val server = Server(ts = ts + 30 * minute)
+        val first = runtime(null, server)
+        first.startTask(loadSeed = false) { ts + hour }
+        assertEquals("${ts + 30 * minute}/${delta.id}", first.crlite().generationId)
+        assertFalse(first.crlite().fromSeed)
+        reset(keepStore = true)
+        recording.messages.clear()
+        val past = ts + 31 * 24 * hour
+        val restart = runtime(null, Server(ts = ts + 30 * minute), policy = RevoktPolicy.STRICT)
+        restart.startTask(loadSeed = false) { past }
+        assertEquals("${ts + 30 * minute}/${delta.id}", restart.crlite().generationId)
+        assertEquals(
+            emptyList(),
+            restart.diagnostics(past).filter { it.code == DiagnosticCode.SEED_PAST_REJECT_THRESHOLD },
+        )
+        assertTrue(recording.messages.none { "SEED_PAST_REJECT_THRESHOLD" in it.second }, "${recording.messages}")
     }
 
     @Test

@@ -7,6 +7,8 @@ package dev.revokt.engine.runtime
 
 import dev.revokt.CrliteChannel
 import dev.revokt.Dataset
+import dev.revokt.DiagnosticCode
+import dev.revokt.LogLevel
 import dev.revokt.RevoktPolicy
 import dev.revokt.SeedSource
 import dev.revokt.engine.generation.DatasetGeneration
@@ -40,6 +42,7 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
         seed: SeedSource?,
         engine: TestEngine = TestEngine(),
         fetchingSource: Boolean = false,
+        policy: RevoktPolicy = RevoktPolicy.DEFAULT,
     ): CrliteRuntime =
         CrliteRuntime(
             seed = seed,
@@ -48,7 +51,7 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
             fetchingSource = fetchingSource,
             engine = engine,
             verifier = verifier,
-            policy = RevoktPolicy.DEFAULT,
+            policy = policy,
             pinnedRootSpkis = pinned,
             storage = storage,
             logger = logger,
@@ -412,6 +415,72 @@ internal class CrliteRuntimeStartTest : SeedFixture() {
         assertFalse(runtime.storeReadUnresolved)
         // spec §5.1: a damaged pointer is a counted store failure only; STORE_UNREADABLE means the in-memory fallback.
         assertEquals(emptyList(), recording.messages.filter { "STORE_UNREADABLE" in it.second || "SEED_" in it.second })
+    }
+
+    @Test
+    fun `a restart serving a stored seed generation past rejectStaleAfter reports SEED_PAST_REJECT_THRESHOLD`() {
+        installedAt(ts)
+        val past = ts + 31 * 24 * hour
+        for (seed in listOf(null, source(Seed()))) {
+            reset(keepStore = true)
+            recording.messages.clear()
+            val engine = TestEngine()
+            val runtime = runtime(seed, engine, policy = RevoktPolicy.STRICT)
+            runtime.startTask(runtime.startSeed(soleSeed = false, nowMillis = past)) { past }
+            // The stored seed generation is served, not the seed re-installed: a restart is a first start (spec §4).
+            assertEquals(listOf(seedId()), engine.prepared)
+            assertTrue(runtime.crlite().fromSeed)
+            val fired = runtime.diagnostics(past).single { it.code == DiagnosticCode.SEED_PAST_REJECT_THRESHOLD }
+            assertEquals(Dataset.CRLITE, fired.dataset)
+            assertTrue(
+                recording.messages.any { (level, m) -> level == LogLevel.WARN && "SEED_PAST_REJECT_THRESHOLD" in m },
+                "logged, since the start task may end after start() returned: ${recording.messages}",
+            )
+            assertEquals(
+                emptyList(),
+                runtime.diagnostics(ts + hour).filter { it.code == DiagnosticCode.SEED_PAST_REJECT_THRESHOLD },
+                "measured from the stored generation's signed ts",
+            )
+        }
+    }
+
+    @Test
+    fun `a sole-seed start whose live fails step 3 beside a seed that does not verify logs SEED_UNREADABLE`() {
+        val live = withExtra(ts + hour)
+        rotExtra()
+        reset(keepStore = true)
+        recording.messages.clear()
+        val engine = TestEngine()
+        val runtime = runtime(source(Seed().apply { signature = "not base64url!" }), engine)
+        // Load's steps 1 and 2 pass on the calling thread, so start() does not throw (B5) ...
+        assertTrue(runtime.startSeed(soleSeed = true, nowMillis = now), "the start task still has work")
+        runtime.startTask(true) { now }
+        // ... and the start task ends with nothing served, which is said loudly, once.
+        assertEquals(null, runtime.crlite().generationId)
+        assertFalse(runtime.crlite().pending)
+        assertEquals(emptyList(), engine.prepared)
+        val errors = recording.messages.filter { it.first == LogLevel.ERROR }.map { it.second }
+        assertEquals(1, errors.count { "SEED_UNREADABLE" in it && "NO_DATA" in it }, "$errors")
+        assertTrue(live in store.generationNames(), "nothing deleted")
+        // Outside the sole-seed configuration the same start logs no ERROR.
+        reset(keepStore = true)
+        recording.messages.clear()
+        val other = runtime(source(Seed().apply { signature = "not base64url!" }))
+        start(other)
+        assertEquals(null, other.crlite().generationId)
+        assertEquals(emptyList(), recording.messages.filter { it.first == LogLevel.ERROR })
+    }
+
+    @Test
+    fun `a sole-seed start that serves its stored live logs no SEED_UNREADABLE`() {
+        installedAt(ts)
+        reset(keepStore = true)
+        recording.messages.clear()
+        val runtime = runtime(source(Seed(ts = ts - hour)))
+        assertTrue(runtime.startSeed(soleSeed = true, nowMillis = now))
+        runtime.startTask(true) { now }
+        assertEquals(seedId(), runtime.crlite().generationId)
+        assertEquals(emptyList(), recording.messages.filter { it.first == LogLevel.ERROR })
     }
 
     @Test

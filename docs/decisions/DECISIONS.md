@@ -676,3 +676,34 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   revisit at Kotlin 2.5. The stale 6.7.3 and Kotlin 2.4.0 verification entries are pruned, after a regeneration from
   empty on both versions. 9.9.2's embedded Kotlin 2.4.21 also removes the Kotlin 2.4.0 behind Dependabot alert #1,
   which #275's constraint had already fixed.
+- 2026-11-27 (maintainer, #338, PR #PRNUM): the start chain's three follow-ups from #336's review, each as the builder
+  recommended. upki is `9821cce`; Firefox is `cac25a6` (CS = `security/manager/ssl/cert_storage/src/lib.rs`, RSC =
+  `services/settings/RemoteSettingsClient.sys.mjs`).
+  - **A restart is a first start for the seed's age (B24):** when the recovery chain serves a stored `fromSeed`
+    generation, its signed `<ts>` becomes the seed's for `SEED_PAST_REJECT_THRESHOLD`, which `start()` returns and the
+    loader logs, as for a seed this start installed. A stored synced generation does not trigger it; `STALE` covers it.
+    Firefox checks CRLite's freshness on every query against the stored time of its last update (`is_crlite_fresh`,
+    CS:464-483, 10 days), so a restart behaves as a first start, and it has no start-up diagnostic. upki has no age
+    rule and logs the manifest's `generated_at` at `INFO` (`upki/src/revocation/mod.rs:124-141`).
+  - **The unresolved re-read backs off (B25):** while the start task's store read stays unresolved, each sync's re-read
+    that leaves it so waits §7.1's computed failure backoff over the consecutive re-reads, 15 min doubled up to 6 h,
+    held in memory and reset once the read resolves. Every retry is still a full re-read, and nothing is remembered
+    between them, so no candidate is skipped on remembered state. Remembering the failures was rejected: a blob that a
+    failed seed install rewrote, or an engine refusal that was transient, would then fall to the seed, whose install
+    lowers the floor (B19). It does not wait for #333: it bounds the number of re-reads, not their cost. The trade:
+    nothing is live while the read is unresolved, so `NO_DATA` rejects, and a transient fault heals up to the current
+    wait later (at most 6 h; a restart re-reads at once). Firefox reopens a cert_storage database that fails to open on
+    every query (`get_security_state!`, CS:1288-1300), decodes a filter once per open (CS:216-250, 521-533) and never
+    retries one that fails to decode until the next download (CS:527-532); its sync, whose local read throws, fails
+    (RSC:743-751) and is retried at the next 24 h poll. upki keeps no retry state and re-reads the index and every
+    filter it consults on each check (`index.rs:69-155`, 311-323).
+  - **The sole-seed `ENFORCE` cost stays (B26, B5):** a `live` that passes Load's steps 1 and 2 on the calling thread
+    but fails step 3 or 4 on the loader, beside a seed that does not install, leaves no generation after `start()`
+    returned. The start task logs one `ERROR` naming `SEED_UNREADABLE` and `NO_DATA`. With 0.3's `state` it is
+    `SEED_UNREADABLE` on `RevoktState.warnings` beside `generationId == null` and `pending == false`, the triple
+    `NO_DATA_AT_FLIP` already reads, so no new code value. With a fetching source the first sync installs the collection
+    and heals it. Reading steps 3 and 4 on the calling thread (undoing B5 and B16) and a JVM `start()` that throws after
+    its join (after the flip, and Android does not join) were rejected. upki matches: `rustls-upki`'s
+    `ServerVerifier::new` reads only `index.bin`'s header and fails only on `NoData` (`rustls-upki/src/lib.rs:70-75`),
+    and a damaged filter fails each check as a hard error (`index.rs:311-323`, `lib.rs:132-136`). Firefox drops a
+    filter that does not decode with no log (CS:527-532) and answers `STATE_NO_FILTER` (CS:557-563).
