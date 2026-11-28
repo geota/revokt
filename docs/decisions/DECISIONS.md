@@ -711,3 +711,51 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     `ServerVerifier::new` reads only `index.bin`'s header and fails only on `NoData` (`rustls-upki/src/lib.rs:70-75`),
     and a damaged filter fails each check as a hard error (`index.rs:311-323`, `lib.rs:132-136`). Firefox drops a
     filter that does not decode with no log (CS:527-532) and answers `STATE_NO_FILTER` (CS:557-563).
+- 2026-11-28 (maintainer, #354): the 0.3 scope of the trust manager, sync and state, D1 to D7 of #354, which #356 to
+  #362 build. upki is `9821cce`, where the `rustls-upki/src/lib.rs` and `upki/src/revocation/mod.rs` line numbers
+  below were checked for this entry. The Firefox points marked "fetch summary" come from summaries of mozilla-central's
+  `RemoteSettingsClient.sys.mjs` and `remote-settings.sys.mjs`, with no line numbers, and were not read as source.
+  - **The trust manager is 0.3 scope (B28, D1):** §11's 0.3 row names `RevoktTrustManager` (flow steps 0 to 4),
+    `RevoktCertificateException`, `sslContext()`, the enforcement and policy setters, `resetState()`, listeners and
+    `refreshAnchors()`, which §4 already specified and no row scheduled. Nothing is cut and §4's text is unchanged.
+    upki ships its check as a rustls `ServerCertVerifier` (`ServerVerifier`, `lib.rs:23, 140`, with the check at
+    `:92-137`), the trust-manager equivalent, and Firefox checks CRLite inside its certificate verifier: both make the
+    verifier the product, not a separate evaluate call.
+  - **The clock-behind fixture reference is dropped (B29, D2, option (a)):** §11 and `test-plan.md` no longer cite a
+    [0.3] content-signature item "the restart with the clock behind", which #273 deleted with `clockBehind`.
+    Restating it as a plain row (b) was declined for the smaller core. Neither reference reads the local clock against
+    signed data (DIVERGENCES S11): upki only logs the manifest's `generated_at` (`mod.rs:124-141`), and Firefox
+    compares only the x5u validity with `Now()`.
+  - **`start()` returns `Unit` from 0.3 (B30, D3, option (a)):** its diagnostics are only on `state.diagnostics` and
+    `state.warnings`. Keeping `List<PolicyDiagnostic>` (b) would duplicate `state`; 0.x allows the break and nothing is
+    released. Firefox's `RemoteSecuritySettings.init()` returns nothing, is idempotent and logs its errors (#143,
+    above). upki's `ServerVerifier::new` returns a `Result` and fails only on `NoData` (`lib.rs:44, 70-75`; B26).
+  - **A `sync()` during a sync gets that sync's result (B31, D4):** like Firefox's `maybeSync()`, a `sync()` that
+    arrives while a sync is running gets that sync's `SyncResult`, and no extra sync is queued. This replaces the
+    draft's "at most one pending" recommendation, which queued one more sync after a running one. The spec reads
+    "queued or running", the start task's first sync included, so a call that finds a sync waiting joins it too (#356's
+    row: a `sync()` during the start task returns after it, with one fetch). The trade: a call that arrives after a
+    sync started gets a result that may not reflect data changed since (a replaced seed, #363). Firefox (fetch
+    summary): `RemoteSettingsClient.maybeSync()` returns at once with a warning while `_syncRunning`, so a second call
+    is neither queued nor awaited, and `pollChanges()` has no in-progress guard. revokt differs in one point: the
+    joining call returns the running sync's `SyncResult`, where Firefox's dropped call has no result of its own. upki
+    has no in-process sync: `upki fetch` is a CLI the packager runs, and two fetchers on one directory race
+    (DIVERGENCES T4).
+  - **`Evaluator.evaluate` counts and emits nothing (B32, D5, option (a)):** `Revokt.evaluate` and the trust-manager
+    paths count, emit and run the shadow policy; counting both (b) was declined. rustls-upki has no counters, status,
+    callbacks or report-only mode (fetch summary of `lib.rs` on `main`): at `9821cce` its `Policy` is `{missing_data,
+    cert_not_covered, cert_has_no_scts}`, each an `Outcome` of `Allowed`, `TreatAsRevoked` or `Error`
+    (`lib.rs:243-287`). Firefox records CRLite results as telemetry inside its certificate verifier, so every
+    verification it performs is counted; which callers that includes was not verified.
+  - **`onStateChanged` is conflated and distinct (B33, D6, option (a)):** it is delivered as the `StateFlow` is, so a
+    slow listener gets the latest state and may skip intermediate ones, and the Java and Kotlin views agree; every
+    state in order through a queue like the event ring (b) was declined, since `state` holds slow-changing fields
+    only. upki has no listener. Firefox (fetch summary) sends observer notifications per poll
+    (`remote-settings:changes-poll-start`, `remote-settings:sync-error`, `remote-settings:broken-sync-error`,
+    `remote-settings:changes-poll-end`) and a per-client `sync` event `{current, created, updated, deleted}`, emitted
+    only when listeners exist; its state is read on demand through `RemoteSettings.inspect()`, not pushed. Events per
+    change and state on request is closest to (a).
+  - **`RevoktStatus.unsignedData` is removed (B34, D7):** every generation is Mozilla-signed since #218 cut the MIRROR
+    and SYSTEM sources, and under the first-consumer rule (#221) a member nothing produces is not public. A future
+    unsigned source adds it back, which is not a break. Firefox serves only signed Remote Settings data; upki's mirror
+    data is unsigned, and it has no such counter.
