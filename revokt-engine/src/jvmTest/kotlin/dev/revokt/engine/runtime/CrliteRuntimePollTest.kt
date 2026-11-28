@@ -17,6 +17,8 @@ import dev.revokt.RevocationEngine
 import dev.revokt.RevoktLifecycle
 import dev.revokt.RevoktPolicy
 import dev.revokt.SeedSource
+import dev.revokt.SyncFailure
+import dev.revokt.SyncOutcome
 import dev.revokt.engine.fetch.client
 import dev.revokt.engine.fetch.response
 import dev.revokt.engine.generation.DatasetGeneration
@@ -41,6 +43,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -604,5 +607,95 @@ internal class CrliteRuntimePollTest : SeedFixture() {
         assertFailsWith<OutOfMemoryError> { fatal.startTask(loadSeed = false) { throw OutOfMemoryError("clock") } }
         assertFalse(fatal.crlite().pending)
         assertEquals(2, recording.messages.count { it.first == LogLevel.ERROR && "the clock threw" in it.second })
+    }
+
+    @Test
+    fun `the start task's first sync and each later sync return their result for sync() (spec §4)`() {
+        val now = ts - 25 * hour
+        val server = Server(ts = ts + 2 * hour)
+        val runtime = runtime(source(Seed()), server)
+        runtime.startSeed(soleSeed = false, nowMillis = now)
+        val end = runtime.startTaskWithSync(loadSeed = true) { now }
+        val first = assertNotNull(end.firstSync)
+        assertEquals(SyncOutcome.INSTALLED, first.outcome)
+        assertEquals(mapOf(Dataset.CRLITE to "${server.ts}/${delta.id}"), first.installed)
+        assertEquals(now, first.atMillis)
+        assertEquals(source.sourceId, first.sourceId)
+        assertNull(end.notRun)
+        assertNull(end.fatal)
+        assertEquals(now + 6 * hour + jitters[0], end.nextAtMillis)
+        // The next sync, at the time the schedule returned: a 304, UNCHANGED, and the next poll from it.
+        val at = checkNotNull(end.nextAtMillis)
+        val step = runtime.syncStep(at)
+        assertEquals(SyncOutcome.UNCHANGED, step.result.outcome)
+        assertNull(step.result.failure)
+        assertEquals(at + 6 * hour + jitters[1], step.nextAtMillis)
+        assertNull(step.fatal)
+    }
+
+    @Test
+    fun `with no fetching source a sync is UNCHANGED, fetches nothing and schedules nothing`() {
+        val server = Server()
+        val runtime =
+            CrliteRuntime(
+                seed = null,
+                channel = CrliteChannel.COMPAT,
+                crlite = false,
+                fetchingSource = false,
+                engine = TestEngine(),
+                verifier = verifier,
+                policy = RevoktPolicy.DEFAULT,
+                pinnedRootSpkis = pinned,
+                storage = storage,
+                logger = logger,
+            )
+        val end = runtime.startTaskWithSync(loadSeed = false) { ts }
+        assertNull(end.firstSync)
+        assertNull(end.notRun, "nothing polls, so no first sync was due")
+        val step = runtime.syncStep(ts + hour)
+        assertEquals(SyncOutcome.UNCHANGED, step.result.outcome)
+        assertEquals(ts + hour, step.result.atMillis)
+        assertNull(step.result.sourceId)
+        assertNull(step.nextAtMillis)
+        assertTrue(server.fetcher.requests.isEmpty())
+        assertFailsWith<IllegalStateException> { runtime.sync(ts + hour) }
+    }
+
+    @Test
+    fun `an unresolved store read fails a sync with STORE_FAILED, and a fatal re-read with INTERNAL_ERROR`() {
+        installedAt(ts)
+        reset(keepStore = true)
+        storage.failRead = { name -> if (name == pointerKey) IOException("the generation read") else null }
+        val server = Server(ts = ts + 30 * minute)
+        val runtime = runtime(null, server)
+        val now = ts + hour
+        val end = runtime.startTaskWithSync(loadSeed = false) { now }
+        val first = assertNotNull(end.firstSync)
+        assertEquals(SyncOutcome.FAILED, first.outcome)
+        assertEquals(SyncFailure.STORE_FAILED, first.failure)
+        assertEquals(now + 15 * minute, end.nextAtMillis)
+        assertTrue(server.fetcher.requests.isEmpty(), "nothing fetched")
+        // A fatal error from the re-read: the result says INTERNAL_ERROR with it as the cause, and it is returned.
+        val oom = OutOfMemoryError("the generation read")
+        storage.failRead = { name -> if (name == pointerKey) oom else null }
+        val step = runtime.syncStep(now + hour)
+        assertEquals(SyncOutcome.FAILED, step.result.outcome)
+        assertEquals(SyncFailure.INTERNAL_ERROR, step.result.failure)
+        assertSame(oom, step.result.cause)
+        assertSame(oom, step.fatal)
+        assertEquals(now + hour + 15 * minute, step.nextAtMillis)
+        assertSame(oom, assertFailsWith<OutOfMemoryError> { runtime.sync(now + 2 * hour) })
+    }
+
+    @Test
+    fun `a start task whose clock throws before the first sync says why no result came`() {
+        val server = Server()
+        val runtime = runtime(seed = null, server = server)
+        val clock = IllegalStateException("clock")
+        val end = runtime.startTaskWithSync(loadSeed = false) { throw clock }
+        assertNull(end.firstSync)
+        assertSame(clock, end.notRun)
+        assertNull(end.fatal)
+        assertNull(end.nextAtMillis)
     }
 }

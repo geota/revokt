@@ -8,7 +8,7 @@ package dev.revokt
  * the configuration ([DiagnosticCode] is that). Growable: a code may be added in a minor, so a `when` over codes needs
  * an `else` branch. Persist `name`, never `ordinal`. Match on the code, never on the message.
  */
-internal enum class WarningCode {
+public enum class WarningCode {
     /** A sync's body or record count above half its `RevoktLimits` constant, the signed size notwithstanding (§5.1). */
     CAP_NEAR_LIMIT,
 

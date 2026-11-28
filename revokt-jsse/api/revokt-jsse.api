@@ -10,6 +10,9 @@ public final class dev/revokt/jsse/Revokt : java/lang/AutoCloseable {
 	public fun close ()V
 	public final fun getEvaluator ()Ldev/revokt/Evaluator;
 	public final fun start ()Ljava/util/List;
+	public final synthetic fun sync (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun syncAsync ()Ljava/util/concurrent/CompletableFuture;
+	public final fun syncBlocking ()Ldev/revokt/SyncResult;
 	public fun toString ()Ljava/lang/String;
 	public final fun validate (Ldev/revokt/Enforcement;)Ljava/util/List;
 	public final fun validateOrThrow (Ldev/revokt/Enforcement;)V

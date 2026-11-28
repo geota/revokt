@@ -10,7 +10,7 @@ package dev.revokt
  * over codes needs an `else` branch. Persist `name`, never `ordinal`. A 401 or 407 is the code of the fetch it
  * interrupted: [CHANGESET_FETCH], [X5U_FETCH] or [ATTACHMENT_FETCH] (§3).
  */
-internal enum class SyncFailure(
+public enum class SyncFailure(
     /** The outcome this code ends a sync with: [SyncOutcome.SKIPPED] or [SyncOutcome.FAILED]. */
     public val outcome: SyncOutcome,
 ) {

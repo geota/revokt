@@ -490,6 +490,16 @@ public final class dev/revokt/RevoktStorage$Companion {
 public abstract interface annotation class dev/revokt/RevoktTestingApi : java/lang/annotation/Annotation {
 }
 
+public final class dev/revokt/RevoktWarning {
+	public synthetic fun <init> (Ldev/revokt/RevoktWarning$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ldev/revokt/WarningCode;
+	public final fun getDataset ()Ldev/revokt/Dataset;
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/revokt/Rule : java/lang/Enum {
 	public static final field Companion Ldev/revokt/Rule$Companion;
 	public static final field ENGINE_ERROR Ldev/revokt/Rule;
@@ -579,6 +589,60 @@ public final class dev/revokt/StalenessDurations {
 	public static final synthetic fun of-OxNrBVY (Ldev/revokt/Staleness$Companion;JLkotlin/time/Duration;)Ldev/revokt/Staleness;
 }
 
+public final class dev/revokt/SyncFailure : java/lang/Enum {
+	public static final field ATTACHMENT_BASE Ldev/revokt/SyncFailure;
+	public static final field ATTACHMENT_FETCH Ldev/revokt/SyncFailure;
+	public static final field ATTACHMENT_MISMATCH Ldev/revokt/SyncFailure;
+	public static final field ATTACHMENT_OVER_CAP Ldev/revokt/SyncFailure;
+	public static final field BACKOFF Ldev/revokt/SyncFailure;
+	public static final field CHANGESET_FETCH Ldev/revokt/SyncFailure;
+	public static final field CHANGESET_MALFORMED Ldev/revokt/SyncFailure;
+	public static final field CLOCK_SKEW Ldev/revokt/SyncFailure;
+	public static final field ENGINE_FAILED Ldev/revokt/SyncFailure;
+	public static final field FILTER_UNREADABLE Ldev/revokt/SyncFailure;
+	public static final field FORMAT_UNSUPPORTED Ldev/revokt/SyncFailure;
+	public static final field INDEX_INCONSISTENT Ldev/revokt/SyncFailure;
+	public static final field INTERNAL_ERROR Ldev/revokt/SyncFailure;
+	public static final field NO_SIGNATURE Ldev/revokt/SyncFailure;
+	public static final field ROLLBACK_REFUSED Ldev/revokt/SyncFailure;
+	public static final field SCHEMA_REJECTED Ldev/revokt/SyncFailure;
+	public static final field SIGNATURE_INVALID Ldev/revokt/SyncFailure;
+	public static final field STORE_FAILED Ldev/revokt/SyncFailure;
+	public static final field TOO_MANY_RECORDS Ldev/revokt/SyncFailure;
+	public static final field X5U_CHAIN Ldev/revokt/SyncFailure;
+	public static final field X5U_FETCH Ldev/revokt/SyncFailure;
+	public static final field X5U_URL Ldev/revokt/SyncFailure;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getOutcome ()Ldev/revokt/SyncOutcome;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/SyncFailure;
+	public static fun values ()[Ldev/revokt/SyncFailure;
+}
+
+public final class dev/revokt/SyncOutcome : java/lang/Enum {
+	public static final field FAILED Ldev/revokt/SyncOutcome;
+	public static final field INSTALLED Ldev/revokt/SyncOutcome;
+	public static final field SKIPPED Ldev/revokt/SyncOutcome;
+	public static final field UNCHANGED Ldev/revokt/SyncOutcome;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/SyncOutcome;
+	public static fun values ()[Ldev/revokt/SyncOutcome;
+}
+
+public final class dev/revokt/SyncResult {
+	public synthetic fun <init> (Ldev/revokt/SyncResult$Builder;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAtMillis ()J
+	public final fun getCause ()Ljava/lang/Throwable;
+	public final fun getFailure ()Ldev/revokt/SyncFailure;
+	public final fun getHttpStatus ()Ljava/lang/Integer;
+	public final fun getInstalled ()Ljava/util/Map;
+	public final fun getOutcome ()Ldev/revokt/SyncOutcome;
+	public final fun getSourceId ()Ljava/lang/String;
+	public final fun getWarnings ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class dev/revokt/Verdict {
 	public abstract fun getCrlite ()Ldev/revokt/Finding$Crlite;
 	public abstract fun getDataStates ()Ljava/util/Map;
@@ -624,6 +688,19 @@ public final class dev/revokt/VerifyResult : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/VerifyResult;
 	public static fun values ()[Ldev/revokt/VerifyResult;
+}
+
+public final class dev/revokt/WarningCode : java/lang/Enum {
+	public static final field CAP_NEAR_LIMIT Ldev/revokt/WarningCode;
+	public static final field SEED_CHANNEL_MISMATCH Ldev/revokt/WarningCode;
+	public static final field SEED_UNREADABLE Ldev/revokt/WarningCode;
+	public static final field STORE_LOCKED Ldev/revokt/WarningCode;
+	public static final field STORE_MIGRATED Ldev/revokt/WarningCode;
+	public static final field STORE_NEWER_LAYOUT Ldev/revokt/WarningCode;
+	public static final field STORE_UNREADABLE Ldev/revokt/WarningCode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/revokt/WarningCode;
+	public static fun values ()[Ldev/revokt/WarningCode;
 }
 
 public final class dev/revokt/verify/JcaSignatureVerifier : dev/revokt/SignatureVerifier {

@@ -26,13 +26,21 @@ import dev.revokt.Rule
 import dev.revokt.SeedSource
 import dev.revokt.Severity
 import dev.revokt.SignatureVerifier
+import dev.revokt.SyncResult
+import dev.revokt.engine.runtime.CrliteRuntime
 import dev.revokt.engine.walker.IndexedSnapshot
 import dev.revokt.verify.JcaSignatureVerifier
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.asExecutor
+import kotlinx.coroutines.future.await
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executor
+import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.Future
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledThreadPoolExecutor
@@ -50,8 +58,10 @@ import kotlin.time.TimeSource
  *
  * [Builder.build] runs the spec §4 R checks and throws [IllegalArgumentException] on the first that fails;
  * [validate] returns the V diagnostics for an enforcement. The lifecycle is `CREATED → STARTED → CLOSED` (spec §5.1):
- * [start] loads the data and [close] releases it, both idempotent; [evaluator] evaluates in `STARTED`.
+ * [start] loads the data and [close] releases it, both idempotent; [evaluator] evaluates in `STARTED`, and [sync],
+ * [syncAsync] and [syncBlocking] sync on demand.
  */
+@Suppress("TooManyFunctions") // One member per spec §4 `Revokt` member, and one per loader step of §5.1 it drives.
 public class Revokt private constructor(
     internal val config: RevoktConfig,
 ) : AutoCloseable {
@@ -79,6 +89,23 @@ public class Revokt private constructor(
 
     /** Counted down when the start task ends, or by [close]: what [start]'s join waits on. Guarded by [lock]. */
     private var startTaskDone: CountDownLatch? = null
+
+    /**
+     * The sync queued or running on the loader (spec §4 `sync`), the start task's first sync included: a `sync()` that
+     * arrives while it is set gets its result and queues no sync of its own. Completed by the loader, or exceptionally by
+     * [close]; never handed to a caller, who gets a dependent future. Guarded by [lock].
+     */
+    private var current: CompletableFuture<SyncResult>? = null
+
+    /**
+     * The next scheduled sync's timer task, cancelled when a sync reschedules, and its token: a scheduled sync that
+     * starts with an older token was superseded by a later sync's reschedule, and runs nothing. Guarded by [lock].
+     */
+    private var scheduled: Future<*>? = null
+    private var scheduleToken = 0L
+
+    /** Where `syncAsync()`'s futures are completed (spec §4): the configured I/O dispatcher, never the loader. */
+    private val ioExecutor: Executor = config.ioDispatcher.asExecutor()
 
     /** The thread running [close], and the latch it counts down when done, so a second [close] waits for the first. */
     @Volatile
@@ -148,22 +175,11 @@ public class Revokt private constructor(
                 runtime.openStore()
                 val loadSeed = runtime.startSeed(soleSeed(), nowMillis())
                 done = CountDownLatch(1)
+                // The start task's first sync is queued from the flip on: a sync() then joins it (spec §4 `sync`).
+                val first = if (runtime.polls) CompletableFuture<SyncResult>() else null
                 val executor = newLoader()
                 try {
-                    executor.execute {
-                        var next: Long? = null
-                        try {
-                            next = runtime.startTask(loadSeed, ::nowMillis)
-                        } catch (e: VirtualMachineError) {
-                            // The loader's task swallows what it throws: this line is the error's only trace.
-                            runtime.log(LogLevel.ERROR, "the start task threw a fatal error, rethrown", e)
-                            throw e
-                        } finally {
-                            // Rescheduled before a fatal error propagates, so the schedule never stops (#147, §6.5).
-                            done.countDown()
-                            if (runtime.polls) reschedule(executor, next)
-                        }
-                    }
+                    executor.execute { startTask(executor, loadSeed, done, first) }
                 } catch (
                     // A loader that cannot start (no thread): start() throws, the instance stays CREATED. Under the
                     // sole-seed path the engine already holds the seed then, and the stored seed generation: a retry
@@ -177,6 +193,7 @@ public class Revokt private constructor(
                 }
                 // First, so that close() stops this loader whatever throws below.
                 loader = executor
+                current = first
                 loaderOwnsStore = true
                 indexed = index
                 startTaskDone = done
@@ -206,26 +223,31 @@ public class Revokt private constructor(
      * loader thread and from [start]'s own thread, before doing anything.
      */
     override fun close() {
-        val current = Thread.currentThread()
-        check(current !== loaderThread) { "close() on the revokt loader thread, which it would wait for (spec §5.1)" }
+        val thread = Thread.currentThread()
+        check(thread !== loaderThread) { "close() on the revokt loader thread, which it would wait for (spec §5.1)" }
         checkNotFromStart()
         val executor: ScheduledExecutorService?
         val first: Boolean
+        val pending: CompletableFuture<SyncResult>?
         synchronized(lock) {
             first = lifecycle != RevoktLifecycle.CLOSED
             if (first) {
                 lifecycle = RevoktLifecycle.CLOSED
-                closing = current
+                closing = thread
             }
             executor = loader
             loader = null
             if (first) startTaskDone?.countDown()
+            pending = if (first) current else null
+            if (first) current = null
         }
         if (!first) {
             // The closing thread itself (an engine's close() calling back) returns at once: it cannot wait for itself.
-            if (current !== closing) awaitUninterruptibly { closed.await() }
+            if (thread !== closing) awaitUninterruptibly { closed.await() }
             return
         }
+        // Before the loader is cancelled (spec §5.1 close()): a sync that then ends at the interrupt completes nothing.
+        pending?.completeExceptionally(IllegalStateException("closed"))
         var failure: Throwable? = null
         try {
             executor?.let(::stop)
@@ -252,6 +274,48 @@ public class Revokt private constructor(
             closed.countDown()
         }
         failure?.let { throw it }
+    }
+
+    /**
+     * Syncs now (spec §4 `sync`, §5.1), ignoring the poll interval, and returns how the sync ended. The sync queues on
+     * the loader behind the start task and any in-flight install; under the source's persisted backoff it ends
+     * `SKIPPED` with `BACKOFF`, fetching nothing. A call that arrives while a sync is queued or running, the start
+     * task's first sync included, gets that sync's [SyncResult] and queues no sync of its own. The next scheduled sync
+     * is rescheduled from this one's outcome, as after a scheduled sync. With no fetching source the result is
+     * `UNCHANGED`.
+     *
+     * Throws [IllegalStateException] in `CREATED`, after [close], and when [close] runs before the sync ends.
+     * Cancelling the caller's coroutine stops its wait, never the sync.
+     */
+    @JvmSynthetic
+    // It suspends in kotlinx.coroutines.future.await, which detekt's type resolution does not resolve.
+    @Suppress("RedundantSuspendModifier")
+    public suspend fun sync(): SyncResult = dependent(request()).await()
+
+    /**
+     * [sync] as a future: a fresh one per call, completed on the I/O executor (`ioExecutor`), never on the loader, so
+     * its dependent stages do not run there. Cancelling or completing it touches only this future, never the sync or
+     * another call's future. [close] completes a pending one exceptionally with [IllegalStateException]. Throws
+     * [IllegalStateException] at once in `CREATED` and after [close].
+     */
+    public fun syncAsync(): CompletableFuture<SyncResult> = dependent(request())
+
+    /**
+     * [sync], blocking the calling thread until the sync ends. Throws [IllegalStateException] in `CREATED`, after
+     * [close], when [close] runs before the sync ends, and on the loader thread, where it would wait for itself; an
+     * interrupt throws [InterruptedException] and leaves the sync running.
+     */
+    @Throws(InterruptedException::class)
+    public fun syncBlocking(): SyncResult {
+        check(Thread.currentThread() !== loaderThread) {
+            "syncBlocking() on the revokt loader thread, which it would wait for (spec §4)"
+        }
+        val future = request()
+        return try {
+            future.get()
+        } catch (e: ExecutionException) {
+            throw e.cause ?: e
+        }
     }
 
     /**
@@ -349,41 +413,187 @@ public class Revokt private constructor(
                 runtime.log(LogLevel.ERROR, "the clock threw", t)
                 retry
             }
-        try {
-            config.pollTimer.schedule(executor, delay) { sync(executor) }
-        } catch (
-            // close() shut the loader down after the flip was read: nothing runs after close() (spec §5.1).
-            @Suppress("SwallowedException") e: RejectedExecutionException,
-        ) {
-            // Dropped.
+        synchronized(lock) {
+            // Read again under the lock that close() flips it under: nothing is scheduled after close() (spec §5.1).
+            if (lifecycle != RevoktLifecycle.CLOSED) {
+                // One sync scheduled at a time: an explicit sync's reschedule supersedes the one it found.
+                val token = ++scheduleToken
+                scheduled?.cancel(false)
+                scheduled =
+                    try {
+                        config.pollTimer.schedule(executor, delay) { scheduledSync(executor, token) }
+                    } catch (
+                        // close() shut the loader down after the flip was read: nothing runs after close() (spec §5.1).
+                        @Suppress("SwallowedException") e: RejectedExecutionException,
+                    ) {
+                        // Dropped.
+                        null
+                    }
+            }
         }
         fatal?.let { throw it }
     }
 
     /**
-     * One scheduled sync on the loader (spec §5.1, #147), then the next one scheduled, in a `finally`, so that a fatal
-     * error, which the runtime rethrows, never ends the schedule; the runtime restores an interrupt it absorbed. A clock
-     * that throws before the sync is a logged failure, retried in 15 min; a fatal error is logged and rethrown.
+     * The loader's start task (spec §5.1 "one loader task"): the runtime's, then the next sync scheduled and the first
+     * sync's result delivered to the `sync()` calls that joined it ([first]), in `finally`s, so that a fatal error,
+     * rethrown last, never ends the schedule (#147, §6.5) or leaves a caller waiting.
      */
-    private fun sync(executor: ScheduledExecutorService) {
-        var next: Long? = null
+    private fun startTask(
+        executor: ScheduledExecutorService,
+        loadSeed: Boolean,
+        done: CountDownLatch,
+        first: CompletableFuture<SyncResult>?,
+    ) {
+        var end: CrliteRuntime.StartTaskEnd? = null
+        var fatal: Throwable? = null
         try {
-            next = runtime.sync(nowMillis())
+            end = runtime.startTaskWithSync(loadSeed, ::nowMillis)
+            fatal = end.fatal
+        } catch (e: VirtualMachineError) {
+            fatal = e
+        } finally {
+            done.countDown()
+            try {
+                if (runtime.polls) reschedule(executor, end?.nextAtMillis)
+            } finally {
+                first?.let { finish(it, end?.firstSync, end?.notRun ?: fatal) }
+            }
+        }
+        fatal?.let {
+            // The loader's task swallows what it throws: this line is the error's only trace.
+            runtime.log(LogLevel.ERROR, "the start task threw a fatal error, rethrown", it)
+            throw it
+        }
+    }
+
+    /**
+     * A scheduled sync, when its timer fires (spec §5.1 "The sync schedule"): it runs as the sync a `sync()` call has
+     * queued, if one has, so the call gets its result ([current]), and runs nothing when a later sync's reschedule
+     * superseded it ([token]) or after [close].
+     */
+    private fun scheduledSync(
+        executor: ScheduledExecutorService,
+        token: Long,
+    ) {
+        val future =
+            synchronized(lock) {
+                if (token != scheduleToken || lifecycle == RevoktLifecycle.CLOSED) return
+                current ?: CompletableFuture<SyncResult>().also { current = it }
+            }
+        runSync(executor, future)
+    }
+
+    /**
+     * The sync a `sync()` call queued ([request]); nothing when a sync that started first ran it, or [close] completed
+     * it.
+     */
+    private fun explicitSync(
+        executor: ScheduledExecutorService,
+        future: CompletableFuture<SyncResult>,
+    ) {
+        if (synchronized(lock) { current !== future }) return
+        runSync(executor, future)
+    }
+
+    /**
+     * One sync on the loader (spec §5.1, #147), scheduled or explicit, then the next one scheduled from its outcome and
+     * its result delivered to [future], in `finally`s, so that a fatal error, which the runtime returns and this rethrows
+     * last, never ends the schedule; the runtime restores an interrupt it absorbed. A clock that throws before the sync
+     * is a logged failure, retried in 15 min, and [future] fails with its throwable (no sync ran, so there is no
+     * result); a fatal error is logged and rethrown.
+     */
+    private fun runSync(
+        executor: ScheduledExecutorService,
+        future: CompletableFuture<SyncResult>,
+    ) {
+        var step: CrliteRuntime.SyncStep? = null
+        var failure: Throwable? = null
+        try {
+            step = runtime.syncStep(nowMillis())
         } catch (e: VirtualMachineError) {
             // The loader's task swallows what it throws: this line is the error's only trace.
             runtime.log(LogLevel.ERROR, "the sync task threw a fatal error, rethrown", e)
-            throw e
+            failure = e
         } catch (e: InterruptedException) {
             // A consumer clock's: logged, the interrupt restored, retried in 15 min.
             Thread.currentThread().interrupt()
             runtime.log(LogLevel.ERROR, "the clock was interrupted before the sync", e)
+            failure = e
         } catch (
             // A consumer clock that throws: logged and retried in 15 min (the runtime catches the sync's own).
             @Suppress("TooGenericExceptionCaught") t: Throwable,
         ) {
             runtime.log(LogLevel.ERROR, "the clock threw before the sync", t)
+            failure = t
         } finally {
-            reschedule(executor, next)
+            try {
+                if (runtime.polls) reschedule(executor, step?.nextAtMillis)
+            } finally {
+                finish(future, step?.result, failure)
+            }
+        }
+        (step?.fatal ?: failure as? VirtualMachineError)?.let { throw it }
+    }
+
+    /**
+     * Delivers a sync's [result] to [future], or [error] when no sync ran; first, [future] stops being the sync a
+     * `sync()` call joins. On the loader: [future] is internal, and every caller's future is completed on the I/O
+     * executor ([dependent]).
+     */
+    private fun finish(
+        future: CompletableFuture<SyncResult>,
+        result: SyncResult?,
+        error: Throwable?,
+    ) {
+        synchronized(lock) { if (current === future) current = null }
+        if (result != null) {
+            future.complete(result)
+        } else {
+            future.completeExceptionally(error ?: IllegalStateException("the sync did not run; the cause is logged"))
+        }
+    }
+
+    /**
+     * The sync a `sync()` call gets (spec §4 `sync`, §5.1): in `STARTED`, the sync queued or running, the start task's
+     * first sync included, or else a new one queued on the loader, behind the start task and any in-flight install.
+     * Throws [IllegalStateException] in `CREATED` and `CLOSED`.
+     */
+    private fun request(): CompletableFuture<SyncResult> =
+        synchronized(lock) {
+            when (lifecycle) {
+                RevoktLifecycle.CREATED -> error("sync() before start() (spec §4)")
+                RevoktLifecycle.CLOSED -> error("closed: sync() after close() (spec §4)")
+                RevoktLifecycle.STARTED -> Unit
+            }
+            current ?: run {
+                val executor = checkNotNull(loader) { "no loader in STARTED" }
+                val future = CompletableFuture<SyncResult>()
+                executor.execute { explicitSync(executor, future) }
+                current = future
+                future
+            }
+        }
+
+    /**
+     * A fresh future completed from [inner] on the I/O executor (spec §4: `ioExecutor.execute { future.complete(v) }`),
+     * so its dependent stages never run on the loader, and a caller's `cancel()` or `complete()` touches only its own.
+     */
+    private fun dependent(inner: CompletableFuture<SyncResult>): CompletableFuture<SyncResult> {
+        val future = CompletableFuture<SyncResult>()
+        inner.whenComplete { result, error ->
+            onIo { if (error == null) future.complete(result) else future.completeExceptionally(error) }
+        }
+        return future
+    }
+
+    /** Runs [task] on the I/O executor; one that refuses it (shut down) leaves it to the common pool, never the loader. */
+    private fun onIo(task: Runnable) {
+        try {
+            ioExecutor.execute(task)
+        } catch (e: RejectedExecutionException) {
+            runtime.log(LogLevel.WARN, "the I/O executor refused a sync() completion; it runs on the common pool", e)
+            ForkJoinPool.commonPool().execute(task)
         }
     }
 
@@ -714,11 +924,12 @@ private inline fun awaitUninterruptibly(wait: () -> Any?) {
  * timer whose loader is shut down throws `RejectedExecutionException`.
  */
 internal fun interface PollTimer {
+    /** Returns the task's handle, cancelled when a later sync reschedules, or null where it cannot be cancelled. */
     fun schedule(
         loader: ScheduledExecutorService,
         delayMillis: Long,
         task: Runnable,
-    )
+    ): Future<*>?
 
     companion object {
         val LOADER = PollTimer { loader, delay, task -> loader.schedule(task, delay, TimeUnit.MILLISECONDS) }
