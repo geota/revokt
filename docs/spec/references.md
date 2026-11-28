@@ -170,8 +170,23 @@ Appendix A of the spec: what was verified against live sources and reference cod
     - **PSS:** there is no `RSASSA-PSS` `Signature` or `KeyFactory` and no `id-RSASSA-PSS` alias. PSS is registered
       only as `SHA1withRSA/PSS` to `SHA512withRSA/PSS`.
     - **`JcaSignatureVerifier` over Conscrypt** (at `5d419cc`): a scratch `jvmTest` on 21.0.13 ran under both
-      releases. Printed in full, `unsupportedOids()` is exactly the 21 OIDs §3's "From OID to JCA service" lists,
-      identical under both releases. ML-DSA-44/65/87,
+      releases. Printed in full, `unsupportedOids()` is exactly the 21 OIDs below, identical under both releases.
+      Under §3's "From OID to JCA service" lookups, Conscrypt's registrations above (ML-DSA under its name, its bare
+      OID and its `OID.`-prefixed OID; the composites under a name and a bare OID, an `OID.` lookup throwing;
+      SLH-DSA-SHA2-128s under its name only) make the probe report ML-DSA-44/65/87, SLH-DSA-SHA2-128s (found by
+      name, the lookup the table makes) and the 15 registered composites as supported, and everything else in the
+      tables as well, except these 21 OIDs (37 table entries, since several OIDs fill both the signature and the key
+      role):
+      - **RSA PKCS#1:** `SHA512/224withRSA` (`1.2.840.113549.1.1.15`) and `SHA512/256withRSA` (`.16`), signature
+        only.
+      - **`id-RSASSA-PSS`** (`1.2.840.113549.1.1.10`), as signature and key. Conscrypt registers PSS only as
+        `SHA1withRSA/PSS` to `SHA512withRSA/PSS`, with no `RSASSA-PSS` `Signature` or `KeyFactory`.
+      - **Ed448** (`1.3.101.113`), as signature and key.
+      - **The other 11 SLH-DSA sets**, `2.16.840.1.101.3.4.3.21`–`.31`, as signature and key.
+      - **The composites** `1.3.6.1.5.5.7.6.47`, `.50` and `.51`, as signature and key.
+      - **brainpoolP256r1, P384r1 and P512r1** (`1.3.36.3.3.2.8.1.1.7`, `.11`, `.13`), through the curve probe.
+
+      ML-DSA-44/65/87,
       SLH-DSA-SHA2-128s and the 15 composites each give `VERIFIED` for a Conscrypt-made key and signature, and
       `INVALID` with one bit flipped. A SHA-1 PSS signature is `UNSUPPORTED` over Conscrypt and `INVALID` over the
       JDK's providers, which verify it themselves.
