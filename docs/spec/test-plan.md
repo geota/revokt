@@ -23,7 +23,7 @@ tests; **live checks** are informational.
   the §3.2 equivalence classes; the `CrliteQuery` is extracted once by revokt's parser and handed to
   both engines, so no input is abstained; any `REVOKED`/`NOT_REVOKED` disagreement and any class
   disagreement fails the job; and the §9.3 engine probes on every generation, against each engine.
-- **Content-signature fixtures** (0.2 gates, except the item tagged [0.3], which needs the §6.5 store; revision 49) with mutations; incremental fixtures; a seed with an expired signer
+- **Content-signature fixtures** (0.2 gates) with mutations; incremental fixtures; a seed with an expired signer
   leaf must load; a seed 25 h ahead of local now loads like any other, with `ageMillis = 0`, no warning and the watermark at its signed timestamp; a signed changeset 25 h ahead of local now installs against a dataset with no generation, and one 2 days ahead installs beside a live generation, each advancing the watermark, the cursor and `lastVerifiedAtMillis` with no warning, the next poll of the same changeset `UNCHANGED`, and the next server `<ts>` installs, (#147) the same sequence also through the loader's schedule from a seed 25 h ahead (`CrliteRuntimePollTest` "content-signature sequence through the schedule"); a `mode` other than `p384ecdsa` rejected (`NO_SIGNATURE`); a seed with a 70 MiB declared attachment → `SEED_UNREADABLE` before inflation; a seed with an `attachments/../x` entry, a second `records.json` entry, an extra `notes.txt` entry, an entry that differs from an expected name only in letter case (`RECORDS.JSON`, or an attachment's name with one letter's case changed) beside or instead of the expected entry, a central-directory name that differs from its local header's, a first entry other than `seed.json`, or no entry for an attachment `buildIndex` places in the generation → `SEED_UNREADABLE`, no attachment inflated and nothing installed (revision 52); a changeset whose attachment filenames are 33 and 64 characters → installs, with the generation's names the 32-character derived names; two attachment filenames that map to one name → `FAILED` with `INDEX_INCONSISTENT`, no body fetched; (revision 56) a channel with two full filters, or none → `FAILED` with `INDEX_INCONSISTENT`, the previous generation still live, and `SEED_UNREADABLE` for a seed; a delta whose `parent` names no record → placed by its time and installed; a full record without `parent` → loads, and a delta without one → `SCHEMA_REJECTED`; a changeset signed by a P-256 leaf (a 64-byte raw pair) → verifies; a changeset whose first `signatures` entry fails and whose second verifies → installs; one with 5 entries, or
   whose every entry has a `mode` other than `p384ecdsa` → `FAILED` with `SIGNATURE_INVALID`, or `NO_SIGNATURE` when none is tried; two entries sharing one `x5u` URL → that URL fetched once; one whose `metadata` holds only `signature`, or an empty `signatures` → `FAILED` with `NO_SIGNATURE`; an entry with no `mode`, or a `null` one, is tried and verifies, while one whose `mode` is `""` or a number is skipped; (revision 57, #198) an entry whose `x5u` or `signature` is `""` is skipped like a missing one;
   `signatures` of `[null, a valid entry]` → `FAILED` with `NO_SIGNATURE`, and `[a valid entry, null]` → installs; four failing entries and a fifth that would verify → the fourth's failure, `FAILED` with `SIGNATURE_INVALID`, the fifth never read, and four failing entries then `null` → the same, never `NULL_ENTRY`; a channel of `MAX_CHANGESET_RECORDS` (1,024) records after channel filtering → passes the cap, and one more → `FAILED` with `TOO_MANY_RECORDS`, before any attachment fetch; a first entry whose
@@ -460,6 +460,41 @@ tests; **live checks** are informational.
   verdict-cache TTL → two exceptions, `rejects[REVOKED] == 2`, one event; a Java consumer compile that builds a policy with `staleness` and
   `rejectStaleAfter(Dataset, Duration)`, reads `verdict.getRule()`, implements `Exemption` as a
   lambda over `ExemptionContext` and `RevoktListener` with only `onVerdict`.
+- **0.3 API rows** (0.3 gates; each group is one test class):
+  - `RevoktSyncTest`: `sync()` in `CREATED` and after `close()` → `IllegalStateException`; a `sync()` during the start
+    task returns after it, with one fetch; a `sync()` while a scheduled or explicit sync is queued or running → that
+    sync's `SyncResult`, one fetch and no further sync; under a persisted `backoffUntilMillis` → `SKIPPED` with
+    `BACKOFF`, nothing fetched; the next poll is rescheduled from the explicit sync's outcome as from a scheduled one's
+    (a fixed random source); `syncAsync()`'s future is completed on the io executor, and a consumer's `cancel()`
+    neither cancels the sync nor corrupts a later call; `close()` with a pending `syncAsync()` completes it
+    exceptionally (the API-26 leg is the (h) row).
+  - `RevoktStateTest`: `ready` true once the start task installs; `start()` returns `Unit`, with `validate()`'s
+    `WARNING`s and the S codes it found on `state.value.diagnostics` and `warnings`; a start task that leaves no
+    generation beside an unreadable seed → `SEED_UNREADABLE` on `warnings` beside `generationId == null` and `pending ==
+    false`; a restart serving a stored seed generation past `rejectStaleAfter` → `SEED_PAST_REJECT_THRESHOLD` on `diagnostics`; a second process
+    on the same directory → `STORE_LOCKED` on `warnings` and `storageFallback == true`; `lastSync` and
+    `nextSyncAtMillis` set after the first sync; `signedSourceFailing` and `signedSourceFailingSinceMillis` set after
+    `signedSourceFailingAfter` of `ROLLBACK_REFUSED` polls (§7.1); a collector sees `CLOSED` after `close()`.
+  - `RevoktTrustManagerTest` (SunJSSE over a local `SSLServerSocket` and the §9.1 chain generator; it also runs the
+    trust-manager invariants and the (h) wiring rows): a revoked chain under `ENFORCE` → `RevoktCertificateException`
+    carrying the `Rejected` verdict, and under `OBSERVE` the handshake succeeds.
+  - `RevoktStatusTest`: a live `status()` is zero-filled over every key set; `rejects` advances under `ENFORCE` only
+    and `wouldRejects` under `OBSERVE` only; `unevaluated[NOT_STARTED]` in `CREATED`, `[CLOSED]` after `close()` and
+    `[OFF]` under `OFF`, each with `evaluations` unchanged; a `PLATFORM_ONLY` chain counts `noIssuer[PLATFORM_ONLY]`;
+    `Evaluator.evaluate` advances no counter and emits no event, while `Revokt.evaluate` counts and emits as a
+    handshake does.
+  - `RevoktListenerTest`: a listener registered later sees only later events; a throwing `onVerdict` counts
+    `listenerFailures` and the drain continues; an executor that is shut down removes its listener; 65 `Accepted`
+    events drop the oldest (`droppedEvents == 1`); a `Rejected` event evicts an `Accepted` one; an `Exempted` event
+    overflows to the side queue; under `OBSERVE` a revoked chain → `enforced == false` and
+    `wouldRejects[REVOKED] == 1`; `onStateChanged` sees `STARTED`, then `CLOSED`; a listener whose executor is held
+    while two states publish gets only the latest, and never one state twice.
+  - `ShadowPolicyTest`: a throwing shadow exemption → not exempt plus a shadow-only `EngineError`, the enforced verdict
+    unchanged; under `OFF` no shadow runs; a shadow whose `validate(ENFORCE)` has an `ERROR` is accepted, with a `WARN`
+    line; setting `null` bumps `shadowPolicyEpoch`.
+  - `RevoktSettersTest`: a flip to `ENFORCE` while `pending` is accepted; a policy change that empties
+    `requiredDatasets` makes `ready` true and completes `awaitReady()`; the next event's `policyEpoch` advances after a
+    setter call; either setter in `CREATED` and in `CLOSED` succeeds.
 
 ### 9.1 Fuzzing requirement
 
