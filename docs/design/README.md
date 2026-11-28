@@ -4,7 +4,8 @@
 # Design notes
 
 Not normative. Each note holds spec text for a later milestone or a cut feature, as it stood when it left the spec
-(revision 58, #216), or a design for a later milestone that the spec does not hold yet. A note is promoted into [the spec](../spec/revokt-spec.md) when its milestone starts, and edited
+(revision 58, #216), a design for a later milestone that the spec does not hold yet, or (core-rationale.md only) the
+rationale, measurements and worked examples behind the spec's own sections, which is never promoted. A note is promoted into [the spec](../spec/revokt-spec.md) when its milestone starts, and edited
 there; until then a note may be stale, and the spec wins.
 
 | Note | Milestone | From |
@@ -20,3 +21,4 @@ there; until then a note may be stale, and the spec wins.
 | [fetcher-policy.md](fetcher-policy.md) | cut by #219 | §8 |
 | [m2-sources.md](m2-sources.md) | M2 | §7.4, §7.5 |
 | [crema-approach.md](crema-approach.md) | background | §12 |
+| [core-rationale.md](core-rationale.md) | background | #399: the rationale, measurements and worked examples behind §1, §3, §3.2, §4, §5.1, §6.3 to §6.5, §7.1, §7.2, §8, §10 and §13 |
