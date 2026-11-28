@@ -9,14 +9,18 @@ import dev.revokt.Enforcement
 import dev.revokt.FetchRequest
 import dev.revokt.FetchResponse
 import dev.revokt.HttpFetcher
+import dev.revokt.LogLevel
 import dev.revokt.RevoktInternalApi
 import dev.revokt.RevoktLogger
 import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
 import dev.revokt.SyncResult
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Timeout
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
@@ -29,6 +33,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -63,6 +68,7 @@ class RevoktSyncTest {
     private val timer = RecordingTimer()
     private val clock = FakeClock(1_792_587_631_204)
     private val engine = StubEngine()
+    private val logs = ConcurrentLinkedQueue<Pair<LogLevel, String>>()
 
     @AfterTest
     fun release() {
@@ -81,11 +87,20 @@ class RevoktSyncTest {
 
         val entries = CopyOnWriteArrayList<Entry>()
 
+        /** When set, the next [schedule] counts down [scheduling] and waits for it before it records the task. */
+        @Volatile var gate: CountDownLatch? = null
+        val scheduling = CountDownLatch(1)
+
         override fun schedule(
             loader: ScheduledExecutorService,
             delayMillis: Long,
             task: Runnable,
         ): Future<*> {
+            gate?.let {
+                gate = null
+                scheduling.countDown()
+                it.await()
+            }
             if (loader.isShutdown) throw RejectedExecutionException("the loader is shut down")
             val handle = CompletableFuture<Unit>()
             entries += Entry(delayMillis, handle, loader) { loader.execute(task) }
@@ -108,7 +123,15 @@ class RevoktSyncTest {
     private class FakeClock(
         @Volatile var millis: Long,
     ) : Clock {
-        override fun now(): Instant = Instant.fromEpochMilliseconds(millis)
+        @Volatile var throwOnce: Throwable? = null
+
+        override fun now(): Instant {
+            throwOnce?.let {
+                throwOnce = null
+                throw it
+            }
+            return Instant.fromEpochMilliseconds(millis)
+        }
     }
 
     /**
@@ -159,7 +182,7 @@ class RevoktSyncTest {
         pollTimer = timer
         clock = this@RevoktSyncTest.clock
         random = Random(SEED)
-        logger = RevoktLogger { _, _, _ -> }
+        logger = RevoktLogger { level, message, _ -> logs += level to message }
         return remoteSettings(remoteSettings())
             .enforcement(Enforcement.OBSERVE)
             .ioExecutor(io)
@@ -175,6 +198,65 @@ class RevoktSyncTest {
             it.start()
             timer.awaitCount(1)
         }
+
+    /** An instance with no fetching source, [configure]d further. */
+    private fun noSource(configure: (Revokt.Builder) -> Unit = {}): Revokt =
+        bare()
+            .also {
+                it.pollTimer = timer
+                it.clock = clock
+                it.logger = RevoktLogger { level, message, _ -> logs += level to message }
+                configure(it)
+            }.enforcement(Enforcement.OBSERVE)
+            .revocationEngine(engine)
+            .build()
+            .also { opened += it }
+
+    /** As [open], keeping the builder's own clock. */
+    private fun Revokt.Builder.openKeepingClock(http: HttpFetcher): Revokt {
+        pollTimer = timer
+        logger = RevoktLogger { level, message, _ -> logs += level to message }
+        return remoteSettings(remoteSettings())
+            .enforcement(Enforcement.OBSERVE)
+            .ioExecutor(io)
+            .http(http)
+            .revocationEngine(StubEngine())
+            .build()
+            .also { opened += it }
+    }
+
+    /** As [open], keeping the builder's own I/O dispatcher. */
+    private fun Revokt.Builder.openInline(http: HttpFetcher): Revokt {
+        pollTimer = timer
+        clock = this@RevoktSyncTest.clock
+        random = Random(SEED)
+        logger = RevoktLogger { level, message, _ -> logs += level to message }
+        return remoteSettings(remoteSettings())
+            .enforcement(Enforcement.OBSERVE)
+            .http(http)
+            .revocationEngine(engine)
+            .build()
+            .also { opened += it }
+    }
+
+    /** [block] on a thread of its own, whose outcome the test reads, and whose wait it can see. */
+    private class Waiter(
+        block: () -> Any?,
+    ) {
+        private val result = CompletableFuture<Result<Any?>>()
+        val thread = Thread { result.complete(runCatching(block)) }.apply { isDaemon = true }.also { it.start() }
+
+        /** Waits until the thread parks (a bound, never a wait for the sync). */
+        fun awaitWaiting() {
+            repeat(1_000) {
+                if (thread.state == Thread.State.WAITING || thread.state == Thread.State.TIMED_WAITING) return
+                Thread.sleep(10)
+            }
+            error("the thread never waited: ${thread.state}")
+        }
+
+        fun outcome(): Result<Any?> = result.get(10, TimeUnit.SECONDS)
+    }
 
     @Test
     fun `every form throws in CREATED and after close`() {
@@ -243,11 +325,13 @@ class RevoktSyncTest {
         val first = revokt.syncAsync()
         feed.awaitEntered()
         val second = revokt.syncAsync()
-        val blocking = CompletableFuture.supplyAsync({ revokt.syncBlocking() }, io)
+        // Parked on the running sync before it is released: a call after the sync ended would rightly run its own.
+        val blocking = Waiter { revokt.syncBlocking() }
+        blocking.awaitWaiting()
         feed.releaseHeld()
         val result = first.get(10, TimeUnit.SECONDS)
         assertSame(result, second.get(10, TimeUnit.SECONDS))
-        assertSame(result, blocking.get(10, TimeUnit.SECONDS))
+        assertSame(result, blocking.outcome().getOrThrow())
         assertEquals(SyncOutcome.FAILED, result.outcome)
         Thread.sleep(QUIET_MILLIS)
         assertEquals(2, feed.requests.get(), "the start task's, then one explicit sync")
@@ -361,20 +445,143 @@ class RevoktSyncTest {
 
     @Test
     fun `close with a pending syncAsync completes it exceptionally`() {
+        // The syncBlocking() and suspend sync() calls waiting beside it fail the same way.
         val feed = Feed(status(503))
         val revokt = started(feed)
         clock.millis += 15 * minute
         feed.holdNext()
         val pending = revokt.syncAsync()
-        val blocked = CompletableFuture.supplyAsync({ runCatching { revokt.syncBlocking() } }, io)
         feed.awaitEntered()
+        val blocked = Waiter { revokt.syncBlocking() }
+        val suspended = Waiter { runBlocking { revokt.sync() } }
+        // Surely waiting on the sync, not yet to call: close() then fails them, rather than request() refusing them.
+        blocked.awaitWaiting()
+        suspended.awaitWaiting()
         revokt.close()
         val failure = assertFailsWith<ExecutionException> { pending.get(10, TimeUnit.SECONDS) }
         assertIs<IllegalStateException>(failure.cause)
         assertEquals("closed", failure.cause?.message)
-        assertIs<IllegalStateException>(blocked.get(10, TimeUnit.SECONDS).exceptionOrNull())
+        val thrown = assertIs<IllegalStateException>(blocked.outcome().exceptionOrNull())
+        assertEquals("closed", thrown.message)
+        assertEquals("closed", assertIs<IllegalStateException>(suspended.outcome().exceptionOrNull()).message)
         assertFailsWith<IllegalStateException> { revokt.syncAsync() }
         feed.releaseHeld()
+    }
+
+    @Test
+    fun `an interrupted syncBlocking throws InterruptedException and leaves the sync running`() {
+        val feed = Feed(status(503))
+        val revokt = started(feed)
+        clock.millis += 15 * minute
+        feed.holdNext()
+        val first = revokt.syncAsync()
+        feed.awaitEntered()
+        val blocked = Waiter { revokt.syncBlocking() }
+        blocked.awaitWaiting()
+        blocked.thread.interrupt()
+        assertIs<InterruptedException>(blocked.outcome().exceptionOrNull())
+        val joined = revokt.syncAsync()
+        feed.releaseHeld()
+        assertEquals(SyncFailure.CHANGESET_FETCH, joined.get(10, TimeUnit.SECONDS).failure)
+        assertSame(first.get(), joined.get())
+        assertEquals(2, feed.requests.get(), "the start task's, then the one the interrupted call joined")
+    }
+
+    @Test
+    fun `a sync whose clock throws fails the call with that throwable, and an interrupted clock with an ISE`() {
+        val feed = Feed(status(503))
+        val revokt = started(feed)
+        val clockError = IllegalStateException("clock")
+        clock.throwOnce = clockError
+        assertSame(clockError, assertFailsWith<IllegalStateException> { revokt.syncBlocking() })
+        assertEquals(15 * minute, timer.live.single().delayMillis, "retried in 15 min")
+        val interrupted = InterruptedException("clock")
+        clock.throwOnce = interrupted
+        val wrapped = assertFailsWith<IllegalStateException> { revokt.syncBlocking() }
+        assertSame(interrupted, wrapped.cause)
+        assertFalse(Thread.currentThread().isInterrupted, "the caller's thread was not interrupted")
+        assertEquals(1, feed.requests.get(), "neither sync ran")
+    }
+
+    @Test
+    fun `a call joined to a start task whose first sync never ran fails with the clock's throwable`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val clockError = IllegalStateException("clock")
+        val loaderClock =
+            object : Clock {
+                @Volatile var armed = true
+
+                override fun now(): Instant {
+                    if (armed && Thread.currentThread().name.startsWith("revokt-loader")) {
+                        armed = false
+                        entered.countDown()
+                        release.await()
+                        throw clockError
+                    }
+                    return Instant.fromEpochMilliseconds(clock.millis)
+                }
+            }
+        val feed = Feed()
+        // The first sync's clock read, on the loader, holds then throws: the joined call has no result to get.
+        val held = bare().awaitDataMillis(0).also { it.clock = loaderClock }.openKeepingClock(feed)
+        held.start()
+        assertTrue(entered.await(10, TimeUnit.SECONDS))
+        val joined = held.syncAsync()
+        release.countDown()
+        val failure = assertFailsWith<ExecutionException> { joined.get(10, TimeUnit.SECONDS) }
+        assertSame(clockError, failure.cause)
+        assertEquals(0, feed.requests.get(), "no first sync ran")
+        timer.awaitCount(1)
+        assertEquals(15 * minute, timer.entries.single().delayMillis, "the schedule goes on")
+    }
+
+    @Test
+    fun `a sync reschedules before it delivers its result`() {
+        val feed = Feed(status(503))
+        val revokt = started(feed)
+        clock.millis += 15 * minute
+        val gate = CountDownLatch(1)
+        timer.gate = gate
+        val result = revokt.syncAsync()
+        assertTrue(timer.scheduling.await(10, TimeUnit.SECONDS))
+        Thread.sleep(QUIET_MILLIS)
+        assertFalse(result.isDone, "no result while the next sync is being scheduled")
+        gate.countDown()
+        assertEquals(SyncFailure.CHANGESET_FETCH, result.get(10, TimeUnit.SECONDS).failure)
+    }
+
+    @Test
+    fun `a dispatcher that throws on dispatch still completes the call, off the loader, and is logged`() {
+        val throwing =
+            object : CoroutineDispatcher() {
+                override fun dispatch(
+                    context: CoroutineContext,
+                    block: Runnable,
+                ): Unit = throw RejectedExecutionException("shut down")
+            }
+        val revokt = noSource { it.ioDispatcher = throwing }
+        revokt.start()
+        val on = revokt.syncAsync().thenApply { Thread.currentThread().name }
+        assertFalse(on.get(10, TimeUnit.SECONDS).startsWith("revokt-loader"), on.get())
+        assertTrue(logs.any { (level, message) -> level == LogLevel.WARN && "common pool" in message }, "$logs")
+    }
+
+    @Test
+    @Suppress("InjectDispatcher") // Injected into the builder: the configuration under test.
+    fun `an inline io dispatcher never runs a caller's stages on the loader`() {
+        val feed = Feed(status(503))
+        // Dispatchers.Unconfined runs each fetch inline on the loader too (validate() warns); the sync still ends.
+        val revokt = bare().also { it.ioDispatcher = Dispatchers.Unconfined }.openInline(feed)
+        revokt.start()
+        timer.awaitCount(1)
+        clock.millis += 15 * minute
+        feed.holdNext()
+        val pending = revokt.syncAsync()
+        feed.awaitEntered()
+        val on = pending.thenApply { Thread.currentThread().name }
+        feed.releaseHeld()
+        assertFalse(on.get(10, TimeUnit.SECONDS).startsWith("revokt-loader"), on.get())
     }
 
     @Test

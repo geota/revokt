@@ -213,7 +213,8 @@ public class Revokt private constructor(
     /**
      * Closes the instance (spec §5.1 `close()`); it blocks. Idempotent: a second `close()` returns once the first has
      * finished. In order: the flip to `CLOSED` (under the start lock, so a `close()` racing [start] waits for its
-     * synchronous part); the loader cancelled, and an in-flight install and the loader thread's exit awaited, without a
+     * synchronous part); a pending [sync], [syncAsync] or [syncBlocking] call failed with
+     * `IllegalStateException("closed")`; the loader cancelled, and an in-flight install and the loader thread's exit awaited, without a
      * deadline, so the engine is never closed while it prepares or activates a generation and no loader thread outlives
      * `close()`; the store's lock released and its identity deregistered; the generation reference cleared; then
      * `engine.close()`,
@@ -519,7 +520,8 @@ public class Revokt private constructor(
             // A consumer clock's: logged, the interrupt restored, retried in 15 min.
             Thread.currentThread().interrupt()
             runtime.log(LogLevel.ERROR, "the clock was interrupted before the sync", e)
-            failure = e
+            // Not an InterruptedException: the callers' threads were not interrupted.
+            failure = IllegalStateException("the clock was interrupted before the sync", e)
         } catch (
             // A consumer clock that throws: logged and retried in 15 min (the runtime catches the sync's own).
             @Suppress("TooGenericExceptionCaught") t: Throwable,
@@ -587,13 +589,34 @@ public class Revokt private constructor(
         return future
     }
 
-    /** Runs [task] on the I/O executor; one that refuses it (shut down) leaves it to the common pool, never the loader. */
+    /**
+     * Runs [task] on the I/O executor, never on the loader (spec §4): an executor that runs it inline on the loader
+     * (`Dispatchers.Unconfined`, which `validate()` warns of) hands it to the common pool, and so does one that throws,
+     * a refusal or kotlinx's `DispatchException` alike, which is logged. A fatal error from the executor propagates.
+     */
     private fun onIo(task: Runnable) {
+        val offLoader = Runnable { if (Thread.currentThread() === loaderThread) commonPool(task) else task.run() }
         try {
-            ioExecutor.execute(task)
-        } catch (e: RejectedExecutionException) {
-            runtime.log(LogLevel.WARN, "the I/O executor refused a sync() completion; it runs on the common pool", e)
+            ioExecutor.execute(offLoader)
+        } catch (e: VirtualMachineError) {
+            throw e
+        } catch (
+            // Any non-fatal throw: the caller's future must still complete, so the task goes to the common pool.
+            @Suppress("TooGenericExceptionCaught") t: Throwable,
+        ) {
+            runtime.log(LogLevel.WARN, "the I/O executor threw on a sync() completion; it runs on the common pool", t)
+            commonPool(task)
+        }
+    }
+
+    /** [task] on the common pool, or, if even that refuses it, on this thread: a caller's future always completes. */
+    private fun commonPool(task: Runnable) {
+        try {
             ForkJoinPool.commonPool().execute(task)
+        } catch (
+            @Suppress("SwallowedException") e: RejectedExecutionException,
+        ) {
+            task.run()
         }
     }
 

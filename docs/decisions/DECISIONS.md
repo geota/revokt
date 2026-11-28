@@ -759,3 +759,20 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
     and SYSTEM sources, and under the first-consumer rule (#221) a member nothing produces is not public. A future
     unsigned source adds it back, which is not a break. Firefox serves only signed Remote Settings data; upki's mirror
     data is unsigned, and it has no such counter.
+- 2026-11-28 (maintainer, #356): **a sync while the store read stays unresolved ends `FAILED` with `STORE_FAILED`
+  (B35).** While the start task's store read is unresolved, a sync re-reads the store and, if the read still does not
+  resolve, fetches nothing, writes nothing, and its `SyncResult` is `FAILED` with `STORE_FAILED` (§5.1 "The sync
+  schedule"). A new `SKIPPED` code was declined: a sync that has no local state to trust has failed, and it adds no
+  enum value. `consecutiveFailures` does not advance, since nothing is written; the in-memory re-read backoff (15 min,
+  doubled per re-read up to 6 h) is unchanged. Firefox fails a sync whose local read throws, and retries it at the
+  next poll (`services.settings.poll_interval`) (`services/settings/RemoteSettingsClient.sys.mjs:743-751, 928-944`
+  at `cac25a6`); upki has no in-process sync to compare (B31).
+- 2026-11-28 (maintainer, #356): **an explicit `sync()` re-reads at once during B25's wait (B36).** While the start
+  task's store read stays unresolved, B25's backoff (15 min doubled per re-read, up to 6 h) paces the loader's own
+  re-reads only; a `sync()` the caller asks for re-reads now, like any explicit sync that ignores the poll interval
+  (§5.1), and the next wait doubles from it. Honouring the wait, with a `FAILED`/`STORE_FAILED` and no re-read inside
+  it, was declined: the caller asked. The cost is bounded by the caller's own pacing: the WorkManager worker retries
+  on WorkManager's exponential backoff, and a lifecycle observer syncs once per foreground. Firefox runs an explicit
+  sync when it is called, whatever its poll timer, and a sync whose local read throws fails again
+  (`services/settings/RemoteSettingsClient.sys.mjs:743-751, 928-944` at `cac25a6`; B35); upki keeps no retry state,
+  and each `upki fetch` run reads the store afresh (B25).
