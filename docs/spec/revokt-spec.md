@@ -1365,8 +1365,8 @@ followed, and one in a key's path fails closed (§3), and only the lock holder r
 **Order of an install** (an *install* anywhere in this document means this whole sequence): the bodies, **one at a
 time** (for each placed attachment a stored blob that re-hashes is reused; otherwise the body is fetched, or read from
 the seed archive, hashed against its signed record, written and dropped) → build `index.bin` (≤ 1 MiB, §3.2; every
-placed filter decoded whole, so one that does not decode fails the install with `FILTER_UNREADABLE` before the
-generation file is written, `CrliteSyncFailureTest`) → the
+placed filter decoded whole, so one that does not decode fails a sync with `FILTER_UNREADABLE` and a seed with
+`SEED_UNREADABLE` before the generation file is written, `CrliteSyncFailureTest`, `SeedLoaderTest`) → the
 format check (on every placed filter, the full and each delta, each in its own encoding; a filter whose encoding the
 engine does not list fails the install, `FAILED` with `FORMAT_UNSUPPORTED`, §3.2, the previous generation stays live,
 and nothing is offered to `prepare`) → write the generation file (the cap first; not written again when its key holds a

@@ -29,8 +29,8 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
- * Spec §6.5 Load (one function for the recovery chain, an install's load-back and the adopt scan; step 4 reads coverage
- * alone at `start()`) and Prune, over a store the install wrote (#287). Prune is fail closed: it deletes nothing beside a pointer, or a pointed generation,
+ * Spec §6.5 Load (one function for the recovery chain, an install's load-back and the adopt scan, whose step 4 differs:
+ * coverage alone at `start()`, the install's own index at its load-back, every filter whole in the adopt scan) and Prune, over a store the install wrote (#287). Prune is fail closed: it deletes nothing beside a pointer, or a pointed generation,
  * that does not read.
  */
 internal class StoreLoadTest : InstallFixture() {

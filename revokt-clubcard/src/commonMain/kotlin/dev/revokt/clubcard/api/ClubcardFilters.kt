@@ -42,10 +42,11 @@ public object ClubcardFilters {
 
     /**
      * Reads only a filter's coverage (spec §6.5 Load): the 2-byte prefix, then the coverage, the first field of the body
-     * in both encodings, through the readers [decode] uses, so its rules hold (log ids distinct, the count checked
-     * against the remaining input before anything is allocated). Nothing after the coverage is read: whenever [decode]
-     * returns a filter this returns its [CrliteClubcard.universe], equal entry for entry and in the same order, but a
-     * filter whose coverage reads and whose rest does not decode returns its coverage here and fails [decode].
+     * in both encodings, through the readers [decode] uses, so its rules hold (log ids distinct; the count bounded, by
+     * the remaining input on v3 and by its `u16` on v4, before anything is allocated). Nothing after the coverage is
+     * read: whenever [decode] returns a filter this returns its [CrliteClubcard.universe], equal entry for entry and in
+     * the same order, but a filter whose coverage reads and whose rest does not decode returns its coverage here and
+     * fails [decode].
      */
     public fun coverage(bytes: ByteArray): CrliteCoverage =
         translating {

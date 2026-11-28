@@ -736,5 +736,6 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   - **The adopt scan and installs decode whole (B27, adopt scan (i)):** the adopt scan writes `updater.json` and flips
     `current` before anything is prepared, so it keeps the whole-decode `buildIndex` and never adopts a generation
     `prepare` would refuse. Installs (sync, seed, heal) keep it too, so this binary never writes a generation whose
-    filter does not decode; a filter that does fails the install with `FILTER_UNREADABLE` before the generation file is
-    written, as upki builds its `index.bin` only from filters it has fully decoded (`index.rs:156-235`).
+    filter does not decode; such a filter fails a sync with `FILTER_UNREADABLE`, and a seed with `SEED_UNREADABLE`,
+    before the generation file is written, as upki builds its `index.bin` only from filters it has fully decoded
+    (`index.rs:156-235`).
