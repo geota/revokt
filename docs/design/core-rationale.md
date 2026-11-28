@@ -262,8 +262,8 @@ nothing an attacker could exploit; Firefox and upki do the same.
 ## 13. Naming and publishing
 
 **What was verified for the name**, 2026-10-21: Maven Central `dev.revokt` free; `revokt.dev`, `.io`, `.org` free;
-GitHub handle `Revokt` taken (inactive since 2023); `revokt.com` is a live SaaS called "Revokt" (registered
-2026-03-12), unrelated field.
+GitHub handle `Revokt` taken (inactive since 2023); the name's `.com` domain is a live SaaS called "Revokt"
+(registered 2026-03-12), unrelated field.
 
 **Trademark risk** is accepted as low (different field, descriptive compound); revisit only if the SaaS enters the
 TLS or PKI field.
