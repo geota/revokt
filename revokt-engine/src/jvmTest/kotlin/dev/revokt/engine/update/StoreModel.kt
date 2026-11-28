@@ -535,7 +535,7 @@ internal class StoreModel : SeedFixture() {
             loseDeletes: Boolean = false,
         ): SyncOutcome? {
             // I2: the generation served when the sync began survives it, if it loaded undamaged.
-            val servedAtStart = served()?.takeIf { !storage.hit(it) && truth.load(it) is GenerationLoad.Loaded }
+            val servedAtStart = served()?.takeIf { !storage.hit(it) && truth.loadWhole(it) is GenerationLoad.Loaded }
             val floor = rollbackFloor()
             val prunable = mayPrune()
             val readable = readableGenerations()
@@ -641,10 +641,10 @@ internal class StoreModel : SeedFixture() {
             // that wrote none leaves it on disk.
             val flipped = result.outcome == SyncOutcome.INSTALLED || pointerWritten
             val kept = !flipped || servedAtStart == storage.pointer?.live || servedAtStart == storage.pointer?.previous
-            if (truth.load(servedAtStart) !is GenerationLoad.Loaded || !kept) {
+            if (truth.loadWhole(servedAtStart) !is GenerationLoad.Loaded || !kept) {
                 fail(
                     "I2: the sync lost $servedAtStart, the generation the engine served when it began " +
-                        "(loads: ${truth.load(servedAtStart)}, pointer ${storage.pointer})",
+                        "(loads: ${truth.loadWhole(servedAtStart)}, pointer ${storage.pointer})",
                 )
             }
         }
@@ -788,7 +788,7 @@ internal class StoreModel : SeedFixture() {
         }
 
         /** Whether the model finds [name] intact and loading in full (Load's steps 1 to 4). */
-        private fun serves(name: String): Boolean = intact(name) && truth.load(name) is GenerationLoad.Loaded
+        private fun serves(name: String): Boolean = intact(name) && truth.loadWhole(name) is GenerationLoad.Loaded
 
         /**
          * What §6.5's chain serves at start for a seed at [seedTs] (or none), from the model's own reads: without a seed,
@@ -847,7 +847,7 @@ internal class StoreModel : SeedFixture() {
                 .sorted()
                 .filter { it !in forgedNames && it !in failed && intact(it) }
                 .mapNotNull { n ->
-                    (truth.load(n) as? GenerationLoad.Loaded)?.value?.generation?.takeIf {
+                    (truth.loadWhole(n) as? GenerationLoad.Loaded)?.value?.generation?.takeIf {
                         it.timestampMillis >=
                             floor
                     }
@@ -1054,9 +1054,9 @@ internal class StoreModel : SeedFixture() {
 
         /**
          * An outside write that leaves `current` readable: its `previous` replaced by a generation file that passes
-         * Load's steps 1 to 3 and fails step 4, its one delta a blob whose bytes re-hash but do not decode (the residual of
-         * a `previous` qualified through step 3: after a decoder change, it can no longer load). The recovery chain must
-         * fall past it. Recorded as damage, and as the last pointer written, since the code did not write it.
+         * Load's steps 1 to 3, its one delta a blob whose bytes re-hash but do not decode (the residual of a `previous`
+         * qualified through step 3: after a decoder change, it can no longer load), so it fails step 4 or, when its
+         * coverage reads, the `prepare` that serves it. The recovery chain must fall past it. Recorded as damage, and as the last pointer written, since the code did not write it.
          */
         private fun undecodablePrevious() {
             val pointer = (truth.pointer() as? StoreRead.Found)?.value ?: return
@@ -1229,13 +1229,17 @@ internal class StoreModel : SeedFixture() {
             val pointer = truth.pointer()
             if (pointer is StoreRead.Found) {
                 for (n in listOfNotNull(pointer.value.live, pointer.value.previous)) {
-                    if (!storage.hit(n) && !damagedPointer() && truth.load(n) !is GenerationLoad.Loaded) {
-                        fail("I1: the pointed $n does not load: ${truth.load(n)}")
+                    if (!storage.hit(n) && !damagedPointer() && truth.loadWhole(n) !is GenerationLoad.Loaded) {
+                        fail("I1: the pointed $n does not load: ${truth.loadWhole(n)}")
                     }
                 }
             }
             served()?.let { n ->
-                if (!storage.hit(n) && truth.load(n) !is GenerationLoad.Loaded) fail("I1: the served $n does not load")
+                if (!storage.hit(n) &&
+                    truth.loadWhole(n) !is GenerationLoad.Loaded
+                ) {
+                    fail("I1: the served $n does not load")
+                }
             }
             checkWatermark()
             checkDeleteOrder()
@@ -1355,3 +1359,24 @@ internal class StoreModel : SeedFixture() {
         const val RECOVERY = 3
     }
 }
+
+/**
+ * Load's steps 1 to 4 for the generation file [name] with every filter decoded whole: the model's oracle for what the
+ * start chain serves (its Load reads coverage alone, then `prepare` decodes every filter) and what the adopt scan accepts
+ * (spec §6.5), so the model does not depend on which of the two steps catches a filter that does not decode.
+ */
+private fun StoreLayout.loadWhole(name: String): GenerationLoad =
+    when (val read = stored(name)) {
+        StoreRead.Absent -> {
+            GenerationLoad.Failed(true, "$name is absent")
+        }
+
+        StoreRead.Malformed -> {
+            GenerationLoad.Failed(false, "$name does not read or its records do not place")
+        }
+
+        is StoreRead.Found -> {
+            loadFiles(read.value, read = FilterRead.WHOLE)?.let { GenerationLoad.Loaded(it) }
+                ?: GenerationLoad.Failed(false, "a blob of $name is missing or does not decode")
+        }
+    }

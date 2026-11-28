@@ -12,6 +12,8 @@ import dev.revokt.LogLevel
 import dev.revokt.engine.json.Json
 import dev.revokt.engine.json.JsonBoolean
 import dev.revokt.engine.json.JsonObject
+import dev.revokt.engine.runtime.StartChain
+import dev.revokt.engine.runtime.serveChain
 import dev.revokt.engine.store.GenerationFileJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreLayout
@@ -27,8 +29,8 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
- * Spec §6.5 Load (one function for the recovery chain, an install's load-back and the adopt scan) and Prune, over a
- * store the install wrote (#287). Prune is fail closed: it deletes nothing beside a pointer, or a pointed generation,
+ * Spec §6.5 Load (one function for the recovery chain, an install's load-back and the adopt scan; step 4 reads coverage
+ * alone at `start()`) and Prune, over a store the install wrote (#287). Prune is fail closed: it deletes nothing beside a pointer, or a pointed generation,
  * that does not read.
  */
 internal class StoreLoadTest : InstallFixture() {
@@ -93,6 +95,61 @@ internal class StoreLoadTest : InstallFixture() {
         val file = storage.inner.read(key)!!
         storage.inner.write(key, file.copyOf(file.size - 1))
         assertEquals(false, assertIs<GenerationLoad.Failed>(store.load(r.name)).absent)
+    }
+
+    /**
+     * The generation file at [ts] of one full filter, `own.filter`, whose stored blob is [body], written as an install
+     * of a binary that read it would have left it: the blob under its signed hash, the file beside it, nothing pointed.
+     */
+    private fun storedWith(
+        body: ByteArray,
+        ts: Long = TS,
+    ): String {
+        val records = listOf(FilterRecord("own", "compat", false, 1, "own.filter"))
+        store.putBlob(body)
+        val json = UpdateFixtures.recordsJson(records, mapOf("own.filter" to body))
+        return store.putGeneration(GenerationFileJson.write(UpdateFixtures.file(json, ts)))
+    }
+
+    @Test
+    fun `step 4 reads each filter's coverage alone, and the prepare that serves it refuses one that does not decode`() {
+        // A v4 trailing byte (§6.3 rejects it) behind a coverage that reads: Load builds the index the whole filter's
+        // coverage gives, and the serve fails at prepare, leaving the engine and the snapshot as they were.
+        val name = storedWith(v4 + byteArrayOf(0))
+        val loaded = assertIs<GenerationLoad.Loaded>(store.load(name)).value
+        val own = listOf(FilterRecord("own", "compat", false, 1, "own.filter"))
+        val intact = UpdateFixtures.built(own, mapOf("own.filter" to v4))
+        assertContentEquals(intact.index, loaded.files.bytes(StoreLayout.INDEX))
+        val served = assertIs<StoredServe.Failed>(serveStored(name, engine, store, snapshot, false, now, logger))
+        assertTrue("the engine refused $name" in served.detail, served.detail)
+        assertIs<IllegalArgumentException>(served.cause)
+        assertUntouched()
+        // A coverage that does not read fails Load itself, before any prepare.
+        val unreadable = storedWith(byteArrayOf(4, 0, 0), TS + 1)
+        assertEquals(false, assertIs<GenerationLoad.Failed>(store.load(unreadable)).absent)
+        val prepares = engine.prepared.size
+        assertIs<StoredServe.Failed>(serveStored(unreadable, engine, store, snapshot, false, now, logger))
+        assertEquals(prepares, engine.prepared.size, "nothing offered to prepare")
+    }
+
+    @Test
+    fun `a live whose filter does not decode past its coverage fails at prepare, and the chain serves the previous`() {
+        val p = pending()
+        val previous = nameOf(p)
+        install(p, engine = UpdateFixtures.TestEngine())
+        val live = storedWith(v4 + byteArrayOf(0), TS + 1)
+        store.point(Pointer(live, previous))
+        val failed = HashSet<String>()
+        val chain = serveChain(store, { now }, failed, engine, snapshot, false, logger)
+        assertEquals(StartChain.PREVIOUS, chain)
+        assertEquals(setOf(live), failed, "counted once, by the caller")
+        assertEquals(p.generationId, engine.live)
+        assertEquals(
+            previous,
+            snapshot.snapshot.datasets
+                .getValue(Dataset.CRLITE)
+                .generationFile,
+        )
     }
 
     @Test

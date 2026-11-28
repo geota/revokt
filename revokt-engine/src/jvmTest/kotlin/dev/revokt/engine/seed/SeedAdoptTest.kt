@@ -15,8 +15,11 @@ import dev.revokt.engine.store.GenerationFileJson
 import dev.revokt.engine.store.Pointer
 import dev.revokt.engine.store.StoreRead
 import dev.revokt.engine.store.UpdaterRecord
+import dev.revokt.engine.update.FilterRecord
+import dev.revokt.engine.update.GenerationLoad
 import dev.revokt.engine.update.UpdateFixtures
 import dev.revokt.engine.update.UpdateFixtures.log
+import dev.revokt.engine.update.load
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.io.IOException
@@ -200,6 +203,23 @@ internal class SeedAdoptTest : SeedFixture() {
         assertEquals(2, load.storeFailures)
         assertEquals(Pointer(load.name, null), (store.pointer() as StoreRead.Found).value)
         assertTrue(store.generationKey(newer) in storage.inner.names(), "kept")
+    }
+
+    @Test
+    fun `a newer generation whose filter does not decode past its coverage is not adopted, counted once, and kept`() {
+        // A v4 trailing byte, which §6.3 rejects, behind a coverage that reads; the blob matches its signed hash, and
+        // another leaf signed the file, so only the scan's whole decode can refuse it before the flip.
+        val body = UpdateFixtures.v4(listOf(log(1) to (1L to 2L))) + byteArrayOf(0)
+        val records = listOf(FilterRecord("own", "compat", false, 1, "own.filter"))
+        store.putBlob(body)
+        val json = UpdateFixtures.recordsJson(records, mapOf("own.filter" to body))
+        val newer = store.putGeneration(GenerationFileJson.write(UpdateFixtures.file(json, ts + hour)))
+        assertIs<GenerationLoad.Loaded>(store.load(newer), "the start chain's Load reads its coverage alone")
+        reset(keepStore = true)
+        val load = installed(load(Seed()))
+        assertEquals(1, load.storeFailures, "the rejected candidate, once")
+        assertEquals(Pointer(load.name, null), (store.pointer() as StoreRead.Found).value)
+        assertIs<StoreRead.Found<*>>(store.readGeneration(newer), "kept")
     }
 
     @Test

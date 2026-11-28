@@ -19,7 +19,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** `buildIndex(records, channel)` (#130, spec §3.2, §6.5 seed archive and file names). */
+/** `buildIndex(records, channel, read)` (#130, spec §3.2, §6.5 seed archive, file names and Load). */
 class BuildIndexTest {
     private fun refused(build: IndexBuild): IndexBuild.Refused = assertIs<IndexBuild.Refused>(build)
 
@@ -208,6 +208,49 @@ class BuildIndexTest {
     fun `a filter that does not decode is FILTER_UNREADABLE, with the decoder's error`() {
         val bodies = UpdateFixtures.bodies + (deltaRecord.filename to byteArrayOf(4, 0, 0))
         val r = refused(UpdateFixtures.build(listOf(fullRecord, deltaRecord), bodies))
+        assertEquals(SyncFailure.FILTER_UNREADABLE, r.failure)
+        assertNotNull(r.cause)
+    }
+
+    @Test
+    fun `read for coverage alone, the index is the whole decode's, byte for byte, the golden included`() {
+        val records = listOf(fullRecord, deltaRecord)
+        val whole = UpdateFixtures.built(records)
+        val coverage =
+            assertIs<IndexBuild.Built>(
+                buildIndex(records, CrliteChannel.COMPAT, FilterRead.COVERAGE) {
+                    UpdateFixtures.bodies.getValue(it.filename)
+                },
+            )
+        assertContentEquals(whole.index, coverage.index)
+        assertEquals(whole.filters.map { it.name }, coverage.filters.map { it.name })
+        val golden =
+            assertNotNull(javaClass.getResourceAsStream("seed-format-1-compat.index.bin")).use { it.readBytes() }
+        assertContentEquals(golden, coverage.index)
+    }
+
+    @Test
+    fun `a filter whose coverage reads and whose rest does not decode builds only when read for coverage`() {
+        // A v4 trailing byte (§6.3 rejects it) and a truncated column: the coverage before them reads.
+        val good = v4(1, 2)
+        for (bad in listOf(good + byteArrayOf(0), good.copyOf(good.size - 1))) {
+            val bodies = UpdateFixtures.bodies + (deltaRecord.filename to bad)
+            val records = listOf(fullRecord, deltaRecord)
+            val whole = refused(UpdateFixtures.build(records, bodies))
+            assertEquals(SyncFailure.FILTER_UNREADABLE, whole.failure)
+            val coverage =
+                buildIndex(records, CrliteChannel.COMPAT, FilterRead.COVERAGE) { bodies.getValue(it.filename) }
+            val intact = UpdateFixtures.built(records, UpdateFixtures.bodies + (deltaRecord.filename to good))
+            assertContentEquals(intact.index, assertIs<IndexBuild.Built>(coverage).index)
+        }
+        // A coverage that does not read is FILTER_UNREADABLE either way.
+        val bodies = UpdateFixtures.bodies + (deltaRecord.filename to byteArrayOf(4, 0, 0))
+        val r =
+            refused(
+                buildIndex(listOf(fullRecord, deltaRecord), CrliteChannel.COMPAT, FilterRead.COVERAGE) {
+                    bodies.getValue(it.filename)
+                },
+            )
         assertEquals(SyncFailure.FILTER_UNREADABLE, r.failure)
         assertNotNull(r.cause)
     }

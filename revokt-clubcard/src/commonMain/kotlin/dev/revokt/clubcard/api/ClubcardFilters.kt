@@ -7,13 +7,15 @@ import dev.revokt.clubcard.RevoktInternalApi
 import dev.revokt.clubcard.port.ByteReader
 import dev.revokt.clubcard.port.ClubcardError
 import dev.revokt.clubcard.port.CrliteClubcard
+import dev.revokt.clubcard.port.CrliteCoverage
 import dev.revokt.clubcard.port.Encoding
 import dev.revokt.clubcard.port.WORD_WIDTH
 
 /**
  * Apache-licensed glue over the MPL-2.0 port in `dev.revokt.clubcard.port` (spec §3.1 item 2): the one entry point
- * that turns filter bytes into a [CrliteClubcard]. The 2-byte prefix selects the decoder (spec §6.3): v4 is the
- * port's own C2SP reader; v3 (bincode 1.x) has no upstream reader to translate and is [BincodeV3], written here.
+ * that turns filter bytes into a [CrliteClubcard] ([decode]), and the coverage-only read beside it ([coverage]). The
+ * 2-byte prefix selects the decoder (spec §6.3): v4 is the port's own C2SP reader; v3 (bincode 1.x) has no upstream
+ * reader to translate and is [BincodeV3], written here.
  */
 @RevoktInternalApi
 public object ClubcardFilters {
@@ -35,6 +37,22 @@ public object ClubcardFilters {
             when (Encoding.read(buf)) {
                 Encoding.V3 -> CrliteClubcard(BincodeV3.readClubcard(buf))
                 Encoding.V4 -> CrliteClubcard.fromBytes(bytes)
+            }
+        }
+
+    /**
+     * Reads only a filter's coverage (spec §6.5 Load): the 2-byte prefix, then the coverage, the first field of the body
+     * in both encodings, through the readers [decode] uses, so its rules hold (log ids distinct, the count checked
+     * against the remaining input before anything is allocated). Nothing after the coverage is read: whenever [decode]
+     * returns a filter this returns its [CrliteClubcard.universe], equal entry for entry and in the same order, but a
+     * filter whose coverage reads and whose rest does not decode returns its coverage here and fails [decode].
+     */
+    public fun coverage(bytes: ByteArray): CrliteCoverage =
+        translating {
+            val buf = ByteReader(bytes)
+            when (Encoding.read(buf)) {
+                Encoding.V3 -> BincodeV3.readCoverage(buf)
+                Encoding.V4 -> CrliteCoverage.read(buf)
             }
         }
 
