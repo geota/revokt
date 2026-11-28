@@ -773,6 +773,6 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   (§5.1), and the next wait doubles from it. Honouring the wait, with a `FAILED`/`STORE_FAILED` and no re-read inside
   it, was declined: the caller asked. The cost is bounded by the caller's own pacing: the WorkManager worker retries
   on WorkManager's exponential backoff, and a lifecycle observer syncs once per foreground. Firefox runs an explicit
-  sync when it is called, whatever its poll timer, and a sync whose local read throws fails again
-  (`services/settings/RemoteSettingsClient.sys.mjs:743-751, 928-944` at `cac25a6`; B35); upki keeps no retry state,
-  and each `upki fetch` run reads the store afresh (B25).
+  sync whenever it is called, whatever its poll timer, and a sync whose local read throws fails again
+  (`services/settings/RemoteSettingsClient.sys.mjs:743-751, 928-944` at `cac25a6`; B35); it also reopens a
+  cert_storage database that failed to open on every query (CS:1288-1300, B25). upki has no in-process sync (B31).
