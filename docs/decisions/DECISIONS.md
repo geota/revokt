@@ -676,7 +676,7 @@ Numbers are INDEX.md's "Ask-first items" (1–11) and CRITIQUE.md's missed items
   revisit at Kotlin 2.5. The stale 6.7.3 and Kotlin 2.4.0 verification entries are pruned, after a regeneration from
   empty on both versions. 9.9.2's embedded Kotlin 2.4.21 also removes the Kotlin 2.4.0 behind Dependabot alert #1,
   which #275's constraint had already fixed.
-- 2026-11-27 (maintainer, #338, PR #PRNUM): the start chain's three follow-ups from #336's review, each as the builder
+- 2026-11-27 (maintainer, #338, PR #350): the start chain's three follow-ups from #336's review, each as the builder
   recommended. upki is `9821cce`; Firefox is `cac25a6` (CS = `security/manager/ssl/cert_storage/src/lib.rs`, RSC =
   `services/settings/RemoteSettingsClient.sys.mjs`).
   - **A restart is a first start for the seed's age (B24):** when the recovery chain serves a stored `fromSeed`
