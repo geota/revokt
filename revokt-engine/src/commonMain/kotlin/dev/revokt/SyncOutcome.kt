@@ -7,7 +7,7 @@ package dev.revokt
  * How one sync ended (spec §4, §5.1). Growable. Persist `name`, never `ordinal`. A [SKIPPED] or [FAILED] sync carries
  * its [SyncFailure] on [SyncResult.failure].
  */
-internal enum class SyncOutcome {
+public enum class SyncOutcome {
     /** The sync installed a generation. */
     INSTALLED,
 

@@ -24,7 +24,9 @@ import dev.revokt.RevoktPolicy
 import dev.revokt.RevoktStorage
 import dev.revokt.SeedSource
 import dev.revokt.SignatureVerifier
+import dev.revokt.SyncFailure
 import dev.revokt.SyncOutcome
+import dev.revokt.SyncResult
 import dev.revokt.WarningCode
 import dev.revokt.engine.fetch.FetchLimits
 import dev.revokt.engine.fetch.RemoteSettingsClient
@@ -291,11 +293,25 @@ public class CrliteRuntime internal constructor(
      * from any step is logged and the task still clears `pending`, as §5.1 has every loader task catch `Throwable`; a
      * fatal error is rethrown after that.
      */
-    @Suppress("TooGenericExceptionCaught") // §5.1: every loader task catches Throwable.
     public fun startTask(
         loadSeed: Boolean,
         nowMillis: () -> Long,
     ): Long? {
+        val end = startTaskWithSync(loadSeed, nowMillis)
+        end.fatal?.let { throw it }
+        return end.nextAtMillis
+    }
+
+    /**
+     * [startTask], returning instead of throwing: when the loader syncs next, the first sync's [SyncResult] for the
+     * `sync()` calls that joined it (spec §4 `sync`), and a fatal error for the binding to rethrow once it has
+     * rescheduled and delivered the result ([StartTaskEnd]).
+     */
+    @Suppress("TooGenericExceptionCaught") // §5.1: every loader task catches Throwable.
+    public fun startTaskWithSync(
+        loadSeed: Boolean,
+        nowMillis: () -> Long,
+    ): StartTaskEnd {
         var fatal: Throwable? = null
         try {
             if (!seededSynchronously) storeReadUnresolved = recover(nowMillis, withSeed = loadSeed).unresolved
@@ -306,16 +322,23 @@ public class CrliteRuntime internal constructor(
         }
         reportNoData()
         var next: Long? = null
+        var first: SyncResult? = null
+        // Why no first sync ran although a fetching source is configured: the store step's fatal error or the clock's.
+        var notRun: Throwable? = fatal
         if (polls && fatal == null) {
             var clockRead = false
             try {
                 val now = nowMillis()
                 clockRead = true
-                next = sync(now)
+                val step = syncStep(now)
+                first = step.result
+                next = step.nextAtMillis
+                fatal = step.fatal
             } catch (t: Throwable) {
                 restoreInterrupt(t)
                 if (isFatal(t)) fatal = t
-                // sync() logs its own throwable and lets out only a fatal one; the clock's is logged here.
+                notRun = t
+                // syncStep logs its own throwable and returns a fatal one; the clock's is logged here.
                 if (!clockRead) logger.safeLog(LogLevel.ERROR, "the clock threw before the first sync", t)
             }
         }
@@ -326,45 +349,106 @@ public class CrliteRuntime internal constructor(
             if (isFatal(t) && fatal == null) fatal = t
             logger.safeLog(LogLevel.ERROR, "the start task could not clear pending", t)
         }
-        fatal?.let { throw it }
-        return next
+        return StartTaskEnd(next, first, notRun.takeIf { first == null && polls }, fatal)
     }
+
+    /**
+     * How the start task ended ([startTaskWithSync]): when the loader syncs next ([nextAtMillis], null when nothing
+     * polls), the first sync's result ([firstSync]; null when nothing polls or it did not run, and then [notRun] says
+     * why), and a fatal error the task caught ([fatal]), rethrown by the binding after the next sync is scheduled.
+     */
+    @RevoktInternalApi
+    public class StartTaskEnd internal constructor(
+        public val nextAtMillis: Long?,
+        public val firstSync: SyncResult?,
+        public val notRun: Throwable?,
+        public val fatal: Throwable?,
+    )
 
     /**
      * One sync of the fetching source at [nowMillis], the loader's one clock read for it (spec §5.1, §7.1, #147), and
      * the time of the next one ([PollSchedule]): 6 h plus a jitter in `[0, 36 min)` after a poll that did not fail,
-     * the source's backoff after one that did, and 15 min after a sync that wrote nothing.
-     * 1. While [storeReadUnresolved], the start task's recovery chain runs again first, to re-read the store; the sync
-     *    runs only once it resolves, and otherwise fetches nothing, writes nothing and is retried after the failure
-     *    backoff of its consecutive re-reads ([PollSchedule.unresolvedRetryAtMillis]: 15 min, doubled up to 6 h).
-     * 2. [CrliteSync.syncOnce]; its result is logged (spec §11's 0.2 row has no `state`): `INSTALLED` at `INFO`, each
-     *    warning at `WARN`; `FAILED` is logged by the sync.
-     * 3. The seed's `STALE` gate (§8): once `updater.json` records an attempt since the seed's install, the seed
+     * the source's backoff after one that did, and 15 min after a sync that wrote nothing. As [syncStep], but a fatal
+     * error is rethrown for the loader to reschedule first (§6.5: "nothing escapes the loader thread"; the loader's task
+     * swallows what it rethrows, so the log line is its only trace). Throws [IllegalStateException] when nothing polls.
+     */
+    public fun sync(nowMillis: Long): Long {
+        checkNotNull(updater) { "no fetching source" }
+        val step = syncStep(nowMillis)
+        step.fatal?.let { throw it }
+        return checkNotNull(step.nextAtMillis)
+    }
+
+    /**
+     * One sync at [nowMillis] (spec §4 `sync`, §5.1), scheduled or explicit, with its [SyncResult] and the time of the
+     * next one ([SyncStep]). Never throws a throwable the sync caught: a fatal one is returned on [SyncStep.fatal].
+     * 1. With no fetching source: `UNCHANGED`, nothing fetched or written, and no next sync (nothing polls).
+     * 2. While [storeReadUnresolved], the start task's recovery chain runs again first, to re-read the store; the sync
+     *    runs only once it resolves, and otherwise fetches nothing, writes nothing, ends `FAILED` with `STORE_FAILED`
+     *    and is retried after the failure backoff of its consecutive re-reads ([PollSchedule.unresolvedRetryAtMillis]:
+     *    15 min, doubled up to 6 h).
+     * 3. [CrliteSync.syncOnce]; its result is logged: `INSTALLED` at `INFO`, each warning at `WARN`; `FAILED` is logged
+     *    by the sync.
+     * 4. The seed's `STALE` gate (§8): once `updater.json` records an attempt since the seed's install, the seed
      *    generation is published again with the gate open and `generationEpoch++`.
      *
-     * A non-fatal throwable is logged and swallowed, and the next sync is at [retryAtMillis]; a fatal one is logged and
-     * rethrown for the loader to reschedule first (§6.5: "nothing escapes the loader thread"; the loader's task swallows
-     * what it rethrows, so the log line is its only trace). Throws [IllegalStateException] when nothing polls.
+     * A throwable is logged, and the next sync is at [retryAtMillis]; the result is the sync's own when it ended
+     * before the throw, else `FAILED` with `INTERNAL_ERROR` and the throwable as its cause.
      */
     @Suppress("TooGenericExceptionCaught") // §6.5: every loader task catches Throwable.
-    public fun sync(nowMillis: Long): Long {
-        val sync = checkNotNull(updater) { "no fetching source" }
+    public fun syncStep(nowMillis: Long): SyncStep {
+        val sync = updater ?: return SyncStep(ended(SyncOutcome.UNCHANGED, null, nowMillis, null), null, null)
+        var result: SyncResult? = null
         return try {
-            if (storeReadUnresolved) reRead(nowMillis)?.let { return it }
+            if (storeReadUnresolved) {
+                reRead(nowMillis)?.let {
+                    return SyncStep(ended(SyncOutcome.FAILED, SyncFailure.STORE_FAILED, nowMillis, null), it, null)
+                }
+            }
             val run = sync.syncOnce(nowMillis)
+            result = run.result
             report(run)
             openGate(run.updater)
-            PollSchedule.nextAtMillis(run, checkNotNull(sourceId), nowMillis, random)
+            SyncStep(run.result, PollSchedule.nextAtMillis(run, checkNotNull(sourceId), nowMillis, random), null)
         } catch (t: Throwable) {
             restoreInterrupt(t)
-            if (isFatal(t)) {
-                logger.safeLog(LogLevel.ERROR, "the sync threw a fatal error, rethrown", t)
-                throw t
-            }
-            logger.safeLog(LogLevel.ERROR, "the sync threw", t)
-            PollSchedule.retryAtMillis(nowMillis)
+            val fatal = isFatal(t)
+            logger.safeLog(LogLevel.ERROR, if (fatal) "the sync threw a fatal error, rethrown" else "the sync threw", t)
+            SyncStep(
+                result ?: ended(SyncOutcome.FAILED, SyncFailure.INTERNAL_ERROR, nowMillis, t),
+                PollSchedule.retryAtMillis(nowMillis),
+                t.takeIf { fatal },
+            )
         }
     }
+
+    /**
+     * One sync's end ([syncStep]): its [result], when the loader syncs next ([nextAtMillis], null when nothing polls),
+     * and a fatal error the sync caught ([fatal]), which the binding rethrows once it has rescheduled and delivered
+     * [result].
+     */
+    @RevoktInternalApi
+    public class SyncStep internal constructor(
+        public val result: SyncResult,
+        public val nextAtMillis: Long?,
+        public val fatal: Throwable?,
+    )
+
+    /** A result for a sync that ended before [CrliteSync.syncOnce] ran, or after it threw ([syncStep]). */
+    private fun ended(
+        outcome: SyncOutcome,
+        failure: SyncFailure?,
+        nowMillis: Long,
+        cause: Throwable?,
+    ): SyncResult =
+        SyncResult
+            .Builder()
+            .outcome(outcome)
+            .atMillis(nowMillis)
+            .sourceId(sourceId)
+            .failure(failure)
+            .cause(cause)
+            .build()
 
     /**
      * The start task's store step again (#147), for [sync] while [storeReadUnresolved]: no sync while it does not

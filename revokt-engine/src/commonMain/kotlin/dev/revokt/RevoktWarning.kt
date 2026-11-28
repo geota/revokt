@@ -6,9 +6,9 @@ package dev.revokt
 /**
  * One runtime warning (spec §4): carried on [SyncResult.warnings] and raised by the seed load. Tests and consumers
  * match on [code], never on [message]. An output type: a value with a private constructor and an internal builder.
- * Internal until the public `sync()` and `state` (0.3, #221).
+ * Public since `sync()` returns it, on [SyncResult.warnings] (#221's first-consumer rule).
  */
-internal class RevoktWarning private constructor(
+public class RevoktWarning private constructor(
     builder: Builder,
 ) {
     // The constructor takes its Builder, so the accessor Kotlin emits for the nested Builder keeps one signature as

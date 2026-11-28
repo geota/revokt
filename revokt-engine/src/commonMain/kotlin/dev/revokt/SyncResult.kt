@@ -10,7 +10,7 @@ import kotlin.jvm.Transient
  * value with a private constructor and an internal builder; equality is by content except [cause]. The
  * builder checks that [failure] is set exactly when [outcome] is `SKIPPED` or `FAILED`, and is a code of that outcome.
  */
-internal class SyncResult private constructor(
+public class SyncResult private constructor(
     builder: Builder,
 ) {
     // The constructor takes its Builder, so the accessor Kotlin emits for the nested Builder keeps one signature as

@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
@@ -69,10 +70,11 @@ class RevoktPollTest {
             loader: ScheduledExecutorService,
             delayMillis: Long,
             task: Runnable,
-        ) {
+        ): Future<*>? {
             if (rejectWhenShutdown && loader.isShutdown) throw RejectedExecutionException("the loader is shut down")
             count.incrementAndGet()
             scheduled.put(delayMillis to { loader.execute(task) })
+            return null
         }
 
         /** The next delay requested, waiting for the loader to request it (a bound, never a wait for the delay). */
