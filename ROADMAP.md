@@ -3,8 +3,8 @@
 
 # Roadmap
 
-**Current focus**: 0.2, a working engine. The vertical slice is done: one chain is evaluated end to end through a
-real `Revokt` (#298). Next is #221, then the rest of 0.2 (see [the order](#order), CONTRIBUTING §2).
+**Current focus**: 0.3, usable in apps. The durable store is in (#287, #330, #340), and #333 brings its load time
+under §6.4. 0.2 is built and waits for its first release (#309 lands first).
 
 > [!WARNING]
 > revokt is pre-release and not production ready. Nothing is published yet, and the public API may change in any
@@ -22,8 +22,8 @@ follows the critical path in
 | Milestone | What you get | Estimate | State |
 |---|---|---|---|
 | [0.1](#01-foundations) | The engine's foundations: certificate parser, filter decoder, rule model | 5 weeks | ✅ done |
-| [0.2](#02-a-working-engine) | A minimal working `Revokt`: path walker, signed Mozilla feed, in-memory updates | 4 weeks | 🚧 in progress |
-| [0.3](#03-usable-in-apps) | Usable in apps: durable store, OkHttp and Ktor bindings, Android, WorkManager | 5 weeks | ⏳ not started |
+| [0.2](#02-a-working-engine) | A minimal working `Revokt`: path walker, signed Mozilla feed, in-memory updates | 4 weeks | ✅ done, not released |
+| [0.3](#03-usable-in-apps) | Usable in apps: durable store, OkHttp and Ktor bindings, Android, WorkManager | 5 weeks | 🚧 in progress |
 | [M2: 0.4 → 1.0](#m2-04--10-intermediates-onecrl-and-crlsets) | Intermediate preloading, OneCRL, the bundled denylist, Chrome CRLSets; the 1.0 API promise | | ⏳ not started |
 | [M3](#m3-certificate-transparency) | Certificate Transparency policy | | ⏳ not started |
 | [M4](#m4-distrust) | Per-anchor distrust | | ⏳ not started |
@@ -94,7 +94,7 @@ cross-engine suite (#132, #142, #116), the per-handshake benchmarks (#146), and 
 
 **Goal:** everything an Android or JVM application needs to adopt revokt.
 
-- **A durable store** that survives crashes and is safe between processes, with a lock. ~~The C2SP mirror and the
+- ✅ **A durable store** that survives crashes and is safe between processes, with a lock. ~~The C2SP mirror and the
   system cache as bootstrap-only sources~~ are cut by #218.
 - **Bindings:** OkHttp, and one adapter per Ktor engine.
 - **Per-delegate trust managers** for private CAs, verdict and path caches, the lifecycle state machine and a
